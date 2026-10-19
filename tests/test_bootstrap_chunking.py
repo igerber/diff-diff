@@ -329,7 +329,9 @@ class TestCSBootstrapChunkInvariance:
         return pd.DataFrame({"unit": units, "period": periods, "y": y, "first_treat": ft})
 
     def _fit(self):
-        return CallawaySantAnna(
+        # 4.0: the fit-time surface is gone; the post-fit aggregate() REPLAYS the
+        # bootstrap, so it runs here - inside whatever monkeypatch the caller set.
+        res = CallawaySantAnna(
             control_group="never_treated",
             estimation_method="dr",
             cluster="unit",
@@ -341,20 +343,22 @@ class TestCSBootstrapChunkInvariance:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="all",
         )
+        return _with_aggregates(res)
 
     def test_tiny_chunks_match_single_chunk(self, monkeypatch):
         # Default path: this small panel fits in a single block.
-        base = self._fit()
+        base, base_es, base_grp = self._fit()
         # Force many tiny blocks on every weight path (unit + survey).
         monkeypatch.setattr("diff_diff.bootstrap_chunking.compute_block_size", lambda *a, **k: 7)
         monkeypatch.setattr("diff_diff.staggered_bootstrap.compute_block_size", lambda *a, **k: 7)
-        tiny = self._fit()
+        tiny, tiny_es, tiny_grp = self._fit()
 
         # Continuous bootstrap statistics match to within BLAS reassociation.
         assert tiny.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
-        assert tiny.cband_crit_value == pytest.approx(base.cband_crit_value, rel=1e-10, abs=1e-12)
+        assert tiny_es.cband_crit_value == pytest.approx(
+            base_es.cband_crit_value, rel=1e-10, abs=1e-12
+        )
         # p-values are discrete proportions over draws; a borderline draw can
         # flip under reassociation, shifting a p-value by O(1/n_bootstrap).
         assert tiny.overall_p_value == pytest.approx(base.overall_p_value, abs=0.02)
@@ -366,9 +370,9 @@ class TestCSBootstrapChunkInvariance:
         np.testing.assert_allclose(t["p_value"].to_numpy(), b["p_value"].to_numpy(), atol=0.02)
 
         # Event-study and group aggregate effects/SEs/CIs also match under chunking.
-        for level in ("event_study", "group"):
-            bl = base.to_dataframe(level=level).reset_index(drop=True)
-            tl = tiny.to_dataframe(level=level).reset_index(drop=True)
+        for level, bc, tc in (("event_study", base_es, tiny_es), ("group", base_grp, tiny_grp)):
+            bl = bc.to_dataframe().reset_index(drop=True)
+            tl = tc.to_dataframe().reset_index(drop=True)
             num_cols = [c for c in bl.columns if bl[c].dtype.kind in "fi" and c != "p_value"]
             assert num_cols, f"no numeric columns to compare for level={level}"
             for col in num_cols:
@@ -392,7 +396,6 @@ class TestCSBootstrapChunkInvariance:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="simple",
             )
 
         base = fit()
@@ -423,7 +426,7 @@ class TestCSBootstrapChunkInvariance:
         )
 
     def _fit_clustered(self):
-        return CallawaySantAnna(
+        res = CallawaySantAnna(
             control_group="never_treated",
             estimation_method="dr",
             cluster="state",
@@ -435,15 +438,15 @@ class TestCSBootstrapChunkInvariance:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="all",
         )
+        return _with_aggregates(res)
 
     def test_nonidentity_cluster_chunks_match_single(self, monkeypatch):
         # Exercises the non-identity PSU fan-out expansion under tiny chunks.
-        base = self._fit_clustered()
+        base, _, _ = self._fit_clustered()
         monkeypatch.setattr("diff_diff.bootstrap_chunking.compute_block_size", lambda *a, **k: 7)
         monkeypatch.setattr("diff_diff.staggered_bootstrap.compute_block_size", lambda *a, **k: 7)
-        tiny = self._fit_clustered()
+        tiny, _, _ = self._fit_clustered()
 
         assert tiny.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
@@ -472,20 +475,22 @@ class TestCSBootstrapTileInvariance:
 
     def test_unit_path_tiles_match_single_tile(self, monkeypatch):
         fit = TestCSBootstrapChunkInvariance()._fit
-        base = fit()
+        base, base_es, base_grp = fit()
         self._force_one_column_tiles(monkeypatch)
-        tiled = fit()
+        tiled, tiled_es, tiled_grp = fit()
 
         assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
-        assert tiled.cband_crit_value == pytest.approx(base.cband_crit_value, rel=1e-10, abs=1e-12)
+        assert tiled_es.cband_crit_value == pytest.approx(
+            base_es.cband_crit_value, rel=1e-10, abs=1e-12
+        )
         assert tiled.overall_p_value == pytest.approx(base.overall_p_value, abs=0.02)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
             np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
-        for level in ("event_study", "group"):
-            bl = base.to_dataframe(level=level).reset_index(drop=True)
-            tl = tiled.to_dataframe(level=level).reset_index(drop=True)
+        for bc, tc in ((base_es, tiled_es), (base_grp, tiled_grp)):
+            bl = bc.to_dataframe().reset_index(drop=True)
+            tl = tc.to_dataframe().reset_index(drop=True)
             num_cols = [c for c in bl.columns if bl[c].dtype.kind in "fi" and c != "p_value"]
             for col in num_cols:
                 np.testing.assert_allclose(
@@ -495,9 +500,9 @@ class TestCSBootstrapTileInvariance:
     def test_cluster_path_tiles_match_single_tile(self, monkeypatch):
         # Non-identity PSU fan-out: the per-pass expansion copy must replay too.
         fit = TestCSBootstrapChunkInvariance()._fit_clustered
-        base = fit()
+        base, _, _ = fit()
         self._force_one_column_tiles(monkeypatch)
-        tiled = fit()
+        tiled, _, _ = fit()
 
         assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
@@ -539,7 +544,7 @@ class TestCSBootstrapTileInvariance:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return CallawaySantAnna(
+            res = CallawaySantAnna(
                 control_group="never_treated",
                 estimation_method="dr",
                 n_bootstrap=200,
@@ -550,9 +555,12 @@ class TestCSBootstrapTileInvariance:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="all",
                 survey_design=design,
             )
+            # Replays the bootstrap under the caller's chunking monkeypatch.
+            res.aggregate("event_study")
+            res.aggregate("group")
+            return res
 
     @pytest.mark.parametrize("stratified", [False, True], ids=["psu", "stratified"])
     def test_survey_path_tiles_match_single_tile(self, monkeypatch, stratified):
@@ -586,7 +594,7 @@ class TestCSBootstrapTileInvariance:
         def fit():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                return CallawaySantAnna(
+                res = CallawaySantAnna(
                     estimation_method="reg", panel=False, n_bootstrap=200, seed=42
                 ).fit(
                     self._rcs_frame(),
@@ -594,8 +602,10 @@ class TestCSBootstrapTileInvariance:
                     "unit",
                     "period",
                     "first_treat",
-                    aggregate="all",
                 )
+                res.aggregate("event_study")
+                res.aggregate("group")
+                return res
 
         base = fit()
         self._force_one_column_tiles(monkeypatch)
@@ -606,6 +616,16 @@ class TestCSBootstrapTileInvariance:
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
             np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
+
+
+def _with_aggregates(res):
+    """``(results, aggregate("event_study"), aggregate("group"))`` for a bootstrapped fit.
+
+    Since 4.0 the fit-time surface is gone and each post-fit ``aggregate()`` call
+    REPLAYS the multiplier bootstrap, so the containers are materialized right
+    after the fit - inside the caller's chunk/tile monkeypatch context.
+    """
+    return res, res.aggregate("event_study"), res.aggregate("group")
 
 
 def _design(psu=None, strata=None, fpc=None, weights=None, lonely_psu="adjust"):
@@ -697,27 +717,27 @@ class TestEfficientDiDBootstrapChunkInvariance:
     def _fit(self, cluster=None, survey_design=None):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return EfficientDiD(n_bootstrap=200, seed=42, cluster=cluster).fit(
+            res = EfficientDiD(n_bootstrap=200, seed=42, cluster=cluster).fit(
                 self._panel(),
                 "y",
                 "unit",
                 "period",
                 "first_treat",
-                aggregate="all",
                 survey_design=survey_design,
             )
+            # 4.0: EfficientDiD stores no fit-time surface; the post-fit
+            # containers replay the bootstrap under the caller's monkeypatch.
+            assert res.event_study_effects is None and res.group_effects is None
+            return _with_aggregates(res)
 
     @staticmethod
-    def _ses(r):
+    def _ses(fitted):
         # Flatten every bootstrap SE (overall + group_time + event_study + group)
         # into one vector, ordered by sorted keys, for an nan-safe comparison.
+        r, es_c, grp_c = fitted
         gt = [r.group_time_effects[k]["se"] for k in sorted(r.group_time_effects)]
-        es = (
-            [r.event_study_effects[k]["se"] for k in sorted(r.event_study_effects)]
-            if r.event_study_effects
-            else []
-        )
-        gp = [r.group_effects[k]["se"] for k in sorted(r.group_effects)] if r.group_effects else []
+        es = [float(x) for x in es_c.se]
+        gp = [float(x) for x in grp_c.se]
         return np.array([r.overall_se, *gt, *es, *gp], dtype=float)
 
     def _run(self, monkeypatch, **fit_kwargs):
@@ -837,7 +857,6 @@ class TestHADBootstrapChunkInvariance:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
             )
 

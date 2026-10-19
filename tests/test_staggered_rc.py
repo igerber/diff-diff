@@ -130,26 +130,27 @@ class TestTreatmentEffectRecovery:
 
 
 class TestAggregation:
-    """Aggregation types work with RCS."""
+    """Post-fit aggregation levels work with RCS."""
 
-    @pytest.mark.parametrize("agg", ["simple", "event_study", "group"])
-    def test_aggregation(self, rc_data, agg):
+    def test_aggregation(self, rc_data):
         result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
             rc_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate=agg,
         )
         assert np.isfinite(result.overall_att)
-        if agg == "event_study":
-            assert result.event_study_effects is not None
-            for e, info in result.event_study_effects.items():
-                if info["n_groups"] > 0:
-                    assert np.isfinite(info["effect"])
-        if agg == "group":
-            assert result.group_effects is not None
+        # the fit never populates the fit-time surface; aggregation is post-fit
+        assert result.event_study_effects is None
+        assert result.group_effects is None
+        es = result.aggregate("event_study")
+        for att, n in zip(es.att, es.n):
+            if np.isfinite(n) and n > 0:
+                assert np.isfinite(att)
+        grp = result.aggregate("group")
+        assert len(grp.label) > 0
+        assert np.all(np.isfinite(grp.att))
 
 
 # =============================================================================

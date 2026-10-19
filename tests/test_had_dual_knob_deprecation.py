@@ -467,7 +467,8 @@ class TestHADFitDeprecation:
         df = two_period_panel
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
         with pytest.raises(TypeError):
-            # positional through aggregate, then a positional cband -- now
+            # the removed `aggregate` slot and a positional cband -- fit()
+            # has 6 positional parameters (data..first_treat) and cband is
             # keyword-only, so the 8th positional argument is rejected.
             est.fit(df, "y", "d", "time", "unit", None, "overall", True)
         r = est.fit(df, "y", "d", "time", "unit", cband=True)
@@ -494,7 +495,7 @@ class TestHADFitDeprecation:
             )
 
     def test_fit_rejects_pre_resolved_design_event_study(self, event_study_continuous_panel):
-        """PR #376 R8 P1: same TypeError on aggregate='event_study'."""
+        """PR #376 R8 P1: same TypeError on the multi-period (event-study) path."""
         df = event_study_continuous_panel
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", n_bootstrap=99, seed=0)
         with pytest.raises(TypeError, match=r"`survey_design=` accepts a SurveyDesign"):
@@ -629,7 +630,7 @@ class TestHADFitMassPointSurveyDesign:
 
 
 class TestHADFitEventStudySurveyDesign:
-    """PR #376 R2 P1: cover aggregate='event_study' + cband=True + survey_design=."""
+    """PR #376 R2 P1: cover the multi-period (event-study) path + cband=True + survey_design=."""
 
     def test_survey_design_kwarg_smoke(self, event_study_continuous_panel):
         df = event_study_continuous_panel
@@ -651,8 +652,8 @@ class TestHADFitEventStudySurveyDesign:
 
 
 class TestDidHadPretestWorkflowEventStudySurveyDesign:
-    """PR #376 R2 P1: cover did_had_pretest_workflow(aggregate='event_study',
-    survey_design=...)."""
+    """PR #376 R2 P1: cover did_had_pretest_workflow on a multi-period panel
+    (event-study battery) with survey_design=."""
 
     def test_survey_design_kwarg_smoke(self, event_study_panel):
         df = event_study_panel

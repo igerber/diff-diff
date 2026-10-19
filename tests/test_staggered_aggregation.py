@@ -308,7 +308,25 @@ class _ParityRecorder:
 
         def wrapper(mixin_self, *args, **kwargs):
             new_psi, new_units = orig(mixin_self, *args, **kwargs)
-            old_psi, _ = _frozen_combined_influence_function(*args, **kwargs)
+            frozen_args = list(args)
+            precomputed = frozen_args[7] if len(frozen_args) > 7 else kwargs.get("precomputed")
+            if (
+                frozen_args[5] is None
+                and precomputed is not None
+                and precomputed.get("is_panel", True)
+                and precomputed.get("survey_weights") is None
+            ):
+                # Post-fit ``aggregate()`` relays through the retained kit with
+                # ``df=None`` (the kit keeps no DataFrame); the fast path reads
+                # the cohort sizes off ``precomputed["unit_cohorts"]``. The
+                # frozen dense copy counts them off a per-unit frame, so hand
+                # it the equivalent one (one row per kit unit, canonical ids).
+                cohorts = np.asarray(precomputed["unit_cohorts"])
+                frozen_args[5] = pd.DataFrame(
+                    {"unit": np.arange(len(cohorts)), "first_treat": cohorts}
+                )
+                frozen_args[6] = "unit"
+            old_psi, _ = _frozen_combined_influence_function(*frozen_args, **kwargs)
             assert new_psi.shape == old_psi.shape
             np.testing.assert_allclose(
                 new_psi,
@@ -330,9 +348,10 @@ class _ParityRecorder:
 
 class TestCombinedIFFrozenParity:
     """Old-vs-new psi_total parity across data families and aggregation
-    targets. aggregate='all' exercises the multi-cohort overall target,
-    every per-horizon keeper subset (incl. single-keeper horizons), and
-    single-cohort group targets in one fit."""
+    targets. The plain fit exercises the multi-cohort overall target; the
+    post-fit ``aggregate("event_study")`` / ``aggregate("group")`` calls
+    exercise every per-horizon keeper subset (incl. single-keeper horizons)
+    and the single-cohort group targets."""
 
     def _fit_cs(self, df, covs=None, survey=False, rcs=False, boot=0):
         cs = CallawaySantAnna(
@@ -341,16 +360,17 @@ class TestCombinedIFFrozenParity:
             panel=not rcs,
             seed=7,
         )
-        cs.fit(
+        res = cs.fit(
             df,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
             covariates=covs,
-            aggregate="all",
             survey_design=SurveyDesign(weights="pw") if survey else None,
         )
+        res.aggregate("event_study")
+        res.aggregate("group")
         return cs
 
     def test_plain_panel(self, monkeypatch):
@@ -530,14 +550,15 @@ class TestFastPathTaken:
 
         monkeypatch.setattr(CallawaySantAnnaAggregationMixin, "_combined_if_fast", spy)
         cs = CallawaySantAnna(estimation_method="dr", seed=7)
-        cs.fit(
+        res = cs.fit(
             _make_panel(),
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
+        res.aggregate("event_study")
+        res.aggregate("group")
         # every aggregation target routed through the fast path, none fell
         # back to the general (DataFrame-scanning) branch
         assert calls["resolved"] > 0
@@ -563,15 +584,16 @@ class TestFastPathTaken:
         calls = self._spy(monkeypatch)
         cs = CallawaySantAnna(estimation_method="dr", panel=False, seed=7)
         with pytest.warns(UserWarning, match="stationary"):
-            cs.fit(
+            res = cs.fit(
                 _make_rcs(),
                 outcome="outcome",
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
                 covariates=["x1", "x2"],
-                aggregate="all",
             )
+        res.aggregate("event_study")
+        res.aggregate("group")
         assert calls["resolved"] > 0
         assert calls["fallback"] == 0
 
@@ -581,16 +603,17 @@ class TestFastPathTaken:
         optimization for the whole survey family."""
         calls = self._spy(monkeypatch)
         cs = CallawaySantAnna(estimation_method="dr", seed=7)
-        cs.fit(
+        res = cs.fit(
             _make_panel(n_cov=2, survey=True),
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
             covariates=["x1", "x2"],
-            aggregate="all",
             survey_design=SurveyDesign(weights="pw"),
         )
+        res.aggregate("event_study")
+        res.aggregate("group")
         assert calls["resolved"] > 0
         assert calls["fallback"] == 0
 
@@ -600,14 +623,16 @@ class TestFastPathTaken:
         calls = self._spy(monkeypatch)
         cs = CallawaySantAnna(estimation_method="dr", n_bootstrap=19, seed=7)
         with pytest.warns(UserWarning, match="n_bootstrap"):
-            cs.fit(
+            res = cs.fit(
                 _make_panel(),
                 outcome="outcome",
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="all",
             )
+            # the post-fit aggregation replays the bootstrap
+            res.aggregate("event_study")
+            res.aggregate("group")
         assert calls["resolved"] > 0
         assert calls["fallback"] == 0
 

@@ -57,15 +57,18 @@ def bench_fit(n_units, n_bootstrap=0, covariates=None, n_cohorts=5, n_runs=3,
     times = []
     for _ in range(n_runs):
         start = time.perf_counter()
-        cs.fit(
+        res = cs.fit(
             df,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
             covariates=covariates,
-            aggregate="all",
         )
+        # Keep "fit + aggregations" as the measured work (the 3.x
+        # fit(aggregate="all") route, removed at 4.0).
+        res.aggregate("event_study")
+        res.aggregate("group")
         elapsed = time.perf_counter() - start
         times.append(elapsed)
 

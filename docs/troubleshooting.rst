@@ -212,7 +212,7 @@ Staggered Adoption Issues
    # Use bootstrap for better inference. Post-fit aggregation works on
    # BOOTSTRAPPED fits too: results.aggregate('event_study') replays the
    # fit-time multiplier bootstrap from the retained RNG state (percentile
-   # inference - no refit and no deprecated fit-time aggregate= needed).
+   # inference - no refit needed; fit() takes no aggregate= keyword).
    cs = CallawaySantAnna(n_bootstrap=999)
    results = cs.fit(data, outcome='y', unit='unit_id',
                     time='period', first_treat='first_treat')

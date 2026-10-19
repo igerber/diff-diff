@@ -53,23 +53,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import ImputationDiD, TwoStageDiD
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 # =============================================================================
 # Module-level R-fixture availability + per-class seed decorrelation
@@ -181,12 +167,11 @@ class TestGardner2022Section3TwoStageProcedure:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        es = es_dict(res)
         for h, expected in tau_by_h.items():
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["effect"]
+            assert h in es, f"missing horizon {h}"
+            got = es[h]["effect"]
             assert abs(got - expected) < 0.06, f"h={h}: {got:.4f} vs {expected}"
 
     def test_stage1_uses_untreated_only(self) -> None:
@@ -318,11 +303,11 @@ class TestGardner2022Section33GMMVariance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
-        for h, eff in res.event_study_effects.items():
-            # Skip the normalized reference period (effect=se=0 by construction).
+        es = es_dict(res)
+        assert len(es) > 0
+        for h, eff in es.items():
+            # Skip the normalized reference period (att=0, inference NaN).
             if h >= 0 and np.isfinite(eff["effect"]):
                 assert np.isfinite(eff["se"]) and eff["se"] > 0, f"h={h}"
 
@@ -395,16 +380,15 @@ class TestGardner2022Section33GMMVariance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
-        # At least one pre-period lead is present and has a finite SE.
-        leads = [h for h in res.event_study_effects if h < 0]
-        assert leads, "pretrends=True should expose pre-period leads"
-        for h in leads:
-            eff = res.event_study_effects[h]
-            if np.isfinite(eff["effect"]):
-                assert np.isfinite(eff["se"]), f"lead h={h} SE non-finite"
+        es = res.aggregate("event_study")
+        # At least one pre-period lead is present and has a finite SE
+        # (the reference period's inference is NaN by container contract).
+        leads = (es.event_time < 0) & ~es.is_reference
+        assert leads.any(), "pretrends=True should expose pre-period leads"
+        for h, att, se in zip(es.event_time[leads], es.att[leads], es.se[leads]):
+            if np.isfinite(att):
+                assert np.isfinite(se), f"lead h={h} SE non-finite"
         # Overall ATT is unchanged by requesting pre-period leads.
         assert res.overall_att == pytest.approx(base.overall_att, abs=1e-8)
 
@@ -616,25 +600,20 @@ class TestGardner2022Identification:
             sigma=0.1,
             include_never_treated=False,
         )
+        res = TwoStageDiD().fit(
+            panel,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
         with pytest.warns(UserWarning, match="identified"):
-            res = TwoStageDiD().fit(
-                panel,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                aggregate="event_study",
-            )
-        assert res.event_study_effects is not None
+            es = es_dict(res)
         h_bar = 2
-        flagged = [
-            h
-            for h, eff in res.event_study_effects.items()
-            if h >= h_bar and np.isnan(eff["effect"])
-        ]
+        flagged = [h for h, eff in es.items() if h >= h_bar and np.isnan(eff["effect"])]
         assert flagged, "expected NaN horizons at or above h_bar"
         for h in flagged:
-            assert res.event_study_effects[h]["n_obs"] > 0, f"h={h} should keep n_obs>0"
+            assert es[h]["n_obs"] > 0, f"h={h} should keep n_obs>0"
 
     def test_balance_e_no_qualifying_cohorts_warns(self) -> None:
         """balance_e larger than any cohort's available pre-window -> no cohort
@@ -643,24 +622,18 @@ class TestGardner2022Identification:
         panel = _make_staggered_panel(
             rng, cohorts=[2, 3], n_per_cohort=60, n_periods=5, tau_constant=1.0, sigma=0.1
         )
-        with pytest.warns(UserWarning, match="balance_e"):
-            res = TwoStageDiD().fit(
-                panel,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                aggregate="event_study",
-                balance_e=10,  # impossible pre-window
-            )
-        assert res.event_study_effects is not None
-        # Only the reference period survives.
-        finite_effects = [
-            h for h, eff in res.event_study_effects.items() if eff.get("n_obs", 0) > 0
-        ]
-        assert finite_effects == [] or all(
-            res.event_study_effects[h]["effect"] == 0.0 for h in res.event_study_effects
+        res = TwoStageDiD().fit(
+            panel,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
+        with pytest.warns(UserWarning, match="balance_e"):
+            es = es_dict(res, balance_e=10)  # impossible pre-window
+        # Only the reference period survives.
+        finite_effects = [h for h, eff in es.items() if eff.get("n_obs", 0) > 0]
+        assert finite_effects == [] or all(es[h]["effect"] == 0.0 for h in es)
 
     def test_zero_obs_cohort_nan(self) -> None:
         """A cohort whose treated obs ALL fall at an unidentified period -> its
@@ -705,17 +678,16 @@ class TestGardner2022Identification:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="group",
             )
-        assert res.group_effects is not None
+            grp = group_dict(res)
         # Cohort 4's only treated obs is the unidentified t=4 -> NaN, n_obs=0.
-        assert 4 in res.group_effects
-        c4 = res.group_effects[4]
+        assert 4 in grp
+        c4 = grp[4]
         assert c4["n_obs"] == 0, f"cohort 4 should have n_obs=0, got {c4['n_obs']}"
         assert np.isnan(c4["effect"]), "cohort 4 effect must be NaN"
         assert np.isnan(c4["se"]) and np.isnan(c4["t_stat"]) and np.isnan(c4["p_value"])
         # Cohort 3 keeps an identified t=3 effect.
-        assert 3 in res.group_effects and res.group_effects[3]["n_obs"] > 0
+        assert 3 in grp and grp[3]["n_obs"] > 0
 
 
 # =============================================================================
@@ -805,14 +777,13 @@ class TestTwoStageDiDParityR:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        got_es = es_dict(res)
         es = golden["event_study"]
         assert len(es["horizons"]) > 0
         for h, att in zip(es["horizons"], es["att"]):
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["effect"]
+            assert h in got_es, f"missing horizon {h}"
+            got = got_es[h]["effect"]
             assert np.isfinite(got), f"non-finite ATT at h={h}"
             assert got == pytest.approx(att, abs=1e-6), f"h={h}"
 
@@ -823,13 +794,12 @@ class TestTwoStageDiDParityR:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        got_es = es_dict(res)
         es = golden["event_study"]
         assert len(es["horizons"]) > 0
         for h, se in zip(es["horizons"], es["se"]):
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["se"]
+            assert h in got_es, f"missing horizon {h}"
+            got = got_es[h]["se"]
             assert np.isfinite(got), f"non-finite SE at h={h}"
             assert got == pytest.approx(se, abs=1e-7), f"h={h}"

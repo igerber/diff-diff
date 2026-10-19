@@ -113,13 +113,14 @@ serves a different purpose: R-parity accuracy). They complement it.
       cluster="unit",
       n_bootstrap=999,
   ).fit(data, outcome="y", unit="unit", time="period",
-        first_treat="first_treat", covariates=["log_pop", "baseline_spend"],
-        aggregate="all")
+        first_treat="first_treat", covariates=["log_pop", "baseline_spend"])
+  es = results.aggregate("event_study")   # replays the fit-time bootstrap
   ```
 - **Operation chain.** (1) `BaconDecomposition.fit()` for TWFE diagnostic;
-  (2) CS fit with `aggregate="all"` (populates simple, group, event_study);
+  (2) CS fit followed by post-fit `aggregate("event_study")` (+ `aggregate("group")`;
+  the 3.x `fit(aggregate="all")` route, removed at 4.0);
   (3) inspect event-study pre-period ATTs for pre-trends; (4)
-  `compute_honest_did(results, method="relative_magnitude", M=[0.5, 1.0, 1.5, 2.0])`;
+  `compute_honest_did(es, method="relative_magnitude", M=[0.5, 1.0, 1.5, 2.0])`;
   (5) robustness: refit with `SunAbraham()` and `ImputationDiD()` for
   cross-estimator comparison; (6) refit CS without covariates for the
   Baker-mandated with/without comparison; (7) `practitioner_next_steps()`.
@@ -196,9 +197,10 @@ serves a different purpose: R-parity accuracy). They complement it.
   CallawaySantAnna(control_group="never_treated", estimation_method="reg",
                    n_bootstrap=199).fit(
       panel, outcome="y_mean", unit="state", time="year",
-      first_treat="first_treat", survey_design=stage2, aggregate="all",
+      first_treat="first_treat", survey_design=stage2,
   )
-  compute_honest_did(results, method="relative_magnitude", M=[0.5, 1.0, 1.5])
+  es = results.aggregate("event_study")
+  compute_honest_did(es, method="relative_magnitude", M=[0.5, 1.0, 1.5])
   ```
 - **Operation chain.** (1) `aggregate_survey()` - the microdata-to-panel
   collapse; (2) CS fit with the second-stage SurveyDesign returned by
@@ -305,7 +307,7 @@ serves a different purpose: R-parity accuracy). They complement it.
   ```
 - **Operation chain.** (1) ContinuousDiD fit - produces
   overall ATT, overall ACRT, and the dose-response curves
-  unconditionally (the fit-time `aggregate=` kwarg is deprecated, row
+  unconditionally (`fit()` takes no `aggregate=` kwarg since 4.0, row
   M-025); (2) extract
   `results.to_dataframe(level="dose_response")` and
   `level="group_time"`; (3) a second analytical ContinuousDiD fit followed by

@@ -650,22 +650,16 @@ def _handle_imputation(results: Any):
                 "ImputationDiD aggregates post-fit from its panel-backed kit "
                 "(M-021) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
-                else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
-                "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') and, where supported, "
-                "aggregate('total') relay the stored inference - "
-                "refit with the deprecated fit-time aggregation (or "
-                "n_bootstrap=0) to obtain the recomputed surfaces."
+                else "This fit is BOOTSTRAPPED: ImputationDiD aggregates post-fit "
+                "(M-021) - no refit needed; bootstrapped fits relay the "
+                "percentile event-study/group surfaces computed at fit "
+                "(balance_e unavailable there - re-fit with n_bootstrap=0 "
+                "for a balanced window)."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
                 "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
                 "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
-                if getattr(results, "bootstrap_results", None) is None
-                else "# Bootstrap fit: aggregate at fit time (deprecated kwarg):\n"
-                "results = imp.fit(data, ..., aggregate='all')\n"
-                "print(results.group_effects)        # Per-cohort ATTs\n"
-                "print(results.event_study_effects)  # Dynamic effects"
             ),
             priority="medium",
             # NON-STEPS key (the M-024 "sub_experiment_balance" lesson):
@@ -709,22 +703,16 @@ def _handle_two_stage(results: Any):
                 "TwoStageDiD aggregates post-fit from its panel-backed kit "
                 "(M-022) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
-                else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
-                "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') and, where supported, "
-                "aggregate('total') relay the stored inference - "
-                "refit with the deprecated fit-time aggregation (or "
-                "n_bootstrap=0) to obtain the recomputed surfaces."
+                else "This fit is BOOTSTRAPPED: TwoStageDiD aggregates post-fit "
+                "(M-022) - no refit needed; bootstrapped fits relay the "
+                "percentile event-study/group surfaces computed at fit "
+                "(balance_e unavailable there - re-fit with n_bootstrap=0 "
+                "for a balanced window)."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
                 "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
                 "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
-                if getattr(results, "bootstrap_results", None) is None
-                else "# Bootstrap fit: aggregate at fit time (deprecated kwarg):\n"
-                "results = ts.fit(data, ..., aggregate='all')\n"
-                "print(results.group_effects)        # Per-cohort ATTs\n"
-                "print(results.event_study_effects)  # Dynamic effects"
             ),
             priority="medium",
             # NON-STEPS key (the M-024 "sub_experiment_balance" lesson):
@@ -1232,18 +1220,16 @@ def _handle_continuous(results: Any):
             baker_step=7,
             label="Aggregate post-fit (event study / dose / simple)",
             why=(
-                "The fit-time aggregate= kwarg is deprecated (row M-025; "
-                "removed in 4.0). Aggregate as a post-fit step instead: "
+                "Aggregate as a post-fit step (row M-025): "
                 "aggregate('event_study') recomputes the binarized event "
-                "study from the retained kit (analytical fits only - on a "
-                "bootstrapped fit it raises; re-fit with n_bootstrap=0 or "
-                "use the deprecated fit-time aggregate='eventstudy' until "
-                "4.0), while aggregate('dose') and aggregate('simple') are "
+                "study from the retained kit on analytic fits and relays "
+                "the percentile surface computed at fit on bootstrapped "
+                "fits, while aggregate('dose') and aggregate('simple') are "
                 "views over the always-computed curves and overall "
                 "ATT/ACRT, available on any fit."
             ),
             code=(
-                "es = results.aggregate('event_study')  # analytical fits\n"
+                "es = results.aggregate('event_study')\n"
                 "dose_table = results.aggregate('dose')\n"
                 "overall = results.aggregate('simple')  # att + acrt rows"
             ),

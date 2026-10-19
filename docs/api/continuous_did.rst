@@ -131,10 +131,10 @@ Accessing dose-response curves (always computed by ``fit()``)::
 
 Event study aggregation (post-fit, row M-025)::
 
-    # Dynamic effects (binarized ATT by relative period). The event-study
-    # recompute needs an ANALYTICAL fit - on a bootstrapped fit
-    # aggregate('event_study') raises; the deprecated fit-time
-    # aggregate='eventstudy' remains available for that case until 4.0.
+    # Dynamic effects (binarized ATT by relative period). On an analytical
+    # fit aggregate('event_study') recomputes from the retained kit; on a
+    # bootstrapped fit (n_bootstrap > 0) the percentile event study is
+    # computed at fit and aggregate('event_study') relays it (4.0).
     est_es = ContinuousDiD(seed=42)
     results_es = est_es.fit(data, outcome='outcome', unit='unit',
                             time='period', first_treat='first_treat',

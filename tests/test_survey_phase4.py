@@ -18,21 +18,6 @@ from diff_diff import (
 )
 from diff_diff.linalg import solve_logit
 
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
-
 # =============================================================================
 # Shared Fixtures
 # =============================================================================
@@ -343,14 +328,13 @@ class TestImputationDiDSurvey:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
             survey_design=survey_design_weights_only,
         )
-        assert result.event_study_effects is not None
-        assert len(result.event_study_effects) > 0
-        for h, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
+        assert result.event_study_effects is None  # analytic fit: post-fit route only
+        es = result.aggregate("event_study")
+        assert len(es.event_time) > 0
+        assert np.all(np.isfinite(es.att))
+        assert np.all(np.isfinite(es.se[~es.is_reference]))
 
     def test_bootstrap_survey_supported(self, staggered_survey_data, survey_design_weights_only):
         """Bootstrap + survey should produce finite SE via PSU-level multiplier bootstrap."""
@@ -453,35 +437,32 @@ class TestImputationDiDSurvey:
         ), f"SE not scale-invariant (covariates): {r1.overall_se} vs {r2.overall_se}"
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='group' works with survey design."""
+        """Post-fit group aggregation works with survey design."""
         result = ImputationDiD().fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="group",
             survey_design=survey_design_weights_only,
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
-        for g, eff in result.group_effects.items():
-            assert np.isfinite(eff["effect"])
+        grp = result.aggregate("group")
+        assert len(grp.label) > 0
+        assert np.all(np.isfinite(grp.att))
 
     def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='all' works with survey design."""
+        """Post-fit event-study + group aggregation work with survey design."""
         result = ImputationDiD().fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="all",
             survey_design=survey_design_weights_only,
         )
         assert np.isfinite(result.overall_att)
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert len(result.aggregate("event_study").event_time) > 0
+        assert len(result.aggregate("group").label) > 0
 
     def test_aweight_raises(self, staggered_survey_data):
         """aweight survey design should raise ValueError."""
@@ -643,33 +624,31 @@ class TestTwoStageDiDSurvey:
         assert "pweight" in summary
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='group' works with survey design."""
+        """Post-fit group aggregation works with survey design."""
         result = TwoStageDiD().fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="group",
             survey_design=survey_design_weights_only,
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
+        grp = result.aggregate("group")
+        assert len(grp.label) > 0
 
     def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='all' works with survey design."""
+        """Post-fit event-study + group aggregation work with survey design."""
         result = TwoStageDiD().fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="all",
             survey_design=survey_design_weights_only,
         )
         assert np.isfinite(result.overall_att)
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert len(result.aggregate("event_study").event_time) > 0
+        assert len(result.aggregate("group").label) > 0
 
     def test_always_treated_with_survey(self, staggered_survey_data):
         """TwoStageDiD with survey + always-treated units should not crash."""
@@ -838,21 +817,20 @@ class TestCallawaySantAnnaSurvey:
         assert result.survey_metadata is not None
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='group' works with weights-only survey design."""
+        """Post-fit group aggregation works with weights-only survey design."""
         result = CallawaySantAnna(estimation_method="reg").fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="group",
             survey_design=survey_design_weights_only,
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
+        grp = result.aggregate("group")
+        assert len(grp.label) > 0
 
     def test_aggregate_group_full_design(self, staggered_survey_data):
-        """aggregate='group' with full design uses design-based SEs."""
+        """Post-fit group aggregation with full design uses design-based SEs."""
         sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         result = CallawaySantAnna(estimation_method="reg").fit(
             staggered_survey_data,
@@ -860,29 +838,26 @@ class TestCallawaySantAnnaSurvey:
             "unit",
             "period",
             "first_treat",
-            aggregate="group",
             survey_design=sd_full,
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
-        for g, info in result.group_effects.items():
-            assert np.isfinite(info["effect"])
-            assert np.isfinite(info["se"])
+        grp = result.aggregate("group")
+        assert len(grp.label) > 0
+        assert np.all(np.isfinite(grp.att))
+        assert np.all(np.isfinite(grp.se))
 
     def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
-        """aggregate='all' works with weights-only survey design."""
+        """Post-fit event-study + group aggregation work with weights-only survey design."""
         result = CallawaySantAnna(estimation_method="reg").fit(
             staggered_survey_data,
             "outcome",
             "unit",
             "period",
             "first_treat",
-            aggregate="all",
             survey_design=survey_design_weights_only,
         )
         assert np.isfinite(result.overall_att)
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert len(result.aggregate("event_study").event_time) > 0
+        assert len(result.aggregate("group").label) > 0
 
     def test_bootstrap_survey_supported(self, staggered_survey_data, survey_design_weights_only):
         """Bootstrap + survey now works via PSU-level multiplier bootstrap."""
@@ -963,7 +938,6 @@ class TestCallawaySantAnnaSurvey:
                 "period",
                 "first_treat",
                 covariates=["x1", "x2"],
-                aggregate="simple",
                 survey_design=sd,
             )
         assert np.isfinite(result.overall_att)
@@ -984,7 +958,6 @@ class TestCallawaySantAnnaSurvey:
             "period",
             "first_treat",
             covariates=["x1"],
-            aggregate="simple",
             survey_design=sd1,
         )
         r2 = est.fit(
@@ -994,7 +967,6 @@ class TestCallawaySantAnnaSurvey:
             "period",
             "first_treat",
             covariates=["x1"],
-            aggregate="simple",
             survey_design=sd2,
         )
         assert np.isclose(
@@ -1045,7 +1017,6 @@ class TestCallawaySantAnnaSurvey:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
         )
         r_w = CallawaySantAnna(estimation_method="reg").fit(
             staggered_survey_data,
@@ -1053,14 +1024,13 @@ class TestCallawaySantAnnaSurvey:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
             survey_design=survey_design_weights_only,
         )
         # Event study ATTs should differ with non-uniform weights
         assert r_unw.overall_att != r_w.overall_att
-        # Event study effects should exist
-        assert r_w.event_study_effects is not None
-        assert len(r_w.event_study_effects) > 0
+        # Event study effects should exist on the post-fit route
+        es_w = r_w.aggregate("event_study")
+        assert len(es_w.event_time) > 0
 
     def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
         """Summary output should include survey design section."""
@@ -1302,7 +1272,6 @@ class TestCallawaySantAnnaSurveyInference:
                 "unit",
                 "period",
                 "first_treat",
-                aggregate="simple",
                 survey_design=sd1,
             )
             r2 = CallawaySantAnna(estimation_method="reg").fit(
@@ -1311,7 +1280,6 @@ class TestCallawaySantAnnaSurveyInference:
                 "unit",
                 "period",
                 "first_treat",
-                aggregate="simple",
                 survey_design=sd2,
             )
         assert np.isclose(
@@ -1337,7 +1305,6 @@ class TestCallawaySantAnnaSurveyInference:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="simple",
                 survey_design=sd1,
             )
             r2 = est.fit(
@@ -1346,7 +1313,6 @@ class TestCallawaySantAnnaSurveyInference:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="simple",
                 survey_design=sd2,
             )
             assert np.isclose(
@@ -1392,7 +1358,6 @@ class TestCallawaySantAnnaSurveyInference:
             "unit",
             "period",
             "first_treat",
-            aggregate="simple",
             survey_design=sd_full,
         )
         assert np.isfinite(result.overall_att)

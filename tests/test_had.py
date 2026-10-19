@@ -22,8 +22,8 @@ Covers the 12 plan commit criteria:
    all-NaN inference.
 9. sklearn clone round-trip preserves raw ``design="auto"``; fit is
    idempotent.
-10. Scaffolding (``aggregate="event_study"``, ``survey``, ``weights``)
-    raises ``NotImplementedError`` with phase pointers.
+10. Scaffolding: the removed fit-time ``aggregate=`` keyword is a native
+    ``TypeError``; ``survey`` / ``weights`` positional slots are gone.
 11. ``get_params()`` keys match ``__init__`` signature.
 12. REGISTRY ticks tested indirectly via parity with the paper rules.
 """
@@ -565,39 +565,16 @@ class TestPanelContract:
         with pytest.raises(ValueError, match=r"[Uu]nbalanced|[Bb]alanced"):
             est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_three_periods_supplied_overall_raises(self):
-        # M-027: a PLAIN 3-period fit now infers the event-study mode (the
-        # error->works behavior delta, pinned in test_aggregate_contract);
-        # the overall estimator's two-period requirement still binds on the
-        # supplied legacy path.
+    def test_fit_time_aggregate_kwarg_is_gone(self):
+        # 4.0: the mode follows the panel shape (M-027 inference; a plain
+        # 3-period fit selects the event study, pinned in
+        # test_aggregate_contract). The removed fit-time ``aggregate=``
+        # keyword is a native TypeError - there is no supplied-mode path.
         d, dy = _dgp_continuous_at_zero(200, seed=0)
-        panel2 = _make_panel(d, dy)
-        panel3 = pd.concat([panel2, panel2.assign(period=3)])
+        panel = _make_panel(d, dy)
         est = HeterogeneousAdoptionDiD()
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match=r"exactly two time periods"):
-                est.fit(panel3, "outcome", "dose", "period", "unit", aggregate="overall")
-
-    def test_three_periods_with_first_treat_supplied_overall_raises(self):
-        # See test_three_periods_supplied_overall_raises: the plain-fit
-        # routing changed with M-027; the supplied legacy path keeps the
-        # overall estimator's two-period requirement.
-        d, dy = _dgp_continuous_at_zero(200, seed=0)
-        panel2 = _make_panel(d, dy)
-        panel3 = pd.concat([panel2, panel2.assign(period=3)])
-        panel3["ft"] = 2  # arbitrary first_treat
-        est = HeterogeneousAdoptionDiD()
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match=r"exactly two time periods"):
-                est.fit(
-                    panel3,
-                    "outcome",
-                    "dose",
-                    "period",
-                    "unit",
-                    first_treat="ft",
-                    aggregate="overall",
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            est.fit(panel, "outcome", "dose", "period", "unit", aggregate="overall")
 
     def test_single_period_raises(self):
         d, _ = _dgp_continuous_at_zero(200, seed=0)
@@ -900,38 +877,23 @@ class TestSklearnCompat:
 
 
 class TestScaffoldingRejections:
-    def test_aggregate_event_study_on_two_period_panel_raises(self):
-        """Event-study mode requires T > 2 (Phase 2b). Reaching it on a T=2
-        panel now takes the deprecated supplied path (a plain T=2 fit infers
-        the overall mode, M-027); the shape error still binds there."""
+    def test_aggregate_kwarg_removed_raises_type_error(self):
+        """4.0: the mode is inferred from the panel shape (a T=2 panel is the
+        overall estimator, T > 2 the event study); the fit-time
+        ``aggregate=`` keyword no longer exists, so supplying it (any value)
+        is a native TypeError."""
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel = _make_panel(d, dy)
         est = HeterogeneousAdoptionDiD()
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="more than two"):
-                est.fit(
-                    panel,
-                    "outcome",
-                    "dose",
-                    "period",
-                    "unit",
-                    aggregate="event_study",
-                )
-
-    def test_aggregate_invalid_raises(self):
-        d, dy = _dgp_continuous_at_zero(200, seed=0)
-        panel = _make_panel(d, dy)
-        est = HeterogeneousAdoptionDiD()
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="Invalid aggregate"):
-                est.fit(
-                    panel,
-                    "outcome",
-                    "dose",
-                    "period",
-                    "unit",
-                    aggregate="garbage",
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            est.fit(
+                panel,
+                "outcome",
+                "dose",
+                "period",
+                "unit",
+                aggregate="event_study",
+            )
 
     def test_survey_design_bad_type_raises(self):
         """survey_design= must be a SurveyDesign-like object with a
@@ -2196,11 +2158,10 @@ def _fit_es(est, *args, **kwargs) -> HeterogeneousAdoptionDiDEventStudyResults:
     The public ``fit()`` is annotated to return a union over the
     single-period ``HeterogeneousAdoptionDiDResults`` and the multi-
     period ``HeterogeneousAdoptionDiDEventStudyResults``, matching its
-    runtime polymorphism on ``aggregate``. When ``aggregate="event_study"``
-    is requested, this helper narrows the union to the event-study
-    branch for the test body via ``typing.cast``.
+    runtime polymorphism on the panel shape (T > 2 selects the event
+    study). This helper narrows the union to the event-study branch for
+    the test body via ``typing.cast``.
     """
-    kwargs.setdefault("aggregate", "event_study")
     result = est.fit(*args, **kwargs)
     return cast(HeterogeneousAdoptionDiDEventStudyResults, result)
 
@@ -2210,8 +2171,8 @@ class TestFitReturnAnnotation:
 
     The annotation MUST be a union over the single-period and event-study
     result classes — narrowing one branch out silently would make the
-    static type contract diverge from the runtime polymorphism on
-    ``aggregate``.
+    static type contract diverge from the runtime polymorphism on the
+    panel shape.
     """
 
     def test_fit_return_annotation_is_union_of_result_classes(self):
@@ -2545,40 +2506,39 @@ class TestEventStudyPerHorizonSEIndependence:
                 assert np.isnan(overall_result.att)
 
 
-class TestEventStudyAggregateMatrix:
-    """2x2 period/aggregate matrix: reciprocal rejections."""
+class TestEventStudyModeInference:
+    """The mode follows the panel shape: T=2 -> overall result, T>2 ->
+    event-study result; the fit-time ``aggregate=`` keyword is gone."""
 
-    def test_T2_event_study_raises(self):
+    def test_T2_returns_overall_result(self):
         d = np.linspace(0.0, 1.0, 100)
         dy = 0.3 * d + 0.01 * np.random.default_rng(0).standard_normal(100)
         panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="more than two"):
-                HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-                )
+        res = HeterogeneousAdoptionDiD(design="auto").fit(
+            panel, "outcome", "dose", "period", "unit"
+        )
+        assert isinstance(res, HeterogeneousAdoptionDiDResults)
+        assert not isinstance(res, HeterogeneousAdoptionDiDEventStudyResults)
 
-    def test_T_gt_2_overall_raises(self):
+    def test_T_gt_2_returns_event_study_result(self):
         rng = np.random.default_rng(0)
         G = 100
         d = rng.uniform(0.0, 1.0, G)
         d[0] = 0.0
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="exactly two time periods"):
-                HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="overall"
-                )
+        res = HeterogeneousAdoptionDiD(design="auto").fit(
+            panel, "outcome", "dose", "period", "unit"
+        )
+        assert isinstance(res, HeterogeneousAdoptionDiDEventStudyResults)
 
-    def test_invalid_aggregate_raises(self):
+    def test_aggregate_kwarg_is_type_error(self):
         d = np.linspace(0.0, 1.0, 100)
         dy = 0.3 * d
         panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="Invalid aggregate"):
-                HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="garbage"
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            HeterogeneousAdoptionDiD(design="auto").fit(
+                panel, "outcome", "dose", "period", "unit", aggregate="overall"
+            )
 
 
 class TestEventStudyPlacebos:
@@ -5431,8 +5391,8 @@ class TestEventStudySurveyCband:
 
     def test_survey_event_study_continuous_end_to_end(self):
         """Review R6 P3: estimator-level
-        ``fit(aggregate='event_study', survey_design=SurveyDesign(...))``
-        integration lock for the continuous path. Verifies
+        multi-period ``fit(survey_design=SurveyDesign(...))`` (event-study
+        mode) integration lock for the continuous path. Verifies
         variance_formula, survey_metadata.df_survey (t-inference path),
         cband_* population, and stratified PSU dispatch through
         _aggregate_unit_resolved_survey."""
@@ -5480,8 +5440,8 @@ class TestEventStudySurveyCband:
 
     def test_survey_event_study_mass_point_end_to_end(self):
         """Review R6 P3: estimator-level
-        ``fit(design='mass_point', aggregate='event_study',
-        survey_design=...)`` integration lock. Verifies
+        multi-period ``fit(design='mass_point', survey_design=...)``
+        (event-study mode) integration lock. Verifies
         variance_formula='survey_binder_tsl_2sls' and that the
         weighted 2SLS IF flows correctly through per-horizon
         Binder-TSL + sup-t bootstrap."""

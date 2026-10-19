@@ -105,33 +105,33 @@ class TestStackedDiDBasic:
             if h in results.event_study_effects:
                 assert results.event_study_effects[h]["n_obs"] > 0
 
-    def test_group_aggregate_raises(self, staggered_data):
-        """aggregate='group' warns (M-024 shim) then raises ValueError."""
+    def test_fit_time_aggregate_kwarg_removed(self, staggered_data):
+        """4.0: the fit-time ``aggregate=`` keyword is gone (native TypeError);
+        the event study is always computed."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            with pytest.raises(ValueError, match="group.*not supported"):
-                est.fit(
-                    staggered_data,
-                    outcome="outcome",
-                    unit="unit",
-                    time="period",
-                    first_treat="first_treat",
-                    aggregate="group",
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            est.fit(
+                staggered_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="group",
+            )
 
-    def test_all_aggregate_raises(self, staggered_data):
-        """aggregate='all' warns (M-024 shim) then raises ValueError."""
+    def test_group_aggregation_unsupported(self, staggered_data):
+        """StackedDiD exposes no group aggregation: the post-fit
+        ``aggregate("group")`` raises the mixin's unsupported-type error."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            with pytest.raises(ValueError, match="all.*not supported"):
-                est.fit(
-                    staggered_data,
-                    outcome="outcome",
-                    unit="unit",
-                    time="period",
-                    first_treat="first_treat",
-                    aggregate="all",
-                )
+        results = est.fit(
+            staggered_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            results.aggregate("group")
 
     def test_simple_att(self, staggered_data):
         """Plain fit: overall ATT plus the always-computed surface (M-024)."""
@@ -898,18 +898,27 @@ class TestValidation:
             StackedDiD(cluster="invalid")
 
     def test_invalid_aggregate(self, staggered_data):
-        """Warns (M-024 shim) then raises on invalid aggregate parameter."""
+        """The fit-time ``aggregate=`` keyword is gone (4.0): any value is a
+        native TypeError; an unknown post-fit aggregation type raises."""
         est = StackedDiD()
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            with pytest.raises(ValueError, match="aggregate"):
-                est.fit(
-                    staggered_data,
-                    outcome="outcome",
-                    unit="unit",
-                    time="period",
-                    first_treat="first_treat",
-                    aggregate="invalid",
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            est.fit(
+                staggered_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="invalid",
+            )
+        results = est.fit(
+            staggered_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            results.aggregate("invalid")
 
     def test_population_required_for_population_weighting(self, staggered_data):
         """Raises when population col not specified with weighting='population'."""

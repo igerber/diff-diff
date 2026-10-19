@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict
 from scipy import stats
 
 from diff_diff.sun_abraham import SunAbraham, SunAbrahamResults
@@ -558,8 +559,8 @@ class TestSunAbrahamVsCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        cs_varying_es = es_dict(cs_varying_results)
 
         # Callaway-Sant'Anna with universal base (all compare to g-1)
         cs_universal = CallawaySantAnna(base_period="universal")
@@ -569,13 +570,13 @@ class TestSunAbrahamVsCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        cs_universal_es = es_dict(cs_universal_results)
 
         # Find common event times
         sa_times = set(sa_results.event_study_effects.keys())
-        cs_varying_times = set(cs_varying_results.event_study_effects.keys())
-        cs_universal_times = set(cs_universal_results.event_study_effects.keys())
+        cs_varying_times = set(cs_varying_es.keys())
+        cs_universal_times = set(cs_universal_es.keys())
         common_times = sa_times & cs_varying_times & cs_universal_times
 
         # Separate pre and post periods
@@ -585,14 +586,14 @@ class TestSunAbrahamVsCallawaySantAnna:
         # Post-treatment effects should match across all methods
         for t in post_times:
             sa_eff = sa_results.event_study_effects[t]["effect"]
-            cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
-            cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
+            cs_vary_eff = cs_varying_es[t]["effect"]
+            cs_univ_eff = cs_universal_es[t]["effect"]
 
             # All three should be similar for post-treatment
             max_se = max(
                 sa_results.event_study_effects[t]["se"],
-                cs_varying_results.event_study_effects[t]["se"],
-                cs_universal_results.event_study_effects[t]["se"],
+                cs_varying_es[t]["se"],
+                cs_universal_es[t]["se"],
             )
             assert abs(sa_eff - cs_vary_eff) < 3 * max_se, (
                 f"Post-period t={t}: SA and CS(varying) differ too much: "
@@ -614,8 +615,8 @@ class TestSunAbrahamVsCallawaySantAnna:
         total_diff_universal = 0.0
         for t in pre_times:
             sa_eff = sa_results.event_study_effects[t]["effect"]
-            cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
-            cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
+            cs_vary_eff = cs_varying_es[t]["effect"]
+            cs_univ_eff = cs_universal_es[t]["effect"]
 
             total_diff_varying += abs(sa_eff - cs_vary_eff)
             total_diff_universal += abs(sa_eff - cs_univ_eff)

@@ -32,3 +32,29 @@ capturing `2> <file>` from a real run and applying the same rules.
 
 There is deliberately NO 0.153.4 transcript: the format was first observed on
 that CLI, but the live pin is 0.162.1 and the older CLI is no longer installed.
+
+## `v4_aggregate_oracles.json` - pre-removal aggregation oracles (4.0 PR 3)
+
+Numeric reference for `tests/test_aggregate_contract.py`, captured by
+`tests/_capture_v4_aggregate_oracles.py` on the UNMODIFIED tree at the commit
+named in `provenance.captured_at_head` - i.e. while the deprecated fit-time
+`fit(aggregate=...)` / `fit(balance_e=...)` route still existed and could serve
+as an independent second implementation of every aggregation surface. Layout:
+
+- `analytic` - per estimator, the `fit(aggregate="all")` (ContinuousDiD:
+  `"eventstudy"`) and `balance_e=1` surfaces on every design arm the contract
+  file exercises. The NumPy and Rust captures agreed to rtol 1e-12 /
+  atol 1e-13, so one copy is stored; the post-fit kit recompute must reproduce
+  it after the removal.
+- `boot` - keyed by weight backend (`"numpy"` / `"rust"`, the
+  `effective_weight_backend()` vocabulary), because the seeded multiplier
+  stream differs per backend: the fit-time bootstrapped surfaces the CS/EDiD
+  replays and the Imputation/TwoStage/ContinuousDiD relays must reproduce, plus
+  the overall quintets of bootstrapped PLAIN fits, which the always-on surface
+  materialization must leave unchanged. A pin whose backend key is absent skips.
+
+Rows are stored as `{label: {effect, se, t_stat, p_value, ci_lo, ci_hi,
+n_obs|n_groups, df_used, cband_lo/hi}}` with NaN serialized as `null`; labels
+are stringified numbers (`repr(float)` for fractional horizons). Re-capturing
+on a post-removal tree is NOT a substitute: the fit-time route is gone, so
+nothing independent remains to disagree with.

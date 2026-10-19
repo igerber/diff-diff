@@ -32,7 +32,6 @@ import pandas as pd
 from scipy import stats
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.aggregation import AggregationKit
 from diff_diff.imputation_aggregation import (  # noqa: F401 (compat re-exports)
     _compute_target_weights,
@@ -152,8 +151,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
     df_convention : {"residual", "cluster", "normal"}, default "residual"
         Degrees-of-freedom convention for the PRETRENDS lead regression's
         per-lead t/p/CI — the one ImputationDiD surface running the shared
-        clustered CR1 sandwich (``pretrends=True``, surfaced fit-time via
-        the deprecated ``aggregate="event_study"``/``"all"`` or post-fit via
+        clustered CR1 sandwich (``pretrends=True``, surfaced via
         ``results.aggregate('event_study')``). ``"residual"`` (default) uses
         the lead regression's residual df (``n − k_kept − absorbed
         [time, unit] rank``) — the 3.9 fix: previously silent normal-theory
@@ -271,8 +269,6 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Any = NOT_SUPPLIED,
-        balance_e: Any = NOT_SUPPLIED,
         survey_design: Optional["SurveyDesign"] = None,
     ) -> ImputationDiDResults:
         """
@@ -293,20 +289,6 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             Use 0 (or np.inf) for never-treated units.
         covariates : list of str, optional
             List of covariate column names.
-        aggregate : str, optional
-            DEPRECATED (3.9, removed in 4.0; row M-021): aggregate as a
-            post-fit step instead — ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')`` /
-            ``.aggregate('total')``. Supplying
-            ANY value (``None`` included) warns; the deprecated path still
-            works and returns exactly the numbers it always did
-            (fit-time mode: None/"simple" overall only, "event_study",
-            "group", or "all").
-        balance_e : int, optional
-            DEPRECATED (3.9, removed in 4.0; row M-118): moves onto
-            ``results.aggregate('event_study', balance_e=...)``. Restricts
-            the event study to cohorts observed at every relative time in
-            ``[-balance_e, max_h]`` (the balanced-window rule).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference. Supports
             pweight only (aweight/fweight raise ValueError). Supports strata,
@@ -324,38 +306,6 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         ValueError
             If required columns are missing or data validation fails.
         """
-        # M-021/M-118 deprecation shim (CS-style joint warning): a plain
-        # fit() never warns; supplying EITHER param with ANY value (None
-        # included) warns once, then the legacy routing below runs
-        # unchanged - the deprecated path returns exactly the numbers it
-        # always did (no new value validation; unknown strings still act
-        # like None). The post-fit successor validates its own vocabulary.
-        # The sentinel is normalized HERE, before every downstream read of
-        # ``aggregate`` (the pretrends+replicate gate and the df_convention
-        # reachability warning below both read it).
-        _deprecated_passed = [
-            n
-            for n, v in (("aggregate", aggregate), ("balance_e", balance_e))
-            if v is not NOT_SUPPLIED
-        ]
-        if _deprecated_passed:
-            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
-            warnings.warn(
-                f"ImputationDiD.fit({_args}) is deprecated and will be "
-                "removed in 4.0. Fit once, then aggregate as a post-fit "
-                "step: results = ImputationDiD().fit(...); "
-                "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
-                "alongside it: results.aggregate('event_study', "
-                "balance_e=2).",
-                FutureWarning,
-                stacklevel=2,
-            )
-        if aggregate is NOT_SUPPLIED:
-            aggregate = None
-        if balance_e is NOT_SUPPLIED:
-            balance_e = None
-
         # Re-validate vcov_type at fit-time: set_params validates eagerly
         # (BaseEstimator probe re-init), so this only catches DIRECT
         # attribute mutation (est.vcov_type = ...).
@@ -375,54 +325,32 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
-        # pretrends + analytical survey is supported (Phase 8e-iii).
-        # Replicate-weight surveys need per-replicate lead regression refits
-        # which are not yet implemented — reject that combination.
-        if (
-            self.pretrends
-            and survey_design is not None
-            and survey_design.replicate_method is not None
-            and aggregate in ("event_study", "all")
-        ):
-            raise NotImplementedError(
-                "pretrends=True is not yet compatible with replicate-weight "
-                "survey designs. Analytical survey designs (strata/PSU/FPC) "
-                "are supported. Use pretrends=False with replicate weights."
-            )
+        # (pretrends + replicate-weight survey: the analytical combination
+        # is rejected post-fit by ImputationDiDResults._aggregate_compute;
+        # replicate + n_bootstrap > 0 is rejected below, before any surface
+        # is materialized.)
 
         # Inert-config warning (no-silent-failures): the df_convention knob
         # moves only the pretrends lead regression's per-lead t/p/CI. Since
-        # the M-021 post-fit migration that inference is REACHABLE from any
-        # analytical pretrends=True fit via results.aggregate('event_study'),
-        # so the predicate is reachability-based, not aggregate-keyed:
-        # reachable iff pretrends AND not replicate-weight (the gate above
-        # rejects fit-time ES and the post-fit path fails closed too) AND
-        # (the deprecated fit-time ES/all was supplied OR n_bootstrap <= 0 —
-        # a bootstrapped fit builds no ES surface and post-fit aggregate()
-        # fails closed on it; validate_n_bootstrap rejects negatives at
-        # __init__, so 0 is the only reachable off value and `<= 0` is
-        # equivalent to `== 0` — kept as-is, no behavior change). Reachability-BASED, not exact: a
-        # fit whose bootstrap later FAILS (bootstrap_results=None) can still
-        # aggregate post-fit, so that corner warns spuriously — the warning
-        # fires before the bootstrap runs and cannot know. (The post-fit
-        # ``pretrend_test()`` reaches the lead helper too, but consumes only
-        # gamma/V_gamma — its joint Wald F denominator is knob-independent.)
+        # 4.0 that inference is REACHABLE from every pretrends=True fit via
+        # results.aggregate('event_study') - analytical fits recompute it
+        # from the kit, bootstrapped fits materialize the lead surface at
+        # fit and relay it - EXCEPT under a replicate-weight design, where
+        # the post-fit route fails closed (per-replicate lead refits are not
+        # implemented). So: reachable iff pretrends AND not replicate.
+        # (The post-fit ``pretrend_test()`` reaches the lead helper too, but
+        # consumes only gamma/V_gamma — its joint Wald F denominator is
+        # knob-independent.)
         _is_replicate_design = (
             survey_design is not None and survey_design.replicate_method is not None
         )
-        _lead_inference_reachable = (
-            self.pretrends
-            and not _is_replicate_design
-            and (aggregate in ("event_study", "all") or self.n_bootstrap <= 0)
-        )
+        _lead_inference_reachable = self.pretrends and not _is_replicate_design
         if self.df_convention != "residual" and not _lead_inference_reachable:
             warnings.warn(
                 f"df_convention={self.df_convention!r} affects only the "
                 "pretrends event-study per-lead inference (pretrends=True, "
-                "surfaced fit-time via the deprecated aggregate="
-                "'event_study'/'all' or post-fit via "
-                "results.aggregate('event_study')); it has no effect on "
-                "this configuration.",
+                "surfaced via results.aggregate('event_study')); it has no "
+                "effect on this configuration.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -764,56 +692,70 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             overall_att, overall_se, alpha=self.alpha, df=_survey_df
         )
 
-        # Event study and group aggregation (full-sample, for point estimates)
-        event_study_effects = None
-        group_effects = None
+        # Event study and group aggregation (full-sample, for point estimates).
+        # Materialized at fit ONLY where the post-fit route cannot recompute
+        # it: a bootstrapped fit (n_bootstrap > 0) needs the ES + group
+        # targets inside the multiplier bootstrap (per-draw state is not
+        # retained), so the surfaces are built here with balance_e=None and
+        # RELAYED by results.aggregate('event_study') / ('group'). Analytic
+        # fits leave both None and recompute from the kit on demand.
+        # FAIL-SOFT by design: any exception while materializing leaves the
+        # surfaces None (the bootstrap then covers the overall ATT only -
+        # today's plain-fit path) and is reported once the bootstrap
+        # outcome is known (see the storage rule below).
+        event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
+        group_effects: Optional[Dict[Any, Dict[str, Any]]] = None
+        _surface_failure: Optional[BaseException] = None
 
-        if aggregate in ("event_study", "all"):
-            event_study_effects = self._aggregate_event_study(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                balance_e=balance_e,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_df=_survey_df,
-                resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
-                proj_cache=proj_cache,
-            )
-
-        if aggregate in ("group", "all"):
-            group_effects = self._aggregate_group(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_df=_survey_df,
-                resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
-                proj_cache=proj_cache,
-            )
+        if self.n_bootstrap > 0:
+            try:
+                event_study_effects = self._aggregate_event_study(
+                    df=df,
+                    outcome=outcome,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    cluster_var=cluster_var,
+                    treatment_groups=treatment_groups,
+                    balance_e=None,
+                    kept_cov_mask=kept_cov_mask,
+                    survey_weights=survey_weights,
+                    survey_df=_survey_df,
+                    resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
+                    proj_cache=proj_cache,
+                )
+                group_effects = self._aggregate_group(
+                    df=df,
+                    outcome=outcome,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    cluster_var=cluster_var,
+                    treatment_groups=treatment_groups,
+                    kept_cov_mask=kept_cov_mask,
+                    survey_weights=survey_weights,
+                    survey_df=_survey_df,
+                    resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
+                    proj_cache=proj_cache,
+                )
+            except Exception as e:  # noqa: BLE001 - fail-soft by design
+                _surface_failure = e
+                event_study_effects = None
+                group_effects = None
 
         # Replicate variance: derive keys from actual outputs (after filtering)
         if _uses_replicate_imp:
@@ -834,7 +776,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
                 overall_att=overall_att,
                 event_study_effects=event_study_effects,
                 group_effects=group_effects,
-                balance_e=balance_e,
+                balance_e=None,
                 survey_df_seed=_survey_df,
             )
             overall_se = float(np.sqrt(max(_vcov_rep_imp[0, 0], 0.0)))
@@ -883,15 +825,29 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             "survey_weights": survey_weights,
         }
 
-        # Pre-compute cluster psi sums for bootstrap
-        psi_data = None
+        # Bootstrap stage: psi precompute + multiplier bootstrap. The
+        # engine draws the full weight matrix from the seeded RNG BEFORE any
+        # ES/group work, so the overall-ATT draws are the same with or
+        # without the surfaces. Attempt 1 runs WITH the materialized
+        # surfaces; if it fails while they are present (anything but an
+        # explicit NotImplementedError, which is re-raised), the surfaces
+        # are dropped and the stage is RETRIED ONCE overall-only - today's
+        # plain-fit path with today's failure semantics (psi failure ->
+        # warn + skip; _run_bootstrap failure -> propagates). On a seeded
+        # fit the retry reproduces attempt 1's draws exactly.
+        psi_data: Optional[Dict[str, Any]] = None
+        bootstrap_results: Optional[ImputationBootstrapResults] = None
         if self.n_bootstrap > 0 and n_valid > 0:
-            try:
-                # Extract survey weights for untreated obs (same as analytical path)
-                _sw_0 = survey_weights[omega_0_mask.values] if survey_weights is not None else None
-                # Extract survey weights for treated obs (event-study/group bootstrap paths)
-                _sw_1 = survey_weights[omega_1_mask.values] if survey_weights is not None else None
-                psi_data = self._precompute_bootstrap_psi(
+            # Extract survey weights for untreated obs (same as analytical path)
+            _sw_0 = survey_weights[omega_0_mask.values] if survey_weights is not None else None
+            # Extract survey weights for treated obs (event-study/group bootstrap paths)
+            _sw_1 = survey_weights[omega_1_mask.values] if survey_weights is not None else None
+
+            def _precompute_psi(
+                _es: Optional[Dict[int, Dict[str, Any]]],
+                _grp: Optional[Dict[Any, Dict[str, Any]]],
+            ) -> Dict[str, Any]:
+                return self._precompute_bootstrap_psi(
                     df=df,
                     outcome=outcome,
                     unit=unit,
@@ -907,34 +863,79 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
                     cluster_var=cluster_var,
                     kept_cov_mask=kept_cov_mask,
                     overall_weights=overall_weights,
-                    event_study_effects=event_study_effects,
-                    group_effects=group_effects,
+                    event_study_effects=_es,
+                    group_effects=_grp,
                     treatment_groups=treatment_groups,
                     tau_hat=tau_hat,
-                    balance_e=balance_e,
+                    balance_e=None,
                     survey_weights_0=_sw_0,
                     survey_weights_1=_sw_1,
                     proj_cache=proj_cache,
                 )
-            except Exception as e:
-                warnings.warn(
-                    f"Bootstrap pre-computation failed: {e}. " "Skipping bootstrap inference.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                psi_data = None
 
-        # Bootstrap
-        bootstrap_results = None
-        if self.n_bootstrap > 0 and psi_data is not None:
-            bootstrap_results = self._run_bootstrap(
-                original_att=overall_att,
-                original_event_study=event_study_effects,
-                original_group=group_effects,
-                psi_data=psi_data,
-                resolved_survey=resolved_survey,
+            _surfaces_present = event_study_effects is not None or group_effects is not None
+            if _surfaces_present:
+                try:
+                    psi_data = _precompute_psi(event_study_effects, group_effects)
+                    bootstrap_results = self._run_bootstrap(
+                        original_att=overall_att,
+                        original_event_study=event_study_effects,
+                        original_group=group_effects,
+                        psi_data=psi_data,
+                        resolved_survey=resolved_survey,
+                    )
+                except NotImplementedError:
+                    raise  # explicit rejections are never retried around
+                except Exception as e:  # noqa: BLE001 - fail-soft by design
+                    _surface_failure = e
+                    event_study_effects = None
+                    group_effects = None
+                    psi_data = None
+                    bootstrap_results = None
+            if not _surfaces_present or bootstrap_results is None:
+                # Plain overall-only stage (no surfaces), or the one-shot
+                # retry after a failure with surfaces - identical semantics.
+                try:
+                    psi_data = _precompute_psi(None, None)
+                except Exception as e:
+                    warnings.warn(
+                        f"Bootstrap pre-computation failed: {e}. " "Skipping bootstrap inference.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    psi_data = None
+                if psi_data is not None:
+                    bootstrap_results = self._run_bootstrap(
+                        original_att=overall_att,
+                        original_event_study=None,
+                        original_group=None,
+                        psi_data=psi_data,
+                        resolved_survey=resolved_survey,
+                    )
+
+        # Storage rule: the legacy fields hold a surface IFF the fit carries
+        # bootstrap inference. Without it (n_valid == 0 skipped the stage, or
+        # the bootstrap failed outright and the fit fell back to analytical
+        # inference) an analytical surface must never sit on a bootstrapped
+        # fit where summary()/to_dataframe()/the DiagnosticReport would read
+        # it as the fit's inference; aggregate() recomputes analytically
+        # there, exactly as on an n_bootstrap=0 fit.
+        if self.n_bootstrap > 0 and bootstrap_results is None:
+            event_study_effects = None
+            group_effects = None
+        elif bootstrap_results is not None and _surface_failure is not None:
+            warnings.warn(
+                f"{type(self).__name__}: the event-study/group surfaces could not "
+                f"be materialized on this bootstrapped fit ({_surface_failure}); "
+                "the bootstrap covered the overall ATT only, so "
+                "aggregate('event_study') / aggregate('group') are unavailable "
+                "here - re-fit with n_bootstrap=0 for the analytical post-fit "
+                "recompute.",
+                UserWarning,
+                stacklevel=2,
             )
 
+        if bootstrap_results is not None:
             # Update inference with bootstrap results
             overall_se = bootstrap_results.overall_att_se
             overall_t = (
@@ -1046,9 +1047,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         )
 
         # Attach the post-fit aggregation kit (M-021/M-118). Unconditional —
-        # including bootstrap fits, whose gate lives in _aggregate_compute
+        # including bootstrap fits, whose relay lives in _aggregate_compute
         # (a FAILED bootstrap leaves bootstrap_results=None and the fit
-        # aggregates normally).
+        # aggregates normally from the kit).
         self.results_._aggregation_kit = _build_imputation_aggregation_kit(
             fit_data=self._fit_data,
             treatment_groups=treatment_groups,
@@ -1405,5 +1406,5 @@ def _build_imputation_aggregation_kit(
         alpha=alpha,
         anticipation=anticipation,
         cband=False,  # no simultaneous-band concept on this estimator
-        bootstrap=None,  # replay not wired; recompute levels fail closed ('simple' relays, M-027)
+        bootstrap=None,  # no replay: bootstrapped fits RELAY the fit-time surfaces (4.0 PR 3)
     )

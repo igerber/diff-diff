@@ -12,21 +12,6 @@ from diff_diff.survey import (
 )
 
 # ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -386,7 +371,7 @@ class TestImputationDiDFPC:
         assert result_fpc.overall_se <= result_no_fpc.overall_se + 1e-10
 
     def test_imputation_fpc_event_study(self, staggered_data):
-        """FPC works with aggregate='event_study'."""
+        """FPC works with the post-fit event-study aggregation."""
         from diff_diff import ImputationDiD
 
         data = staggered_data
@@ -406,14 +391,14 @@ class TestImputationDiDFPC:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        for h, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["se"]), f"Non-finite SE at horizon {h}"
+        es = result.aggregate("event_study")
+        for h, se, ref in zip(es.event_time, es.se, es.is_reference):
+            if not ref:
+                assert np.isfinite(se), f"Non-finite SE at horizon {h}"
 
     def test_imputation_fpc_group(self, staggered_data):
-        """FPC works with aggregate='group'."""
+        """FPC works with the post-fit group aggregation."""
         from diff_diff import ImputationDiD
 
         data = staggered_data
@@ -433,11 +418,10 @@ class TestImputationDiDFPC:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="group",
         )
-        assert result.group_effects is not None
-        for g, eff in result.group_effects.items():
-            assert np.isfinite(eff["se"]), f"Non-finite SE for group {g}"
+        grp = result.aggregate("group")
+        for g, se in zip(grp.label, grp.se):
+            assert np.isfinite(se), f"Non-finite SE for group {g}"
 
 
 class TestTwoStageDiDFPC:
@@ -504,7 +488,7 @@ class TestTwoStageDiDFPC:
         assert result_fpc.overall_se <= result_no_fpc.overall_se + 1e-10
 
     def test_two_stage_fpc_event_study(self, staggered_data):
-        """FPC works with aggregate='event_study'."""
+        """FPC works with the post-fit event-study aggregation."""
         from diff_diff import TwoStageDiD
 
         data = staggered_data
@@ -524,14 +508,14 @@ class TestTwoStageDiDFPC:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        for h, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["se"]), f"Non-finite SE at horizon {h}"
+        es = result.aggregate("event_study")
+        for h, se, ref in zip(es.event_time, es.se, es.is_reference):
+            if not ref:
+                assert np.isfinite(se), f"Non-finite SE at horizon {h}"
 
     def test_two_stage_fpc_group(self, staggered_data):
-        """FPC works with aggregate='group'."""
+        """FPC works with the post-fit group aggregation."""
         from diff_diff import TwoStageDiD
 
         data = staggered_data
@@ -551,11 +535,10 @@ class TestTwoStageDiDFPC:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="group",
         )
-        assert result.group_effects is not None
-        for g, eff in result.group_effects.items():
-            assert np.isfinite(eff["se"]), f"Non-finite SE for group {g}"
+        grp = result.aggregate("group")
+        for g, se in zip(grp.label, grp.se):
+            assert np.isfinite(se), f"Non-finite SE for group {g}"
 
 
 class TestUnstratifiedFPC:
@@ -619,11 +602,11 @@ class TestUnstratifiedFPC:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        for h, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["se"]), f"Non-finite SE at horizon {h}"
+        es = result.aggregate("event_study")
+        for h, se, ref in zip(es.event_time, es.se, es.is_reference):
+            if not ref:
+                assert np.isfinite(se), f"Non-finite SE at horizon {h}"
 
 
 class TestSinglePSUUnstratifiedFPC:
@@ -1247,11 +1230,11 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
+        assert result.event_study_effects is None  # analytic fit: post-fit route only
+        es = result.aggregate("event_study")
         # Should have negative-horizon (pre-period) effects
-        pre_horizons = [h for h in result.event_study_effects if h < 0]
+        pre_horizons = [h for h in es.event_time if h < 0]
         assert len(pre_horizons) > 0
 
     def test_pretrends_survey_finite_se(self, staggered_data):
@@ -1268,12 +1251,12 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
-        for h, eff in result.event_study_effects.items():
+        es = result.aggregate("event_study")
+        for h, se in zip(es.event_time, es.se):
             if h < -1:  # Skip reference period (h=-1)
-                assert np.isfinite(eff["se"]), f"Non-finite SE at pre-horizon {h}"
-                assert eff["se"] > 0, f"Zero SE at pre-horizon {h}"
+                assert np.isfinite(se), f"Non-finite SE at pre-horizon {h}"
+                assert se > 0, f"Zero SE at pre-horizon {h}"
 
     def test_pretrend_test_survey_no_raise(self, staggered_data):
         """pretrend_test() works with survey design."""
@@ -1289,7 +1272,6 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
         pt = est._pretrend_test()
         assert "f_stat" in pt
@@ -1314,11 +1296,11 @@ class TestImputationPretrendsSurvey:
             first_treat="first_treat",
             covariates=["x1"],
             survey_design=sd,
-            aggregate="event_study",
         )
-        pre = [h for h in result.event_study_effects if h < -1]
-        for h in pre:
-            assert np.isfinite(result.event_study_effects[h]["se"])
+        es = result.aggregate("event_study")
+        pre = es.event_time < -1
+        assert pre.any()
+        assert np.all(np.isfinite(es.se[pre]))
 
     def test_pretrends_survey_with_bootstrap(self, staggered_data):
         """Survey pretrends + bootstrap: bootstrap doesn't overwrite pre-period SEs."""
@@ -1334,12 +1316,19 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
+        # Bootstrapped fits materialize the surface at fit time.
+        assert result.event_study_effects is not None
         pre = [h for h in result.event_study_effects if h < -1]
+        assert pre
         for h in pre:
             # Pre-period SEs come from lead regression, not bootstrap
             assert np.isfinite(result.event_study_effects[h]["se"])
+        # The relay reproduces the stored surface.
+        es = result.aggregate("event_study")
+        for h in pre:
+            i = list(es.event_time).index(h)
+            assert es.se[i] == result.event_study_effects[h]["se"]
 
     def test_pretrends_survey_always_treated_psu(self):
         """Survey pretrends with a PSU/stratum that has no untreated obs."""
@@ -1385,17 +1374,17 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
         # Should produce finite results even though stratum 0 has
         # mostly treated PSUs (sparse untreated domain)
         assert np.isfinite(result.overall_att)
-        pre = [h for h in result.event_study_effects if h < -1]
-        for h in pre:
-            assert np.isfinite(result.event_study_effects[h]["se"])
+        es = result.aggregate("event_study")
+        pre = es.event_time < -1
+        assert pre.any()
+        assert np.all(np.isfinite(es.se[pre]))
 
     def test_pretrends_replicate_raises(self, staggered_data):
-        """pretrends=True + replicate-weight survey raises NotImplementedError."""
+        """pretrends=True + replicate-weight survey: aggregate('event_study') raises."""
         from diff_diff import ImputationDiD
 
         data = staggered_data
@@ -1419,16 +1408,19 @@ class TestImputationPretrendsSurvey:
             replicate_method="BRR",
         )
         est = ImputationDiD(pretrends=True, horizon_max=3)
+        # The fit itself succeeds; the lead regression's per-replicate refits
+        # are rejected post-fit by the event-study aggregation.
+        result = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
         with pytest.raises(NotImplementedError, match="replicate"):
-            est.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                survey_design=sd,
-                aggregate="event_study",
-            )
+            result.aggregate("event_study")
 
     def test_pretrend_test_replicate_raises(self, staggered_data):
         """pretrend_test() with replicate-weight survey raises NotImplementedError."""

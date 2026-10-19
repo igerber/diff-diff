@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff._dr_scores import drdid_panel_inf_func
 from diff_diff.aggregation import AggregationKit
 from diff_diff.bootstrap_utils import (
@@ -101,11 +100,11 @@ def _build_continuous_aggregation_kit(
     never read the kit at all.
 
     On bootstrap fits (``n_bootstrap > 0``) the kit is SCALARS-ONLY:
-    ``aggregate('event_study')`` fails closed before reading any payload
-    and the views never read the kit, so a populated payload there would
-    be pure dead retention. The scalars still distinguish the
-    bootstrap-NotImplementedError gate from the legacy-pickle no-kit
-    ValueError.
+    ``aggregate('event_study')`` relays the fit-time surface (the
+    percentile event study materialized by ``fit()``) without reading any
+    payload, and the views never read the kit, so a populated payload
+    there would be pure dead retention. The scalars still distinguish the
+    bootstrap relay gate from the legacy-pickle no-kit ValueError.
     """
     is_bootstrap = estimator.n_bootstrap > 0
     gt_summary: Dict[Tuple, Dict[str, Any]] = {}
@@ -351,7 +350,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         time: str,
         first_treat: str,
         dose: str,
-        aggregate: Any = NOT_SUPPLIED,
         survey_design: Optional["SurveyDesign"] = None,
         covariates: Optional[List[str]] = None,
     ) -> ContinuousDiDResults:
@@ -372,17 +370,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             First treatment period column (0 or inf for never-treated).
         dose : str
             Continuous dose column.
-        aggregate : str, optional
-            DEPRECATED (row M-025, removed in 4.0) - aggregate as a
-            post-fit step instead: ``results.aggregate('event_study')``
-            for the binarized event study (underscored - the
-            ``"eventstudy"`` spelling dies with this parameter), or
-            ``results.aggregate('dose')`` / ``results.aggregate('simple')``
-            views. The dose-response curves and overall ATT/ACRT are
-            always computed by ``fit()``, so ``aggregate="dose"`` was
-            already a no-op. Supplying ANY value (including ``None``)
-            warns ``FutureWarning``; supplied values still run the legacy
-            routing unchanged until 4.0.
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference.
             Supports weighted estimation and Taylor series linearization
@@ -402,45 +389,13 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         -------
         ContinuousDiDResults
         """
-        # M-025 deprecation shim: a plain fit() never warns; supplying
-        # aggregate= with ANY value (None included) warns once, then the
-        # legacy routing below runs unchanged - "eventstudy" still
-        # computes the fit-time surface and invalid strings still reach
-        # the pre-existing ValueError. Only the SENTINEL normalizes to
-        # None (it would otherwise fail the _VALID_AGGREGATES check on
-        # every plain fit). The post-fit successor validates its own
-        # (unified) vocabulary.
-        if aggregate is not NOT_SUPPLIED:
-            warnings.warn(
-                "ContinuousDiD.fit(aggregate=) is deprecated and will be "
-                "removed in 4.0. Fit once, then aggregate as a post-fit "
-                "step: results = ContinuousDiD().fit(...); "
-                "results.aggregate('event_study') (note the underscore - "
-                "the 'eventstudy' spelling dies with this parameter) / "
-                ".aggregate('dose') / .aggregate('simple'). The "
-                "dose-response curves and overall ATT/ACRT are always "
-                "computed by fit(), so aggregate='dose' was already "
-                "redundant.",
-                FutureWarning,
-                stacklevel=2,
-            )
-        else:
-            aggregate = None
-
         # Fit-time re-check: __init__ and set_params validate eagerly, so
         # this only catches DIRECT attribute mutation (est.anticipation = ...)
         # — an out-of-domain value silently changes the ESTIMAND. The
-        # assignment also re-normalizes a mutated numpy scalar to int. Placed
-        # AFTER the deprecation shim so a caller who both mutated and passed
-        # a deprecated argument still sees the FutureWarning before the raise.
+        # assignment also re-normalizes a mutated numpy scalar to int.
         self.anticipation = validate_anticipation(self.anticipation)
 
         # 1. Validate & prepare
-        _VALID_AGGREGATES = (None, "dose", "eventstudy")
-        if aggregate not in _VALID_AGGREGATES:
-            raise ValueError(
-                f"Invalid aggregate: '{aggregate}'. " f"Must be one of {_VALID_AGGREGATES}."
-            )
 
         # Resolve survey design if provided
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
@@ -949,16 +904,32 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         att_d_p = None
         acrt_d_p = None
 
-        # Event study aggregation (binarized) — runs on ALL (g,t) cells
-        event_study_effects = None
-        if aggregate == "eventstudy":
-            event_study_effects = self._aggregate_event_study(
-                gt_results,
-                gt_bootstrap_info=gt_bootstrap_info,
-                unit_survey_weights=precomp.get("unit_survey_weights"),
-                unit_cohorts=precomp["unit_cohorts"],
-                anticipation=self.anticipation,
-            )
+        # Event study aggregation (binarized) — runs on ALL (g,t) cells.
+        # Materialized at fit ONLY where the post-fit route cannot recompute
+        # it: a bootstrapped fit (n_bootstrap > 0) needs the ES targets
+        # inside the multiplier bootstrap (per-cell draws are not retained;
+        # the kit is scalars-only), so the surface is built here and RELAYED
+        # by results.aggregate('event_study'). Analytic fits leave it None
+        # and recompute from the kit on demand. FAIL-SOFT by design: any
+        # exception while materializing leaves the surface None (the
+        # bootstrap then covers the overall/dose targets only - today's
+        # plain-fit path) and is reported once the bootstrap outcome is
+        # known (see the storage rule below).
+        event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
+        _surface_failure: Optional[BaseException] = None
+        _bootstrap_ran = False
+        if self.n_bootstrap > 0:
+            try:
+                event_study_effects = self._aggregate_event_study(
+                    gt_results,
+                    gt_bootstrap_info=gt_bootstrap_info,
+                    unit_survey_weights=precomp.get("unit_survey_weights"),
+                    unit_cohorts=precomp["unit_cohorts"],
+                    anticipation=self.anticipation,
+                )
+            except Exception as exc:  # noqa: BLE001 - fail-soft by design
+                _surface_failure = exc
+                event_study_effects = None
 
         _survey_df = None  # Set by analytical branch when survey is active
 
@@ -1047,23 +1018,46 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
 
             # 5. Bootstrap / Analytical SE
             if self.n_bootstrap > 0:
-                boot_result = self._run_bootstrap(
-                    precomp,
-                    gt_results,
-                    gt_bootstrap_info,
-                    post_gt,
-                    cell_weights,
-                    knots,
-                    degree,
-                    dvals,
-                    overall_att,
-                    overall_acrt,
-                    agg_att_d,
-                    agg_acrt_d,
-                    event_study_effects,
-                    resolved_survey=resolved_survey,
-                    pre_unit_resolved=_unit_resolved_shared,
-                )
+                # The engine draws the full weight matrix from the seeded
+                # RNG BEFORE any ES work, so the overall/dose draws are the
+                # same with or without the surface. Attempt 1 runs WITH the
+                # materialized ES surface; if it raises (anything but
+                # NotImplementedError, re-raised as today) the surface is
+                # dropped and the bootstrap is RETRIED ONCE overall-only -
+                # today's plain-fit path; a retry failure propagates, as
+                # today. On a seeded fit the retry reproduces attempt 1's
+                # draws exactly.
+                def _run_stage(_es: Optional[Dict[int, Dict[str, Any]]]) -> Dict[str, Any]:
+                    return self._run_bootstrap(
+                        precomp,
+                        gt_results,
+                        gt_bootstrap_info,
+                        post_gt,
+                        cell_weights,
+                        knots,
+                        degree,
+                        dvals,
+                        overall_att,
+                        overall_acrt,
+                        agg_att_d,
+                        agg_acrt_d,
+                        _es,
+                        resolved_survey=resolved_survey,
+                        pre_unit_resolved=_unit_resolved_shared,
+                    )
+
+                if event_study_effects is not None:
+                    try:
+                        boot_result = _run_stage(event_study_effects)
+                    except NotImplementedError:
+                        raise  # explicit rejections (replicate designs) propagate
+                    except Exception as exc:  # noqa: BLE001 - fail-soft by design
+                        _surface_failure = exc
+                        event_study_effects = None
+                        boot_result = _run_stage(None)
+                else:
+                    boot_result = _run_stage(None)
+                _bootstrap_ran = True
                 att_d_se = boot_result["att_d_se"]
                 att_d_ci_lower = boot_result["att_d_ci_lower"]
                 att_d_ci_upper = boot_result["att_d_ci_upper"]
@@ -1152,24 +1146,32 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                     acrt_d_ci_lower[idx] = ci[0]
                     acrt_d_ci_upper[idx] = ci[1]
 
-                # Event study analytical SEs - the body lives in
-                # continuous_did_aggregation._compute_event_study_inference,
-                # shared verbatim with the post-fit aggregate('event_study')
-                # recompute (row M-025). fit passes its full gt_results /
-                # gt_bootstrap_info locals; the method reads only the
-                # kit-compatible key subset.
-                if event_study_effects is not None:
-                    self._compute_event_study_inference(
-                        event_study_effects,
-                        gt_summary=gt_results,
-                        gt_es_payload=gt_bootstrap_info,
-                        n_units=precomp["n_units"],
-                        unit_cohorts=precomp["unit_cohorts"],
-                        unit_survey_weights=precomp.get("unit_survey_weights"),
-                        unit_first_panel_row=precomp["unit_first_panel_row"],
-                        resolved_survey=resolved_survey,
-                        survey_df=_survey_df,
-                    )
+                # (The analytical event-study inference lives in
+                # continuous_did_aggregation._compute_event_study_inference
+                # and runs ONLY on the post-fit aggregate('event_study')
+                # kit recompute - analytic fits materialize no ES surface.)
+
+        # Storage rule: the legacy field holds a surface IFF the fit carries
+        # bootstrap inference. When no post-treatment cells exist the
+        # bootstrap never runs (the overall ATT is NaN with a UserWarning),
+        # so an analytical surface must never sit on that bootstrapped fit
+        # where summary()/to_dataframe()/the DiagnosticReport would read it
+        # as the fit's inference. The fail-soft warning fires only when the
+        # bootstrap DID run but the surface was dropped.
+        if self.n_bootstrap > 0:
+            if not _bootstrap_ran:
+                event_study_effects = None
+            elif _surface_failure is not None:
+                warnings.warn(
+                    f"{type(self).__name__}: the event-study/group surfaces could not "
+                    f"be materialized on this bootstrapped fit ({_surface_failure}); "
+                    "the bootstrap covered the overall ATT only, so "
+                    "aggregate('event_study') / aggregate('group') are unavailable "
+                    "here - re-fit with n_bootstrap=0 for the analytical post-fit "
+                    "recompute.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # 6. Assemble results
         dose_response_att = DoseResponseCurve(
@@ -1253,18 +1255,15 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             rank_deficient_action=self.rank_deficient_action,
             event_study_effects=event_study_effects,
             survey_metadata=survey_metadata,
-            # Per-row ES df provenance (M-092 completion): the survey df the
-            # ES rows' safe_inference used. None when no ES surface was
-            # built, on bootstrap fits (_survey_df stays None there), on
-            # non-survey fits, and for the replicate-undefined 0 sentinel.
-            event_study_df=(
-                float(_survey_df)
-                if (event_study_effects is not None and _survey_df is not None and _survey_df > 0)
-                else None
-            ),
+            # Per-row ES df provenance (M-092 completion): the only fit-time
+            # ES surface is the bootstrapped one, whose percentile inference
+            # used no df - always None here; the analytical post-fit
+            # recompute threads the kit's survey df onto its own carrier.
+            event_study_df=None,
         )
         # Post-fit aggregation kit (row M-025): attached on EVERY fit;
-        # scalars-only on bootstrap fits (the ES route fails closed there).
+        # scalars-only on bootstrap fits (the ES route relays the fit-time
+        # surface there).
         results._aggregation_kit = _build_continuous_aggregation_kit(
             self,
             gt_results=gt_results,

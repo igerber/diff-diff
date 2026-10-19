@@ -96,8 +96,7 @@ def main():
     )
 
     # The event-study surface is always computed at fit (3.9, row M-024);
-    # the deprecated aggregate= kwarg would emit a FutureWarning inside
-    # the timed block and contaminate the measurement.
+    # fit() takes no aggregate= kwarg since 4.0.
     with Timer() as estimation_timer:
         results = est.fit(
             df,

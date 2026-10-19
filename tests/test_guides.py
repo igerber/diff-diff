@@ -296,6 +296,30 @@ def test_module_docstring_mentions_helper():
 # ---------------------------------------------------------------------------
 # llms-full.txt — HeterogeneousAdoptionDiD coverage (Phase 5)
 # ---------------------------------------------------------------------------
+def _assert_no_fit_time_aggregation_lines(fit_block: str, label: str) -> None:
+    """4.0 (PR 3): no documented fit() signature carries a fit-time
+    ``aggregate`` / ``balance_e`` line - aggregation is post-fit only."""
+    offending = [
+        line
+        for line in fit_block.splitlines()
+        if line.strip().startswith(("aggregate", "balance_e"))
+    ]
+    assert (
+        offending == []
+    ), f"{label}: fit-time aggregation keyword(s) still documented: {offending}"
+
+
+def test_llms_full_callaway_fit_block_has_no_fit_time_aggregate():
+    # M-020 / M-117 (removed at 4.0, PR 3): the CallawaySantAnna signature block
+    # lost its `aggregate: str = None` / `balance_e: int = None` lines.
+    text = get_llm_guide("full")
+    start = text.index("### CallawaySantAnna")
+    section = text[start : text.index("\n### ", start + 1)]
+    fit_start = section.index(".fit(")
+    fit_block = section[fit_start : section.index("\n)", fit_start)]
+    _assert_no_fit_time_aggregation_lines(fit_block, "CallawaySantAnna")
+
+
 class TestLLMsFullHADCoverage:
     """Lock the HAD section additions to llms-full.txt against deletion
     or framing drift. Phase 5 surfaces the agent-facing API contract for
@@ -929,20 +953,14 @@ class TestLLMsFullStackedDiDCoverage:
             "does not document it."
         )
 
-    def test_llms_full_stacked_fit_aggregate_line_documents_shim(self):
-        # M-024: the documented fit signature must carry the sentinel
-        # default + deprecation marker (the dCDH precedent's form), not
-        # the stale `aggregate: str = None` - no other pin covers this
-        # line, so it could silently go stale.
+    def test_llms_full_stacked_fit_block_has_no_fit_time_aggregate(self):
+        # M-024 (removed at 4.0, PR 3): the documented fit signature carries
+        # no `aggregate` line any more - aggregation is post-fit only.
         section = self._stacked_section()
         fit_start = section.index("stacked.fit(")
         fit_block = section[fit_start : section.index("\n)", fit_start)]
-        agg_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
-        )
-        assert "NOT_SUPPLIED" in agg_line
-        assert "DEPRECATED (M-024)" in agg_line
-        assert "results.aggregate()" in agg_line
+        _assert_no_fit_time_aggregation_lines(fit_block, "StackedDiD")
+        assert "NOT_SUPPLIED" not in fit_block
         # balance= must be documented somewhere in the section (constructor param)
         assert "balance" in section
 
@@ -1009,21 +1027,12 @@ class TestLLMsFullEfficientDiDShimLine:
         nxt = text.index("\n### ", start + 1)
         return text[start:nxt]
 
-    def test_llms_full_efficient_fit_aggregate_line_documents_shim(self):
-        section = self._efficient_section()
-        fit_start = section.index("edid.fit(")
+    def test_llms_full_efficient_fit_block_has_no_fit_time_aggregate(self):
+        # M-023 / M-120 (removed at 4.0, PR 3).
+        section = self._section("### EfficientDiD")
+        fit_start = section.index(".fit(")
         fit_block = section[fit_start : section.index("\n)", fit_start)]
-        agg_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
-        )
-        assert "NOT_SUPPLIED" in agg_line
-        assert "DEPRECATED (M-023)" in agg_line
-        assert "results.aggregate()" in agg_line
-        bal_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
-        )
-        assert "NOT_SUPPLIED" in bal_line
-        assert "DEPRECATED (M-120)" in bal_line
+        _assert_no_fit_time_aggregation_lines(fit_block, "EfficientDiD")
 
     def _section(self, header):
         text = get_llm_guide("full")
@@ -1031,41 +1040,28 @@ class TestLLMsFullEfficientDiDShimLine:
         nxt = text.index("\n### ", start + 1)
         return text[start:nxt]
 
-    def _assert_shim_lines(self, section, fit_call, agg_row, bal_row=None):
-        """``bal_row=None`` skips the balance_e-line lookup - required for
-        estimators without a balance_e param (ContinuousDiD, M-025), where
-        the unconditional ``next(...)`` would raise StopIteration."""
+    def _assert_no_shim_lines(self, section, fit_call):
         fit_start = section.index(fit_call)
         fit_block = section[fit_start : section.index("\n)", fit_start)]
-        agg_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
-        )
-        assert "NOT_SUPPLIED" in agg_line
-        assert f"DEPRECATED ({agg_row})" in agg_line
-        assert "results.aggregate()" in agg_line
-        if bal_row is not None:
-            bal_line = next(
-                line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
-            )
-            assert "NOT_SUPPLIED" in bal_line
-            assert f"DEPRECATED ({bal_row})" in bal_line
+        _assert_no_fit_time_aggregation_lines(fit_block, fit_call)
+        assert "NOT_SUPPLIED" not in fit_block
 
-    def test_llms_full_imputation_fit_aggregate_line_documents_shim(self):
+    def test_llms_full_imputation_fit_block_has_no_fit_time_aggregate(self):
         # The M-021/M-118 twin of the EfficientDiD pin above - no other
         # test covers the ImputationDiD signature block's shim comments.
-        self._assert_shim_lines(self._section("### ImputationDiD"), "imp.fit(", "M-021", "M-118")
+        self._assert_no_shim_lines(self._section("### ImputationDiD"), "imp.fit(")
 
-    def test_llms_full_two_stage_fit_aggregate_line_documents_shim(self):
-        self._assert_shim_lines(self._section("### TwoStageDiD"), ".fit(", "M-022", "M-119")
+    def test_llms_full_two_stage_fit_block_has_no_fit_time_aggregate(self):
+        self._assert_no_shim_lines(self._section("### TwoStageDiD"), ".fit(")
 
-    def test_llms_full_continuous_fit_aggregate_line_documents_shim(self):
+    def test_llms_full_continuous_fit_block_has_no_fit_time_aggregate(self):
         # M-025: no balance_e twin exists - bal_row stays None.
-        self._assert_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(", "M-025")
+        self._assert_no_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(")
 
-    def test_llms_full_had_fit_aggregate_line_documents_shim(self):
+    def test_llms_full_had_fit_block_has_no_fit_time_aggregate(self):
         # M-027: the mode-selector shim (panel-shape inference successor);
         # no balance_e twin exists - bal_row stays None.
-        self._assert_shim_lines(self._section("### HeterogeneousAdoptionDiD"), "had.fit(", "M-027")
+        self._assert_no_shim_lines(self._section("### HeterogeneousAdoptionDiD"), "had.fit(")
 
     def test_llms_full_had_examples_do_not_teach_mode_kwarg(self):
         # M-027/M-139 regression guard (local review R1 P2): outside the
@@ -1090,7 +1086,6 @@ class TestLLMsFullEfficientDiDShimLine:
                     or "aggregate='event_study'" in line
                     or 'aggregate="event_study"' in line
                 )
-                and "DEPRECATED" not in line
             ]
             assert offending == [], offending
 

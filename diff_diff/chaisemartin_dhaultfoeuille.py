@@ -37,7 +37,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED, warn_deprecated_kwarg
 from diff_diff.chaisemartin_dhaultfoeuille_bootstrap import (
     ChaisemartinDHaultfoeuilleBootstrapMixin,
 )
@@ -401,8 +400,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     - TWFE decomposition diagnostic from Theorem 1 of AER 2020
 
     Aggregation is a post-fit step: ``results.aggregate('event_study')`` /
-    ``results.aggregate('simple')`` (the deprecated fit-time ``aggregate=``
-    never computed anything and now warns; row M-026).
+    ``results.aggregate('simple')``; ``fit()`` takes no aggregation
+    keyword.
 
     Parameters
     ----------
@@ -878,7 +877,6 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         time: str,
         treatment: str,
         # ---------- forward-compat parameters ----------
-        aggregate: Any = NOT_SUPPLIED,
         L_max: Optional[int] = None,
         covariates: Optional[List[str]] = None,
         trends_linear: Optional[bool] = None,
@@ -914,15 +912,6 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             within each ``(unit, time)`` cell. Both binary ``{0, 1}`` and
             non-binary (ordinal or continuous) treatment are supported.
             Non-binary treatment requires ``L_max >= 1``.
-        aggregate : str, optional
-            DEPRECATED since 3.9, removed in 4.0 (ledger row M-026).
-            Passing it emits a ``FutureWarning``. The parameter never
-            computed aggregations here (it was reserved and any non-None
-            value has always raised); aggregation is a POST-FIT step:
-            ``results.aggregate('event_study')`` for the multi-horizon
-            surface, ``results.aggregate('simple')`` for the overall
-            estimand. A non-None value now raises ``ValueError`` pointing
-            at that post-fit route.
         L_max : int, optional
             Maximum event-study horizon. When set, computes ``DID_l``
             for ``l = 1, ..., L_max`` using the per-group building block
@@ -1063,28 +1052,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         # ------------------------------------------------------------------
         # Step 2: Forward-compat gates
         # ------------------------------------------------------------------
-        # M-026: fit(aggregate=) is deprecated - the aggregation entry point
-        # is post-fit (results.aggregate()). The param never computed
-        # anything here (any non-None value has always raised), so the shim
-        # warns on supply and rejects non-None values with a pointer at the
-        # post-fit route.
-        if aggregate is not NOT_SUPPLIED:
-            warn_deprecated_kwarg(
-                "ChaisemartinDHaultfoeuille.fit",
-                "aggregate",
-                "aggregation is a post-fit step: "
-                "results.aggregate('event_study') / results.aggregate('simple')",
-            )
-            if aggregate is not None:
-                raise ValueError(
-                    f"fit(aggregate={aggregate!r}) never computed aggregations "
-                    "on ChaisemartinDHaultfoeuille (the parameter was reserved "
-                    "and always raised). Aggregate post-fit instead: "
-                    "results.aggregate('event_study') for the multi-horizon "
-                    "surface (Phase-1 fits without L_max return the 2-row "
-                    "l=1 view), or results.aggregate('simple') for the "
-                    "overall estimand."
-                )
+        # Aggregation is a post-fit step (results.aggregate('event_study') /
+        # results.aggregate('simple')); fit() takes no aggregation keyword.
         _check_forward_compat_gates(
             L_max=L_max,
             controls=controls,
@@ -4395,10 +4364,8 @@ def _check_forward_compat_gates(
     """Raise ``NotImplementedError`` for any non-default Phase 3 parameter.
 
     Phase 2 parameters (``L_max``) are validated inline in ``fit()``
-    after period detection. The deprecated ``aggregate`` parameter is
-    resolved in ``fit()`` itself (row M-026: FutureWarning on supply,
-    ValueError on any non-None value, pointing at the post-fit
-    ``results.aggregate()`` route).
+    after period detection. Aggregation is a post-fit step
+    (``results.aggregate()``); ``fit()`` takes no aggregation keyword.
     """
     # L_max is validated inline in fit() after period detection (needs
     # the period count). Not gated here.

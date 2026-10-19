@@ -257,7 +257,8 @@ QR — Phase 3 candidate).
 
 **R `did` yardstick** (did 2.5.1 — the 2.5.0 performance release with `faster_mode` and
 the tiled-contraction bootstrap — R 4.5.2 + OpenBLAS 0.3.33; equal work: `att_gt` +
-`aggte` simple+dynamic+group vs `fit(aggregate="all")`; identical `biters`/`cband`;
+`aggte` simple+dynamic+group vs a plain `fit()` followed by post-fit `aggregate("event_study")` +
+`aggregate("group")` (the 3.x `fit(aggregate="all")` route, removed at 4.0 - same work); identical `biters`/`cband`;
 medians of 3; run configs recorded in each JSON artifact's metadata):
 
 | Scenario | diff-diff | R 1-core | R 14-core (`pl=TRUE, cores=14`) |
@@ -834,11 +835,12 @@ These are developer-ergonomics / API-consistency smells surfaced during
 scenario development. None are silent-failures and none belong in this PR
 or in the silent-failures audit; logging here for awareness.
 
-1. **`aggregate` / `level` parameter naming is inconsistent.** CS accepts
-   `aggregate="event_study"`; ContinuousDiD historically required
+1. **`aggregate` / `level` parameter naming was inconsistent (historical; resolved at
+   4.0).** CS accepted `aggregate="event_study"` on `fit()`; ContinuousDiD required
    `aggregate="eventstudy"` on `fit()` **but** `level="event_study"` on
    `to_dataframe()`. Two different spellings within one estimator plus a
-   third cross-estimator spelling. Surfaced when the P1 exit-propagation
+   third cross-estimator spelling. Both fit-time keywords were removed at 4.0 (PR 3);
+   `results.aggregate("event_study")` is the single post-fit spelling. Surfaced when the P1 exit-propagation
    fix stopped silently swallowing the resulting `ValueError` in the
    dose-response benchmark. RESOLVED by row M-025: the fit-time kwarg is
    deprecated (removed in 4.0, its `"eventstudy"` spelling with it) and

@@ -23,8 +23,9 @@ existing diff-diff utility (`compute_honest_did`,
 `HonestDiD.sensitivity`, `BaconDecomposition`,
 `check_parallel_trends`, `compute_pretrends_power`). The post-fit
 derivation is the one report-layer data source beyond direct reads:
-when a fit's raw `event_study_effects` field is absent (the modern,
-no-fit-time-`aggregate=` path), `DiagnosticReport` resolves
+when a fit's raw `event_study_effects` field is absent (every analytic
+CS/DMLDiD/EfficientDiD/ImputationDiD/TwoStageDiD/ContinuousDiD fit since
+the 4.0 removal of the fit-time `aggregate=` keyword), `DiagnosticReport` resolves
 `results.aggregate('event_study')` once (cached) and consumes the
 returned `EventStudyResults` container, where applicable per
 estimator: CallawaySantAnna and DMLDiD for parallel_trends /
@@ -48,14 +49,20 @@ joint-Wald path and pretrends_power/sensitivity the full covariance -
 the Bonferroni and diagonal fallbacks remain for fits where no
 bootstrap covariance is stored, e.g. `n_bootstrap` at or below the
 number of event times - and the replay's re-emitted fit-time warnings
-are recorded and republished per section). Kit-less/legacy-pickle fits,
-backend-mismatched CS bootstrap replays, and the other estimators'
-bootstrap gates still fail closed: the derivation exception is caught
-and surfaced as an explicit per-check skip reason, never substituted
-with analytical numbers. The raw field, when present — including the
-requested-but-empty `{}` sentinel, which encodes fit-time
-configuration such as a `balance_e=` that emptied the window — always
-takes precedence and is never re-derived. When the caller
+are recorded and republished per section). Bootstrapped ImputationDiD /
+TwoStageDiD / ContinuousDiD fits are HYBRIDS since 4.0 (PR 3): they
+materialize the percentile event-study (and group) surface at fit into
+the raw fields, so the report reads those directly (raw-field
+precedence) rather than deriving. Only kit-less/legacy-pickle fits,
+backend-mismatched CS bootstrap replays, and bootstrapped hybrid fits
+whose surface could not be materialized (fail-soft cleared, the relay
+raises) still skip: the derivation exception is caught and surfaced as
+an explicit per-check skip reason, never substituted with analytical
+numbers. The raw field, when present — including the
+requested-but-empty `{}` sentinel, which now arises only from producers
+that materialize at fit (StackedDiD, SunAbraham, the bootstrapped
+hybrids; always `balance_e=None`) — always takes precedence and is
+never re-derived. When the caller
 passes the raw panel + column kwargs, `DiagnosticReport` may call
 those utilities on the supplied data (2x2 PT via
 `check_parallel_trends`, Goodman-Bacon decomposition via
@@ -484,8 +491,9 @@ a library setting.
   fields. Pretrends POWER: natively
   `compute_pretrends_power()` supports MPD / CS / SunAbraham fits;
   since row M-024 a Stacked `results.aggregate('event_study')`
-  CONTAINER also admits (kappa_pre >= 2). On plain (no fit-time
-  `aggregate=`) CS fits, `DiagnosticReport` internally derives the CS
+  CONTAINER also admits (kappa_pre >= 2). On CS fits (whose raw
+  `event_study_effects` is None on every fit since 4.0),
+  `DiagnosticReport` internally derives the CS
   container and feeds it to `compute_pretrends_power` /
   `HonestDiD.sensitivity_analysis` — CS is M-093-admitted with pinned
   raw-route parity; the admission set itself is unchanged (widening

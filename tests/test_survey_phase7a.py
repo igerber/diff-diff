@@ -82,13 +82,16 @@ class TestSmokeIPWDRSurvey:
             "first_treat",
             covariates=["x1"],
             survey_design=survey_weights_only,
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        for e, info in result.event_study_effects.items():
-            if info["n_groups"] > 0:
-                assert np.isfinite(info["effect"])
-                assert np.isfinite(info["se"])
+        # 4.0: the fit-time surface is gone - CS leaves the legacy field None
+        # on every fit and the post-fit container carries the event study.
+        assert result.event_study_effects is None
+        es = result.aggregate("event_study")
+        assert len(es.event_time) > 0
+        for i in range(len(es.event_time)):
+            if es.n[i] > 0:
+                assert np.isfinite(es.att[i])
+                assert np.isfinite(es.se[i])
 
     @pytest.mark.parametrize("method", ["ipw", "dr"])
     def test_full_design(self, staggered_data_with_covariates, survey_full_design, method):
@@ -263,13 +266,14 @@ class TestAggregation:
             "first_treat",
             covariates=["x1"],
             survey_design=survey_weights_only,
-            aggregate=agg,
         )
         assert np.isfinite(result.overall_att)
-        if agg == "event_study":
-            assert result.event_study_effects is not None
-        if agg == "group":
-            assert result.group_effects is not None
+        agg_result = result.aggregate(agg)
+        if agg == "simple":
+            assert float(agg_result.att[0]) == pytest.approx(result.overall_att)
+        else:
+            assert len(agg_result.att) > 0
+            assert np.isfinite(agg_result.att).any()
 
 
 # =============================================================================

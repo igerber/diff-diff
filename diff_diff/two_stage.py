@@ -31,7 +31,6 @@ from scipy import sparse
 from scipy.sparse.linalg import factorized as sparse_factorized
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.aggregation import AggregationKit
 from diff_diff.conley import (
     ConleyMetric,
@@ -1363,8 +1362,6 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Any = NOT_SUPPLIED,
-        balance_e: Any = NOT_SUPPLIED,
         survey_design: Optional["SurveyDesign"] = None,
     ) -> TwoStageDiDResults:
         """
@@ -1385,20 +1382,6 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
             Use 0 (or np.inf) for never-treated units.
         covariates : list of str, optional
             List of covariate column names.
-        aggregate : str, optional
-            DEPRECATED (3.9, removed in 4.0; row M-022): aggregate as a
-            post-fit step instead — ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')`` /
-            ``.aggregate('total')``. Supplying
-            ANY value (``None`` included) warns; the deprecated path still
-            works and returns exactly the numbers it always did
-            (fit-time mode: None/"simple" overall only, "event_study",
-            "group", or "all").
-        balance_e : int, optional
-            DEPRECATED (3.9, removed in 4.0; row M-119): moves onto
-            ``results.aggregate('event_study', balance_e=...)``. Restricts
-            the event study to cohorts observed at every relative time in
-            ``[-balance_e, max_h]`` (the balanced-window rule).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference. Supports
             pweight only (aweight/fweight raise ValueError). Supports strata,
@@ -1416,35 +1399,6 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         ValueError
             If required columns are missing or data validation fails.
         """
-        # M-022/M-119 deprecation shim (CS-style joint warning): a plain
-        # fit() never warns; supplying EITHER param with ANY value (None
-        # included) warns once, then the legacy routing below runs
-        # unchanged - the deprecated path returns exactly the numbers it
-        # always did (no new value validation; unknown strings still act
-        # like None). The post-fit successor validates its own vocabulary.
-        _deprecated_passed = [
-            n
-            for n, v in (("aggregate", aggregate), ("balance_e", balance_e))
-            if v is not NOT_SUPPLIED
-        ]
-        if _deprecated_passed:
-            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
-            warnings.warn(
-                f"TwoStageDiD.fit({_args}) is deprecated and will be "
-                "removed in 4.0. Fit once, then aggregate as a post-fit "
-                "step: results = TwoStageDiD().fit(...); "
-                "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
-                "alongside it: results.aggregate('event_study', "
-                "balance_e=2).",
-                FutureWarning,
-                stacklevel=2,
-            )
-        if aggregate is NOT_SUPPLIED:
-            aggregate = None
-        if balance_e is NOT_SUPPLIED:
-            balance_e = None
-
         # Re-validate vcov_type at fit-time: set_params validates eagerly
         # (BaseEstimator probe re-init), so this only catches DIRECT
         # attribute mutation (est.vcov_type = ...).
@@ -1796,61 +1750,77 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
             overall_att, overall_se, alpha=self.alpha, df=_survey_df
         )
 
-        # Event study and group aggregation (full-sample, for point estimates)
-        event_study_effects = None
-        group_effects = None
+        # Event study and group aggregation (full-sample, for point estimates).
+        # Materialized at fit ONLY where the post-fit route cannot recompute
+        # it: a bootstrapped fit (n_bootstrap > 0) needs the ES + group
+        # targets inside the multiplier bootstrap (per-draw state is not
+        # retained), so the surfaces are built here with balance_e=None and
+        # RELAYED by results.aggregate('event_study') / ('group'). Analytic
+        # fits leave both None and recompute from the kit on demand.
+        # FAIL-SOFT by design: any exception while materializing leaves the
+        # surfaces None (the bootstrap then covers the overall ATT only -
+        # today's plain-fit path) and is reported once the bootstrap
+        # outcome is known (see the storage rule below).
+        event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
+        group_effects: Optional[Dict[Any, Dict[str, Any]]] = None
         _es_vcov_ts: Optional[np.ndarray] = None
         _es_vcov_index_ts: Optional[List[int]] = None
+        _surface_failure: Optional[BaseException] = None
 
-        if aggregate in ("event_study", "all"):
-            event_study_effects, _es_vcov_ts, _es_vcov_index_ts = self._stage2_event_study(
-                df=df,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                ref_period=ref_period,
-                balance_e=balance_e,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_weight_type=survey_weight_type,
-                survey_df=_survey_df,
-                resolved_survey=(resolved_survey if not _uses_replicate_ts else None),
-                score_pad_mask=score_pad_mask_arg,
-                cluster_ids_full=cluster_ids_full_arg,
-            )
-
-        if aggregate in ("group", "all"):
-            group_effects = self._stage2_group(
-                df=df,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_weight_type=survey_weight_type,
-                survey_df=_survey_df,
-                resolved_survey=(resolved_survey if not _uses_replicate_ts else None),
-                score_pad_mask=score_pad_mask_arg,
-                cluster_ids_full=cluster_ids_full_arg,
-            )
+        if self.n_bootstrap > 0:
+            try:
+                event_study_effects, _es_vcov_ts, _es_vcov_index_ts = self._stage2_event_study(
+                    df=df,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    cluster_var=cluster_var,
+                    treatment_groups=treatment_groups,
+                    ref_period=ref_period,
+                    balance_e=None,
+                    kept_cov_mask=kept_cov_mask,
+                    survey_weights=survey_weights,
+                    survey_weight_type=survey_weight_type,
+                    survey_df=_survey_df,
+                    resolved_survey=(resolved_survey if not _uses_replicate_ts else None),
+                    score_pad_mask=score_pad_mask_arg,
+                    cluster_ids_full=cluster_ids_full_arg,
+                )
+                group_effects = self._stage2_group(
+                    df=df,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    cluster_var=cluster_var,
+                    treatment_groups=treatment_groups,
+                    kept_cov_mask=kept_cov_mask,
+                    survey_weights=survey_weights,
+                    survey_weight_type=survey_weight_type,
+                    survey_df=_survey_df,
+                    resolved_survey=(resolved_survey if not _uses_replicate_ts else None),
+                    score_pad_mask=score_pad_mask_arg,
+                    cluster_ids_full=cluster_ids_full_arg,
+                )
+            except Exception as e:  # noqa: BLE001 - fail-soft by design
+                _surface_failure = e
+                event_study_effects = None
+                group_effects = None
+                _es_vcov_ts = None
+                _es_vcov_index_ts = None
 
         # Replicate variance override: derive keys from actual outputs, then refit
         _n_valid_rep_ts = None
@@ -1872,7 +1842,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                 cluster_var=cluster_var,
                 treatment_groups=treatment_groups,
                 ref_period=ref_period,
-                balance_e=balance_e,
+                balance_e=None,
                 keep_mask=keep_mask,
                 resolved_survey=resolved_survey,
                 overall_att=overall_att,
@@ -1905,10 +1875,26 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
             treated_df["weight"] = 0.0
 
         # ---- Bootstrap ----
-        bootstrap_results = None
+        # The engine draws the full weight matrix from the seeded RNG BEFORE
+        # any ES/group work, so the overall-ATT draws are the same with or
+        # without the surfaces. Attempt 1 runs WITH the materialized
+        # surfaces (aggregate="all" is the private selector gating the
+        # ES/group draws); it counts as failed-with-surfaces if it RAISES
+        # (anything but NotImplementedError, re-raised as today) or RETURNS
+        # None (an LSMR-unconverged ES/group column) while surfaces are
+        # present. Then the surfaces are dropped and the bootstrap is
+        # RETRIED ONCE overall-only - today's plain-fit path with today's
+        # catch-all semantics (failure -> "Bootstrap failed" warning +
+        # analytical overall). On a seeded fit the retry reproduces attempt
+        # 1's draws exactly.
+        bootstrap_results: Optional[TwoStageBootstrapResults] = None
         if self.n_bootstrap > 0:
-            try:
-                bootstrap_results = self._run_bootstrap(
+
+            def _run_stage(
+                _es: Optional[Dict[int, Dict[str, Any]]],
+                _grp: Optional[Dict[Any, Dict[str, Any]]],
+            ) -> Optional[TwoStageBootstrapResults]:
+                return self._run_bootstrap(
                     df=df,
                     unit=unit,
                     time=time,
@@ -1924,18 +1910,67 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                     kept_cov_mask=kept_cov_mask,
                     treatment_groups=treatment_groups,
                     ref_period=ref_period,
-                    balance_e=balance_e,
+                    balance_e=None,
                     original_att=overall_att,
-                    original_event_study=event_study_effects,
-                    original_group=group_effects,
-                    aggregate=aggregate,
+                    original_event_study=_es,
+                    original_group=_grp,
+                    aggregate=("all" if (_es is not None or _grp is not None) else None),
                     resolved_survey=resolved_survey,
                 )
-            except NotImplementedError:
-                raise  # Don't swallow explicit rejections (e.g. lonely_psu="adjust")
-            except Exception as e:
+
+            _surfaces_present = event_study_effects is not None or group_effects is not None
+            if _surfaces_present:
+                try:
+                    bootstrap_results = _run_stage(event_study_effects, group_effects)
+                    if bootstrap_results is None:
+                        raise RuntimeError(
+                            "the multiplier bootstrap returned no results for the "
+                            "event-study/group targets"
+                        )
+                except NotImplementedError:
+                    raise  # Don't swallow explicit rejections (e.g. lonely_psu="adjust")
+                except Exception as e:  # noqa: BLE001 - fail-soft by design
+                    _surface_failure = e
+                    event_study_effects = None
+                    group_effects = None
+                    _es_vcov_ts = None
+                    _es_vcov_index_ts = None
+                    bootstrap_results = None
+            if not _surfaces_present or bootstrap_results is None:
+                # Plain overall-only stage (no surfaces), or the one-shot
+                # retry after a failure with surfaces - identical semantics.
+                try:
+                    bootstrap_results = _run_stage(None, None)
+                except NotImplementedError:
+                    raise  # Don't swallow explicit rejections (e.g. lonely_psu="adjust")
+                except Exception as e:
+                    warnings.warn(
+                        f"Bootstrap failed: {e}. Skipping bootstrap inference.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    bootstrap_results = None
+
+            # Storage rule: the legacy fields hold a surface IFF the fit
+            # carries bootstrap inference. A failed bootstrap falls back to
+            # analytical inference, and an analytical surface must never sit
+            # on a bootstrapped fit where summary()/to_dataframe()/the
+            # DiagnosticReport would read it as the fit's inference;
+            # aggregate() recomputes analytically there, exactly as on an
+            # n_bootstrap=0 fit.
+            if bootstrap_results is None:
+                event_study_effects = None
+                group_effects = None
+                _es_vcov_ts = None
+                _es_vcov_index_ts = None
+            elif _surface_failure is not None:
                 warnings.warn(
-                    f"Bootstrap failed: {e}. Skipping bootstrap inference.",
+                    f"{type(self).__name__}: the event-study/group surfaces could not "
+                    f"be materialized on this bootstrapped fit ({_surface_failure}); "
+                    "the bootstrap covered the overall ATT only, so "
+                    "aggregate('event_study') / aggregate('group') are unavailable "
+                    "here - re-fit with n_bootstrap=0 for the analytical post-fit "
+                    "recompute.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -2075,9 +2110,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         )
 
         # Attach the post-fit aggregation kit (M-022/M-119). Unconditional —
-        # including bootstrap fits, whose gate lives in _aggregate_compute
+        # including bootstrap fits, whose relay lives in _aggregate_compute
         # (a FAILED bootstrap leaves bootstrap_results=None and the fit
-        # aggregates normally).
+        # aggregates normally from the kit).
         self.results_._aggregation_kit = _build_twostage_aggregation_kit(
             df=df,
             outcome=outcome,
@@ -2329,5 +2364,5 @@ def _build_twostage_aggregation_kit(
         alpha=alpha,
         anticipation=anticipation,
         cband=False,  # no simultaneous-band concept on this estimator
-        bootstrap=None,  # replay not wired; recompute levels fail closed ('simple' relays, M-027)
+        bootstrap=None,  # no replay: bootstrapped fits RELAY the fit-time surfaces (4.0 PR 3)
     )

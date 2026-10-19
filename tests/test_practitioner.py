@@ -644,7 +644,11 @@ class _AggregationStepMixin:
         steps = self._agg_step(output)
         assert len(steps) == 1
         assert "BOOTSTRAPPED" in steps[0]["why"]
-        assert "aggregate='all'" in steps[0]["code"]
+        # 4.0 (PR 3): bootstrapped fits RELAY the surfaces computed at fit; the
+        # deprecated fit-time aggregate='all' route is gone from the guidance.
+        assert "relay" in steps[0]["why"]
+        assert "aggregate='all'" not in steps[0]["code"]
+        assert "results.aggregate('event_study')" in steps[0]["code"]
 
     def test_aggregation_step_name_is_non_steps_key(self):
         from diff_diff.practitioner import STEPS
@@ -683,9 +687,8 @@ class TestContinuousAggregationStep:
     ``aggregate('group')`` (not in ContinuousDiD's supported set),
     simulates bootstrap via a ``bootstrap_results`` field
     (ContinuousDiDResults keys on ``n_bootstrap`` and has no such field),
-    and expects an ``aggregate='all'`` fallback (never a valid
-    ContinuousDiD value). ContinuousDiD's step is a single unconditional
-    step whose wording carries the bootstrap carve-out.
+    and never had an ``aggregate='all'`` fallback. ContinuousDiD's step is a
+    single unconditional step whose wording names the bootstrapped-fit relay.
     """
 
     @staticmethod
@@ -706,8 +709,9 @@ class TestContinuousAggregationStep:
         assert "results.aggregate('event_study')" in steps[0]["code"]
         assert "results.aggregate('dose')" in steps[0]["code"]
         assert "results.aggregate('simple')" in steps[0]["code"]
-        # The bootstrap carve-out is carried in the wording.
-        assert "n_bootstrap=0" in steps[0]["why"]
+        # 4.0 (PR 3): bootstrapped fits relay the surface computed at fit.
+        assert "relays" in steps[0]["why"]
+        assert "n_bootstrap=0" not in steps[0]["why"]
 
     def test_aggregation_step_name_is_non_steps_key(self):
         from diff_diff.practitioner import STEPS

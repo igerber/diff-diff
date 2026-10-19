@@ -574,10 +574,10 @@ SURFACE_ALLOWLIST = {
     **{f"{cls}.groups": _CS_COHORT for cls in _CS_GROUPS_CLASSES},
     "GroupTimeEffect.group": _CS_COHORT,
     "HADPretestReport.aggregate": (
-        "honest OUTPUT metadata, not the deprecated param (M-139 kills only "
-        "did_had_pretest_workflow's aggregate= INPUT): the field records "
-        "which pretest battery the workflow RAN, and the overall/event_study "
-        "modes survive 4.0 - only the routing param dies"
+        "honest OUTPUT metadata, not the removed param (M-139 removed only "
+        "did_had_pretest_workflow's aggregate= INPUT at 4.0): the field "
+        "records which pretest battery the workflow RAN, and the "
+        "overall/event_study modes survive - only the routing param died"
     ),
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
     "DMLDiDResults.overall_att": (
@@ -1261,13 +1261,34 @@ CONSUMER_ALLOWLIST = {
     # the docs/guides attr lane. Each entry below was verified clean of
     # stale fit-time `aggregate=` teaching before allowlisting (the
     # migrate-first rule; stale sites were migrated in the same diff that
-    # added these entries). Dated phase-closure records in the paper-review
-    # doc describe the API as-shipped at closure time (the released-record
-    # convention) and are not regenerated for a deprecation sweep.
+    # added these entries - the last of them with the 4.0 PR 3 removal of
+    # the fit-time keyword on all eight estimators and the workflow). Dated
+    # phase-closure records in the paper-review doc describe the API
+    # as-shipped at closure time (the released-record convention) and are
+    # not regenerated for a deprecation sweep.
     ("aggregate", "diff_diff/guides/llms-autonomous.txt"): (
         "canonical post-fit results.aggregate() vocabulary; the HAD "
         "mode-kwarg teachings were migrated to panel-shape wording with "
         "M-027/M-139"
+    ),
+    ("aggregate", "diff_diff/guides/llms.txt"): (
+        "canonical post-fit results.aggregate() vocabulary; the fit-time "
+        "aggregate= teaching for the eight adopters was removed with the "
+        "4.0 PR 3 sweep (M-020..M-027, M-117..M-120, M-139); the only "
+        "surviving fit-time aggregate= is TripleDifference's canonical "
+        "staggered-mode keyword (M-140/M-141)"
+    ),
+    ("aggregate", "diff_diff/guides/llms-full.txt"): (
+        "canonical post-fit results.aggregate() vocabulary and the "
+        "signature blocks WITHOUT the removed fit-time lines (4.0 PR 3 "
+        "sweep; pinned by tests/test_guides.py's "
+        "*_fit_block_has_no_fit_time_aggregate tests); the only surviving "
+        "fit-time aggregate= is TripleDifference's (M-140/M-141)"
+    ),
+    ("aggregate", "diff_diff/guides/llms-practitioner.txt"): (
+        "canonical post-fit results.aggregate() vocabulary; the bootstrapped "
+        "ImputationDiD/TwoStageDiD fit-time route was replaced by the "
+        "4.0 PR 3 relay wording"
     ),
     ("aggregate", "docs/methodology/REGISTRY.md"): (
         "the aggregate-postfit register Notes (M-020..M-027) teach the "
@@ -1282,9 +1303,9 @@ CONSUMER_ALLOWLIST = {
         "consumes"
     ),
     ("aggregate", "docs/methodology/REPORTING.md"): (
-        "canonical post-fit aggregate() mention only (zero fit-time "
-        "kwarg sites; the fit-time-population clause was reworded with "
-        "M-027)"
+        "canonical post-fit aggregate() mention only (zero fit-time kwarg "
+        "sites since the 4.0 PR 3 sweep removed the deprecated-route "
+        "clauses; the fit-time-population clause was reworded with M-027)"
     ),
     ("aggregate", "docs/methodology/papers/dechaisemartin-2026-review.md"): (
         "dated phase-closure records describing the API as-shipped at "
@@ -1298,7 +1319,8 @@ CONSUMER_ALLOWLIST = {
         "with M-027)"
     ),
     ("aggregate", "docs/methodology/variance-conventions.md"): (
-        "canonical post-fit aggregate() vocabulary only (zero fit-time " "kwarg sites)"
+        "canonical post-fit aggregate() vocabulary only (zero fit-time kwarg "
+        "sites since the 4.0 PR 3 sweep removed the deprecated-route clause)"
     ),
     **{
         (

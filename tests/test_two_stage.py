@@ -7,26 +7,12 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, es_dict_from_container, group_dict
 
 from diff_diff.two_stage import (
     TwoStageBootstrapResults,
     TwoStageDiD,
     TwoStageDiDResults,
-)
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
 )
 
 # =============================================================================
@@ -171,19 +157,18 @@ class TestTwoStageDiDBasic:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        es = es_dict(results)
+        assert len(es) > 0
 
         # Check reference period is present
         ref_period = -1
-        assert ref_period in results.event_study_effects
-        assert results.event_study_effects[ref_period]["effect"] == 0.0
+        assert ref_period in es
+        assert es[ref_period]["effect"] == 0.0
 
         # Post-treatment effects should be positive (treatment_effect=2.0)
-        post_effects = {h: e for h, e in results.event_study_effects.items() if h >= 0}
+        post_effects = {h: e for h, e in es.items() if h >= 0}
         assert len(post_effects) > 0
         for h, eff in post_effects.items():
             assert eff["effect"] > 0, f"Post-treatment effect at h={h} should be positive"
@@ -200,19 +185,19 @@ class TestTwoStageDiDBasic:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        assert results.group_effects is not None
+        grp = group_dict(results)
         # Should have 3 groups (cohorts 3, 5, 7)
-        assert len(results.group_effects) == 3
-        for g, eff in results.group_effects.items():
+        assert len(grp) == 3
+        for g, eff in grp.items():
             assert eff["effect"] > 0
             assert eff["se"] > 0
             assert np.isfinite(eff["t_stat"])
 
     def test_all_aggregation(self):
-        """Test aggregate='all' produces both event study and group effects."""
+        """An analytic fit stores NO fit-time surfaces; both event-study and
+        group effects come from the post-fit aggregate() route."""
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data,
@@ -220,11 +205,17 @@ class TestTwoStageDiDBasic:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
-        assert results.event_study_effects is not None
-        assert results.group_effects is not None
+        assert results.event_study_effects is None
+        assert results.group_effects is None
+        es = results.aggregate("event_study")
+        grp = results.aggregate("group")
+        assert len(es.event_time) > 0
+        assert len(grp.label) == 3
+        # Post-fit aggregation does not populate the fit-time fields.
+        assert results.event_study_effects is None
+        assert results.group_effects is None
 
     def test_summary_text(self):
         """Test that summary produces expected header text."""
@@ -239,7 +230,8 @@ class TestTwoStageDiDBasic:
         assert "Overall Average Treatment Effect" in text
 
     def test_to_dataframe_event_study(self):
-        """Test to_dataframe with event_study level."""
+        """Event-study frame comes from the aggregate() container; the
+        results-level to_dataframe steers there on an analytic fit."""
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data,
@@ -247,18 +239,20 @@ class TestTwoStageDiDBasic:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        df = results.to_dataframe("event_study")
+        with pytest.raises(ValueError, match=r"aggregate\('event_study'\)"):
+            results.to_dataframe("event_study")
+        df = results.aggregate("event_study").to_dataframe()
         assert isinstance(df, pd.DataFrame)
-        assert "relative_period" in df.columns
-        assert "effect" in df.columns
+        assert "event_time" in df.columns
+        assert "att" in df.columns
         assert "se" in df.columns
         assert len(df) > 0
 
     def test_to_dataframe_group(self):
-        """Test to_dataframe with group level."""
+        """Group frame comes from the aggregate() container; the results-level
+        to_dataframe steers there on an analytic fit."""
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data,
@@ -266,12 +260,13 @@ class TestTwoStageDiDBasic:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        df = results.to_dataframe("group")
+        with pytest.raises(ValueError, match=r"aggregate\('group'\)"):
+            results.to_dataframe("group")
+        df = results.aggregate("group").to_dataframe()
         assert isinstance(df, pd.DataFrame)
-        assert "group" in df.columns
+        assert "label" in df.columns
         assert len(df) == 3
 
     def test_to_dataframe_observation(self):
@@ -300,13 +295,14 @@ class TestTwoStageDiDBasic:
             results.to_dataframe("invalid")
 
     def test_to_dataframe_no_event_study(self):
-        """Test to_dataframe raises when event study not computed."""
+        """to_dataframe raises on an analytic fit (no fit-time event-study
+        surface) and steers to the post-fit aggregate() route."""
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        with pytest.raises(ValueError, match="Event study effects not computed"):
+        with pytest.raises(ValueError, match="not stored on this fit"):
             results.to_dataframe("event_study")
 
     def test_repr(self):
@@ -396,7 +392,6 @@ class TestTwoStageDiDEquivalence:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         imp_results = ImputationDiD().fit(
             data,
@@ -404,18 +399,19 @@ class TestTwoStageDiDEquivalence:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        ts_es = es_dict(ts_results)
+        imp_es = es_dict(imp_results)
 
         # Both should have the same horizons
-        ts_horizons = set(ts_results.event_study_effects.keys())
-        imp_horizons = set(imp_results.event_study_effects.keys())
+        ts_horizons = set(ts_es.keys())
+        imp_horizons = set(imp_es.keys())
         assert ts_horizons == imp_horizons
 
         # Point estimates should match
         for h in ts_horizons:
-            ts_eff = ts_results.event_study_effects[h]["effect"]
-            imp_eff = imp_results.event_study_effects[h]["effect"]
+            ts_eff = ts_es[h]["effect"]
+            imp_eff = imp_es[h]["effect"]
             if np.isfinite(ts_eff) and np.isfinite(imp_eff):
                 assert (
                     abs(ts_eff - imp_eff) < 1e-8
@@ -433,7 +429,6 @@ class TestTwoStageDiDEquivalence:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
         imp_results = ImputationDiD().fit(
             data,
@@ -441,14 +436,15 @@ class TestTwoStageDiDEquivalence:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
+        ts_grp = group_dict(ts_results)
+        imp_grp = group_dict(imp_results)
 
-        assert set(ts_results.group_effects.keys()) == set(imp_results.group_effects.keys())
+        assert set(ts_grp.keys()) == set(imp_grp.keys())
 
-        for g in ts_results.group_effects:
-            ts_eff = ts_results.group_effects[g]["effect"]
-            imp_eff = imp_results.group_effects[g]["effect"]
+        for g in ts_grp:
+            ts_eff = ts_grp[g]["effect"]
+            imp_eff = imp_grp[g]["effect"]
             assert abs(ts_eff - imp_eff) < 1e-8
 
     def test_ses_differ_from_imputation(self):
@@ -496,10 +492,9 @@ class TestTwoStageDiDVariance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if eff.get("n_obs", 0) > 0:
                 assert eff["se"] > 0, f"SE at h={h} should be positive"
                 assert np.isfinite(eff["se"])
@@ -903,13 +898,13 @@ class TestTwoStageDiDEdgeCases:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            es = es_dict(results)
 
         # Proposition 5 horizons should have NaN inference fields
-        assert results.event_study_effects, "Event study should be computed"
+        assert es, "Event study should be computed"
         nan_horizons_found = 0
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es.items():
             if np.isnan(eff["effect"]):
                 nan_horizons_found += 1
                 assert_nan_inference(
@@ -986,12 +981,12 @@ class TestTwoStageDiDEdgeCases:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # All horizons should have |h| <= 2
-        for h in results.event_study_effects:
-            if results.event_study_effects[h].get("n_obs", 0) > 0:
+        es = es_dict(results)
+        for h in es:
+            if es[h].get("n_obs", 0) > 0:
                 assert abs(h) <= 2
 
     def test_always_treated_warning_lists_unit_ids(self):
@@ -1046,24 +1041,23 @@ class TestTwoStageDiDEdgeCases:
         """Unreasonably large balance_e should warn when no cohorts qualify."""
         data = generate_test_data()
 
+        results = TwoStageDiD().fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = TwoStageDiD().fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                aggregate="event_study",
-                balance_e=100,  # No cohort can satisfy this
-            )
+            es = results.aggregate("event_study", balance_e=100)  # No cohort can satisfy this
             balance_warns = [x for x in w if "No cohorts satisfy" in str(x.message)]
             assert len(balance_warns) > 0
 
         # Event study should contain only the reference period
-        assert len(results.event_study_effects) == 1
-        ref_key = list(results.event_study_effects.keys())[0]
-        assert results.event_study_effects[ref_key]["n_obs"] == 0
+        assert len(es.event_time) == 1
+        assert bool(es.is_reference[0])
+        assert es_dict_from_container(es)[int(es.event_time[0])]["n_obs"] == 0
 
     def test_proposition_5_nan_for_long_run_horizons(self):
         """Prop 5 horizons have n_obs > 0 but NaN inference (unidentified)."""
@@ -1082,10 +1076,8 @@ class TestTwoStageDiDEdgeCases:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-
-        assert results.event_study_effects is not None
+            es = es_dict(results)
 
         # Check Prop 5 warning was emitted
         prop5_warnings = [x for x in w if "not identified without never-treated" in str(x.message)]
@@ -1093,13 +1085,13 @@ class TestTwoStageDiDEdgeCases:
 
         # Horizons 0-3 should have observations and finite effects
         for h in range(0, 4):
-            eff = results.event_study_effects[h]
+            eff = es[h]
             assert eff["n_obs"] > 0, f"Horizon {h} should have observations"
             assert np.isfinite(eff["effect"]), f"Horizon {h} effect should be finite"
 
         # Horizons 4, 5, 6: Prop 5 — n_obs > 0 but NaN inference
         for h in [4, 5, 6]:
-            eff = results.event_study_effects[h]
+            eff = es[h]
             assert eff["n_obs"] > 0, f"Horizon {h} should have n_obs > 0 (Prop 5)"
             assert np.isnan(eff["effect"]), f"Horizon {h} effect should be NaN"
             assert np.isnan(eff["se"]), f"Horizon {h} SE should be NaN"
@@ -1120,19 +1112,18 @@ class TestTwoStageDiDEdgeCases:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        assert results.group_effects is not None
+        grp = group_dict(results)
 
         # Cohorts 3 and 5 should have valid effects
         for g in [3, 5]:
-            eff = results.group_effects[g]
+            eff = grp[g]
             assert eff["n_obs"] > 0, f"Cohort {g} should have observations"
             assert np.isfinite(eff["effect"]), f"Cohort {g} effect should be finite"
 
         # Cohort 7: all treated obs have NaN y_tilde -> zero obs -> NaN
-        eff_7 = results.group_effects[7]
+        eff_7 = grp[7]
         assert eff_7["n_obs"] == 0, "Cohort 7 should have 0 observations"
         assert np.isnan(eff_7["effect"]), "Cohort 7 effect should be NaN"
         assert np.isnan(eff_7["se"]), "Cohort 7 SE should be NaN"
@@ -1225,7 +1216,6 @@ class TestTwoStageDiDParameters:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         results_limited = TwoStageDiD(horizon_max=2).fit(
             data,
@@ -1233,11 +1223,10 @@ class TestTwoStageDiDParameters:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        full_horizons = set(results_full.event_study_effects.keys())
-        limited_horizons = set(results_limited.event_study_effects.keys())
+        full_horizons = set(results_full.aggregate("event_study").event_time.tolist())
+        limited_horizons = set(results_limited.aggregate("event_study").event_time.tolist())
 
         assert len(limited_horizons) <= len(full_horizons)
 
@@ -1303,13 +1292,19 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         assert results.bootstrap_results is not None
         assert results.bootstrap_results.event_study_ses is not None
         for h, se in results.bootstrap_results.event_study_ses.items():
             assert se > 0
+        # Bootstrapped fits materialize the percentile surface at fit time and
+        # aggregate() relays it.
+        assert results.event_study_effects is not None
+        es = results.aggregate("event_study")
+        for h, se in zip(es.event_time, es.se):
+            if h in results.bootstrap_results.event_study_ses:
+                assert se == results.event_study_effects[h]["se"]
 
     def test_bootstrap_weights_mammen(self, ci_params):
         """Bootstrap with mammen weights should produce valid results."""
@@ -1349,7 +1344,6 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         br = results.bootstrap_results
@@ -1370,7 +1364,6 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         br = results.bootstrap_results
@@ -1502,8 +1495,8 @@ class TestSilentWarningAudit:
         survey_notes = [x for x in w if "survey weights" in str(x.message)]
         assert len(survey_notes) == 0, f"Unexpected survey note: {survey_notes}"
 
-    def test_item2_nan_ytilde_event_study(self):
-        """Item 2: y_tilde warning fires for aggregate='event_study'."""
+    def test_item2_nan_ytilde_fit(self):
+        """Item 2: y_tilde warning fires at fit (the overall Stage-2 regression)."""
         data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.0, seed=42)
         ts = TwoStageDiD()
         with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
@@ -1513,22 +1506,24 @@ class TestSilentWarningAudit:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
-    def test_item2_nan_ytilde_group(self):
-        """Item 2: y_tilde warning fires for aggregate='group'."""
+    @pytest.mark.parametrize("level", ["event_study", "group"])
+    def test_item2_nan_ytilde_aggregate(self, level):
+        """Item 2: the post-fit event-study / group aggregations re-run the
+        Stage-2 regression on the kit and warn about non-finite y_tilde too."""
         data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.0, seed=42)
-        ts = TwoStageDiD()
-        with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
-            ts.fit(
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(
                 data,
                 outcome="outcome",
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="group",
             )
+        with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
+            res.aggregate(level)
 
     def test_iterative_fe_warns_on_nonconvergence(self):
         """Silent-failure audit axis B: _iterative_fe must warn when max_iter exhausts."""
@@ -1715,11 +1710,8 @@ class TestTwoStageStage2BreadWarning:
 
         return drop_last
 
-    @pytest.mark.parametrize(
-        "aggregate,attr",
-        [("event_study", "event_study_effects"), ("group", "group_effects")],
-    )
-    def test_dropped_coefficient_propagates_nan_inference(self, aggregate, attr):
+    @pytest.mark.parametrize("aggregate", ["event_study", "group"])
+    def test_dropped_coefficient_propagates_nan_inference(self, aggregate):
         """A dropped (unidentified) Stage-2 coefficient must report NaN se / t_stat
         / p_value / conf_int at the ESTIMATOR level (not the zero-filled se=0) — the
         per-coefficient propagation the rank-guard enables (CI codex P2 test-depth).
@@ -1740,9 +1732,20 @@ class TestTwoStageStage2BreadWarning:
                     unit="unit",
                     time="time",
                     first_treat="first_treat",
-                    aggregate=aggregate,
                 )
-        effects = getattr(res, attr)
+                # The analytical Stage-2 aggregation recomputes post-fit, so the
+                # rank-guard patch must still be live when aggregate() runs.
+                if aggregate == "event_study":
+                    es = res.aggregate("event_study")
+                    # The reference row's inference is NaN by container
+                    # contract - exclude it so nan_k reflects dropped coordinates.
+                    effects = {
+                        k: e
+                        for (k, e), ref in zip(es_dict_from_container(es).items(), es.is_reference)
+                        if not ref
+                    }
+                else:
+                    effects = group_dict(res)
         nan_k = [k for k, e in effects.items() if np.isnan(e["se"])]
         fin_k = [k for k, e in effects.items() if np.isfinite(e["se"]) and e["se"] > 0]
         assert nan_k, (
@@ -1777,9 +1780,10 @@ class TestTwoStageStage2BreadWarning:
                     unit="unit",
                     time="time",
                     first_treat="first_treat",
-                    aggregate="all",
                 )
+        # Bootstrapped fits materialize the percentile surface at fit time.
         es = res.event_study_effects
+        assert es is not None
         nan_h = [h for h, e in es.items() if np.isnan(e["se"])]
         fin_h = [h for h, e in es.items() if np.isfinite(e["se"]) and e["se"] > 0]
         assert nan_h, (
@@ -2203,23 +2207,45 @@ def _fit_ts(est, data, **kw):
 
 
 def _assert_results_bit_equal(r0, r1):
-    """Assert two TwoStageDiDResults are numerically identical (NaN-aware)."""
+    """Assert two TwoStageDiDResults are numerically identical (NaN-aware).
+
+    Bootstrapped fits materialize the percentile ``event_study_effects`` /
+    ``group_effects`` at fit time, so those legacy fields are compared
+    directly; analytic fits store no fit-time surface, so the post-fit
+    ``aggregate()`` containers are compared instead.
+    """
 
     def _eq(a, b):
         return a == b or (np.isnan(a) and np.isnan(b))
 
     assert _eq(r0.overall_att, r1.overall_att)
     assert _eq(r0.overall_se, r1.overall_se)
+    assert (r0.bootstrap_results is None) == (r1.bootstrap_results is None)
+    if r0.bootstrap_results is not None:
+        for attr in ("event_study_effects", "group_effects"):
+            e0 = getattr(r0, attr)
+            e1 = getattr(r1, attr)
+            assert e0 is not None and e1 is not None, f"bootstrapped fit left {attr} None"
+            assert set(e0) == set(e1)
+            for k in e0:
+                for f in ("effect", "se"):
+                    assert _eq(e0[k][f], e1[k][f]), f"{attr}[{k}][{f}] differs"
+        return
     for attr in ("event_study_effects", "group_effects"):
-        e0 = getattr(r0, attr)
-        e1 = getattr(r1, attr)
-        if e0 is None:
-            assert e1 is None
-            continue
-        assert set(e0) == set(e1)
-        for k in e0:
-            for f in ("effect", "se"):
-                assert _eq(e0[k][f], e1[k][f]), f"{attr}[{k}][{f}] differs"
+        assert getattr(r0, attr) is None and getattr(r1, attr) is None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pairs = [
+            (level, r0.aggregate(level), r1.aggregate(level)) for level in ("event_study", "group")
+        ]
+    for level, c0, c1 in pairs:
+        labels = "event_time" if level == "event_study" else "label"
+        np.testing.assert_array_equal(getattr(c0, labels), getattr(c1, labels))
+        for f in ("att", "se"):
+            # Exact (NaN-aware) equality: vcov_type="hc1" is a pure no-op.
+            np.testing.assert_array_equal(
+                getattr(c0, f), getattr(c1, f), err_msg=f"{level}.{f} differs"
+            )
 
 
 def _assert_full_bootstrap_nan(r):
@@ -2280,7 +2306,7 @@ class TestTwoStageDiDVcovType:
 
     def test_results_carry_vcov_metadata(self):
         data = generate_test_data(n_units=80, seed=1)
-        r = _fit_ts(TwoStageDiD(), data, aggregate="all")
+        r = _fit_ts(TwoStageDiD(), data)
         assert r.vcov_type == "hc1"
         assert r.cluster_name == "unit"
         assert r.n_clusters == 80
@@ -2362,41 +2388,37 @@ class TestTwoStageDiDVcovType:
 
     # ---- bit-equality regression guards (vcov_type='hc1' is a pure no-op) ----
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_default_path_bit_equal(self, aggregate):
+    def test_default_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=10)
-        r0 = _fit_ts(TwoStageDiD(), data, aggregate=aggregate)
-        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, aggregate=aggregate)
+        r0 = _fit_ts(TwoStageDiD(), data)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_cluster_path_bit_equal(self, aggregate):
+    def test_cluster_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=11)
         data["st"] = data["unit"] % 7
-        r0 = _fit_ts(TwoStageDiD(cluster="st"), data, aggregate=aggregate)
-        r1 = _fit_ts(TwoStageDiD(cluster="st", vcov_type="hc1"), data, aggregate=aggregate)
+        r0 = _fit_ts(TwoStageDiD(cluster="st"), data)
+        r1 = _fit_ts(TwoStageDiD(cluster="st", vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
 
     def test_tsl_survey_path_bit_equal(self):
         data, _ = _add_survey_cols(generate_test_data(n_units=80, seed=12))
         design = SurveyDesign(weights="w")
-        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design, aggregate="all")
-        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design, aggregate="all")
+        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
         _assert_results_bit_equal(r0, r1)
 
     def test_replicate_survey_path_bit_equal(self):
         data, rep_cols = _add_survey_cols(generate_test_data(n_units=80, seed=13))
         design = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
-        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design, aggregate="event_study")
-        r1 = _fit_ts(
-            TwoStageDiD(vcov_type="hc1"), data, survey_design=design, aggregate="event_study"
-        )
+        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
         _assert_results_bit_equal(r0, r1)
 
     def test_bootstrap_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=14)
-        r0 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99), data, aggregate="all")
-        r1 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99, vcov_type="hc1"), data, aggregate="all")
+        r0 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99), data)
+        r1 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99, vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
         b0, b1 = r0.bootstrap_results, r1.bootstrap_results
         assert b0.overall_att_se == b1.overall_att_se
@@ -2434,7 +2456,6 @@ class TestTwoStageDiDVcovType:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="all",
             )
         _assert_full_bootstrap_nan(r)
 
@@ -2451,7 +2472,6 @@ class TestTwoStageDiDVcovType:
                 time="time",
                 first_treat="first_treat",
                 survey_design=design,
-                aggregate="event_study",
             )
         _assert_full_bootstrap_nan(r)
 
@@ -2621,7 +2641,7 @@ class TestEventStudyVcovPersistence:
                 )
         return pd.DataFrame(rows)
 
-    def test_analytical_fit_persists_vcov_diag_matches_ses(self):
+    def test_analytical_aggregate_vcov_diag_matches_ses(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = TwoStageDiD().fit(
@@ -2630,16 +2650,22 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        assert res.event_study_vcov is not None
-        assert res.event_study_vcov_index is not None
-        ses = {h: d["se"] for h, d in res.event_study_effects.items()}
-        diag = np.sqrt(np.maximum(np.diag(res.event_study_vcov), 0.0))
-        for i, h in enumerate(res.event_study_vcov_index):
+            es = res.aggregate("event_study")
+        # Analytic fits store no fit-time surface; the GMM matrix travels on
+        # the container.
+        assert res.event_study_vcov is None
+        assert res.event_study_vcov_index is None
+        assert es.vcov is not None
+        assert es.vcov_index is not None
+        ses = dict(zip(es.event_time.tolist(), es.se.tolist()))
+        diag = np.sqrt(np.maximum(np.diag(es.vcov), 0.0))
+        for i, h in enumerate(es.vcov_index.tolist()):
             np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
         # Non-survey GMM inference is normal-theory: no df provenance.
         assert res.event_study_df is None
+        assert es.df_survey is None
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
 
     def test_bootstrap_clears_vcov_and_df(self):
         # Bootstrap replaces the stored ES se/p/CI with percentile values:
@@ -2653,12 +2679,18 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            es = res.aggregate("event_study")
         assert res.bootstrap_results is not None
+        assert res.event_study_effects is not None
         assert res.event_study_vcov is None
         assert res.event_study_vcov_index is None
         assert res.event_study_df is None
+        # The relay carries neither matrix nor df.
+        assert es.vcov is None
+        assert es.vcov_index is None
+        assert es.df_survey is None
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
 
     def test_replicate_weight_survey_clears_vcov_and_threads_final_df(self):
         # Replicate-weight designs: reported ES SEs come from the replicate
@@ -2676,21 +2708,18 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
                 survey_design=design,
             )
-        assert res.event_study_vcov is None
-        assert res.event_study_vcov_index is None
-        assert res.event_study_df is not None and res.event_study_df > 0
-        assert res.event_study_df == float(res.survey_metadata.df_survey)
-        from diff_diff.results_base import build_event_study_surface
-
-        surface = build_event_study_surface(res)
+            surface = res.aggregate("event_study")
+        assert surface.vcov is None
+        assert surface.vcov_index is None
+        assert surface.df_survey is not None and surface.df_survey > 0
+        assert surface.df_survey == float(res.survey_metadata.df_survey)
         finite_p = np.isfinite(surface.p_value)
         assert finite_p.any()
-        assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+        assert set(np.asarray(surface.df)[finite_p].tolist()) == {float(surface.df_survey)}
 
-    def test_group_only_aggregate_has_no_es_vcov(self):
+    def test_analytic_fit_leaves_fit_time_surfaces_none(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = TwoStageDiD().fit(
@@ -2699,9 +2728,12 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="group",
             )
+            res.aggregate("group")
+            res.aggregate("event_study")
+        # Post-fit aggregation is a pure read: nothing is written back.
         assert res.event_study_effects is None
+        assert res.group_effects is None
         assert res.event_study_vcov is None
         assert res.event_study_vcov_index is None
         assert res.event_study_df is None

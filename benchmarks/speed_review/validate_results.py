@@ -64,8 +64,11 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
         time="time",
         first_treat="first_treat",
         covariates=covariates,
-        aggregate="all",
     )
+    # Post-fit containers (the 3.x fit(aggregate="all") route, removed at 4.0);
+    # the fit is bootstrapped, so each call replays the fit-time bootstrap.
+    es_container = results.aggregate("event_study")
+    grp_container = results.aggregate("group")
 
     out = {
         "overall_att": float(results.overall_att),
@@ -87,31 +90,30 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
         }
     out["group_time_effects"] = gt_effects
 
-    # Event study
-    if results.event_study_effects:
-        es = {}
-        for e, data in sorted(results.event_study_effects.items()):
-            es[str(e)] = {
-                "effect": float(data["effect"]),
-                "se": float(data["se"]),
-                "t_stat": float(data["t_stat"]),
-                "p_value": float(data["p_value"]),
-                "conf_int": [float(data["conf_int"][0]), float(data["conf_int"][1])],
-            }
-        out["event_study"] = es
+    # Event study (same keyed shape as the legacy dict, one record per
+    # container row including the reference row)
+    es = {}
+    for row in es_container.to_dataframe().sort_values("event_time").itertuples(index=False):
+        es[str(int(row.event_time))] = {
+            "effect": float(row.att),
+            "se": float(row.se),
+            "t_stat": float(row.t_stat),
+            "p_value": float(row.p_value),
+            "conf_int": [float(row.conf_int_lower), float(row.conf_int_upper)],
+        }
+    out["event_study"] = es
 
     # Group effects
-    if results.group_effects:
-        ge = {}
-        for g_key, data in sorted(results.group_effects.items()):
-            ge[str(g_key)] = {
-                "effect": float(data["effect"]),
-                "se": float(data["se"]),
-                "t_stat": float(data["t_stat"]),
-                "p_value": float(data["p_value"]),
-                "conf_int": [float(data["conf_int"][0]), float(data["conf_int"][1])],
-            }
-        out["group_effects"] = ge
+    ge = {}
+    for row in grp_container.to_dataframe().sort_values("label").itertuples(index=False):
+        ge[str(row.label)] = {
+            "effect": float(row.att),
+            "se": float(row.se),
+            "t_stat": float(row.t_stat),
+            "p_value": float(row.p_value),
+            "conf_int": [float(row.conf_int_lower), float(row.conf_int_upper)],
+        }
+    out["group_effects"] = ge
 
     return out
 

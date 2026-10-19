@@ -815,12 +815,12 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed at fit time. Use "
-                    "results.aggregate('event_study') for the post-fit "
-                    "event-study container (bootstrapped fits replay the "
-                    "fit-time multiplier bootstrap - no refit needed); a "
-                    "result unpickled from a pre-3.9 release carries no "
-                    "aggregation kit and must be refit."
+                    "Event study effects are not stored on 4.0 fits; use "
+                    "results.aggregate('event_study').to_dataframe() "
+                    "(bootstrapped fits replay the fit-time multiplier "
+                    "bootstrap - no refit needed); a result unpickled from "
+                    "a pre-3.9 release carries no aggregation kit and must "
+                    "be refit."
                 )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
@@ -840,12 +840,12 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         elif level == "group":
             if self.group_effects is None:
                 raise ValueError(
-                    "Group effects not computed at fit time. Use "
-                    "results.aggregate('group') for the post-fit group "
-                    "container (bootstrapped fits replay the fit-time "
-                    "multiplier bootstrap - no refit needed); a result "
-                    "unpickled from a pre-3.9 release carries no "
-                    "aggregation kit and must be refit."
+                    "Group effects are not stored on 4.0 fits; use "
+                    "results.aggregate('group').to_dataframe() "
+                    "(bootstrapped fits replay the fit-time multiplier "
+                    "bootstrap - no refit needed); a result unpickled from "
+                    "a pre-3.9 release carries no aggregation kit and must "
+                    "be refit."
                 )
             rows = []
             for group, data in sorted(self.group_effects.items()):

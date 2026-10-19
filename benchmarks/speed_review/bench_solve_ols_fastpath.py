@@ -124,8 +124,11 @@ def build(scenario):
                 time="time",
                 first_treat="first_treat",
                 covariates=covs,
-                aggregate="all",
             )
+            # fit + aggregations is the measured work (the 3.x
+            # fit(aggregate="all") route, removed at 4.0).
+            res.aggregate("event_study")
+            res.aggregate("group")
             return float(res.overall_att), float(res.overall_se)
 
         return df, fit

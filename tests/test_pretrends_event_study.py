@@ -7,25 +7,10 @@ when pretrends=True is set on the estimator.
 
 import numpy as np
 import pandas as pd
-import pytest
+from legacy_surface import es_dict
 
 from diff_diff.imputation import ImputationDiD
 from diff_diff.two_stage import TwoStageDiD
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 
 def generate_test_data(
@@ -95,11 +80,9 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        horizons = sorted(results.event_study_effects.keys())
+        horizons = sorted(es_dict(results))
         negative = [h for h in horizons if h < 0]
         positive = [h for h in horizons if h >= 0]
         assert len(negative) > 1, "Should have pre-period horizons"
@@ -115,11 +98,10 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         ref_period = -1
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if h >= 0 or h == ref_period:
                 continue
             assert np.isfinite(eff["effect"]), f"h={h}: effect not finite"
@@ -137,11 +119,10 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         ref_period = -1
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if h == ref_period:
                 continue
             if eff["n_obs"] == 0:
@@ -159,11 +140,11 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert -1 in results.event_study_effects
-        ref = results.event_study_effects[-1]
+        effects = es_dict(results)
+        assert -1 in effects
+        ref = effects[-1]
         assert ref["effect"] == 0.0
         assert ref["n_obs"] == 0
 
@@ -177,7 +158,6 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         results_false = ImputationDiD(pretrends=False).fit(
             data,
@@ -185,14 +165,11 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         assert results_default.overall_att == results_false.overall_att
         assert results_default.overall_se == results_false.overall_se
-        assert set(results_default.event_study_effects.keys()) == set(
-            results_false.event_study_effects.keys()
-        )
+        assert set(es_dict(results_default)) == set(es_dict(results_false))
 
     def test_post_treatment_invariance(self):
         """Post-treatment effects identical with pretrends=True vs False."""
@@ -204,7 +181,6 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         results_on = ImputationDiD(pretrends=True).fit(
             data,
@@ -212,7 +188,6 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Overall ATT unchanged
@@ -220,10 +195,11 @@ class TestImputationPretrends:
         assert results_on.overall_se == results_off.overall_se
 
         # Post-treatment event study effects unchanged
-        for h in results_off.event_study_effects:
-            assert h in results_on.event_study_effects
-            eff_off = results_off.event_study_effects[h]
-            eff_on = results_on.event_study_effects[h]
+        es_off, es_on = es_dict(results_off), es_dict(results_on)
+        for h in es_off:
+            assert h in es_on
+            eff_off = es_off[h]
+            eff_on = es_on[h]
             np.testing.assert_allclose(eff_off["effect"], eff_on["effect"], rtol=1e-10)
             np.testing.assert_allclose(eff_off["se"], eff_on["se"], rtol=1e-10)
 
@@ -237,10 +213,9 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h in results.event_study_effects:
+        for h in es_dict(results):
             assert abs(h) <= 2, f"h={h} exceeds horizon_max=2"
 
     def test_anticipation_interaction(self):
@@ -253,11 +228,11 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert -2 in results.event_study_effects
-        ref = results.event_study_effects[-2]
+        effects = es_dict(results)
+        assert -2 in effects
+        ref = effects[-2]
         assert ref["effect"] == 0.0
         assert ref["n_obs"] == 0
 
@@ -292,9 +267,8 @@ class TestImputationPretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert results.event_study_effects is not None
+        assert results.aggregate("event_study") is not None
 
 
 # =============================================================================
@@ -315,11 +289,9 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        horizons = sorted(results.event_study_effects.keys())
+        horizons = sorted(es_dict(results))
         negative = [h for h in horizons if h < 0]
         positive = [h for h in horizons if h >= 0]
         assert len(negative) > 1, "Should have pre-period horizons"
@@ -335,11 +307,10 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         ref_period = -1
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if h >= 0 or h == ref_period:
                 continue
             assert np.isfinite(eff["effect"]), f"h={h}: effect not finite"
@@ -357,11 +328,10 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         ref_period = -1
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if h == ref_period:
                 continue
             if eff["n_obs"] == 0:
@@ -379,7 +349,6 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         results_on = TwoStageDiD(pretrends=True).fit(
             data,
@@ -387,7 +356,6 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Overall ATT unchanged
@@ -395,10 +363,11 @@ class TestTwoStagePretrends:
         assert results_on.overall_se == results_off.overall_se
 
         # Post-treatment event study effects unchanged
-        for h in results_off.event_study_effects:
-            assert h in results_on.event_study_effects
-            eff_off = results_off.event_study_effects[h]
-            eff_on = results_on.event_study_effects[h]
+        es_off, es_on = es_dict(results_off), es_dict(results_on)
+        for h in es_off:
+            assert h in es_on
+            eff_off = es_off[h]
+            eff_on = es_on[h]
             np.testing.assert_allclose(eff_off["effect"], eff_on["effect"], rtol=1e-10)
             np.testing.assert_allclose(eff_off["se"], eff_on["se"], rtol=1e-10)
 
@@ -419,10 +388,9 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h in results.event_study_effects:
+        for h in es_dict(results):
             assert abs(h) <= 2, f"h={h} exceeds horizon_max=2"
 
     def test_anticipation_interaction(self):
@@ -435,11 +403,11 @@ class TestTwoStagePretrends:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert -2 in results.event_study_effects
-        ref = results.event_study_effects[-2]
+        effects = es_dict(results)
+        assert -2 in effects
+        ref = effects[-2]
         assert ref["effect"] == 0.0
         assert ref["n_obs"] == 0
 
@@ -463,7 +431,6 @@ class TestPretrends_ContractTests:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Get pretrend_test lead coefficients (called on results object)
@@ -471,9 +438,10 @@ class TestPretrends_ContractTests:
         lead_coefs = pt["lead_coefficients"]
 
         # Every lead coefficient should match the event study pre-period effect
+        effects = es_dict(results)
         for h, coef in lead_coefs.items():
-            assert h in results.event_study_effects, f"h={h}: lead coefficient not in event study"
-            es_effect = results.event_study_effects[h]["effect"]
+            assert h in effects, f"h={h}: lead coefficient not in event study"
+            es_effect = effects[h]["effect"]
             np.testing.assert_allclose(
                 es_effect,
                 coef,
@@ -537,11 +505,10 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
 
-        for h, eff in results.event_study_effects.items():
+        for h, eff in es_dict(results).items():
             if eff["n_obs"] == 0:
                 continue
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"
@@ -563,12 +530,9 @@ class TestPretrends_Regressions:
             time="time",
             first_treat="first_treat",
             covariates=["x1"],
-            aggregate="event_study",
         )
 
-        negative = {
-            h: v for h, v in results.event_study_effects.items() if h < -1 and v["n_obs"] > 0
-        }
+        negative = {h: v for h, v in es_dict(results).items() if h < -1 and v["n_obs"] > 0}
         assert len(negative) > 0, "Should have pre-period horizons"
         for h, eff in negative.items():
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite with covariates"
@@ -589,7 +553,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # With bootstrap
@@ -599,15 +562,16 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        # Pre-period effects and SEs should be identical (bootstrap doesn't touch them)
-        for h in results_no_boot.event_study_effects:
-            if h >= 0 or results_no_boot.event_study_effects[h]["n_obs"] == 0:
+        # Pre-period effects and SEs should be identical (bootstrap doesn't
+        # touch them): the analytical recompute vs the relayed fit-time surface.
+        es_no_boot, es_boot = es_dict(results_no_boot), es_dict(results_boot)
+        for h in es_no_boot:
+            if h >= 0 or es_no_boot[h]["n_obs"] == 0:
                 continue
-            eff_nb = results_no_boot.event_study_effects[h]
-            eff_b = results_boot.event_study_effects[h]
+            eff_nb = es_no_boot[h]
+            eff_b = es_boot[h]
             np.testing.assert_allclose(
                 eff_nb["effect"],
                 eff_b["effect"],
@@ -636,7 +600,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Permuted integer index
@@ -649,7 +612,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Gapped/nonconsecutive index
@@ -661,16 +623,18 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # All pre-period effects and SEs must match
-        for h in results_default.event_study_effects:
-            if results_default.event_study_effects[h]["n_obs"] == 0:
+        es_default = es_dict(results_default)
+        es_perm = es_dict(results_perm)
+        es_gap = es_dict(results_gap)
+        for h in es_default:
+            if es_default[h]["n_obs"] == 0:
                 continue
-            eff_d = results_default.event_study_effects[h]
-            eff_p = results_perm.event_study_effects[h]
-            eff_g = results_gap.event_study_effects[h]
+            eff_d = es_default[h]
+            eff_p = es_perm[h]
+            eff_g = es_gap[h]
             np.testing.assert_allclose(
                 eff_d["effect"],
                 eff_p["effect"],
@@ -709,7 +673,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         rng = np.random.default_rng(42)
@@ -721,14 +684,14 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h in results_default.event_study_effects:
-            if results_default.event_study_effects[h]["n_obs"] == 0:
+        es_default, es_perm = es_dict(results_default), es_dict(results_perm)
+        for h in es_default:
+            if es_default[h]["n_obs"] == 0:
                 continue
-            eff_d = results_default.event_study_effects[h]
-            eff_p = results_perm.event_study_effects[h]
+            eff_d = es_default[h]
+            eff_p = es_perm[h]
             np.testing.assert_allclose(
                 eff_d["effect"],
                 eff_p["effect"],
@@ -759,41 +722,32 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
+        assert result.aggregate("event_study") is not None
         assert np.isfinite(result.overall_att)
 
     def test_imputation_pretrends_balance_e(self):
         """balance_e restricts pre-period lead regression to balanced cohorts."""
         data = generate_test_data(seed=42)
 
-        results_no_be = ImputationDiD(pretrends=True).fit(
+        results = ImputationDiD(pretrends=True).fit(
             data,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        results_be = ImputationDiD(pretrends=True).fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=1,
-        )
+        es_no_be = results.aggregate("event_study")
+        es_be = results.aggregate("event_study", balance_e=1)
 
         # Both should have pre-period horizons
-        neg_no_be = [h for h in results_no_be.event_study_effects if h < -1]
+        neg_no_be = [h for h in es_no_be.event_time.tolist() if h < -1]
         assert len(neg_no_be) > 0
         # balance_e restricts cohorts; pre-period coefficients may be NaN
         # if the restricted sample is rank-deficient after demeaning
         # The key invariant: the method runs without error
-        assert results_be.event_study_effects is not None
+        assert es_be is not None
 
     def test_two_stage_pretrends_bootstrap(self):
         """TwoStageDiD pretrends=True with bootstrap produces finite pre-period SEs."""
@@ -805,12 +759,9 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        negative = {
-            h: v for h, v in results.event_study_effects.items() if h < -1 and v["n_obs"] > 0
-        }
+        negative = {h: v for h, v in es_dict(results).items() if h < -1 and v["n_obs"] > 0}
         assert len(negative) > 0, "Should have pre-period horizons"
         for h, eff in negative.items():
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"

@@ -1066,7 +1066,9 @@ def _extract_plot_data(
         "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
         "SunAbrahamResults, ImputationDiDResults, "
         "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
-        "For DMLDiDResults (no fit-time event-study surface), plot the "
+        "For a result that stores no event-study surface (DMLDiD, "
+        "EfficientDiD, every CallawaySantAnna fit since 4.0, and ANALYTICAL "
+        "ImputationDiD / TwoStageDiD / ContinuousDiD fits), plot the "
         "post-fit container: plot_event_study(results.aggregate("
         "'event_study'))."
     )

@@ -28,6 +28,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import legacy_standin
 
 from diff_diff import CallawaySantAnna, compute_honest_did, compute_pretrends_power
 from diff_diff.pretrends import PreTrendsPower
@@ -60,12 +61,14 @@ def _panel(seed=11, n_units=80, n_periods=8):
 
 
 def _fit_cs(data, **cs_kw):
-    # The deprecated fit-time aggregate= populates the NATIVE surface the
-    # route-parity tests compare against; the container side re-aggregates
-    # from the kit either way.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return CallawaySantAnna(**cs_kw).fit(data, aggregate="event_study", **FIT_KW)
+    # 4.0: no CS fit stores an event-study surface. The route-parity tests
+    # compare the consumers' NATIVE (raw-field, legacy-pickle) branch against
+    # the container route on the same fit, so the native side is a stand-in
+    # carrying the container's surface in the 3.x fields (dict + vcov +
+    # vcov_index + provenance); the container side re-aggregates from the kit.
+    res = CallawaySantAnna(**cs_kw).fit(data, **FIT_KW)
+    assert res.event_study_effects is None
+    return legacy_standin(res)
 
 
 @pytest.fixture(scope="module")
@@ -194,9 +197,7 @@ class TestHonestRouteParity:
         sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = CallawaySantAnna().fit(
-                _panel(), survey_design=sd, aggregate="event_study", **FIT_KW
-            )
+            res = legacy_standin(CallawaySantAnna().fit(_panel(), survey_design=sd, **FIT_KW))
         h_native, h_container = _assert_honest_parity(res)
         assert h_container.df_survey is not None
         assert np.isfinite(float(h_container.df_survey))
@@ -220,8 +221,17 @@ class TestHonestRouteParity:
         # and assert the same drop (the row disappears from the retained
         # pre set rather than entering beta with sigma 0).
         res = _fit_cs(panel, base_period="universal")
+        # The 3.x field type is ``list`` (CallawaySantAnnaResults annotates
+        # ``event_study_vcov_index: Optional[list]``) and the native branch's
+        # subsetting path calls ``.index()`` on it; the stand-in stores an
+        # ndarray, so restore the native type here.
+        import dataclasses
+
         from diff_diff.honest_did import _extract_event_study_params
 
+        res = dataclasses.replace(
+            res, event_study_vcov_index=[int(t) for t in res.event_study_vcov_index]
+        )
         pre_key = min(k for k in res.event_study_effects if k < -1)
         res.event_study_effects[pre_key] = dict(
             res.event_study_effects[pre_key], se=0.0, p_value=np.nan
@@ -393,11 +403,16 @@ class TestCommonReferenceGuard:
                         "y": ufe + 0.3 * t + 2.0 * post + rng.randn() * 0.5,
                     }
                 )
+        # The native (raw-field) side is a legacy stand-in carrying the
+        # container's surface; ``balance_e=`` restricts that surface the way
+        # the 3.x fit-time ``balance_e`` did.
+        balance_e = fit_kw.pop("balance_e", None)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return CallawaySantAnna(n_bootstrap=0, base_period="universal").fit(
-                pd.DataFrame(rows), aggregate="event_study", **fit_kw, **FIT_KW
+            res = CallawaySantAnna(n_bootstrap=0, base_period="universal").fit(
+                pd.DataFrame(rows), **fit_kw, **FIT_KW
             )
+            return legacy_standin(res, balance_e=balance_e)
 
     def test_overlap_layout_provenance(self):
         res = self._fit_gapped((1, 2, 3, 5), (2, 3, 5))
@@ -512,13 +527,16 @@ class TestCommonReferenceGuard:
         with pytest.warns(UserWarning, match="no reference_event_times provenance"):
             compute_pretrends_power(surface, M=0.1)
 
-    def test_fit_time_balance_e_provenance_matches_surface(self):
-        # The deprecated fit-time aggregate="event_study" + balance_e
-        # stores a RESTRICTED surface: its provenance must describe the
-        # retained cohorts too, or the native route would reject a fit
-        # whose equivalent post-fit container is accepted (route parity).
+    def test_native_balance_e_provenance_matches_surface(self):
+        # A balance_e-RESTRICTED native surface (the 3.x fit-time shape, here a
+        # legacy stand-in) carries provenance describing the retained cohorts
+        # only, so the native route accepts a surface whose equivalent post-fit
+        # container is accepted (route parity). The unrestricted FIT keeps the
+        # fit-wide tuple.
         res = self._fit_gapped((1, 2, 3, 4, 6), (3, 6), balance_e=1)
         assert tuple(int(e) for e in res.reference_event_times) == (-1,)
+        unrestricted = self._fit_gapped((1, 2, 3, 4, 6), (3, 6))
+        assert tuple(int(e) for e in unrestricted.reference_event_times) == (-2, -1)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             p = compute_pretrends_power(res, M=0.1)
