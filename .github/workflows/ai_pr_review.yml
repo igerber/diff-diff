@@ -269,6 +269,16 @@ jobs:
             echo "Base SHA does not contain tools/notebook_md_extract.py; tutorial prose extraction will be skipped (one-shot bootstrap)."
           fi
 
+          # Stage the diff budget filter from BASE_SHA for the same reason.
+          # Bootstrap-safe: absent on base, the unified diff is appended
+          # untrimmed (the pre-filter behaviour).
+          if git show "${BASE_SHA}":tools/ai_review_diff_budget.py > /tmp/ai_review_diff_budget.py 2>/dev/null; then
+            echo "Diff budget filter staged from base SHA ${BASE_SHA}."
+          else
+            rm -f /tmp/ai_review_diff_budget.py
+            echo "Base SHA does not contain tools/ai_review_diff_budget.py; the unified diff will be appended untrimmed (one-shot bootstrap)."
+          fi
+
           # Sanitize untrusted text so hostile content can't close the
           # wrapper tags and inject instructions to the reviewer.
           # Case- and whitespace-tolerant; PR_TITLE / PR_BODY / PREV_REVIEW
@@ -338,19 +348,10 @@ jobs:
             echo ""
             echo "Changed files:"
             git --no-pager diff --name-status "$BASE_SHA" "$HEAD_SHA"
-            echo ""
-            echo "Unified diff (context=5):"
-            # Exclude large generated/data files from the full diff to stay
-            # within the model's input limit. The --name-status above still
-            # lists them. Narrowed to real-data assets, notebook outputs, and
-            # the qte golden fixture (generated single-line JSON, ~700KB - a
-            # regeneration blew the input limit at PR #688; the reviewable
-            # artifact is benchmarks/R/generate_qte_golden.R).
-            git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA" \
-              -- . ':!benchmarks/data/real/*.json' ':!benchmarks/data/real/*.csv' \
-                   ':!benchmarks/data/qte_golden.json' \
-                   ':!docs/tutorials/*.ipynb'
           } >> "$PROMPT"
+          # The unified diff is appended LAST (after the notebook prose
+          # below) so its budget can be computed from the final size of
+          # everything else in the prompt.
 
           # Tutorial notebook prose extraction: substitute a markdown view
           # for the .ipynb JSON that the unified diff excludes. The extractor
@@ -511,6 +512,42 @@ jobs:
               echo "</notebook-prose>"
             } >> "$PROMPT"
           fi
+
+          # Unified diff, fitted to the remaining prompt budget.
+          # Exclude large generated/data files from the full diff to stay
+          # within the model's input limit. The --name-status above still
+          # lists them. Narrowed to real-data assets, notebook outputs, and
+          # the qte golden fixture (generated single-line JSON, ~700KB - a
+          # regeneration blew the input limit at PR #688; the reviewable
+          # artifact is benchmarks/R/generate_qte_golden.R).
+          git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA" \
+            -- . ':!benchmarks/data/real/*.json' ':!benchmarks/data/real/*.csv' \
+                 ':!benchmarks/data/qte_golden.json' \
+                 ':!docs/tutorials/*.ipynb' > /tmp/ai-review-diff.patch
+          # Codex rejects a prompt above 1,048,576 characters outright
+          # (input_too_large; PR #861 compiled to 1.72M). PROMPT_BUDGET is the
+          # whole-prompt target in BYTES (a bound on characters for UTF-8),
+          # leaving ~48K headroom under the hard cap; the diff gets whatever
+          # the rules, PR text, previous review, file list and notebook prose
+          # left. The filter (staged from BASE_SHA above) passes an in-budget
+          # patch through byte-for-byte and otherwise replaces whole per-file
+          # blocks with one-line stubs, largest and lowest-value paths first,
+          # each carrying the git command that shows that file's hunks.
+          PROMPT_BUDGET=1000000
+          {
+            echo ""
+            echo "Unified diff (context=5):"
+          } >> "$PROMPT"
+          if [ -f /tmp/ai_review_diff_budget.py ]; then
+            DIFF_BUDGET=$(( PROMPT_BUDGET - $(wc -c < "$PROMPT") ))
+            if [ "$DIFF_BUDGET" -lt 0 ]; then DIFF_BUDGET=0; fi
+            python3 /tmp/ai_review_diff_budget.py --diff /tmp/ai-review-diff.patch \
+              --budget "$DIFF_BUDGET" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" >> "$PROMPT"
+          else
+            cat /tmp/ai-review-diff.patch >> "$PROMPT"
+          fi
+          rm -f /tmp/ai-review-diff.patch
+          echo "Compiled prompt size: $(wc -c < "$PROMPT") bytes (target ${PROMPT_BUDGET})."
 
       - name: Run Codex
         id: run_codex

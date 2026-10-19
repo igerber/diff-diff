@@ -3870,6 +3870,7 @@ class TestWorkflowDoesNotExecutePRHeadCode:
     # source so the staging-test asserts the FULL command line.
     ALLOWED_TMP_PYTHON_EXECUTIONS = {
         "/tmp/notebook_md_extract.py": "tools/notebook_md_extract.py",
+        "/tmp/ai_review_diff_budget.py": "tools/ai_review_diff_budget.py",
     }
 
     # Literal allowlist of single-line `python3 -c <body>` payloads.
