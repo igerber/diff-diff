@@ -124,8 +124,11 @@ def build(scenario):
                 time="time",
                 first_treat="first_treat",
                 covariates=covs,
-                aggregate="all",
             )
+            # fit + aggregations is the measured work (the 3.x
+            # fit(aggregate="all") route, deprecated since 3.9 and removed at the 4.0 cut).
+            res.aggregate("event_study")
+            res.aggregate("group")
             return float(res.overall_att), float(res.overall_se)
 
         return df, fit

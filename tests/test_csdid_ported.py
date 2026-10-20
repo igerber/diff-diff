@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import CallawaySantAnna
 from tests.helpers.csdid_dgp import build_csdid_sim_data, build_two_group_sim_data
@@ -188,16 +189,20 @@ class TestCSDIDCoreEstimation:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="all",
         )
         assert (
             abs(results.overall_att - 1.0) < 0.5
         ), f"Simple ATT = {results.overall_att:.3f}, expected ≈ 1.0"
+        # A plain fit stores no aggregation surface; both levels are post-fit
+        assert results.event_study_effects is None and results.group_effects is None
         # Event study: post-treatment effect ≈ 1
-        if results.event_study_effects:
-            post_effects = {e: v for e, v in results.event_study_effects.items() if e >= 0}
-            for e, eff in post_effects.items():
-                assert abs(eff["effect"] - 1.0) < 0.5, f"Event study e={e}: {eff['effect']:.3f}"
+        post_effects = {e: v for e, v in es_dict(results).items() if e >= 0}
+        assert post_effects
+        for e, eff in post_effects.items():
+            assert abs(eff["effect"] - 1.0) < 0.5, f"Event study e={e}: {eff['effect']:.3f}"
+        # Group: the single cohort's effect ≈ 1
+        for g, eff in group_dict(results).items():
+            assert abs(eff["effect"] - 1.0) < 0.5, f"Group g={g}: {eff['effect']:.3f}"
 
     def test_dynamic_effects_dose_response(self, ci_params):
         """Ported from R did::test-att_gt.R: 'aggregations' (dynamic)
@@ -221,14 +226,14 @@ class TestCSDIDCoreEstimation:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
-        assert results.event_study_effects is not None
+        es_all = es_dict(results)
+        assert es_all
         # Post-treatment event study effects should be positive and increasing.
         # R: panel=FALSE gives att(e=2) ≈ 2. Panel=TRUE may give ≈ 3
         # (different aggregation weights). Check monotonic increase.
         post_effects = sorted(
-            [(e, v["effect"]) for e, v in results.event_study_effects.items() if e >= 0],
+            [(e, v["effect"]) for e, v in es_all.items() if e >= 0],
             key=lambda x: x[0],
         )
         if len(post_effects) >= 2:
@@ -262,11 +267,11 @@ class TestCSDIDCoreEstimation:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="group",
         )
-        assert results.group_effects is not None
+        grp = group_dict(results)
+        assert grp
         # At least one group should have a sizeable effect
-        any_large = any(abs(v["effect"]) > 1.0 for v in results.group_effects.values())
+        any_large = any(abs(v["effect"]) > 1.0 for v in grp.values())
         assert any_large, "Expected group-specific heterogeneity"
 
     def test_aggregation_balance_e(self, ci_params):
@@ -293,11 +298,9 @@ class TestCSDIDCoreEstimation:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
-            balance_e=1,
         )
-        assert results.event_study_effects is not None
-        es = results.event_study_effects
+        es = es_dict(results, balance_e=1)
+        assert es
         if 0 in es and 1 in es:
             diff = es[1]["effect"] - es[0]["effect"]
             assert abs(diff - 1.0) < 0.5, f"balance_e consecutive diff = {diff:.3f}, expected ≈ 1.0"
@@ -333,12 +336,12 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
-        assert results.event_study_effects is not None
+        es_all = es_dict(results)
+        assert es_all
         # R: agg_dynamic$att.egt[egt==2] ≈ 3
-        if 2 in results.event_study_effects:
-            att_e2 = results.event_study_effects[2]["effect"]
+        if 2 in es_all:
+            att_e2 = es_all[2]["effect"]
             assert abs(att_e2 - 3.0) < 1.0, f"Non-consecutive e=2: {att_e2:.3f}, expected ≈ 3"
 
     def test_anticipation_with_and_without(self, ci_params):
@@ -369,10 +372,10 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
-        if results.event_study_effects and 2 in results.event_study_effects:
-            att_e2 = results.event_study_effects[2]["effect"]
+        es_all = es_dict(results)
+        if 2 in es_all:
+            att_e2 = es_all[2]["effect"]
             assert abs(att_e2 - 2.0) < 0.5, f"Anticipation=1 e=2: {att_e2:.3f}, expected ≈ 2"
 
         # Without anticipation (incorrectly ignoring it)
@@ -384,10 +387,10 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
-        if results_no.event_study_effects and 2 in results_no.event_study_effects:
-            att_e2_no = results_no.event_study_effects[2]["effect"]
+        es_no = es_dict(results_no)
+        if 2 in es_no:
+            att_e2_no = es_no[2]["effect"]
             assert abs(att_e2_no - 3.0) < 0.5, f"No anticipation e=2: {att_e2_no:.3f}, expected ≈ 3"
 
     def test_varying_vs_universal_pretreatment(self, ci_params):
@@ -417,8 +420,8 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
+        es_v = es_dict(res_v)
 
         # Universal base period
         cs_u = CallawaySantAnna(estimation_method="dr", base_period="universal")
@@ -429,15 +432,15 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
+        es_u = es_dict(res_u)
 
         # R: varying at e=-3 ≈ 1, universal at e=-3 ≈ -2
-        if res_v.event_study_effects and -3 in res_v.event_study_effects:
-            att_v = res_v.event_study_effects[-3]["effect"]
+        if -3 in es_v:
+            att_v = es_v[-3]["effect"]
             assert abs(att_v - 1.0) < 0.5, f"Varying e=-3: {att_v:.3f}, expected ≈ 1"
-        if res_u.event_study_effects and -3 in res_u.event_study_effects:
-            att_u = res_u.event_study_effects[-3]["effect"]
+        if -3 in es_u:
+            att_u = es_u[-3]["effect"]
             assert abs(att_u - (-2.0)) < 0.5, f"Universal e=-3: {att_u:.3f}, expected ≈ -2"
 
     def test_small_groups_warning(self):
@@ -581,8 +584,8 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
+        es05 = res05.aggregate("event_study")
 
         cs01 = CallawaySantAnna(
             estimation_method="dr",
@@ -598,17 +601,12 @@ class TestCSDIDNonStandardConfigs:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
+        es01 = res01.aggregate("event_study")
 
         # 5% CI should be narrower than (or equal to) 1% CI
-        if (
-            res05.event_study_effects
-            and res01.event_study_effects
-            and res05.cband_crit_value
-            and res01.cband_crit_value
-        ):
-            assert res05.cband_crit_value <= res01.cband_crit_value + 0.01
+        assert es05.cband_crit_value is not None and es01.cband_crit_value is not None
+        assert es05.cband_crit_value <= es01.cband_crit_value + 0.01
 
     def test_some_units_treated_first_period(self):
         """Ported from R did::test-att_gt.R: 'some units treated in first period'
@@ -712,18 +710,19 @@ class TestCSDIDBugFixRegressions:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="all",
         )
 
         # Dynamic aggregation should have no NaN ATTs
-        if results.event_study_effects:
-            for e, eff in results.event_study_effects.items():
-                assert np.isfinite(eff["effect"]), f"NaN in event_study at e={e}"
+        es_all = es_dict(results)
+        assert es_all
+        for e, eff in es_all.items():
+            assert np.isfinite(eff["effect"]), f"NaN in event_study at e={e}"
 
         # Group aggregation should have no NaN ATTs
-        if results.group_effects:
-            for g, eff in results.group_effects.items():
-                assert np.isfinite(eff["effect"]), f"NaN in group_effects at g={g}"
+        grp = group_dict(results)
+        assert grp
+        for g, eff in grp.items():
+            assert np.isfinite(eff["effect"]), f"NaN in group_effects at g={g}"
 
     def test_zero_pretreatment_outcomes(self):
         """Ported from R did::test-user_bug_fixes.R: '0 pre-treatment estimates...'
@@ -1088,18 +1087,16 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
         r_dyn = scenario["results"]["dynamic"]
-        if results.event_study_effects:
-            for i, e in enumerate(r_dyn["egt"]):
-                e = int(e)
-                if e in results.event_study_effects:
-                    py_att = results.event_study_effects[e]["effect"]
-                    r_att = r_dyn["att"][i]
-                    assert (
-                        abs(py_att - r_att) < 0.05
-                    ), f"Dynamic e={e}: Py={py_att:.4f}, R={r_att:.4f}"
+        es_all = es_dict(results)
+        assert es_all
+        for i, e in enumerate(r_dyn["egt"]):
+            e = int(e)
+            if e in es_all:
+                py_att = es_all[e]["effect"]
+                r_att = r_dyn["att"][i]
+                assert abs(py_att - r_att) < 0.05, f"Dynamic e={e}: Py={py_att:.4f}, R={r_att:.4f}"
 
     def test_golden_non_consecutive_periods(self, golden_values):
         """Non-consecutive periods {1,2,5,7} match R at the per-cell level.
@@ -1125,7 +1122,6 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
         r_gt = scenario["results"]["group_time"]
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
@@ -1161,18 +1157,18 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
         r_dyn = scenario["results"]["dynamic"]
-        if results.event_study_effects:
-            for i, e in enumerate(r_dyn["egt"]):
-                e = int(e)
-                if e in results.event_study_effects:
-                    py_att = results.event_study_effects[e]["effect"]
-                    r_att = r_dyn["att"][i]
-                    assert (
-                        abs(py_att - r_att) < 0.1
-                    ), f"Anticipation e={e}: Py={py_att:.4f}, R={r_att:.4f}"
+        es_all = es_dict(results)
+        assert es_all
+        for i, e in enumerate(r_dyn["egt"]):
+            e = int(e)
+            if e in es_all:
+                py_att = es_all[e]["effect"]
+                r_att = r_dyn["att"][i]
+                assert (
+                    abs(py_att - r_att) < 0.1
+                ), f"Anticipation e={e}: Py={py_att:.4f}, R={r_att:.4f}"
 
     def test_golden_varying_vs_universal(self, golden_values):
         """Both base period modes match R."""
@@ -1265,7 +1261,6 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="all",
         )
         r_gt = scenario["results"]["group_time"]
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
@@ -1335,7 +1330,6 @@ class TestCSDIDGoldenValues:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="simple",
         )
         r_simple = scenario["results"]["simple"]
         assert (
@@ -1375,14 +1369,14 @@ class TestCSDIDGoldenValues:
                 time="period",
                 first_treat="first_treat",
                 covariates=["X"],
-                aggregate="event_study",
             )
+            es_all = es_dict(results)
             blk = scenario["results"][f"{bp}_dynamic"]
             n_checked = 0
             for e, r_att, r_se in zip(blk["egt"], blk["att"], blk["se"]):
                 if r_att == "NA" or r_se == "NA":
                     continue
-                es = results.event_study_effects.get(int(e))
+                es = es_all.get(int(e))
                 assert es is not None, f"{bp}: missing event time e={e}"
                 assert (
                     abs(es["effect"] - float(r_att)) < 2e-3
@@ -1457,19 +1451,18 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="all",
         )
         r = scenario["results"]
         assert abs(results.overall_att - r["simple"]["att"]) < 1e-8
         assert abs(results.overall_se - r["simple"]["se"]) < 1e-8
         g_att = np.atleast_1d(r["group"]["att"])[0]
         g_se = np.atleast_1d(r["group"]["se"])[0]
-        grp = results.group_effects[2]
+        grp = group_dict(results)[2]
         assert abs(grp["effect"] - g_att) < 1e-8
         assert abs(grp["se"] - g_se) < 1e-8
         d_att = np.atleast_1d(r["dynamic"]["att"])[0]
         d_se = np.atleast_1d(r["dynamic"]["se"])[0]
-        es0 = results.event_study_effects[0]
+        es0 = es_dict(results)[0]
         assert abs(es0["effect"] - d_att) < 1e-8
         assert abs(es0["se"] - d_se) < 1e-8
 
@@ -1484,11 +1477,11 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="event_study",
         )
         r_dyn = scenario["results"]["dynamic"]
+        es_all = es_dict(results)
         for i, e in enumerate(r_dyn["egt"]):
-            es = results.event_study_effects.get(int(e))
+            es = es_all.get(int(e))
             assert es is not None, f"missing event time e={e}"
             assert (
                 abs(es["effect"] - r_dyn["att"][i]) < 1e-8
@@ -1525,7 +1518,6 @@ class TestCSDIDGoldenValues:
             time="period",
             first_treat="first_treat",
             covariates=["X"],
-            aggregate="all",
         )
         # R did 2.5.1: aggte(type="simple", bstrap=FALSE, cband=FALSE)
         assert abs(results.overall_att - r_results["simple"]["att"]) < 1e-6
@@ -1533,15 +1525,17 @@ class TestCSDIDGoldenValues:
         # aggte(type="dynamic"): (att.egt, se.egt) per event time
         r_dyn = r_results["dynamic"]
         assert len(r_dyn["egt"]) > 0
+        es_all = es_dict(results)
         for e, r_att, r_se in zip(r_dyn["egt"], r_dyn["att"], r_dyn["se"]):
-            es = results.event_study_effects[int(e)]
+            es = es_all[int(e)]
             assert abs(es["effect"] - r_att) < 1e-6, f"ipw dyn ATT(e={e})"
             assert abs(es["se"] - r_se) < 1e-6, f"ipw dyn SE(e={e})"
         # aggte(type="group"): (att.egt, se.egt) per cohort
         r_grp = r_results["group"]
         assert len(r_grp["egt"]) > 0
+        grp_all = group_dict(results)
         for g, r_att, r_se in zip(r_grp["egt"], r_grp["att"], r_grp["se"]):
-            grp = results.group_effects[int(g)]
+            grp = grp_all[int(g)]
             assert abs(grp["effect"] - r_att) < 1e-6, f"ipw group ATT(g={g})"
             assert abs(grp["se"] - r_se) < 1e-6, f"ipw group SE(g={g})"
 
@@ -1807,9 +1801,8 @@ class TestCSDIDPositionalBasePeriod:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        es = res.event_study_effects
+        es = es_dict(res)
         gt = res.group_time_effects
         real = gt[(5, 3)]["effect"]  # cohort 5 estimated cell at e=-2
         real_se = gt[(5, 3)]["se"]
@@ -1865,7 +1858,6 @@ class TestCSDIDPositionalBasePeriod:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
             gt = res.group_time_effects
             # (7,1) is skipped; (7,5) reference still carries a positive weight.
@@ -1874,9 +1866,7 @@ class TestCSDIDPositionalBasePeriod:
             # e=-2 is still diluted to half the real cell (weight not zeroed by the
             # skipped cell). Bootstrap SE differs from analytical but the POINT is
             # the same diluted estimand.
-            assert res.event_study_effects[-2]["effect"] == pytest.approx(
-                0.5 * gt[(5, 3)]["effect"], rel=1e-6
-            )
+            assert es_dict(res)[-2]["effect"] == pytest.approx(0.5 * gt[(5, 3)]["effect"], rel=1e-6)
 
     def test_universal_reference_materialized_for_all_skipped_cohort(self):
         """A cohort whose non-reference cells are ALL non-estimable still gets its
@@ -1911,8 +1901,10 @@ class TestCSDIDPositionalBasePeriod:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            # the post-fit event study (bootstrap replay on the n_boot=199 arm)
+            # must also be computable on this all-skipped-cohort panel
+            assert es_dict(res)
             gt = res.group_time_effects
             # Every non-reference cohort-7 cell is skipped, yet its base (7,5)
             # reference is materialized with the fixed cohort mass (40), not
@@ -1983,7 +1975,6 @@ class TestAllowUnbalancedPanel:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
     def test_cells_match_r(self, unbalanced_golden):
@@ -2009,11 +2000,12 @@ class TestAllowUnbalancedPanel:
         """
         with pytest.warns(UserWarning):
             res = self._fit(unbalanced_golden)
+        py_es = es_dict(res)
         es = unbalanced_golden["event_study"]
         n_units = unbalanced_golden["meta"]["n_units"]
         fac = np.sqrt(n_units / (n_units - 1))
         for i, e in enumerate(es["egt"]):
-            v = res.event_study_effects.get(int(e))
+            v = py_es.get(int(e))
             assert v is not None, f"missing event time {e}"
             assert v["effect"] == pytest.approx(es["att"][i], abs=1e-9)
             assert v["se"] == pytest.approx(es["se"][i] * fac, abs=1e-8)
@@ -2041,17 +2033,15 @@ class TestAllowUnbalancedPanel:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         r0 = CallawaySantAnna(estimation_method="reg").fit(bal, **kw)
         r1 = CallawaySantAnna(estimation_method="reg", allow_unbalanced_panel=True).fit(bal, **kw)
-        for e in r0.event_study_effects:
-            assert r1.event_study_effects[e]["effect"] == pytest.approx(
-                r0.event_study_effects[e]["effect"], abs=1e-13
-            )
-            assert r1.event_study_effects[e]["se"] == pytest.approx(
-                r0.event_study_effects[e]["se"], abs=1e-13
-            )
+        es0 = es_dict(r0)
+        es1 = es_dict(r1)
+        assert es0 and set(es0) == set(es1)
+        for e in es0:
+            assert es1[e]["effect"] == pytest.approx(es0[e]["effect"], abs=1e-13)
+            assert es1[e]["se"] == pytest.approx(es0[e]["se"], abs=1e-13)
 
     def test_unbalanced_default_path_warns(self, unbalanced_golden):
         """Without the flag, an unbalanced panel warns (no-silent-failures)."""
@@ -2062,7 +2052,6 @@ class TestAllowUnbalancedPanel:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
     def test_user_cluster_honored(self, unbalanced_golden):
@@ -2082,11 +2071,11 @@ class TestAllowUnbalancedPanel:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+        py_es = es_dict(res)
         es = unbalanced_golden["event_study"]
         for i, e in enumerate(es["egt"]):
-            v = res.event_study_effects.get(int(e))
+            v = py_es.get(int(e))
             if v is not None:
                 assert v["effect"] == pytest.approx(es["att"][i], abs=1e-9)
 
@@ -2146,14 +2135,14 @@ class TestAllowUnbalancedPanel:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="group",
             )
+        grp = group_dict(res)
         g = unbalanced_golden["group"]
         n_units = unbalanced_golden["meta"]["n_units"]
         fac = np.sqrt(n_units / (n_units - 1))
-        assert res.group_effects is not None
+        assert grp
         for i, gval in enumerate(g["egt"]):
-            eff = res.group_effects.get(gval) or res.group_effects.get(float(gval))
+            eff = grp.get(gval) or grp.get(float(gval))
             assert eff is not None, f"missing group {gval}"
             assert eff["effect"] == pytest.approx(g["att"][i], abs=1e-9)
             assert eff["se"] == pytest.approx(g["se"][i] * fac, abs=1e-8)
@@ -2168,7 +2157,6 @@ class TestAllowUnbalancedPanel:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         df = _unbal_df(unbalanced_golden)
         with pytest.warns(UserWarning):
@@ -2183,10 +2171,11 @@ class TestAllowUnbalancedPanel:
                 n_bootstrap=200,
                 seed=11,
             ).fit(df, **kw)
-        for e in a.event_study_effects:
-            assert b.event_study_effects[e]["effect"] == pytest.approx(
-                a.event_study_effects[e]["effect"], abs=1e-12
-            )
+        es_a = es_dict(a)
+        es_b = es_dict(b)  # bootstrap replay
+        assert es_a and set(es_a) == set(es_b)
+        for e in es_a:
+            assert es_b[e]["effect"] == pytest.approx(es_a[e]["effect"], abs=1e-12)
 
     def test_result_metadata_reflects_rc_routing(self, unbalanced_golden):
         """The result records the flag AND whether RC-on-panel actually engaged,
@@ -2296,7 +2285,6 @@ class TestAllowUnbalancedPanel:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         def mk():
@@ -2317,8 +2305,11 @@ class TestAllowUnbalancedPanel:
             if v.get("is_reference"):
                 continue
             assert v["effect"] == pytest.approx(ref.group_time_effects[k]["effect"], abs=1e-12)
-        for e, v in res.event_study_effects.items():
-            assert v["effect"] == pytest.approx(ref.event_study_effects[e]["effect"], abs=1e-12)
+        es_res = es_dict(res)
+        es_ref = es_dict(ref)
+        assert es_res and set(es_res) == set(es_ref)
+        for e, v in es_res.items():
+            assert v["effect"] == pytest.approx(es_ref[e]["effect"], abs=1e-12)
         assert res.overall_att == pytest.approx(ref.overall_att, abs=1e-12)
 
     def test_complete_case_rectangular_stays_inert(self):

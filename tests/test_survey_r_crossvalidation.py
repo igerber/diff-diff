@@ -279,7 +279,6 @@ class TestCSWeighted:
             "period",
             "first_treat",
             covariates=covariates,
-            aggregate="simple",
             survey_design=sd,
         )
         return result, r
@@ -362,7 +361,6 @@ class TestCSWeighted:
             "period",
             "first_treat",
             covariates=covariates,
-            aggregate="simple",
             survey_design=sd,
         )
 
@@ -380,7 +378,6 @@ class TestCSWeighted:
             "period",
             "first_treat",
             covariates=covariates,
-            aggregate="simple",
         )
 
         assert result_survey.overall_se != result_naive.overall_se, (

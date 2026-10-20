@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import (
     DifferenceInDifferences,
@@ -16,21 +17,6 @@ from diff_diff import (
     TwoWayFixedEffects,
 )
 from diff_diff.survey import SurveyDesign
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -414,15 +400,14 @@ class TestImputationDiDReplicate:
             "unit",
             "time",
             "first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_se) and result.overall_se > 0
-        assert result.event_study_effects is not None
+        es = es_dict(result)
         # At least some identified periods should have finite SE
         finite_ses = [
             e
-            for e, eff in result.event_study_effects.items()
+            for e, eff in es.items()
             if np.isfinite(eff["effect"]) and np.isfinite(eff["se"]) and eff["se"] > 0
         ]
         assert len(finite_ses) > 0, "No event-study periods have finite replicate SE"
@@ -438,11 +423,11 @@ class TestImputationDiDReplicate:
             "unit",
             "time",
             "first_treat",
-            aggregate="group",
             survey_design=sd,
         )
-        assert result.group_effects is not None
-        for g, eff in result.group_effects.items():
+        grp = group_dict(result)
+        assert len(grp) > 0
+        for g, eff in grp.items():
             assert np.isfinite(eff["se"]) and eff["se"] > 0, f"group {g}: SE not finite"
 
     def test_imputation_bootstrap_rejected(self):
@@ -491,11 +476,9 @@ class TestTwoStageDiDReplicate:
             "unit",
             "time",
             "first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
-        non_ref = {e: eff for e, eff in result.event_study_effects.items() if eff["effect"] != 0.0}
+        non_ref = {e: eff for e, eff in es_dict(result).items() if eff["effect"] != 0.0}
         assert len(non_ref) > 0, "No non-reference event-study effects"
         for e, eff in non_ref.items():
             assert np.isfinite(eff["se"]) and eff["se"] > 0, f"period {e}: SE not finite"
@@ -608,7 +591,6 @@ class TestTwoStageDiDReplicate:
             "unit",
             "time",
             "first_treat",
-            aggregate="all",
             survey_design=sd,
         )
         # Event-study surface: at least one non-reference horizon must have
@@ -616,10 +598,9 @@ class TestTwoStageDiDReplicate:
         # override path at `two_stage.py` updates SE + t_stat + p_value +
         # conf_int separately for each non-reference horizon via the same
         # _refit_ts callback, so all four fields must be locked).
-        assert result.event_study_effects is not None
         non_ref_es = {
             e: eff
-            for e, eff in result.event_study_effects.items()
+            for e, eff in es_dict(result).items()
             if eff["effect"] != 0.0 and np.isfinite(eff["effect"])
         }
         assert len(non_ref_es) > 0, "no non-reference event-study effects"
@@ -636,9 +617,8 @@ class TestTwoStageDiDReplicate:
             ), f"event-study horizon {e}: replicate conf_int bounds must be finite"
         # Group surface: at least one cohort with finite replicate SE /
         # p_value / conf_int (same override path applies to group effects).
-        assert result.group_effects is not None
         finite_groups = {
-            g: eff for g, eff in result.group_effects.items() if np.isfinite(eff["effect"])
+            g: eff for g, eff in group_dict(result).items() if np.isfinite(eff["effect"])
         }
         assert len(finite_groups) > 0, "no finite group effects"
         for g, eff in finite_groups.items():

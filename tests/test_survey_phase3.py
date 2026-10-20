@@ -1375,11 +1375,9 @@ class TestReviewRegressions:
         assert r.overall_se > 0
         assert r.overall_se > 0.01  # Not artificially tiny
 
-    @pytest.mark.filterwarnings(r"ignore:ContinuousDiD\.fit\(aggregate=\):FutureWarning")
     def test_continuous_did_eventstudy_survey(self, continuous_survey_data):
-        """The deprecated fit-time aggregate=eventstudy still works with a
-        survey design (M-025 legacy routing; the post-fit successor's
-        survey arms are pinned in tests/test_aggregate_contract.py)."""
+        """The post-fit event-study aggregation works with a survey design
+        (the survey arms are pinned in tests/test_aggregate_contract.py)."""
         from diff_diff import ContinuousDiD
 
         sd = SurveyDesign(weights="weight", strata="stratum")
@@ -1390,14 +1388,15 @@ class TestReviewRegressions:
             "time",
             "first_treat",
             "dose",
-            aggregate="eventstudy",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
+        assert result.event_study_effects is None  # analytic fit: post-fit route only
         assert result.survey_metadata is not None
-        for e, eff in result.event_study_effects.items():
-            if np.isfinite(eff["effect"]):
-                assert np.isfinite(eff["se"]), f"Non-finite SE for e={e}"
+        es = result.aggregate("event_study")
+        assert len(es.event_time) > 0
+        for e, att, se, ref in zip(es.event_time, es.att, es.se, es.is_reference):
+            if not ref and np.isfinite(att):
+                assert np.isfinite(se), f"Non-finite SE for e={e}"
 
     def test_within_unit_varying_weights_rejected(self):
         """Time-varying survey weights within units should be rejected."""

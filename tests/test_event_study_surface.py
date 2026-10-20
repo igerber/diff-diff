@@ -19,6 +19,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import legacy_standin
 
 from diff_diff.results_base import (
     EVENT_STUDY_SCHEMA,
@@ -263,7 +264,18 @@ def test_df_survey_bare_cluster_falls_back_to_df_inference():
 
 @pytest.fixture(scope="module")
 def surfaces():
-    """Build every producer's surface once; return {label: (native, surface)}."""
+    """Build every producer's surface once; return {label: (native, surface)}.
+
+    Producer routes as they stand in this (tests-first) migration step: the
+    CallawaySantAnna "native" side is a ``legacy_standin`` carrying
+    ``aggregate("event_study")`` in the 3.x fields (a plain CS fit stores no
+    fit-time dict; the stand-in is the legacy-pickle shape
+    ``build_event_study_surface`` still accepts), while the ImputationDiD,
+    TwoStageDiD, ContinuousDiD and EfficientDiD producers still use the
+    deprecated fit-time ``aggregate=`` route, which populates the dict directly.
+    Those sites move to stand-ins / the post-fit relay when the fit-time
+    keywords are removed (4.0 PRs 3b/3c).
+    """
     out = {}
 
     from diff_diff import (
@@ -303,8 +315,9 @@ def surfaces():
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        assert cs.event_study_effects is None  # plain fit: not populated at fit
+        cs = legacy_standin(cs)
         out["CallawaySantAnna"] = (cs, build_event_study_surface(cs))
 
         # 2. SunAbraham (always-on)
@@ -789,13 +802,14 @@ def test_cs_universal_gapped_multiple_references():
             )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        cs = CallawaySantAnna(n_bootstrap=0, base_period="universal").fit(
-            pd.DataFrame(rows),
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-            aggregate="event_study",
+        cs = legacy_standin(
+            CallawaySantAnna(n_bootstrap=0, base_period="universal").fit(
+                pd.DataFrame(rows),
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
         )
     native_refs = sorted(e for e, r in cs.event_study_effects.items() if r.get("n_groups") == 0)
     assert len(native_refs) >= 2  # the case only matters when >1
@@ -1030,7 +1044,8 @@ def test_absent_surface_raises():
     from diff_diff.prep import generate_staggered_data as prep_staggered
 
     data = prep_staggered(n_units=60, n_periods=6, cohort_periods=[3], treatment_effect=2.0, seed=1)
-    # aggregate defaults to "simple": no event_study_effects populated.
+    # A plain CallawaySantAnna fit does not populate event_study_effects; the builder
+    # distinguishes that ABSENT surface (raise) from an empty one.
     cs = CallawaySantAnna(n_bootstrap=0).fit(
         data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
     )
@@ -1298,7 +1313,7 @@ def test_two_stage_vcov_alignment(surfaces):
     idx = surface.vcov_index.tolist()
     assert set(idx).issubset(set(surface.event_time.tolist()))
     assert -1 not in idx  # ref_period never a Stage-2 column
-    assert idx == native.event_study_vcov_index
+    assert idx == np.asarray(native.event_study_vcov_index).tolist()
     ses = {h: d["se"] for h, d in native.event_study_effects.items()}
     diag = np.sqrt(np.maximum(np.diag(surface.vcov), 0.0))
     for i, h in enumerate(idx):
@@ -1330,18 +1345,17 @@ def test_two_stage_prop5_horizons_excluded_from_vcov_index():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        surface = res.aggregate("event_study")
     prop5 = [
-        h
-        for h, d in res.event_study_effects.items()
-        if d["n_obs"] > 0 and not np.isfinite(d["effect"])
+        int(h)
+        for h, n, att in zip(surface.event_time, surface.n, surface.att)
+        if n > 0 and not np.isfinite(att)
     ]
     assert prop5, "fixture must produce Proposition-5 horizons"
-    assert res.event_study_vcov_index is not None
-    assert not set(prop5) & set(res.event_study_vcov_index)
-    surface = build_event_study_surface(res)
     assert surface.vcov is not None
+    assert surface.vcov_index is not None
+    assert not set(prop5) & set(surface.vcov_index.tolist())
     assert set(surface.vcov_index.tolist()).issubset(set(surface.event_time.tolist()))
 
 
@@ -1434,14 +1448,14 @@ def test_two_stage_survey_df_threaded():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=design,
         )
-    assert res.event_study_df is not None and res.event_study_df > 0
-    surface = build_event_study_surface(res)
+        surface = res.aggregate("event_study")
+    assert surface.df_survey is not None and surface.df_survey > 0
+    assert surface.df_survey == float(res.survey_metadata.df_survey)
     finite_p = np.isfinite(surface.p_value)
     assert finite_p.any()
-    assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+    assert set(surface.df[finite_p].tolist()) == {float(surface.df_survey)}
 
 
 def test_stacked_replicate_weight_vcov_diag_matches_ses():
@@ -1511,13 +1525,12 @@ def test_cs_bare_cluster_df_fallback():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        surface = res.aggregate("event_study")
     # Bare-cluster synthesize path: the ES rows' safe_inference used G-1,
-    # recorded on BOTH channels (primary event_study_df; df_inference keeps
-    # its narrow HonestDiD contract).
-    assert res.event_study_df == float(res.df_inference) == 7.0
-    surface = build_event_study_surface(res)
+    # recorded on BOTH channels (the container's per-row df + df_survey;
+    # df_inference keeps its narrow HonestDiD contract).
+    assert surface.df_survey == float(res.df_inference) == 7.0
     finite_p = np.isfinite(surface.p_value)
     assert set(surface.df[finite_p].tolist()) == {7.0}
 
@@ -1533,16 +1546,14 @@ def test_cs_bare_cluster_bootstrap_df_is_nan():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-    # Bootstrap overrode the stored ES p/CIs with percentile values that
+        surface = res.aggregate("event_study")
+    # The bootstrap replay overrides the ES p/CIs with percentile values that
     # never used the analytical df: the surface must show NO df even though
     # df_inference (the HonestDiD contract field) still carries G-1 on the
-    # container. Bootstrap p-values are finite, so only the gated
+    # results object. Bootstrap p-values are finite, so only the gated
     # df_inference fallback - not the NaN-p mask - prevents the leak.
     assert res.df_inference == 7
-    assert res.event_study_df is None
-    surface = build_event_study_surface(res)
     assert np.isfinite(surface.p_value).any()
     assert np.isnan(surface.df).all()
 
@@ -1562,18 +1573,19 @@ def test_cs_survey_min_df_on_surface():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=design,
         )
+        surface = res.aggregate("event_study")
     # Explicit-survey fits: df_inference stays None (PR #487 narrow
     # HonestDiD contract - channel separation), while the surface carries
     # the ONE df every ES row's safe_inference_batch actually applied.
     assert res.df_inference is None
-    assert res.event_study_df is not None and res.event_study_df > 0
-    surface = build_event_study_surface(res)
     finite_p = np.isfinite(surface.p_value)
     assert finite_p.any()
-    assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+    applied = set(surface.df[finite_p].tolist())
+    assert len(applied) == 1
+    (df_applied,) = applied
+    assert np.isfinite(df_applied) and df_applied > 0
 
 
 def test_mpd_hc2_bm_per_period_df():

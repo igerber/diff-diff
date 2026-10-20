@@ -1,7 +1,7 @@
 """
 Scenario 1: Staggered marketing campaign.
 
-CallawaySantAnna with covariates + bootstrap + aggregate='all', wrapped in
+CallawaySantAnna with covariates + bootstrap + post-fit aggregate(), wrapped in
 the 8-step Baker workflow: Bacon -> CS fit -> event-study pre-trend
 inspection -> HonestDiD M-grid -> SunAbraham + ImputationDiD robustness
 -> with/without-covariates refit -> practitioner_next_steps.
@@ -64,21 +64,27 @@ def make_phases(data, results, covars, fit_kwargs):
             control_group="never_treated", estimation_method="dr",
             cluster="unit", n_bootstrap=999, seed=123,
         )
-        results["cs"] = cs.fit(
-            **fit_kwargs, covariates=covars, aggregate="all",
-        )
+        results["cs"] = cs.fit(**fit_kwargs, covariates=covars)
+        # Materialize BOTH post-fit containers ONCE inside the timed fit
+        # phase (the 3.x fit(aggregate="all") workload = fit + event-study
+        # + group aggregation) and reuse them below: the fit has
+        # n_bootstrap=999, so every aggregate() call replays the bootstrap.
+        results["cs_es"] = results["cs"].aggregate("event_study")
+        results["cs_grp"] = results["cs"].aggregate("group")
 
     def inspect_pretrends():
-        es = results["cs"].event_study_effects or {}
+        es = results["cs_es"].to_dataframe()
+        pre = es[es["event_time"] < 0]
         results["pretrends"] = {
-            rel_t: eff for rel_t, eff in es.items() if rel_t < 0
+            int(r.event_time): {"effect": float(r.att), "se": float(r.se)}
+            for r in pre.itertuples(index=False)
         }
 
     def honest_did_grid():
         out = {}
         for M in (0.5, 1.0, 1.5, 2.0):
             out[M] = compute_honest_did(
-                results["cs"], method="relative_magnitude", M=M,
+                results["cs_es"], method="relative_magnitude", M=M,
             )
         results["honest"] = out
 
@@ -88,7 +94,8 @@ def make_phases(data, results, covars, fit_kwargs):
 
     def imputation():
         bjs = ImputationDiD(cluster="unit")
-        results["bjs"] = bjs.fit(**fit_kwargs, aggregate="event_study")
+        results["bjs"] = bjs.fit(**fit_kwargs)
+        results["bjs_es"] = results["bjs"].aggregate("event_study")
 
     def cs_no_covariates():
         # Match phase 2's estimator config exactly; the only axis that
@@ -99,7 +106,10 @@ def make_phases(data, results, covars, fit_kwargs):
             control_group="never_treated", estimation_method="dr",
             cluster="unit", n_bootstrap=999, seed=123,
         )
-        results["cs_nocov"] = cs.fit(**fit_kwargs, aggregate="all")
+        results["cs_nocov"] = cs.fit(**fit_kwargs)
+        # Same fit + event-study + group workload as the covariate arm.
+        results["cs_nocov_es"] = results["cs_nocov"].aggregate("event_study")
+        results["cs_nocov_grp"] = results["cs_nocov"].aggregate("group")
 
     def next_steps():
         results["guidance"] = practitioner_next_steps(results["cs"])
@@ -137,7 +147,7 @@ def run_scale(scale, config):
             "n_obs": int(len(data)),
             "covariates": covars,
             "n_bootstrap": 999,
-            "aggregate": "all",
+            "aggregate": "fit + post-fit aggregate",
             "estimation_method": "dr",
         },
     )

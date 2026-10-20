@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import CallawaySantAnna, SurveyDesign
 from diff_diff.bootstrap_utils import (
@@ -258,16 +259,16 @@ class TestBasePeriodSelection:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        # Reference period e=-1 should exist with effect=0
-        assert results.event_study_effects is not None, "Event study effects should be computed"
-        assert (
-            -1 in results.event_study_effects
-        ), "Universal base period should include e=-1 in event study"
+        # A plain fit stores no event study; it is computed post-fit
+        assert results.event_study_effects is None
+        es = es_dict(results)
 
-        ref = results.event_study_effects[-1]
+        # Reference period e=-1 should exist with effect=0
+        assert -1 in es, "Universal base period should include e=-1 in event study"
+
+        ref = es[-1]
         assert ref["effect"] == 0.0, "Reference period effect should be 0"
         assert np.isnan(ref["se"]), "Reference period SE should be NaN"
         assert ref["n_groups"] == 0, "Reference period n_groups should be 0"
@@ -339,7 +340,7 @@ class TestDRNoCovariateSEUniformity:
     fed aggregation."""
 
     @staticmethod
-    def _fit(data, method, aggregate=None):
+    def _fit(data, method):
         cs = CallawaySantAnna(estimation_method=method, n_bootstrap=0)
         return cs.fit(
             data,
@@ -347,7 +348,6 @@ class TestDRNoCovariateSEUniformity:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
 
     def test_dr_reg_per_cell_se_identical(self):
@@ -406,16 +406,18 @@ class TestDRNoCovariateSEUniformity:
         """Overall and event-study SEs are identical between dr and reg (both
         consume the same per-cell IF) — guards against an accidental IF change."""
         data = generate_staggered_data(n_units=120, n_periods=6, never_treated_frac=0.3, seed=11)
-        reg = self._fit(data, "reg", aggregate="event_study")
-        dr = self._fit(data, "dr", aggregate="event_study")
+        reg = self._fit(data, "reg")
+        dr = self._fit(data, "dr")
 
         np.testing.assert_allclose(dr.overall_att, reg.overall_att, rtol=0, atol=1e-12)
         np.testing.assert_allclose(dr.overall_se, reg.overall_se, rtol=0, atol=1e-12)
 
-        assert reg.event_study_effects is not None and dr.event_study_effects is not None
-        assert set(reg.event_study_effects) == set(dr.event_study_effects)
-        for e, reg_es in reg.event_study_effects.items():
-            dr_es = dr.event_study_effects[e]
+        reg_es_all = es_dict(reg)
+        dr_es_all = es_dict(dr)
+        assert reg_es_all and dr_es_all
+        assert set(reg_es_all) == set(dr_es_all)
+        for e, reg_es in reg_es_all.items():
+            dr_es = dr_es_all[e]
             if np.isnan(reg_es["se"]):
                 assert np.isnan(dr_es["se"])
             else:
@@ -434,8 +436,8 @@ class TestDRNoCovariateSEUniformity:
         branch has diverged from the diff-in-means contract and the REGISTRY
         note must be revisited."""
         data = generate_staggered_data(n_units=120, n_periods=6, never_treated_frac=0.3, seed=7)
-        reg = self._fit(data, "reg", aggregate="event_study")
-        ipw = self._fit(data, "ipw", aggregate="event_study")
+        reg = self._fit(data, "reg")
+        ipw = self._fit(data, "ipw")
 
         assert set(reg.group_time_effects) == set(ipw.group_time_effects)
         compared = 0
@@ -1063,14 +1065,13 @@ class TestAggregationMethods:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        es = results.aggregate("event_study")
+        assert len(es.event_time) > 0
 
         # Should have both pre and post treatment periods
-        rel_times = list(results.event_study_effects.keys())
+        rel_times = list(es.event_time)
         assert any(e < 0 for e in rel_times), "Should have pre-treatment periods"
         assert any(e >= 0 for e in rel_times), "Should have post-treatment periods"
 
@@ -1091,17 +1092,16 @@ class TestAggregationMethods:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        assert results.group_effects is not None
-        assert len(results.group_effects) > 0
+        grp = group_dict(results)
+        assert len(grp) > 0
 
         # Should have effects for each cohort
-        assert 4 in results.group_effects or 6 in results.group_effects
+        assert 4 in grp or 6 in grp
 
     def test_all_aggregation_computes_everything(self):
-        """Test aggregate='all' computes event_study and group effects."""
+        """Both post-fit aggregation levels are available on one fit."""
         data = generate_staggered_data(
             n_units=100, n_periods=8, cohort_periods=[4], treatment_effect=2.0, seed=42
         )
@@ -1113,11 +1113,10 @@ class TestAggregationMethods:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="all",
         )
 
-        assert results.event_study_effects is not None
-        assert results.group_effects is not None
+        assert len(results.aggregate("event_study").event_time) > 0
+        assert len(results.aggregate("group").label) > 0
 
 
 class TestGetSetParams:
@@ -1211,7 +1210,7 @@ class TestResultsObject:
         assert len(df) == len(results.group_time_effects)
 
     def test_results_to_dataframe_event_study(self):
-        """Test to_dataframe with level='event_study'."""
+        """The post-fit event study container converts to a DataFrame."""
         data = generate_staggered_data(
             n_units=50, n_periods=6, cohort_periods=[3], treatment_effect=2.0, seed=42
         )
@@ -1223,13 +1222,12 @@ class TestResultsObject:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        df = results.to_dataframe(level="event_study")
+        df = results.aggregate("event_study").to_dataframe()
 
-        assert "relative_period" in df.columns
-        assert "effect" in df.columns
+        assert "event_time" in df.columns
+        assert "att" in df.columns
 
     def test_results_significance_properties(self):
         """Test is_significant and significance_stars properties."""
@@ -1282,12 +1280,12 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
+        es = es_dict(results)
+        assert es
 
-        for e, eff_data in results.event_study_effects.items():
+        for e, eff_data in es.items():
             se_with_wif = eff_data["se"]
             if np.isfinite(se_with_wif) and se_with_wif > 0:
                 # WIF-adjusted SE should be positive
@@ -1310,10 +1308,10 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_analytical = es_dict(results_analytical)
 
-        # Bootstrap SEs
+        # Bootstrap SEs (post-fit aggregation replays the bootstrap)
         cs_boot = CallawaySantAnna(n_bootstrap=n_boot, seed=42, cband=False)
         results_boot = cs_boot.fit(
             data,
@@ -1321,19 +1319,19 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_boot = es_dict(results_boot)
 
-        assert results_analytical.event_study_effects is not None
-        assert results_boot.event_study_effects is not None
+        assert es_analytical
+        assert es_boot
 
         threshold = 0.40 if n_boot < 100 else 0.20
         n_compared = 0
-        for e in results_analytical.event_study_effects:
-            se_a = results_analytical.event_study_effects[e]["se"]
-            if e not in results_boot.event_study_effects:
+        for e in es_analytical:
+            se_a = es_analytical[e]["se"]
+            if e not in es_boot:
                 continue
-            se_b = results_boot.event_study_effects[e]["se"]
+            se_b = es_boot[e]["se"]
             if np.isfinite(se_a) and se_a > 0 and np.isfinite(se_b) and se_b > 0:
                 rel_diff = abs(se_a - se_b) / se_a
                 assert rel_diff < threshold, (
@@ -1390,12 +1388,12 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
+        es = es_dict(results)
+        assert es
         # With a single cohort, all event times have only one group
-        for e, eff_data in results.event_study_effects.items():
+        for e, eff_data in es.items():
             if eff_data["n_groups"] == 1:
                 # SE should still be finite and positive
                 assert np.isfinite(eff_data["se"]), f"Single-group SE for e={e} should be finite"
@@ -1449,10 +1447,10 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_a = es_dict(results_a)
 
-        # Bootstrap SEs (the fix under test)
+        # Bootstrap SEs (the fix under test; post-fit aggregation replays it)
         cs_boot = CallawaySantAnna(n_bootstrap=n_boot, seed=42, cband=False)
         results_b = cs_boot.fit(
             data_unbalanced,
@@ -1460,19 +1458,19 @@ class TestEventStudySEWithWIF:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_b = es_dict(results_b)
 
-        assert results_a.event_study_effects is not None
-        assert results_b.event_study_effects is not None
+        assert es_a
+        assert es_b
 
         threshold = 0.40 if n_boot < 100 else 0.25
         n_compared = 0
-        for e in results_a.event_study_effects:
-            se_a = results_a.event_study_effects[e]["se"]
-            if e not in results_b.event_study_effects:
+        for e in es_a:
+            se_a = es_a[e]["se"]
+            if e not in es_b:
                 continue
-            se_b = results_b.event_study_effects[e]["se"]
+            se_b = es_b[e]["se"]
             if np.isfinite(se_a) and se_a > 0 and np.isfinite(se_b) and se_b > 0:
                 rel_diff = abs(se_a - se_b) / se_a
                 assert rel_diff < threshold, (
@@ -1504,14 +1502,16 @@ class TestSimultaneousConfidenceBands:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        # A plain fit stores no band; the post-fit event study carries it
+        assert results.cband_crit_value is None
+        es = results.aggregate("event_study")
 
         assert (
-            results.cband_crit_value is not None
+            es.cband_crit_value is not None
         ), "cband_crit_value should be set when cband=True and n_bootstrap > 0"
-        assert results.cband_crit_value > 1.96, (
-            f"Simultaneous critical value ({results.cband_crit_value:.3f}) "
+        assert es.cband_crit_value > 1.96, (
+            f"Simultaneous critical value ({es.cband_crit_value:.3f}) "
             "should exceed pointwise z_0.025=1.96"
         )
 
@@ -1529,11 +1529,12 @@ class TestSimultaneousConfidenceBands:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        for e, eff_data in results.event_study_effects.items():
+        es = es_dict(results)
+        assert es
+        assert any("cband_conf_int" in eff_data for eff_data in es.values())
+        for e, eff_data in es.items():
             if "cband_conf_int" in eff_data:
                 pw_ci = eff_data["conf_int"]
                 cb_ci = eff_data["cband_conf_int"]
@@ -1559,10 +1560,9 @@ class TestSimultaneousConfidenceBands:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.cband_crit_value is None
+        assert results.aggregate("event_study").cband_crit_value is None
 
     def test_cband_requires_bootstrap(self):
         """When n_bootstrap=0, cband has no effect (remains None)."""
@@ -1577,10 +1577,9 @@ class TestSimultaneousConfidenceBands:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.cband_crit_value is None
+        assert results.aggregate("event_study").cband_crit_value is None
 
     def test_cband_validity_threshold(self):
         """When >50% of sup-t bootstrap draws are non-finite, cband_crit_value is None."""
@@ -1606,18 +1605,20 @@ class TestSimultaneousConfidenceBands:
                 result[:n_nan] = np.nan
             return result
 
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        # The sup-t band is computed by the post-fit bootstrap replay, so the
+        # patch and the warning capture wrap the aggregation, not the fit.
         with unittest.mock.patch("diff_diff.staggered_bootstrap.np.max", side_effect=mock_max):
             with pytest.warns(RuntimeWarning, match="Too few valid sup-t"):
-                results = cs.fit(
-                    data,
-                    outcome="outcome",
-                    unit="unit",
-                    time="period",
-                    first_treat="first_treat",
-                    aggregate="event_study",
-                )
+                es = results.aggregate("event_study")
 
-        assert results.cband_crit_value is None
+        assert es.cband_crit_value is None
 
     def test_cband_in_get_params(self):
         """Test that cband parameter appears in get_params."""
@@ -1640,12 +1641,12 @@ class TestSimultaneousConfidenceBands:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        df = results.to_dataframe(level="event_study")
+        df = results.aggregate("event_study").to_dataframe()
         assert "cband_lower" in df.columns
         assert "cband_upper" in df.columns
+        assert np.isfinite(df["cband_lower"]).any()
 
 
 class TestMPDTARComparison:
@@ -1886,10 +1887,10 @@ class TestMPDTARComparison:
             unit="countyreal",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert py_results.event_study_effects is not None, "Python event_study_effects is None"
+        py_es = es_dict(py_results)
+        assert py_es, "Python event study is empty"
 
         r_es = r_results["event_study"]
         r_event_times = r_es["event_time"]
@@ -1908,11 +1909,11 @@ class TestMPDTARComparison:
             if r_se is None or np.isnan(r_se) or r_se == 0:
                 continue
 
-            if e not in py_results.event_study_effects:
+            if e not in py_es:
                 unmatched_r.append(e)
                 continue
 
-            py_eff = py_results.event_study_effects[e]
+            py_eff = py_es[e]
             py_att = py_eff["effect"]
             py_se = py_eff["se"]
 
@@ -1960,10 +1961,9 @@ class TestMPDTARComparison:
             unit="countyreal",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        py_crit = py_results.cband_crit_value
+        py_crit = py_results.aggregate("event_study").cband_crit_value
 
         # Both should be finite and > 1.96 (exceed pointwise z-value)
         assert np.isfinite(r_crit), f"R crit value not finite: {r_crit}"

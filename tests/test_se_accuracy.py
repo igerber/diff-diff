@@ -126,7 +126,6 @@ class TestCallawaySantAnnaSEAccuracy:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
         elapsed = time.perf_counter() - start
 
@@ -195,7 +194,6 @@ class TestCallawaySantAnnaSEAccuracy:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
         # Aggregated SE should be positive

@@ -32,3 +32,36 @@ capturing `2> <file>` from a real run and applying the same rules.
 
 There is deliberately NO 0.153.4 transcript: the format was first observed on
 that CLI, but the live pin is 0.162.1 and the older CLI is no longer installed.
+
+## `v4_aggregate_oracles.json` - pre-removal aggregation oracles (4.0 PRs 3a-3c)
+
+Numeric reference for `tests/test_aggregate_contract.py`, captured by
+`tests/_capture_v4_aggregate_oracles.py` on the UNMODIFIED tree at the commit
+named in `provenance.captured_at_head` - i.e. while the deprecated fit-time
+`fit(aggregate=...)` / `fit(balance_e=...)` route still existed and could serve
+as an independent second implementation of every aggregation surface. Layout:
+
+- `analytic` - per estimator, the `fit(aggregate="all")` (ContinuousDiD:
+  `"eventstudy"`) and `balance_e=1` surfaces on every design arm the contract
+  file exercises. The NumPy and Rust captures agreed to rtol 1e-12 /
+  atol 1e-13, so one copy is stored; the post-fit kit recompute must reproduce
+  it after the removal.
+- `boot` - keyed by weight backend (`"numpy"` / `"rust"`, the
+  `effective_weight_backend()` vocabulary), because the seeded multiplier
+  stream differs per backend: the fit-time bootstrapped surfaces the CS/EDiD
+  replays and the Imputation/TwoStage/ContinuousDiD relays must reproduce, plus
+  the overall quintets of bootstrapped PLAIN fits, which the always-on surface
+  materialization must leave unchanged. A pin whose backend key is absent skips.
+
+Rows are stored as `{label: {effect, se, t_stat, p_value, ci_lo, ci_hi,
+n_obs|n_groups, df_used, cband_lo/hi}}` with NaN serialized as `null` (the file
+is written by the script's `dump_fixture()`: sorted keys, one indent level per
+nesting level, every leaf row / label list / matrix row on one line); labels
+are stringified numbers (`repr(float)` for fractional horizons). Every
+event-study bundle also carries `ref_labels`, the labels the post-fit container
+marks `is_reference` (the legacy zero-count sentinel rows where the post-fit
+route was closed at capture): the contract test pins reference MEMBERSHIP
+against it, so a surface that mis-marks an estimated horizon as reference
+fails instead of having that row skipped. Re-capturing
+on a post-removal tree is NOT a substitute: the fit-time route is gone, so
+nothing independent remains to disagree with.

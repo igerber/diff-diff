@@ -153,7 +153,7 @@ def _make_two_period_panel(
 
 
 def _fit_overall(panel: pd.DataFrame, **kwargs) -> HeterogeneousAdoptionDiDResults:
-    """Fit HAD with `aggregate="overall"` and return the result."""
+    """Fit HAD on a two-period panel (overall mode) and return the result."""
     est = HeterogeneousAdoptionDiD(**kwargs)
     with warnings.catch_warnings():
         # The Design 1 family (mass_point / continuous_near_d_lower) emits

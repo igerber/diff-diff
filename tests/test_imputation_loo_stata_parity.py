@@ -74,24 +74,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from legacy_surface import es_dict
 from numpy.testing import assert_allclose
 
 from diff_diff import ImputationDiD
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 _DATA = Path(__file__).parent.parent / "benchmarks" / "data"
 STATA_GOLDEN_PATH = _DATA / "didimputation_loo_stata_golden.json"
@@ -144,10 +130,10 @@ def r_golden() -> dict:
 def library_fit() -> dict:
     """Fit the LOO and non-LOO paths once each; return per-horizon + overall + warnings.
 
-    ImputationDiD exposes ``res.event_study_effects[h]["effect"]`` / ``["se"]`` (a
-    dict-of-dicts, NOT a ``.event_study`` DataFrame) and scalar ``res.overall_att`` /
-    ``res.overall_se``. ``aggregate="event_study"`` also computes the overall
-    unconditionally, so one fit per variance mode suffices.
+    The fit stores scalar ``res.overall_att`` / ``res.overall_se``; the per-horizon
+    surface is the post-fit ``res.aggregate("event_study")`` container, read here
+    through the legacy dict shape (``es_dict``: ``{h: {"effect", "se", ...}}``).
+    The LOO warnings of both stages (fit + event-study recompute) are recorded.
     """
     _skip_if_missing()
     panel = pd.read_csv(PANEL_PATH)
@@ -159,8 +145,8 @@ def library_fit() -> dict:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        loo_es = es_dict(loo)
         loo_msgs = [str(w.message) for w in caught]
     nonloo = ImputationDiD(leave_one_out=False).fit(
         panel,
@@ -168,17 +154,17 @@ def library_fit() -> dict:
         unit="unit",
         time="time",
         first_treat="first_treat",
-        aggregate="event_study",
     )
+    nonloo_es = es_dict(nonloo)
 
-    def by_h(res):
-        return {h: res.event_study_effects[h] for h in HORIZONS}
+    def by_h(es):
+        return {h: es[h] for h in HORIZONS}
 
     return {
         "loo_overall": (float(loo.overall_att), float(loo.overall_se)),
-        "loo_es": {h: (float(v["effect"]), float(v["se"])) for h, v in by_h(loo).items()},
+        "loo_es": {h: (float(v["effect"]), float(v["se"])) for h, v in by_h(loo_es).items()},
         "nonloo_overall_se": float(nonloo.overall_se),
-        "nonloo_es_se": {h: float(v["se"]) for h, v in by_h(nonloo).items()},
+        "nonloo_es_se": {h: float(v["se"]) for h, v in by_h(nonloo_es).items()},
         "loo_warnings": loo_msgs,
     }
 
@@ -194,11 +180,9 @@ def _require_block(golden: dict, key: str) -> dict:
 
 
 def _fit_partition(panel, aux_partition: str, leave_one_out: bool):
-    """One event-study fit; returns (results, [warning messages]). The event_study
-    aggregate populates the per-horizon surfaces gates 6/8 read. The DEPRECATED
-    fit-time ``aggregate=`` route is deliberate, matching this module's convention
-    (see the M-021/M-022 pytestmark comment above: parity tests pin the fit-time
-    surface shape-for-shape; the shim warning is filtered by message)."""
+    """One fit plus its post-fit event-study recompute; returns (results,
+    per-horizon legacy dict, [warning messages]). The event-study surface is the
+    per-horizon surface gates 6/8 read; warnings from both stages are recorded."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         res = ImputationDiD(leave_one_out=leave_one_out, aux_partition=aux_partition).fit(
@@ -207,10 +191,10 @@ def _fit_partition(panel, aux_partition: str, leave_one_out: bool):
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-    assert res.event_study_effects is not None
-    return res, [str(w.message) for w in caught]
+        es = es_dict(res)
+    assert len(es) > 0
+    return res, es, [str(w.message) for w in caught]
 
 
 @pytest.fixture(scope="module")
@@ -223,11 +207,9 @@ def library_fit_variants() -> dict:
     out: dict = {"loo_warnings": []}
     for part in ("cohort", "horizon", "cohort_horizon"):
         for loo in (True, False):
-            res, msgs = _fit_partition(panel, part, loo)
+            res, es, msgs = _fit_partition(panel, part, loo)
             if loo:
                 out["loo_warnings"] += msgs
-            es = res.event_study_effects
-            assert es is not None
             mode = "loo" if loo else "nonloo"
             out[f"{part}_{mode}"] = {
                 "att": float(res.overall_att),

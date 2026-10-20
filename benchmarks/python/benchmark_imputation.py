@@ -79,8 +79,10 @@ def main():
             time="time",
             unit="unit",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        # Post-fit event study stays inside the timed region (the 3.x
+        # fit(aggregate="event_study") route, deprecated since 3.9 and removed at the 4.0 cut).
+        es = results.aggregate("event_study")
 
     estimation_time = estimation_timer.elapsed
     total_time = estimation_time
@@ -90,18 +92,17 @@ def main():
     n_periods = len(df["time"].unique())
     n_obs = len(df)
 
-    # Format event study effects (if available)
+    # Format event study effects from the post-fit container, skipping the
+    # reference-period marker row exactly as the legacy reader did.
     es_effects = []
-    if results.event_study_effects:
-        for rel_t, effect_data in sorted(results.event_study_effects.items()):
-            # Skip reference period marker (n_obs == 0)
-            if effect_data.get("n_obs", 1) == 0:
-                continue
-            es_effects.append({
-                "event_time": int(rel_t),
-                "att": float(effect_data["effect"]),
-                "se": float(effect_data["se"]),
-            })
+    for row in es.to_dataframe().sort_values("event_time").itertuples(index=False):
+        if bool(row.is_reference):
+            continue
+        es_effects.append({
+            "event_time": int(row.event_time),
+            "att": float(row.att),
+            "se": float(row.se),
+        })
 
     # Build output
     output = {

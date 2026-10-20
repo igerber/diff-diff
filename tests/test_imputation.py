@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff.imputation import (
     ImputationBootstrapResults,
@@ -172,7 +173,7 @@ class TestImputationDiD:
         assert results.group_effects is None
 
     def test_aggregate_event_study(self):
-        """Test event study aggregation."""
+        """Post-fit event-study aggregation on an analytical fit."""
         data = generate_test_data()
         est = ImputationDiD()
         results = est.fit(
@@ -181,20 +182,27 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        # Analytical fits store no fit-time surface; the route is post-fit.
+        assert results.event_study_effects is None
         assert results.group_effects is None
-
-        for h, eff in results.event_study_effects.items():
-            assert "effect" in eff
-            assert "se" in eff
-            assert "t_stat" in eff
-            assert "p_value" in eff
-            assert "conf_int" in eff
-            assert "n_obs" in eff
+        es = results.aggregate("event_study")
+        assert len(es.event_time) > 0
+        assert es.n_kind == "obs"
+        frame = es.to_dataframe()
+        for col in (
+            "event_time",
+            "att",
+            "se",
+            "t_stat",
+            "p_value",
+            "conf_int_lower",
+            "conf_int_upper",
+            "n",
+            "is_reference",
+        ):
+            assert col in frame.columns
 
     def test_aggregate_group(self):
         """Test group aggregation."""
@@ -206,20 +214,17 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        assert results.group_effects is not None
-        assert len(results.group_effects) == 3  # 3 cohorts
+        grp = results.aggregate("group")
+        assert len(grp.label) == 3  # 3 cohorts
         assert results.event_study_effects is None
-
-        for g, eff in results.group_effects.items():
-            assert "effect" in eff
-            assert "se" in eff
-            assert eff["se"] > 0
+        assert results.group_effects is None
+        assert np.all(np.isfinite(grp.att))
+        assert np.all(grp.se > 0)
 
     def test_aggregate_all(self):
-        """Test 'all' aggregation computes both event study and group."""
+        """Both post-fit levels are available from one analytical fit."""
         data = generate_test_data()
         est = ImputationDiD()
         results = est.fit(
@@ -228,11 +233,10 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
-        assert results.event_study_effects is not None
-        assert results.group_effects is not None
+        assert len(results.aggregate("event_study").event_time) > 0
+        assert len(results.aggregate("group").label) > 0
 
     def test_covariates(self):
         """Test estimation with covariates."""
@@ -265,7 +269,6 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         est1 = ImputationDiD(anticipation=1)
@@ -275,15 +278,16 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # With anticipation=1, more obs are treated, fewer untreated
         assert results1.n_treated_obs > results0.n_treated_obs
 
         # Reference period changes
-        ref0 = [h for h, e in results0.event_study_effects.items() if e.get("n_obs", 1) == 0]
-        ref1 = [h for h, e in results1.event_study_effects.items() if e.get("n_obs", 1) == 0]
+        es0 = results0.aggregate("event_study")
+        es1 = results1.aggregate("event_study")
+        ref0 = es0.event_time[es0.is_reference].tolist()
+        ref1 = es1.event_time[es1.is_reference].tolist()
         assert -1 in ref0
         assert -2 in ref1
 
@@ -292,26 +296,18 @@ class TestImputationDiD:
         data = generate_test_data()
 
         est = ImputationDiD()
-        results_unbal = est.fit(
+        results = est.fit(
             data,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        results_bal = est.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=2,
-        )
+        es_unbal = results.aggregate("event_study")
+        es_bal = results.aggregate("event_study", balance_e=2)
 
         # Balanced should have same or fewer horizons
-        assert len(results_bal.event_study_effects) <= len(results_unbal.event_study_effects) + 5
+        assert len(es_bal.event_time) <= len(es_unbal.event_time) + 5
 
     def test_horizon_max(self):
         """Test horizon_max caps event study horizons."""
@@ -324,11 +320,10 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h in results.event_study_effects:
-            if results.event_study_effects[h].get("n_obs", 0) > 0:
+        for h, eff in es_dict(results).items():
+            if eff["n_obs"] > 0:
                 assert abs(h) <= 3
 
     def test_summary(self):
@@ -341,14 +336,16 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
         summary = results.summary()
         assert "Imputation DiD" in summary
         assert "ATT" in summary
-        assert "Event Study" in summary
-        assert "Group" in summary
+        # Analytical fits carry no fit-time surface: the per-level tables
+        # live on the post-fit containers' own summaries.
+        assert "Event Study" not in summary
+        assert "Event-Study Effects" in results.aggregate("event_study").summary()
+        assert "aggregate(type='group')" in results.aggregate("group").summary()
 
     def test_to_dataframe_observation(self):
         """Test to_dataframe at observation level."""
@@ -377,12 +374,11 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        df = results.to_dataframe("event_study")
-        assert "relative_period" in df.columns
-        assert "effect" in df.columns
+        df = results.aggregate("event_study").to_dataframe()
+        assert "event_time" in df.columns
+        assert "att" in df.columns
         assert "se" in df.columns
 
     def test_to_dataframe_group(self):
@@ -395,11 +391,10 @@ class TestImputationDiD:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        df = results.to_dataframe("group")
-        assert "group" in df.columns
+        df = results.aggregate("group").to_dataframe()
+        assert "label" in df.columns
         assert len(df) == 3
 
     def test_to_dataframe_errors(self):
@@ -592,33 +587,25 @@ class TestImputationDiD:
         data = pd.DataFrame(rows)
         est = ImputationDiD(horizon_max=1)
 
-        # balance_e=2, horizon_max=1: required = {-2,-1,0,1}
-        # Cohort B missing -2 => should be dropped
-        results_bal2 = est.fit(
+        results = est.fit(
             data,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=2,
         )
+
+        # balance_e=2, horizon_max=1: required = {-2,-1,0,1}
+        # Cohort B missing -2 => should be dropped
+        es_bal2 = es_dict(results, balance_e=2)
 
         # balance_e=1, horizon_max=1: required = {-1,0,1}
         # Both cohorts have -1 => both kept
-        results_bal1 = est.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=1,
-        )
+        es_bal1 = es_dict(results, balance_e=1)
 
         # Cohort B dropped at balance_e=2 => fewer obs at horizon 0
-        n_obs_bal2_h0 = results_bal2.event_study_effects[0]["n_obs"]
-        n_obs_bal1_h0 = results_bal1.event_study_effects[0]["n_obs"]
+        n_obs_bal2_h0 = es_bal2[0]["n_obs"]
+        n_obs_bal1_h0 = es_bal1[0]["n_obs"]
         assert n_obs_bal2_h0 < n_obs_bal1_h0, (
             f"balance_e=2 should drop cohort B (missing rel_time=-2), "
             f"got n_obs={n_obs_bal2_h0} vs {n_obs_bal1_h0}"
@@ -748,11 +735,10 @@ class TestImputationVariance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h, eff in results.event_study_effects.items():
-            if eff.get("n_obs", 0) > 0 and np.isfinite(eff["se"]):
+        for h, eff in es_dict(results).items():
+            if eff["n_obs"] > 0 and np.isfinite(eff["se"]):
                 assert eff["se"] > 0
 
     def test_aux_partition_cohort_horizon(self):
@@ -1424,8 +1410,8 @@ class TestImputationEdgeCases:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            effects = es_dict(results)
 
         # Should still estimate
         assert results.overall_att is not None
@@ -1433,15 +1419,13 @@ class TestImputationEdgeCases:
 
         # Proposition 5: long-run horizons should be NaN
         prop5_nans = [
-            h
-            for h, eff in results.event_study_effects.items()
-            if np.isnan(eff["effect"]) and eff.get("n_obs", 0) > 0
+            h for h, eff in effects.items() if np.isnan(eff["effect"]) and eff["n_obs"] > 0
         ]
         assert len(prop5_nans) > 0, "Should have Prop 5 NaN horizons"
 
         # Check all inference fields are NaN for Prop 5 horizons
         for h in prop5_nans:
-            eff = results.event_study_effects[h]
+            eff = effects[h]
             assert np.isnan(eff["se"])
             assert np.isnan(eff["t_stat"])
             assert np.isnan(eff["p_value"])
@@ -1602,12 +1586,12 @@ class TestImputationEdgeCases:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            effects = es_dict(results)
 
         # Check that NaN horizons have all-NaN inference
-        for h, eff in results.event_study_effects.items():
-            if eff.get("n_obs", 0) > 0 and np.isnan(eff["effect"]):
+        for h, eff in effects.items():
+            if eff["n_obs"] > 0 and np.isnan(eff["effect"]):
                 assert np.isnan(eff["se"])
                 assert np.isnan(eff["t_stat"])
                 assert np.isnan(eff["p_value"])
@@ -1652,19 +1636,14 @@ class TestImputationEdgeCases:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
             rank_warnings = [x for x in w if "Rank condition" in str(x.message)]
             assert len(rank_warnings) > 0, "Should warn about rank condition violation"
+            effects = es_dict(results)
 
         # Affected horizons should have NaN effects (periods with no untreated units)
-        if results.event_study_effects:
-            nan_effects = [
-                h
-                for h, d in results.event_study_effects.items()
-                if np.isnan(d["effect"]) and d.get("n_obs", 1) > 0
-            ]
-            assert len(nan_effects) > 0, "Some horizons should have NaN effects"
+        nan_effects = [h for h, d in effects.items() if np.isnan(d["effect"]) and d["n_obs"] > 0]
+        assert len(nan_effects) > 0, "Some horizons should have NaN effects"
 
     def test_rank_condition_error_mode(self):
         """Test error raised when rank condition fails with action='error'."""
@@ -1754,17 +1733,17 @@ class TestImputationEdgeCases:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         # Reference should be at -2 (= -1 - anticipation)
-        assert -2 in results.event_study_effects
-        assert results.event_study_effects[-2]["n_obs"] == 0  # reference marker
+        es = results.aggregate("event_study")
+        assert es.event_time[es.is_reference].tolist() == [-2]
+        assert es_dict(results)[-2]["n_obs"] == 0  # legacy zero-count marker
 
-        # Test that plot_event_study auto-detects it
+        # Test that plot_event_study auto-detects it on the container
         pytest.importorskip("matplotlib")
         from diff_diff import plot_event_study
 
-        fig = plot_event_study(results)
+        fig = plot_event_study(es)
         assert fig is not None
 
     def test_overall_se_with_partial_nan_tau_hat(self):
@@ -2085,28 +2064,23 @@ class TestImputationEdgeCases:
         # All cohorts fail the balanced check, so all horizons have n_h=0.
         est = ImputationDiD()
 
+        results = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = est.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                aggregate="event_study",
-                balance_e=100,
-            )
+            effects = es_dict(results, balance_e=100)
             empty_warnings = [x for x in w if "no horizons with observations" in str(x.message)]
             assert len(empty_warnings) >= 1, "Expected warning about empty event study"
 
         # Only reference period should remain
         ref_period = -1
-        assert ref_period in results.event_study_effects
-        real_effects = {
-            h: v
-            for h, v in results.event_study_effects.items()
-            if h != ref_period and v.get("n_obs", 0) > 0
-        }
+        assert ref_period in effects
+        real_effects = {h: v for h, v in effects.items() if h != ref_period and v["n_obs"] > 0}
         assert len(real_effects) == 0
 
     def test_balanced_cohort_mask_requires_negative_horizons(self):
@@ -2687,7 +2661,6 @@ class TestImputationDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         r_default = ImputationDiD(cluster="state", pretrends=True).fit(**common)
         r_explicit = ImputationDiD(cluster="state", pretrends=True, vcov_type="hc1").fit(**common)
@@ -2702,18 +2675,19 @@ class TestImputationDiDVcovType:
         pt_explicit = r_explicit.pretrend_test()
         assert np.isclose(pt_default["f_stat"], pt_explicit["f_stat"], rtol=0, atol=1e-12)
         assert np.isclose(pt_default["p_value"], pt_explicit["p_value"], rtol=0, atol=1e-12)
-        # Event-study SE (computed during fit() via Theorem 3 machinery on
+        # Event-study SE (post-fit recompute via Theorem 3 machinery on
         # within-transformed residuals; pretrends=True path includes the
         # pre-period horizons). Sub-ULP differences come from BLAS
         # non-associativity in the shared MAP demean engine
         # (`demean_by_groups`) across distinct estimator instances and are
         # not methodological divergence under the narrow vcov_type contract.
-        assert r_default.event_study_effects is not None
-        assert r_explicit.event_study_effects is not None
-        for h in r_default.event_study_effects:
+        es_default = es_dict(r_default)
+        es_explicit = es_dict(r_explicit)
+        assert set(es_default) == set(es_explicit)
+        for h in es_default:
             assert np.isclose(
-                r_default.event_study_effects[h]["se"],
-                r_explicit.event_study_effects[h]["se"],
+                es_default[h]["se"],
+                es_explicit[h]["se"],
                 rtol=0,
                 atol=1e-12,
                 equal_nan=True,
@@ -2983,17 +2957,16 @@ class TestZeroWeightGroups:
                 first_treat="first_treat",
                 covariates=["x1", "x2"],
                 survey_design=SurveyDesign(weights="w"),
-                aggregate="group",
             )
+            groups = group_dict(r)
         from tests.conftest import assert_nan_inference
 
         assert np.isfinite(r.overall_att)
-        assert r.group_effects is not None
         # Cohort 2 contains only the zero-weight unit: NaN across ALL fields.
-        assert_nan_inference(r.group_effects[2])
-        assert np.isnan(r.group_effects[2]["effect"])
+        assert_nan_inference(groups[2])
+        assert np.isnan(groups[2]["effect"])
         # Cohort 3 is unaffected.
-        assert np.isfinite(r.group_effects[3]["effect"])
+        assert np.isfinite(groups[3]["effect"])
 
 
 class TestLeadSnapAbsorbed:
@@ -3034,10 +3007,10 @@ class TestLeadSnapAbsorbed:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        assert res.event_study_effects is not None
-        eff = res.event_study_effects
+            # The lead regression runs on the post-fit route; its warnings
+            # are recorded in the same block.
+            eff = es_dict(res)
         # The spanned lead is deterministically NaN — the FULL inference
         # tuple (review P3: assert every field, not just effect/se).
         assert np.isnan(eff[-2]["effect"]) and np.isnan(eff[-2]["se"])
@@ -3074,12 +3047,9 @@ class TestLeadSnapAbsorbed:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        assert res.event_study_effects is not None
-        finite_leads = [
-            h for h, e in res.event_study_effects.items() if h < -1 and np.isfinite(e["effect"])
-        ]
+            effects = es_dict(res)
+        finite_leads = [h for h, e in effects.items() if h < -1 and np.isfinite(e["effect"])]
         assert len(finite_leads) >= 4
         assert not any("collinear with the absorbed fixed effects" in str(x.message) for x in w)
 
@@ -3261,7 +3231,6 @@ class TestImputationDfConvention:
         unit="unit",
         time="time",
         first_treat="first_treat",
-        aggregate="event_study",
     )
 
     @staticmethod
@@ -3277,8 +3246,9 @@ class TestImputationDfConvention:
         return 2 * stats.norm.sf(abs(t_stat))
 
     def _lead(self, res):
-        h = min(k for k in res.event_study_effects if k < -1)
-        return h, res.event_study_effects[h]
+        effects = es_dict(res)
+        h = min(k for k in effects if k < -1)
+        return h, effects[h]
 
     def test_leads_are_t_residual_not_z(self):
         res = ImputationDiD(pretrends=True).fit(self._panel(), **self._kw)
@@ -3292,20 +3262,21 @@ class TestImputationDfConvention:
         r0 = ImputationDiD(pretrends=True).fit(data, **self._kw)
         rc = ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
         h, e0 = self._lead(r0)
-        ec = rc.event_study_effects[h]
+        es0, esc = es_dict(r0), es_dict(rc)
+        ec = esc[h]
         G = data["unit"].nunique()
         assert ec["effect"] == e0["effect"] and ec["se"] == e0["se"]
         assert ec["p_value"] == pytest.approx(self._t_p(ec["t_stat"], G - 1), rel=1e-12)
         # post rows are BJS (knob-independent)
-        hp = min(k for k in r0.event_study_effects if k >= 0)
-        assert r0.event_study_effects[hp]["p_value"] == rc.event_study_effects[hp]["p_value"]
+        hp = min(k for k in es0 if k >= 0)
+        assert es0[hp]["p_value"] == esc[hp]["p_value"]
 
     def test_normal_reproduces_pre39_z_on_leads(self):
         data = self._panel()
         r0 = ImputationDiD(pretrends=True).fit(data, **self._kw)
         rn = ImputationDiD(pretrends=True, df_convention="normal").fit(data, **self._kw)
         h, e0 = self._lead(r0)
-        en = rn.event_study_effects[h]
+        en = es_dict(rn)[h]
         assert en["effect"] == e0["effect"] and en["se"] == e0["se"]
         assert en["p_value"] == pytest.approx(self._z_p(en["t_stat"]), rel=1e-14)
 
@@ -3336,7 +3307,7 @@ class TestImputationDfConvention:
         }
         h, e0 = self._lead(fits["residual"])
         for conv in ("cluster", "normal"):
-            e = fits[conv].event_study_effects[h]
+            e = es_dict(fits[conv])[h]
             assert e["p_value"] == e0["p_value"]
             assert e["conf_int"] == e0["conf_int"]
 

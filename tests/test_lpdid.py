@@ -25,6 +25,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _dgp_utils import make_lpdid_panel  # noqa: E402
+from legacy_surface import es_dict  # noqa: E402
 
 from diff_diff import (  # noqa: E402
     CallawaySantAnna,
@@ -722,19 +723,11 @@ class TestLPDiDCrossEstimator:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        cs_es = es_dict(cs)
         for h in range(0, 4):
-            assert _event_coef(lp, h) == pytest.approx(
-                cs.event_study_effects[h]["effect"], abs=1e-9
-            )
+            assert _event_coef(lp, h) == pytest.approx(cs_es[h]["effect"], abs=1e-9)
 
-    # The BJS cross-check reads `bjs.event_study_effects` (the native fit-time
-    # dict) so it keeps the deprecated `fit(aggregate=)` route (rows M-021);
-    # scoped by message to the ImputationDiD shim only.
-    @pytest.mark.filterwarnings(
-        r"ignore:ImputationDiD\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-    )
     def test_ce3_pmd_single_cohort_equals_bjs_imputation(self):
         # PMD LP-DiD (k=t-1, "max") with a SINGLE treated cohort == BJS
         # imputation [paper Section 3.4, footnotes 10-11; only single-cohort
@@ -750,12 +743,10 @@ class TestLPDiDCrossEstimator:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        bjs_es = es_dict(bjs)
         for h in range(0, 4):
-            assert _event_coef(lp, h) == pytest.approx(
-                bjs.event_study_effects[h]["effect"], abs=1e-6
-            )
+            assert _event_coef(lp, h) == pytest.approx(bjs_es[h]["effect"], abs=1e-6)
 
     # CE-4 (variance-weighted LP-DiD == stacked regression) is intentionally
     # omitted: the paper's equivalence is to the Cengiz et al. (2019) stacking
@@ -850,12 +841,10 @@ class TestLPDiDUnbalanced:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        cs_es = es_dict(cs)
         for h in range(0, 4):
-            assert _event_coef(lp, h) == pytest.approx(
-                cs.event_study_effects[h]["effect"], abs=1e-9
-            )
+            assert _event_coef(lp, h) == pytest.approx(cs_es[h]["effect"], abs=1e-9)
 
     def test_ra_nan_consistent_on_uncontrolled_event_time(self):
         # An event time with treated units but no clean control is unidentified:

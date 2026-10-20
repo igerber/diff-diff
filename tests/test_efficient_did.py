@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from edid_dgp import make_compustat_dgp
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import CallawaySantAnna, EDiD, EfficientDiD
 from diff_diff._backend import HAS_RUST_BACKEND
@@ -645,11 +646,8 @@ class TestFusedConditionalPath:
     @staticmethod
     def _surfaces(res):
         gt = {k: (v["effect"], v["se"]) for k, v in res.group_time_effects.items()}
-        es = (
-            {k: (v["effect"], v["se"]) for k, v in res.event_study_effects.items()}
-            if res.event_study_effects
-            else {}
-        )
+        # post-fit container (a plain fit stores no fit-time surface)
+        es = {k: (v["effect"], v["se"]) for k, v in es_dict(res).items()}
         return gt, es, (res.overall_att, res.overall_se)
 
     @classmethod
@@ -737,7 +735,7 @@ class TestFusedConditionalPath:
             return out
 
         df = self._cov_df()
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_fused = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -757,7 +755,7 @@ class TestFusedConditionalPath:
         import diff_diff.efficient_did_covariates as cov_mod
 
         df = self._cov_df(n_units=150)
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -789,9 +787,7 @@ class TestFusedConditionalPath:
         n_units = df["unit"].nunique()
         pw = np.exp(rng.normal(0, 0.4, n_units))
         df = df.merge(pd.DataFrame({"unit": sorted(df["unit"].unique()), "pw": pw}), on="unit")
-        fit_kwargs = dict(
-            covariates=["x1", "x2"], aggregate="all", survey_design=SurveyDesign(weights="pw")
-        )
+        fit_kwargs = dict(covariates=["x1", "x2"], survey_design=SurveyDesign(weights="pw"))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -809,7 +805,7 @@ class TestFusedConditionalPath:
 
         n_units = 40
         df = self._cov_df(n_units=n_units)
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
 
         calls = {"n": 0}
         orig_build = cov_mod._build_group_kcov_table
@@ -864,7 +860,6 @@ class TestFusedConditionalPath:
                 "time",
                 "first_treat",
                 covariates=["x1", "x2"],
-                aggregate="all",
             )
         assert calls["tables"] == 0
         assert calls["kernels"] == 0
@@ -877,7 +872,7 @@ class TestFusedConditionalPath:
         import diff_diff.efficient_did_covariates as cov_mod
 
         df = self._cov_df(n_units=150)
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -893,7 +888,7 @@ class TestFusedConditionalPath:
         per-cell and event-study ATTs and SEs by <= 1e-6 relative under the
         default ridge (the legacy pseudoinverse path moves ~1e-4)."""
         df = self._cov_df()
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -909,12 +904,12 @@ class TestFusedConditionalPath:
         df = _make_staggered_panel(n_per_group=80, n_control=100)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         df_ulp = df.copy()
         df_ulp["y"] = np.nextafter(df_ulp["y"].to_numpy(), np.inf)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", aggregate="all")
+            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat")
         self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
 
 
@@ -979,7 +974,6 @@ class TestRidgeSolveRustDispatch:
                 "time",
                 "first_treat",
                 covariates=["x1", "x2"],
-                aggregate="all",
             )
         assert calls["n"] > 0, "rust kernel never dispatched on the conditional fit"
 
@@ -993,7 +987,7 @@ class TestRidgeSolveRustDispatch:
         import diff_diff.efficient_did_covariates as cov_mod
 
         df = _make_covariate_panel(n_units=150, n_periods=9, seed=42)
-        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        fit_kwargs = dict(covariates=["x1", "x2"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_rust = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
@@ -1463,7 +1457,7 @@ class TestClusterRobustSE:
         assert result_unclustered.overall_se > 0
 
     def test_clustered_aggregate_event_study(self):
-        """Clustered SE with aggregate='event_study' should produce finite results."""
+        """Clustered SE: the post-fit event-study aggregation should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
         result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
         es = result.aggregate("event_study")
@@ -1471,7 +1465,7 @@ class TestClusterRobustSE:
         assert np.isfinite(es.se[~es.is_reference]).all()
 
     def test_clustered_aggregate_all(self):
-        """Clustered SE with aggregate='all' should produce finite results."""
+        """Clustered SE: both post-fit aggregations should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
         result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
         es = result.aggregate("event_study")
@@ -1560,21 +1554,19 @@ class TestClusterRobustSE:
             )
 
     def test_clustered_bootstrap_aggregate_all(self, ci_params):
-        """Clustered bootstrap with aggregate='all' should produce finite results."""
+        """Clustered bootstrap: the post-fit aggregations (which REPLAY the
+        fit-time bootstrap on n_bootstrap > 0) produce finite SEs."""
         n_boot = ci_params.bootstrap(99)
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
-        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
-        with pytest.warns(FutureWarning):
-            result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
-                df, "y", "unit", "time", "first_treat", aggregate="all"
-            )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["se"])
-        for g, d in result.group_effects.items():
-            assert np.isfinite(d["se"])
+        result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert len(es.event_time) > 0
+        assert len(grp.label) > 0
+        assert np.isfinite(es.se).all()
+        assert np.isfinite(grp.se).all()
 
 
 class TestSmallCohortWarning:
@@ -1770,7 +1762,7 @@ class TestLastCohortControl:
         assert 7 not in result_a1.groups
 
     def test_last_cohort_aggregate_event_study(self):
-        """last_cohort with aggregate='event_study' should produce finite results."""
+        """last_cohort: the post-fit event-study aggregation should produce finite results."""
         df = _make_staggered_panel(
             n_per_group=60,
             n_control=0,
@@ -1786,7 +1778,7 @@ class TestLastCohortControl:
         assert np.isfinite(es.att).all()
 
     def test_last_cohort_aggregate_all(self):
-        """last_cohort with aggregate='all' should produce finite results."""
+        """last_cohort: both post-fit aggregations should produce finite results."""
         df = _make_staggered_panel(
             n_per_group=60,
             n_control=0,
@@ -1837,22 +1829,14 @@ class TestBalanceE:
         """Bootstrap balance_e should produce finite SEs."""
         n_boot = ci_params.bootstrap(99)
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        # Deprecated fit-time kwargs kept as the parity REFERENCE: post-fit
-        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
-        with pytest.warns(FutureWarning):
-            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-                df,
-                "y",
-                "unit",
-                "time",
-                "first_treat",
-                aggregate="event_study",
-                balance_e=0,
-            )
-        assert result.event_study_effects is not None
-        for e, d in result.event_study_effects.items():
-            if np.isfinite(d["effect"]):
-                assert np.isfinite(d["se"])
+        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        # post-fit aggregate() REPLAYS the fit-time bootstrap on n_bootstrap > 0
+        es = result.aggregate("event_study", balance_e=0)
+        assert len(es.event_time) > 0
+        finite = np.isfinite(es.att)
+        assert np.isfinite(es.se[finite]).all()
 
     def test_balance_e_nan_anchor_filters_group(self):
         """When a group has NaN at the anchor horizon, bootstrap should
@@ -1916,17 +1900,18 @@ class TestBootstrap:
     def test_bootstrap_with_aggregation(self, ci_params):
         n_boot = ci_params.bootstrap(99)
         df = _make_simple_panel()
-        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
-        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
-        with pytest.warns(FutureWarning):
-            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-                df, "y", "unit", "time", "first_treat", aggregate="all"
-            )
+        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
         assert result.bootstrap_results is not None
-        if result.event_study_effects:
-            for e, d in result.event_study_effects.items():
-                if np.isfinite(d["effect"]):
-                    assert np.isfinite(d["se"])
+        # the legacy fit-time fields are None on a plain EDiD fit; the
+        # post-fit aggregate() REPLAYS the fit-time bootstrap
+        assert result.event_study_effects is None
+        assert result.group_effects is None
+        es = result.aggregate("event_study")
+        assert len(es.event_time) > 0
+        finite = np.isfinite(es.att)
+        assert np.isfinite(es.se[finite]).all()
 
     def test_bootstrap_override_t_is_effect_over_se(self, ci_params):
         # Committed pin for the t-recompute semantics of the shared
@@ -1937,11 +1922,10 @@ class TestBootstrap:
         # draw values - and catches a misaligned or altered t routine.
         n_boot = ci_params.bootstrap(99)
         df = _make_simple_panel()
-        with pytest.warns(FutureWarning):
-            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-                df, "y", "unit", "time", "first_treat", aggregate="all"
-            )
-        rows = list(result.event_study_effects.values()) + list(result.group_effects.values())
+        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        rows = list(es_dict(result).values()) + list(group_dict(result).values())
         assert rows
         for d in rows:
             se = float(d["se"])
@@ -2664,21 +2648,17 @@ class TestCovariatesBootstrap:
     def test_covariates_pt_all_bootstrap(self):
         """PT-All + bootstrap + covariates end-to-end."""
         df = _make_covariate_panel(n_units=300)
-        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
-        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
-        with pytest.warns(FutureWarning):
-            result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
-                df,
-                "y",
-                "unit",
-                "time",
-                "first_treat",
-                covariates=["x1"],
-                aggregate="all",
-            )
+        result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+        )
         assert result.bootstrap_results is not None
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
         assert np.isfinite(result.overall_att)
         assert result.overall_se > 0
 
@@ -2974,10 +2954,11 @@ class TestEfficientDiDVcovType:
     stay None under unclustered fits.
 
     7-surface matrix:
-      1. Default preserved bit-equally across all 4 aggregate modes
-      2. Cluster path preserved bit-equally across the same aggregate grid
-      3. TSL-survey path preserved bit-equally across the same aggregate grid
-      4. Replicate-survey path preserved bit-equally across the same aggregate grid
+      1. Default preserved bit-equally
+      2. Cluster path preserved bit-equally
+      3. TSL-survey path preserved bit-equally
+      4. Replicate-survey path preserved bit-equally (incl. the post-fit
+         event-study / group containers)
       5. Bootstrap × cluster + bootstrap × survey bit-equal
       6. set_params(vcov_type=bad) eager revalidation
       7. Bootstrap n_psu<2 NaN propagation (defensive fix regression)
@@ -2986,10 +2967,9 @@ class TestEfficientDiDVcovType:
     ``cluster + replicate_weights`` rejection, and a DR-path bit-equality test.
     """
 
-    # ---- Surface 1: default bit-equal across aggregation modes ------------
+    # ---- Surface 1: default bit-equal ------------------------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_default_hc1_bit_equal_baseline(self, aggregate):
+    def test_default_hc1_bit_equal_baseline(self):
         data = _efficient_clustered_panel()
         common = dict(
             data=data,
@@ -2997,21 +2977,15 @@ class TestEfficientDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
-        # Subject is bit equality, not the deprecated fit-time shim - keep
-        # all four aggregate arms and silence the FutureWarning.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD().fit(**common)
-            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        r_default = EfficientDiD().fit(**common)
+        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
     # ---- Surface 2: cluster path bit-equal --------------------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_cluster_hc1_bit_equal_baseline(self, aggregate):
+    def test_cluster_hc1_bit_equal_baseline(self):
         data = _efficient_clustered_panel()
         common = dict(
             data=data,
@@ -3019,19 +2993,15 @@ class TestEfficientDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD(cluster="state").fit(**common)
-            r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
+        r_default = EfficientDiD(cluster="state").fit(**common)
+        r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
     # ---- Surface 3: TSL-survey path bit-equal -----------------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_survey_tsl_hc1_bit_equal_baseline(self, aggregate):
+    def test_survey_tsl_hc1_bit_equal_baseline(self):
         data = _efficient_survey_panel()
         design = SurveyDesign(weights="weight", psu="psu", strata="stratum", weight_type="pweight")
         common = dict(
@@ -3040,20 +3010,16 @@ class TestEfficientDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
             survey_design=design,
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD().fit(**common)
-            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        r_default = EfficientDiD().fit(**common)
+        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
     # ---- Surface 4: replicate-survey path bit-equal -----------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_survey_replicate_hc1_bit_equal_baseline(self, aggregate):
+    def test_survey_replicate_hc1_bit_equal_baseline(self):
         data, rep_cols = _efficient_replicate_panel()
         design = SurveyDesign(
             weights="weight",
@@ -3068,29 +3034,21 @@ class TestEfficientDiDVcovType:
             time="time",
             first_treat="first_treat",
             survey_design=design,
-            aggregate=aggregate,
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD().fit(**common)
-            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        r_default = EfficientDiD().fit(**common)
+        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
         # Per-horizon / per-group SE override branches must also agree under
-        # the replicate-weight variance path.
-        if aggregate in ("event_study", "all"):
-            assert r_default.event_study_effects is not None
-            assert r_explicit.event_study_effects is not None
-            for h in r_default.event_study_effects:
-                assert (
-                    r_default.event_study_effects[h]["se"]
-                    == r_explicit.event_study_effects[h]["se"]
-                )
-        if aggregate in ("group", "all"):
-            assert r_default.group_effects is not None
-            assert r_explicit.group_effects is not None
-            for g in r_default.group_effects:
-                assert r_default.group_effects[g]["se"] == r_explicit.group_effects[g]["se"]
+        # the replicate-weight variance path (post-fit containers).
+        es_d, es_e = r_default.aggregate("event_study"), r_explicit.aggregate("event_study")
+        assert len(es_d.event_time) > 0
+        np.testing.assert_array_equal(es_d.event_time, es_e.event_time)
+        np.testing.assert_array_equal(es_d.se, es_e.se)
+        g_d, g_e = r_default.aggregate("group"), r_explicit.aggregate("group")
+        assert len(g_d.label) > 0
+        np.testing.assert_array_equal(g_d.label, g_e.label)
+        np.testing.assert_array_equal(g_d.se, g_e.se)
 
     # ---- Surface 5: bootstrap × cluster / × survey bit-equal --------------
 
@@ -3103,30 +3061,31 @@ class TestEfficientDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
-            r_explicit = EfficientDiD(
-                cluster="state", n_bootstrap=n_boot, seed=11, vcov_type="hc1"
-            ).fit(**common)
+        r_default = EfficientDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
+        r_explicit = EfficientDiD(
+            cluster="state", n_bootstrap=n_boot, seed=11, vcov_type="hc1"
+        ).fit(**common)
         assert r_default.bootstrap_results is not None
         assert r_explicit.bootstrap_results is not None
         assert (
             r_default.bootstrap_results.overall_att_se
             == r_explicit.bootstrap_results.overall_att_se
         )
-        # Per-horizon / per-group bootstrap SE override branches at
-        # efficient_did.py:1090-1115 must also agree.
-        assert r_default.bootstrap_results.event_study_ses is not None
-        assert r_explicit.bootstrap_results.event_study_ses is not None
-        for h, se in r_default.bootstrap_results.event_study_ses.items():
-            assert se == r_explicit.bootstrap_results.event_study_ses[h]
-        assert r_default.bootstrap_results.group_effect_ses is not None
-        assert r_explicit.bootstrap_results.group_effect_ses is not None
-        for g, se in r_default.bootstrap_results.group_effect_ses.items():
-            assert se == r_explicit.bootstrap_results.group_effect_ses[g]
+        # A plain EDiD fit computes no aggregated bootstrap SEs; the
+        # post-fit aggregate() REPLAYS the fit-time bootstrap, so the
+        # per-horizon / per-group override branches are compared on the
+        # replayed containers.
+        assert r_default.bootstrap_results.event_study_ses is None
+        assert r_default.bootstrap_results.group_effect_ses is None
+        es_d, es_e = r_default.aggregate("event_study"), r_explicit.aggregate("event_study")
+        assert len(es_d.event_time) > 0
+        np.testing.assert_array_equal(es_d.event_time, es_e.event_time)
+        np.testing.assert_array_equal(es_d.se, es_e.se)
+        g_d, g_e = r_default.aggregate("group"), r_explicit.aggregate("group")
+        assert len(g_d.label) > 0
+        np.testing.assert_array_equal(g_d.label, g_e.label)
+        np.testing.assert_array_equal(g_d.se, g_e.se)
 
     def test_bootstrap_survey_hc1_bit_equal(self, ci_params):
         data = _efficient_survey_panel()
@@ -3139,12 +3098,9 @@ class TestEfficientDiDVcovType:
             time="time",
             first_treat="first_treat",
             survey_design=design,
-            aggregate="all",
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r_default = EfficientDiD(n_bootstrap=n_boot, seed=23).fit(**common)
-            r_explicit = EfficientDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
+        r_default = EfficientDiD(n_bootstrap=n_boot, seed=23).fit(**common)
+        r_explicit = EfficientDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
         assert r_default.bootstrap_results is not None
         assert r_explicit.bootstrap_results is not None
         assert (

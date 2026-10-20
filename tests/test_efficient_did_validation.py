@@ -8,13 +8,13 @@ These tests validate the estimator against published results from
 "Efficient Difference-in-Differences and Event Study Estimators."
 """
 
-import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from edid_dgp import make_compustat_dgp, true_es_avg, true_overall_att
+from legacy_surface import es_dict
 
 from diff_diff import CallawaySantAnna, EfficientDiD
 
@@ -90,25 +90,9 @@ def _assert_close(actual, expected, label, se=None, se_frac=0.05):
 
 def _compute_es_avg(result):
     """Compute ES_avg (Eq 2.3): uniform average over post-treatment horizons."""
-    if result.event_study_effects is None:
-        raise ValueError("No event study effects; use aggregate='all'")
-    es = {int(e): d["effect"] for e, d in result.event_study_effects.items() if int(e) >= 0}
-    return np.mean(list(es.values()))
-
-
-def _attach_post_fit_event_study(res):
-    """Recompute the event-study surface post-fit and hand it to the
-    mapping-consuming helpers/assertions in this module (``_compute_es_avg``
-    and the dict-iterating tests). Post-fit ``aggregate()`` recomputes from
-    the retained kit and relays the same numbers as the deprecated fit-time
-    ``aggregate=`` surface.
-    """
-    es = res.aggregate("event_study")
-    res.event_study_effects = {
-        int(e): {"effect": float(a), "se": float(s)}
-        for e, a, s in zip(es.event_time, es.att, es.se)
-    }
-    return res
+    es = result.aggregate("event_study")
+    post = np.asarray(es.event_time, dtype=int) >= 0
+    return float(np.mean(np.asarray(es.att, dtype=float)[post]))
 
 
 _TRUE_ES_AVG_COMPUSTAT = true_es_avg()
@@ -133,7 +117,6 @@ def _run_mc_simulation(n_sims, rho, seed=1000, also_cs=False):
             time="time",
             first_treat="first_treat",
         )
-        _attach_post_fit_event_study(res)
         edid_estimates.append(_compute_es_avg(res))
         edid_overall_att.append(res.overall_att)
         edid_overall_se.append(res.overall_se)
@@ -141,18 +124,13 @@ def _run_mc_simulation(n_sims, rho, seed=1000, also_cs=False):
 
         if also_cs:
             cs = CallawaySantAnna(control_group="never_treated")
-            # CS fit-time aggregate= is deprecated too; migrating CS is out
-            # of scope here, so silence its shim warning.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", FutureWarning)
-                cs_res = cs.fit(
-                    data,
-                    outcome="y",
-                    unit="unit",
-                    time="time",
-                    first_treat="first_treat",
-                    aggregate="event_study",
-                )
+            cs_res = cs.fit(
+                data,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
             cs_estimates_list.append(_compute_es_avg(cs_res))
 
     return {
@@ -188,7 +166,7 @@ def edid_hrs_result(hrs_data):
         time="time",
         first_treat="first_treat",
     )
-    return _attach_post_fit_event_study(res)
+    return res
 
 
 class TestHRSReplication:
@@ -225,9 +203,13 @@ class TestHRSReplication:
             _assert_close(info["effect"], expected_effect, f"ATT({g},{t})", se=se)
 
     def test_event_study_effects_match_table6(self, edid_hrs_result):
+        # EDiD fits never populate the fit-time field; the post-fit container
+        # (via the legacy dict shape) carries the event study.
+        assert edid_hrs_result.event_study_effects is None
+        es = es_dict(edid_hrs_result)
         for e, (expected_effect, se) in TABLE6_ES.items():
             found = False
-            for rel_time, info in edid_hrs_result.event_study_effects.items():
+            for rel_time, info in es.items():
                 if int(rel_time) == e:
                     _assert_close(info["effect"], expected_effect, f"ES({e})", se=se)
                     found = True

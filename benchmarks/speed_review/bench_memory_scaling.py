@@ -128,7 +128,6 @@ def _run_one(cfg):
             "dose",
             "period",
             "unit",
-            aggregate="event_study",
             survey_design=SurveyDesign(weights="w"),
         )
     elif est == "twfe":

@@ -5,6 +5,7 @@ Tests for visualization functions.
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict_from_container, legacy_standin
 
 from diff_diff import (
     CallawaySantAnna,
@@ -97,8 +98,8 @@ class TestPlotEventStudy:
         )
 
     @pytest.fixture
-    def cs_results(self):
-        """Fixture for CallawaySantAnna results with event study."""
+    def cs_fit(self):
+        """A plain CallawaySantAnna fit (no fit-time event-study surface)."""
         data = generate_staggered_data()
         cs = CallawaySantAnna()
         return cs.fit(
@@ -107,8 +108,12 @@ class TestPlotEventStudy:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+
+    @pytest.fixture
+    def cs_results(self, cs_fit):
+        """The post-fit event-study container - what plot_event_study consumes."""
+        return cs_fit.aggregate("event_study")
 
     def test_plot_from_multi_period_results(self, multi_period_results):
         """Test plotting from MultiPeriodDiD results."""
@@ -118,11 +123,51 @@ class TestPlotEventStudy:
         assert ax is not None
 
     def test_plot_from_cs_results(self, cs_results):
-        """Test plotting from CallawaySantAnna results."""
+        """Test plotting from the CallawaySantAnna event-study container."""
         pytest.importorskip("matplotlib")
 
         ax = plot_event_study(cs_results, show=False)
         assert ax is not None
+
+    def test_cs_results_object_has_no_fit_time_surface(self, cs_fit):
+        """Plain-fit invariant: a CS results object carries no event-study surface.
+
+        Every CallawaySantAnna fit leaves the legacy field None; plotting the
+        results object itself fails closed and points at the container.
+        """
+        assert cs_fit.event_study_effects is None
+        with pytest.raises(TypeError, match=r"aggregate\(\s*'event_study'\)"):
+            plot_event_study(cs_fit, show=False)
+
+    def test_plot_from_legacy_raw_field_results(self, cs_fit):
+        """Raw-field branch pin: a results object whose ``event_study_effects``
+        dict is populated by hand (the legacy-pickle shape) still plots, and
+        the plotted effects equal the container's.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        from diff_diff.visualization import _extract_plot_data
+
+        standin = legacy_standin(cs_fit)
+        assert standin.event_study_effects is not None
+        es = cs_fit.aggregate("event_study")
+
+        effects, se, periods, _, _, ref, inferred, *_ = _extract_plot_data(
+            standin, None, None, None, None
+        )
+        assert sorted(periods) == sorted(es.event_time.tolist())
+        for i, e in enumerate(es.event_time.tolist()):
+            assert effects[e] == pytest.approx(float(es.att[i]), nan_ok=True)
+            assert se[e] == pytest.approx(float(es.se[i]), nan_ok=True)
+        # Varying-base CS marks no reference row on the container; the raw-field
+        # branch keeps its legacy ``-1`` fallback for that case.
+        assert ref == (es.reference_period if es.reference_period is not None else -1)
+        assert inferred is True
+
+        ax = plot_event_study(standin, show=False)
+        assert ax is not None
+        plt.close()
 
     def test_plot_from_dataframe(self):
         """Test plotting from DataFrame."""
@@ -331,8 +376,7 @@ class TestPlotEventStudy:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
-        )
+        ).aggregate("event_study")
 
         # Should not raise even with NaN SE in reference period
         ax = plot_event_study(results, show=False)
@@ -362,12 +406,13 @@ class TestPlotEventStudy:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
-        )
+        ).aggregate("event_study")
 
         # Reference period should be at e=-2 (not e=-1) with anticipation=1
-        assert -2 in results.event_study_effects
-        assert results.event_study_effects[-2]["n_groups"] == 0
+        times = results.event_time.tolist()
+        assert -2 in times
+        assert bool(results.is_reference[times.index(-2)])
+        assert results.reference_period == -2
 
         ax = plot_event_study(results, show=False)
         assert ax is not None
@@ -538,7 +583,7 @@ class TestPlotEventStudy:
         # Get original effects from results (before any normalization)
         original_effects = {
             period: effect_data["effect"]
-            for period, effect_data in results.event_study_effects.items()
+            for period, effect_data in es_dict_from_container(results).items()
         }
 
         # Plot WITHOUT explicitly specifying reference_period
@@ -586,7 +631,7 @@ class TestPlotEventStudy:
         # Get original effects from results
         original_effects = {
             period: effect_data["effect"]
-            for period, effect_data in results.event_study_effects.items()
+            for period, effect_data in es_dict_from_container(results).items()
         }
 
         # Choose reference period (typically -1)
@@ -658,8 +703,7 @@ class TestPlotEventStudyCband:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
-        )
+        ).aggregate("event_study")
 
     def test_plot_uses_cband_cis_by_default(self, cs_cband_results):
         """Test that cband CIs are used by default when available."""
@@ -668,16 +712,36 @@ class TestPlotEventStudyCband:
 
         from diff_diff.visualization import _extract_plot_data
 
+        # The container carries the simultaneous band.
+        assert cs_cband_results.cband_lower is not None
+        assert cs_cband_results.cband_upper is not None
+        assert np.isfinite(cs_cband_results.cband_crit_value)
+        finite = np.isfinite(cs_cband_results.cband_lower) & np.isfinite(
+            cs_cband_results.cband_upper
+        )
+        assert finite.any()
+        # The band is at least as wide as the pointwise interval on every finite row.
+        assert np.all(
+            cs_cband_results.cband_lower[finite] <= cs_cband_results.conf_int_lower[finite] + 1e-12
+        )
+        assert np.all(
+            cs_cband_results.cband_upper[finite] >= cs_cband_results.conf_int_upper[finite] - 1e-12
+        )
+
         # Verify plot succeeds
         ax = plot_event_study(cs_cband_results, show=False)
         assert ax is not None
 
-        # Verify cband CIs are extracted
+        # Verify cband CIs are extracted and equal the container's band
         _, _, _, _, _, _, _, ci_lower_override, ci_upper_override, _, _, _ = _extract_plot_data(
             cs_cband_results, None, None, None, None
         )
         assert ci_lower_override is not None
         assert ci_upper_override is not None
+        for i, e in enumerate(cs_cband_results.event_time.tolist()):
+            if finite[i]:
+                assert ci_lower_override[e] == float(cs_cband_results.cband_lower[i])
+                assert ci_upper_override[e] == float(cs_cband_results.cband_upper[i])
 
         plt.close()
 
@@ -737,11 +801,12 @@ class TestPlotEventStudyIntegration:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        # Plot
-        ax = plot_event_study(results, title="Staggered DiD Event Study", show=False)
+        # Plot the post-fit container
+        ax = plot_event_study(
+            results.aggregate("event_study"), title="Staggered DiD Event Study", show=False
+        )
 
         assert ax is not None
         plt.close()
@@ -760,24 +825,28 @@ class TestEfficientDiDPlotReference:
 
     def test_pt_post_anticipation_reference_shifts(self):
         pytest.importorskip("matplotlib")
-        import warnings
 
         from diff_diff import EfficientDiD
         from diff_diff.prep_dgp import generate_staggered_data
         from diff_diff.visualization._event_study import _extract_plot_data
 
         d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            res = EfficientDiD(pt_assumption="post", anticipation=1).fit(
-                d,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                aggregate="event_study",
-            )
-        assert res.reference_period == -2
-        extracted = _extract_plot_data(res, None, None, None, None)
+        res = EfficientDiD(pt_assumption="post", anticipation=1).fit(
+            d,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        # A plain EfficientDiD fit stores no fit-time surface, so the MEMBERSHIP-GATED
+        # property is None on the results object itself ...
+        assert res.event_study_effects is None
+        assert res.reference_period is None
+        # ... and reads -2 on a surface-bearing stand-in (the legacy-pickle shape),
+        # while the container carries the anchor as its single is_reference row.
+        assert legacy_standin(res).reference_period == -2
+        es = res.aggregate("event_study")
+        assert es.reference_period == -2
+        extracted = _extract_plot_data(es, None, None, None, None)
         assert extracted[5] == -2  # reference_period slot
         assert extracted[6] is True  # inferred, not caller-supplied
