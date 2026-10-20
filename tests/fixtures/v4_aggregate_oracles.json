@@ -1009,6 +1009,31 @@
     "ref_labels": ["-1"],
     "reference_event_times": null
    },
+   "clustered_all": {
+    "cband_crit_value": null,
+    "es": {
+     "-1": {"ci_hi": 0.0, "ci_lo": 0.0, "effect": 0.0, "n_obs": 0.0, "p_value": null, "se": 0.0, "t_stat": null},
+     "0": {"ci_hi": 2.218829131988498, "ci_lo": 1.893264929648046, "effect": 2.056047030818272, "n_obs": 84.0, "p_value": 2.694464189754571e-135, "se": 0.08305361856351977, "t_stat": 24.75565865015018},
+     "1": {"ci_hi": 2.350509982450415, "ci_lo": 2.0985474578604464, "effect": 2.2245287201554307, "n_obs": 84.0, "p_value": 1.8958681893332686e-262, "se": 0.06427733534325543, "t_stat": 34.60829090496591},
+     "2": {"ci_hi": 2.443311474542479, "ci_lo": 1.8721736032283969, "effect": 2.157742538885438, "n_obs": 38.0, "p_value": 1.2741818175541948e-49, "se": 0.14570111385187298, "t_stat": 14.809375727073071},
+     "3": {"ci_hi": 2.8763469498721994, "ci_lo": 2.4301070282791946, "effect": 2.653226989075697, "n_obs": 38.0, "p_value": 3.775737967728134e-120, "se": 0.11383880650687672, "t_stat": 23.306876367466327}
+    },
+    "event_study_df": null,
+    "event_study_vcov": [
+     [0.006897903556494635, 0.0007346537576831481, 0.005338947079466995, -0.0007721350063547473],
+     [0.0007346537576831481, 0.004131575838829314, 0.0014031116885452183, 0.0010808021797016122],
+     [0.005338947079466994, 0.0014031116885452183, 0.02122881457767645, 0.005982112982436549],
+     [-0.0007721350063547474, 0.0010808021797016122, 0.005982112982436549, 0.012959273866910119]
+    ],
+    "event_study_vcov_index": [0.0, 1.0, 2.0, 3.0],
+    "group": {
+     "4": {"ci_hi": 2.3210630691402483, "ci_lo": 2.0951075824373695, "effect": 2.208085325788809, "n_obs": 152.0, "p_value": 0.0, "se": 0.05764276499088422, "t_stat": 38.306374202174396},
+     "6": {"ci_hi": 2.4092259574532466, "ci_lo": 2.085474816990569, "effect": 2.247350387221908, "n_obs": 92.0, "p_value": 4.87045717484717e-163, "se": 0.08259109427938087, "t_stat": 27.210565580107176}
+    },
+    "overall": {"att": 2.222890185017679, "ci_hi": 2.3363632254275863, "ci_lo": 2.1094171446077716, "p_value": 0.0, "se": 0.057895472215289887, "t_stat": 38.39488823498404},
+    "ref_labels": ["-1"],
+    "reference_event_times": null
+   },
    "covariates_all": {
     "cband_crit_value": null,
     "es": {
@@ -2576,7 +2601,7 @@
  "provenance": {
   "backends": ["numpy", "rust"],
   "captured_at_head": "8724fecd98eca407e862c0c0adacb212bc964f16",
-  "captured_with": "tests/_capture_v4_aggregate_oracles.py, once per DIFF_DIFF_BACKEND (python -> 'numpy', rust -> 'rust'), on a tree whose diff_diff/ is byte-identical to captured_at_head (the 4.0 PR 3a branch: tests/benchmarks only); the analytic sections of the two runs agreed to rtol 1e-12 / atol 1e-13 and are stored once. Every arm of the original capture reproduced exactly (0 differences); this re-capture added ref_labels (reference-row membership) to every event-study bundle, the CS bootstrap arms fpc_survey_all / rcs_all / unbalanced_all nine ContinuousDiD analytic design arms, the EfficientDiD replicate analytic arms and the EfficientDiD covariates / anticipation / alpha-Mammen bootstrap arms.",
+  "captured_with": "tests/_capture_v4_aggregate_oracles.py, once per DIFF_DIFF_BACKEND (python -> 'numpy', rust -> 'rust'), on a tree whose diff_diff/ is byte-identical to captured_at_head (the 4.0 PR 3a branch: tests/benchmarks only); the analytic sections of the two runs agreed to rtol 1e-12 / atol 1e-13 and are stored once. Every arm of the original capture reproduced exactly (0 differences); this re-capture added ref_labels (reference-row membership) to every event-study bundle, the CS bootstrap arms fpc_survey_all / rcs_all / unbalanced_all nine ContinuousDiD analytic design arms, the EfficientDiD replicate analytic arms and the EfficientDiD covariates / anticipation / alpha-Mammen bootstrap arms. A further re-capture (same tree, same checks, 0 differences) added the TwoStageDiD clustered_all analytic arm.",
   "diff_diff_version": "3.13.0",
   "numpy": "2.5.4"
  }

@@ -288,6 +288,9 @@ def capture_analytic() -> Dict[str, Any]:
         T._fit_twostage(tp, est_kw={"pretrends": True}, aggregate="all")
     )
     ts["prop5_all"] = _all_bundle(T._fit_twostage(T._twostage_prop5_panel(), aggregate="all"))
+    ts["clustered_all"] = _all_bundle(
+        T._fit_twostage(T._twostage_clustered_panel(), est_kw={"cluster": "cl"}, aggregate="all")
+    )
     d_sw, _ = T._twostage_survey_panel()
     ts["survey_tsl_all"] = _all_bundle(
         T._fit_twostage(d_sw, survey_design=T._twostage_survey_design(), aggregate="all")

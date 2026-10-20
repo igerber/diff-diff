@@ -4002,6 +4002,12 @@ def _twostage_panel(seed=42, n_units=120, n_periods=8):
     )
 
 
+def _twostage_clustered_panel(seed=11):
+    d = _twostage_panel(seed=seed).copy()
+    d["cl"] = (d["unit"] // 3).astype(int)
+    return d
+
+
 def _twostage_prop5_panel(seed=13):
     """No never-treated units, multiple cohorts -> Proposition-5 NaN rows."""
     d = _twostage_panel(seed=seed)
@@ -4205,18 +4211,26 @@ class TestTwoStageAggregate:
         assert orow["event_study_vcov"] is None
         assert es.df_survey == float(orow["event_study_df"])
 
-    def test_cluster_arm_point_path(self):
-        d = _twostage_panel(seed=11).copy()
-        d["cl"] = (d["unit"] // 3).astype(int)
+    def test_cluster_arm_matches_oracle(self):
+        d = _twostage_clustered_panel()
         plain = _fit_twostage(d, est_kw={"cluster": "cl"})
         es = plain.aggregate("event_study")
+        orow = _ts_oracle("clustered_all")
+        _assert_es_matches_oracle(es, orow, **ANALYTIC_TOL, name="ts/cl")
+        _assert_group_matches_oracle(plain.aggregate("group"), orow, **ANALYTIC_TOL, name="ts/cl")
         _assert_post_att_is_tau_mean(plain, es, name="ts/cl")
         _assert_analytic_inference_contract(es, alpha=plain.alpha)
-        _assert_analytic_inference_contract(plain.aggregate("group"), alpha=plain.alpha)
-        # Clustering changes the variance, never the point path.
+        # Clustering changes the variance, never the point path. Compare the
+        # estimated rows only: the reference row's SE is NaN on both surfaces,
+        # which would make a whole-array (in)equality check vacuous.
         unclustered = _fit_twostage(d).aggregate("event_study")
         np.testing.assert_array_equal(np.asarray(es.att), np.asarray(unclustered.att))
-        assert not np.array_equal(np.asarray(es.se), np.asarray(unclustered.se))
+        est_rows = ~np.asarray(es.is_reference, dtype=bool)
+        assert np.array_equal(est_rows, ~np.asarray(unclustered.is_reference, dtype=bool))
+        se_cl = np.asarray(es.se, dtype=float)[est_rows]
+        se_un = np.asarray(unclustered.se, dtype=float)[est_rows]
+        assert np.isfinite(se_cl).all() and np.isfinite(se_un).all()
+        assert not np.allclose(se_cl, se_un, rtol=1e-8, atol=0)
 
     def test_cluster_naming_unit_column_inert(self, twostage_panel, twostage_fitted):
         # cluster= legally names the unit column - the kit's column-subset
