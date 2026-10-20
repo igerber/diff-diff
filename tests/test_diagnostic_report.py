@@ -22,6 +22,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import legacy_standin
 
 import diff_diff as dd
 from diff_diff import (
@@ -108,15 +109,27 @@ def cs_fit():
     # methodology-critical reason (Rambachan-Roth bounds are not valid for
     # interpretation on consecutive-comparison pre-periods). See the
     # round-5 CI review on PR #318.
+    # Plain fit, no fit-time surface - DR derives the event study via
+    # results.aggregate("event_study") (the default route).
     cs = CallawaySantAnna(base_period="universal").fit(
         sdf,
         outcome="outcome",
         unit="unit",
         time="period",
         first_treat="first_treat",
-        aggregate="event_study",
     )
     return cs, sdf
+
+
+@pytest.fixture(scope="module")
+def cs_raw_fit(cs_fit):
+    """The RAW-FIELD route: ``cs_fit`` with the 3.x fit-time fields populated by
+    hand from the container (the legacy-pickle shape). DR reads the raw field
+    FIRST, so this is the precedence-route fixture."""
+    cs, sdf = cs_fit
+    raw = legacy_standin(cs)
+    assert raw.event_study_effects is not None
+    return raw, sdf
 
 
 @pytest.fixture(scope="module")
@@ -387,11 +400,14 @@ class TestPrecomputed:
 
         fit, data = cs_fit
 
-        # Precompute the power result from the same fit. The compute function
-        # populates ``original_results`` on the output so DR's precomputed
-        # adapter can inspect the source fit's event_study_vcov.
-        pp = compute_pretrends_power(fit, alpha=0.05, target_power=0.80, violation_type="linear")
-        assert getattr(pp, "original_results", None) is fit
+        # Precompute the power result from the same fit's event-study
+        # container (the consumer takes the post-fit container). The
+        # compute function records ``covariance_source`` and populates
+        # ``original_results`` on the output for DR's precomputed adapter.
+        es = fit.aggregate("event_study")
+        pp = compute_pretrends_power(es, alpha=0.05, target_power=0.80, violation_type="linear")
+        assert getattr(pp, "original_results", None) is es
+        assert pp.covariance_source == "full_pre_period_vcov"
 
         dr_default = DiagnosticReport(fit, data=data).to_dict()
         dr_precomputed = DiagnosticReport(
@@ -3083,14 +3099,16 @@ class TestStackedTwoStageJointWaldUpgrade:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
-                balance_e=4,
             )
+            # The balance_e-restricted surface reaches DR through the RAW
+            # field (DR derives without balance_e): a legacy stand-in carrying
+            # aggregate("event_study", balance_e=4) in the 3.x fields.
+            res = legacy_standin(res, balance_e=4)
         # Path-B precondition: -6 is an estimated column with NaN inference
         # and a NaN-filled VCV row; finite pre-periods {-4, -3, -2} remain.
         assert res.event_study_effects[-6]["n_obs"] == 0
         assert not np.isfinite(res.event_study_effects[-6]["se"])
-        idx = res.event_study_vcov_index
+        idx = [int(h) for h in res.event_study_vcov_index]
         assert -6 in idx and -4 in idx
         pos = idx.index(-6)
         assert np.isnan(res.event_study_vcov[pos, :]).all()
@@ -3290,10 +3308,10 @@ class TestStackedTwoStageJointWaldUpgrade:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        V = res.event_study_vcov
-        idx = res.event_study_vcov_index
+            es = res.aggregate("event_study")
+        V = es.vcov
+        idx = es.vcov_index.tolist()
         pre_idx = [i for i, h in enumerate(idx) if h < -1 and np.isfinite(V[i, i])]
         sub = V[np.ix_(pre_idx, pre_idx)]
         sub = 0.5 * (sub + sub.T)
@@ -3485,11 +3503,13 @@ def cs_bootstrap_plain_fit():
 
 @pytest.fixture(scope="module")
 def imp_pretrends_fits():
-    """(raw-kwarg fit, plain fit) ImputationDiD pair, both pretrends=True.
+    """(raw-field stand-in, plain fit) ImputationDiD pair, both pretrends=True.
 
     ``pretrends=True`` is REQUIRED for estimated pre-period horizons to
     exist at all — under the default ``pretrends=False`` the derived
-    surface carries only the reference lead.
+    surface carries only the reference lead. A plain analytic fit
+    stores no surface, so the raw-field route is a legacy stand-in with the
+    container's surface hand-set in the 3.x fields.
     """
     from diff_diff import ImputationDiD
 
@@ -3497,22 +3517,24 @@ def imp_pretrends_fits():
     kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        raw = ImputationDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
         plain = ImputationDiD(pretrends=True).fit(sdf, **kw)
+        assert plain.event_study_effects is None
+        raw = legacy_standin(plain)
     return raw, plain, sdf
 
 
 @pytest.fixture(scope="module")
 def ts_pretrends_fits():
-    """(raw-kwarg fit, plain fit) TwoStageDiD pair, both pretrends=True."""
+    """(raw-field stand-in, plain fit) TwoStageDiD pair, both pretrends=True."""
     from diff_diff import TwoStageDiD
 
     sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
     kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        raw = TwoStageDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
         plain = TwoStageDiD(pretrends=True).fit(sdf, **kw)
+        assert plain.event_study_effects is None
+        raw = legacy_standin(plain)
     return raw, plain, sdf
 
 
@@ -3530,9 +3552,9 @@ class TestDerivedEventStudySurface:
         for check in ("parallel_trends", "pretrends_power", "sensitivity", "heterogeneity"):
             assert d[check]["status"] == "ran", (check, d[check])
 
-    def test_plain_cs_pt_parity_with_kwarg_route(self, cs_plain_fit, cs_fit):
+    def test_plain_cs_pt_parity_with_raw_field_route(self, cs_plain_fit, cs_raw_fit):
         plain, _ = cs_plain_fit
-        raw, _ = cs_fit
+        raw, _ = cs_raw_fit
         d_plain = DiagnosticReport(plain).run_all().to_dict()["parallel_trends"]
         d_raw = DiagnosticReport(raw).run_all().to_dict()["parallel_trends"]
         assert d_plain["method"] == "joint_wald_event_study"
@@ -3552,9 +3574,9 @@ class TestDerivedEventStudySurface:
             np.testing.assert_allclose(a["coef"], b["coef"], rtol=1e-12, atol=1e-12)
             np.testing.assert_allclose(a["se"], b["se"], rtol=1e-12, atol=1e-12)
 
-    def test_plain_cs_pretrends_power_parity(self, cs_plain_fit, cs_fit):
+    def test_plain_cs_pretrends_power_parity(self, cs_plain_fit, cs_raw_fit):
         plain, _ = cs_plain_fit
-        raw, _ = cs_fit
+        raw, _ = cs_raw_fit
         d_plain = DiagnosticReport(plain).run_all().to_dict()["pretrends_power"]
         d_raw = DiagnosticReport(raw).run_all().to_dict()["pretrends_power"]
         assert d_plain["status"] == d_raw["status"] == "ran"
@@ -3571,9 +3593,9 @@ class TestDerivedEventStudySurface:
             atol=1e-3,
         )
 
-    def test_plain_cs_sensitivity_parity(self, cs_plain_fit, cs_fit):
+    def test_plain_cs_sensitivity_parity(self, cs_plain_fit, cs_raw_fit):
         plain, _ = cs_plain_fit
-        raw, _ = cs_fit
+        raw, _ = cs_raw_fit
         d_plain = DiagnosticReport(plain).run_all().to_dict()["sensitivity"]
         d_raw = DiagnosticReport(raw).run_all().to_dict()["sensitivity"]
         assert d_plain["status"] == d_raw["status"] == "ran"
@@ -3586,9 +3608,9 @@ class TestDerivedEventStudySurface:
             np.testing.assert_allclose(a["ci_lower"], b["ci_lower"], rtol=1e-12, atol=1e-12)
             np.testing.assert_allclose(a["ci_upper"], b["ci_upper"], rtol=1e-12, atol=1e-12)
 
-    def test_derived_route_emits_pre_period_source(self, cs_plain_fit, cs_fit):
+    def test_derived_route_emits_pre_period_source(self, cs_plain_fit, cs_raw_fit):
         plain, _ = cs_plain_fit
-        raw, _ = cs_fit
+        raw, _ = cs_raw_fit
         d_plain = DiagnosticReport(plain).run_all().to_dict()
         d_raw = DiagnosticReport(raw).run_all().to_dict()
         assert d_plain["parallel_trends"]["pre_period_source"] == "aggregate_event_study"
@@ -3901,9 +3923,9 @@ class TestDerivedEventStudySurface:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            # ContinuousDiD's fit-time spelling has no underscore.
-            raw = ContinuousDiD().fit(cdf, aggregate="eventstudy", **kw)
             plain = ContinuousDiD().fit(cdf, **kw)
+            assert plain.event_study_effects is None
+            raw = legacy_standin(plain)
         self._assert_heterogeneity_parity(raw, plain)
 
     def test_pre_period_source_on_inconclusive_derived_return(self, cs_plain_fit):
@@ -3932,23 +3954,28 @@ class TestDerivedEventStudySurface:
         assert all(p["period"] < -1 for p in d["per_period"])
 
     def test_requested_but_empty_raw_field_is_authoritative(self):
-        # Round-4 dual-review P0 pin: a fit whose fit-time aggregate=/
-        # balance_e= produced the REQUESTED-but-empty {} sentinel must
-        # behave exactly as today — no silent re-derivation (which would
-        # drop the fit-time balance_e and report effects over cohorts the
-        # fit deliberately excluded).
+        # Round-4 dual-review P0 pin: a results object whose raw field holds
+        # the REQUESTED-but-empty {} sentinel (what a 3.x fit-time
+        # balance_e=4 stored on this panel - a legacy pickle today) must
+        # behave exactly as before — no silent re-derivation (which would
+        # drop the restriction and report effects over cohorts the surface
+        # deliberately excluded).
+        import dataclasses
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
-            e = EfficientDiD().fit(
+            plain = EfficientDiD().fit(
                 sdf,
                 outcome="outcome",
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
-                balance_e=4,
             )
+            # balance_e=4 retains no cohort on this 6-period panel.
+            assert len(plain.aggregate("event_study", balance_e=4).event_time) == 0
+        assert plain.event_study_effects is None
+        e = dataclasses.replace(plain, event_study_effects={})
         assert e.event_study_effects == {}
         calls = {"n": 0}
         orig = type(e).aggregate
@@ -3983,8 +4010,8 @@ class TestDerivedEventStudySurface:
         DiagnosticReport(cs).run_all()
         assert cs.event_study_effects is None
 
-    def test_raw_precedence_never_calls_aggregate(self, cs_fit):
-        cs, _ = cs_fit
+    def test_raw_precedence_never_calls_aggregate(self, cs_raw_fit):
+        cs, _ = cs_raw_fit
 
         def boom(self, *args, **kwargs):
             raise AssertionError("aggregate() must not be called when the raw field is present")
@@ -4030,12 +4057,10 @@ class TestDerivedEventStudySurface:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            cs_raw = CallawaySantAnna(base_period="universal").fit(
-                sdf, aggregate="event_study", **kw
-            )
             cs_plain = CallawaySantAnna(base_period="universal").fit(sdf, **kw)
-            ts_raw = TwoStageDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
+            cs_raw = legacy_standin(cs_plain)
             ts_plain = TwoStageDiD(pretrends=True).fit(sdf, **kw)
+            ts_raw = legacy_standin(ts_plain)
         for raw, plain in ((cs_raw, cs_plain), (ts_raw, ts_plain)):
             d_raw = DiagnosticReport(raw).run_all().to_dict()["parallel_trends"]
             d_plain = DiagnosticReport(plain).run_all().to_dict()["parallel_trends"]

@@ -885,16 +885,17 @@ class TestEdgeCases:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        # Verify reference period exists with NaN SE
-        assert -1 in results.event_study_effects
-        assert np.isnan(results.event_study_effects[-1]["se"])
+        # Verify the reference period exists with NaN SE on the post-fit container
+        es = results.aggregate("event_study")
+        es_times = list(es.event_time)
+        assert -1 in es_times
+        assert np.isnan(es.se[es_times.index(-1)])
 
         # PreTrendsPower should work without errors (reference period filtered out)
         pt = PreTrendsPower()
-        power_results = pt.fit(results)
+        power_results = pt.fit(es)
 
         # Should have valid (non-NaN) results
         assert np.isfinite(power_results.power)

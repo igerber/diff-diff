@@ -149,7 +149,6 @@ class TestMpdtaCanonicalDirection:
             unit="countyreal",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(
             cs,
@@ -202,7 +201,6 @@ class TestCastleDoctrineCanonicalDirection:
             unit="state",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(
             cs,
@@ -248,7 +246,6 @@ class TestCastleDoctrineCanonicalDirection:
             unit="state",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(
             cs,
@@ -274,7 +271,6 @@ class TestCastleDoctrineCanonicalDirection:
             unit="state",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(
             cs,
@@ -318,7 +314,6 @@ class TestCastleDoctrineCrossEstimatorConsistency:
             unit="state",
             time="year",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         sa = SunAbraham().fit(
             castle_panel,

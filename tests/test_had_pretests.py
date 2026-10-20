@@ -2789,7 +2789,8 @@ class TestOrderedCategoricalChronology:
         assert np.isfinite(result.p_value)
 
     def test_workflow_event_study_ordered_categorical(self):
-        """did_had_pretest_workflow(aggregate="event_study") must pick
+        """did_had_pretest_workflow on a multi-period panel (event-study
+        battery) must pick
         up BOTH earlier pre-periods ("q1", "q2") from an ordered-
         categorical panel where lexical order would silently drop one
         of them. Regression against the `earlier_pre` raw-< fix."""

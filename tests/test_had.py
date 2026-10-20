@@ -2196,11 +2196,10 @@ def _fit_es(est, *args, **kwargs) -> HeterogeneousAdoptionDiDEventStudyResults:
     The public ``fit()`` is annotated to return a union over the
     single-period ``HeterogeneousAdoptionDiDResults`` and the multi-
     period ``HeterogeneousAdoptionDiDEventStudyResults``, matching its
-    runtime polymorphism on ``aggregate``. When ``aggregate="event_study"``
-    is requested, this helper narrows the union to the event-study
-    branch for the test body via ``typing.cast``.
+    runtime polymorphism on the panel shape (T > 2 selects the event
+    study). This helper narrows the union to the event-study branch for
+    the test body via ``typing.cast``.
     """
-    kwargs.setdefault("aggregate", "event_study")
     result = est.fit(*args, **kwargs)
     return cast(HeterogeneousAdoptionDiDEventStudyResults, result)
 
@@ -2210,8 +2209,8 @@ class TestFitReturnAnnotation:
 
     The annotation MUST be a union over the single-period and event-study
     result classes — narrowing one branch out silently would make the
-    static type contract diverge from the runtime polymorphism on
-    ``aggregate``.
+    static type contract diverge from the runtime polymorphism on the
+    panel shape.
     """
 
     def test_fit_return_annotation_is_union_of_result_classes(self):
@@ -5431,8 +5430,8 @@ class TestEventStudySurveyCband:
 
     def test_survey_event_study_continuous_end_to_end(self):
         """Review R6 P3: estimator-level
-        ``fit(aggregate='event_study', survey_design=SurveyDesign(...))``
-        integration lock for the continuous path. Verifies
+        multi-period ``fit(survey_design=SurveyDesign(...))`` (event-study
+        mode) integration lock for the continuous path. Verifies
         variance_formula, survey_metadata.df_survey (t-inference path),
         cband_* population, and stratified PSU dispatch through
         _aggregate_unit_resolved_survey."""
@@ -5480,8 +5479,8 @@ class TestEventStudySurveyCband:
 
     def test_survey_event_study_mass_point_end_to_end(self):
         """Review R6 P3: estimator-level
-        ``fit(design='mass_point', aggregate='event_study',
-        survey_design=...)`` integration lock. Verifies
+        multi-period ``fit(design='mass_point', survey_design=...)``
+        (event-study mode) integration lock. Verifies
         variance_formula='survey_binder_tsl_2sls' and that the
         weighted 2SLS IF flows correctly through per-horizon
         Binder-TSL + sup-t bootstrap."""

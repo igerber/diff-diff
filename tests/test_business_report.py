@@ -26,6 +26,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import legacy_standin
 
 import diff_diff as dd
 from diff_diff import (
@@ -95,13 +96,14 @@ def cs_fit():
     # base_period='universal' so DR's sensitivity check can run without
     # hitting the round-5 methodology-critical skip (Rambachan-Roth bounds
     # are not interpretable on consecutive-comparison pre-periods).
+    # Plain fit, no fit-time surface - the report layer derives the event study
+    # via results.aggregate("event_study").
     cs = CallawaySantAnna(base_period="universal").fit(
         sdf,
         outcome="outcome",
         unit="unit",
         time="period",
         first_treat="first_treat",
-        aggregate="event_study",
     )
     return cs, sdf
 
@@ -1455,7 +1457,6 @@ class TestAnticipationPersistsOnRealResults:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         assert getattr(cs, "anticipation", None) == 1
         br = BusinessReport(cs, auto_diagnostics=False)
@@ -2283,7 +2284,6 @@ class TestWooldridgeSampleNotYetTreatedSemantics:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(cs, auto_diagnostics=False)
         sample = br.to_dict()["sample"]
@@ -2609,8 +2609,8 @@ class TestDiagFallbackDowngradeAppliedCentrally:
         # Step 4 linear MDV is in Roth's γ units, a slope; the level-scale
         # comparable is mdv * max(|violation_weights|)).
         assert block["covariance_source"] == "full_pre_period_vcov", (
-            "cs_fit is analytical CS with event_study_vcov populated — "
-            "PR-B routing must report full_pre_period_vcov"
+            "cs_fit is analytical CS whose derived event-study container carries "
+            "the full vcov — PR-B routing must report full_pre_period_vcov"
         )
         # max_abs_pre_violation = mdv * max(|t - t_ref|) = 0.1337 * 3 ≈ 0.401
         assert block.get("max_abs_pre_violation") is not None
@@ -2633,7 +2633,7 @@ class TestDiagFallbackDowngradeAppliedCentrally:
         # compute_pretrends_power output's persisted field, locking that
         # provenance is recorded at fit time and consumed at the report
         # layer (not re-inferred from the source-fit type).
-        pp = compute_pretrends_power(fit, alpha=0.05, target_power=0.80)
+        pp = compute_pretrends_power(fit.aggregate("event_study"), alpha=0.05, target_power=0.80)
         assert pp.covariance_source == "full_pre_period_vcov"
 
         # Positive prose contract on the rendered surfaces.
@@ -2690,7 +2690,6 @@ class TestCSNotYetTreatedControlGroupSemantics:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         br = BusinessReport(cs, auto_diagnostics=False)
         sample = br.to_dict()["sample"]
@@ -5062,19 +5061,12 @@ class TestDerivedEventStudySurfaceLift:
         # The provenance key crosses the _lift_pre_trends whitelist.
         assert pt["pre_period_source"] == "aggregate_event_study"
 
-    def test_raw_route_business_report_pre_period_source_is_none(self):
-        # Raw-field (fit-time kwarg) route: BR still emits the key, as None.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
-            cs = CallawaySantAnna(base_period="universal").fit(
-                sdf,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                aggregate="event_study",
-            )
+    def test_raw_route_business_report_pre_period_source_is_none(self, cs_plain_fit_br):
+        # Raw-field route (the 3.x fit-time shape, hand-populated from the
+        # container - a legacy pickle today): BR still emits the key, as None.
+        cs, _ = cs_plain_fit_br
+        cs = legacy_standin(cs)
+        assert cs.event_study_effects is not None
         d = BusinessReport(cs, outcome_label="revenue").to_dict()
         pt = d["pre_trends"]
         assert pt["status"] == "computed"

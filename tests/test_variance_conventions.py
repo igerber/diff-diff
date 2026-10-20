@@ -385,14 +385,11 @@ ROWS = [
     ),
     dict(
         key="imputation_pretrends_event_study",
-        fit=lambda df: diff_diff.ImputationDiD(pretrends=True).fit(
-            df,
-            outcome="y",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-        ),
+        # The pretrends lead regression runs on the post-fit event-study
+        # route (no fit-time aggregate=), so the row spies fit + aggregate.
+        fit=lambda df: diff_diff.ImputationDiD(pretrends=True)
+        .fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
+        .aggregate("event_study"),
         cr1_k=None,  # contract row: shared CR1 REACHED; exact k is config-detail
         # Pinned since 3.9 (M-127): the three lead calls carry the knob-
         # resolved residual df (157 = n_untreated - k_kept - absorbed rank

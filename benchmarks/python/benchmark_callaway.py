@@ -105,7 +105,6 @@ def main():
             time="time",
             unit="unit",
             first_treat="first_treat",
-            aggregate="all",
         )
 
     cs = CallawaySantAnna(
@@ -122,8 +121,12 @@ def main():
             time="time",
             unit="unit",
             first_treat="first_treat",
-            aggregate="all",  # Get event study and group aggregations
         )
+        # Post-fit aggregations stay inside the timed region: the R `aggte`
+        # yardstick is fit + simple/dynamic/group aggregation (the 3.x
+        # fit(aggregate="all") route, deprecated since 3.9 and removed at the 4.0 cut).
+        es = results.aggregate("event_study")
+        grp = results.aggregate("group")
 
     estimation_time = estimation_timer.elapsed
     total_time = estimation_time
@@ -145,25 +148,25 @@ def main():
             }
         )
 
-    # Format event study effects (if available)
+    # Format event study effects from the post-fit container: one record per
+    # row INCLUDING the reference row (the legacy dict carried it too);
+    # run_refresh.py joins these records against R on `event_time`.
     es_effects = []
-    if results.event_study_effects:
-        for rel_t, effect_data in sorted(results.event_study_effects.items()):
-            es_effects.append({
-                "event_time": int(rel_t),
-                "att": float(effect_data["effect"]),
-                "se": float(effect_data["se"]),
-            })
+    for row in es.to_dataframe().sort_values("event_time").itertuples(index=False):
+        es_effects.append({
+            "event_time": int(row.event_time),
+            "att": float(row.att),
+            "se": float(row.se),
+        })
 
-    # Format group effects (if available)
+    # Format group effects from the post-fit container (joined on `group`).
     grp_effects = []
-    if results.group_effects:
-        for g, effect_data in sorted(results.group_effects.items()):
-            grp_effects.append({
-                "group": int(g),
-                "att": float(effect_data["effect"]),
-                "se": float(effect_data["se"]),
-            })
+    for row in grp.to_dataframe().sort_values("label").itertuples(index=False):
+        grp_effects.append({
+            "group": int(row.label),
+            "att": float(row.att),
+            "se": float(row.se),
+        })
 
     # Build output
     output = {

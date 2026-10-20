@@ -1002,7 +1002,8 @@ re-enumerate the cells' M-id lists:
 cut's PR order; order and rationale only - the M-id rosters live in the
 phase-5 cell above and the lifecycle facts in the ledger. Every PR lands on
 main under the section 2 cut window with `__version__` unchanged; each flips
-its rows terminal and names them in its changelog fragment.
+its rows terminal and names them in its changelog fragment (3a excepted: a
+tests-first PR that flips no rows).
 
 0. Spec/ledger refresh (the PR that wrote this subsection): the cut-window
    rule, the roster/M-080/M-008 amendments, the [M-150] locator, the id
@@ -1017,7 +1018,16 @@ its rows terminal and names them in its changelog fragment.
    [M-045]/[M-115]; `_deprecation.py` stays (section 8 rule 11 corollary).
 3. Fit-time `aggregate=`/`balance_e=` removals, plus the runtime messages that
    still steer users to the deprecated route (readers recorded in the rows'
-   `code_refs`) and the benchmark/guide sweep.
+   `code_refs`) and the benchmark/guide sweep. Split three ways (2026-10-20)
+   so each piece fits the AI reviewer's input cap:
+   - 3a - tests-first migration of the test and benchmark suites to the
+     post-fit containers; flips no rows, by design (it carries the test bulk
+     so 3b/3c fit the reviewer) (SHIPPED, PR 3a).
+   - 3b - the mechanical removals on the estimators whose post-fit route
+     already exists (CallawaySantAnna, EfficientDiD, StackedDiD, dCDH, HAD,
+     the HAD pretest workflow).
+   - 3c - the ImputationDiD/TwoStageDiD/ContinuousDiD removals plus the
+     bootstrapped-fit relay (section 6 amendment).
 4. The three merges: the MultiPeriodDiD class, `MultiPeriodDiDResults`,
    `PeriodEffect` and `EventStudy`; the QDiD class and `QDiDResults`; the
    `StaggeredTripleDifference` CLASS and `SDDD` - but NOT

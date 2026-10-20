@@ -9,6 +9,7 @@ from fractions import Fraction
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, es_dict_from_container, group_dict
 
 from diff_diff import CallawaySantAnna, CallawaySantAnnaResults
 from diff_diff.prep import generate_staggered_data as _generate_staggered_data
@@ -118,7 +119,7 @@ class TestCallawaySantAnna:
         ), f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
 
     def test_event_study_aggregation(self):
-        """Test event study aggregation."""
+        """Test post-fit event study aggregation."""
         data = generate_staggered_data()
 
         cs = CallawaySantAnna()
@@ -128,14 +129,16 @@ class TestCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        # A plain fit does not populate the fit-time surface; aggregation is post-fit
+        assert results.event_study_effects is None
+        assert results.group_effects is None
+        es = results.aggregate("event_study")
+        assert len(es.event_time) > 0
 
         # Check that relative periods are present
-        rel_periods = list(results.event_study_effects.keys())
+        rel_periods = list(es.event_time)
         assert any(p >= 0 for p in rel_periods)  # Post-treatment
 
     def test_group_aggregation(self):
@@ -149,14 +152,13 @@ class TestCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
-        assert results.group_effects is not None
-        assert len(results.group_effects) > 0
+        grp = results.aggregate("group")
+        assert len(grp.label) > 0
 
     def test_all_aggregation(self):
-        """Test computing all aggregations."""
+        """Test computing both post-fit aggregation levels on one fit."""
         data = generate_staggered_data()
 
         cs = CallawaySantAnna()
@@ -166,11 +168,10 @@ class TestCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
-        assert results.event_study_effects is not None
-        assert results.group_effects is not None
+        assert len(results.aggregate("event_study").event_time) > 0
+        assert len(results.aggregate("group").label) > 0
 
     def test_control_group_options(self):
         """Test different control group options."""
@@ -221,7 +222,6 @@ class TestCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         summary = results.summary()
@@ -241,7 +241,6 @@ class TestCallawaySantAnna:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
         # Group-time DataFrame
@@ -250,13 +249,15 @@ class TestCallawaySantAnna:
         assert "time" in df_gt.columns
         assert "effect" in df_gt.columns
 
-        # Event study DataFrame
-        df_es = results.to_dataframe(level="event_study")
-        assert "relative_period" in df_es.columns
+        # Event study DataFrame (post-fit container)
+        df_es = results.aggregate("event_study").to_dataframe()
+        assert "event_time" in df_es.columns
+        assert "att" in df_es.columns
 
-        # Group DataFrame
-        df_g = results.to_dataframe(level="group")
-        assert "group" in df_g.columns
+        # Group DataFrame (post-fit container)
+        df_g = results.aggregate("group").to_dataframe()
+        assert "label" in df_g.columns
+        assert "att" in df_g.columns
 
     def test_get_set_params(self):
         """Test sklearn-compatible parameter access."""
@@ -537,11 +538,9 @@ class TestCallawaySantAnnaCovariates:
             time="time",
             first_treat="first_treat",
             covariates=["x1", "x2"],
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        assert len(results.aggregate("event_study").event_time) > 0
 
     def test_missing_covariate_error(self):
         """Test error when covariate column is missing."""
@@ -1118,8 +1117,10 @@ class TestCallawaySantAnnaCovariates:
                     time="time",
                     first_treat="first_treat",
                     covariates=["x1", "x1_dup"],
-                    aggregate="all",
                 )
+            # post-fit aggregation replays the bootstrap (low-n warnings again)
+            es = es_dict(results)
+            grp = group_dict(results)
 
         # NaN cell should be preserved in group_time_effects
         nan_cells = [
@@ -1140,18 +1141,18 @@ class TestCallawaySantAnnaCovariates:
         assert all(np.isfinite(x) for x in results.overall_conf_int), "overall CI should be finite"
 
         # Event study: valid relative times should have finite bootstrap inference
-        if results.event_study_effects:
-            for e, data_es in results.event_study_effects.items():
-                if np.isfinite(data_es["effect"]):
-                    assert np.isfinite(data_es["se"]), f"ES e={e} se should be finite"
-                    assert np.isfinite(data_es["p_value"]), f"ES e={e} p_value should be finite"
+        assert es
+        for e, data_es in es.items():
+            if np.isfinite(data_es["effect"]):
+                assert np.isfinite(data_es["se"]), f"ES e={e} se should be finite"
+                assert np.isfinite(data_es["p_value"]), f"ES e={e} p_value should be finite"
 
         # Group effects: valid groups should have finite bootstrap inference
-        if results.group_effects:
-            for g, data_ge in results.group_effects.items():
-                if np.isfinite(data_ge["effect"]):
-                    assert np.isfinite(data_ge["se"]), f"Group {g} se should be finite"
-                    assert np.isfinite(data_ge["p_value"]), f"Group {g} p_value should be finite"
+        assert grp
+        for g, data_ge in grp.items():
+            if np.isfinite(data_ge["effect"]):
+                assert np.isfinite(data_ge["se"]), f"Group {g} se should be finite"
+                assert np.isfinite(data_ge["p_value"]), f"Group {g} p_value should be finite"
 
     def test_balance_e_excludes_nan_anchor_cohort(self, ci_params):
         """balance_e must exclude cohorts whose anchor-horizon effect is NaN."""
@@ -1196,9 +1197,9 @@ class TestCallawaySantAnnaCovariates:
                     time="time",
                     first_treat="first_treat",
                     covariates=["x1", "x1_dup"],
-                    aggregate="event_study",
-                    balance_e=0,
                 )
+            # balanced post-fit aggregation (replays the bootstrap)
+            es = es_dict(results, balance_e=0)
 
         # Confirm the anchor cell is NaN and is specifically the anchor (t - g == 0)
         assert np.isnan(
@@ -1209,21 +1210,16 @@ class TestCallawaySantAnnaCovariates:
         # Cohort g=3 should be excluded from ALL event-study horizons
         # Only g=5 and g=8 should contribute (<=2 because not all balanced
         # cohorts have cells at extreme horizons)
-        for e, es_data in results.event_study_effects.items():
+        for e, es_data in es.items():
             assert es_data["n_groups"] <= 2, (
                 f"Event time e={e} has n_groups={es_data['n_groups']}, "
                 "expected <=2 (cohort g=3 should be excluded due to NaN anchor)"
             )
 
-        # Analytical effects and SEs should be finite for all horizons
-        for e, es_data in results.event_study_effects.items():
-            assert np.isfinite(es_data["effect"]), f"e={e}: analytical effect should be finite"
-            assert np.isfinite(es_data["se"]), f"e={e}: analytical SE should be finite"
-
-        # Bootstrap SEs should also be finite
-        if results.bootstrap_results and results.bootstrap_results.event_study_ses:
-            for e, se in results.bootstrap_results.event_study_ses.items():
-                assert np.isfinite(se), f"e={e}: bootstrap SE should be finite"
+        # Effects and (bootstrap percentile) SEs should be finite for all horizons
+        for e, es_data in es.items():
+            assert np.isfinite(es_data["effect"]), f"e={e}: effect should be finite"
+            assert np.isfinite(es_data["se"]), f"e={e}: bootstrap SE should be finite"
 
     @pytest.mark.parametrize("action", ["silent", "warn"])
     def test_reg_underdetermined_control_cell_no_crash(self, action):
@@ -1525,9 +1521,8 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        es = results.event_study_effects
+            es = es_dict(results)
         # Relative time e=2 contains only (g=2, t=4), which is non-estimable (no
         # not-yet-treated controls at t=4) -> the whole bucket must be omitted.
         assert 2 not in es, "all-non-estimable relative time must be omitted, not a NaN row"
@@ -2335,8 +2330,10 @@ class TestCallawaySantAnnaRankDeficiencyPaths:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
+        # both post-fit aggregation levels (bootstrap replay) must not crash either
+        results.aggregate("event_study")
+        results.aggregate("group")
 
         assert results is not None
         assert results.overall_att is not None
@@ -2395,16 +2392,15 @@ class TestCallawaySantAnnaBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         assert results.bootstrap_results is not None
-        assert results.bootstrap_results.event_study_ses is not None
-        assert results.bootstrap_results.event_study_cis is not None
-        assert results.bootstrap_results.event_study_p_values is not None
+        # the post-fit aggregation replays the bootstrap: percentile inference
+        es = es_dict(results)
+        assert es
 
         # Check event study effects have bootstrap SEs
-        for e, effect in results.event_study_effects.items():
+        for e, effect in es.items():
             assert effect["se"] > 0
             assert effect["conf_int"][0] < effect["conf_int"][1]
 
@@ -2420,16 +2416,14 @@ class TestCallawaySantAnnaBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         assert results.bootstrap_results is not None
-        assert results.bootstrap_results.group_effect_ses is not None
-        assert results.bootstrap_results.group_effect_cis is not None
-        assert results.bootstrap_results.group_effect_p_values is not None
+        grp = group_dict(results)
+        assert grp
 
         # Check group effects have bootstrap SEs
-        for g, effect in results.group_effects.items():
+        for g, effect in grp.items():
             assert effect["se"] > 0
             assert effect["conf_int"][0] < effect["conf_int"][1]
 
@@ -2445,12 +2439,13 @@ class TestCallawaySantAnnaBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
 
         assert results.bootstrap_results is not None
-        assert results.bootstrap_results.event_study_ses is not None
-        assert results.bootstrap_results.group_effect_ses is not None
+        es = results.aggregate("event_study")
+        grp = results.aggregate("group")
+        assert np.all(np.isfinite(es.se)) and np.all(es.se > 0)
+        assert np.all(np.isfinite(grp.se)) and np.all(grp.se > 0)
 
     def test_bootstrap_reproducibility(self, ci_params):
         """Test that bootstrap is reproducible with same seed."""
@@ -2630,16 +2625,14 @@ class TestCallawaySantAnnaBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=0,  # Balance at treatment time
         )
 
         assert results.bootstrap_results is not None
-        assert results.bootstrap_results.event_study_ses is not None
-        assert results.event_study_effects is not None
+        es = es_dict(results, balance_e=0)  # Balance at treatment time
+        assert es
 
         # Check that event study effects have valid bootstrap SEs
-        for e, effect in results.event_study_effects.items():
+        for e, effect in es.items():
             assert effect["se"] > 0
             assert effect["conf_int"][0] < effect["conf_int"][1]
 
@@ -2670,12 +2663,12 @@ class TestCallawaySantAnnaBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        effects = results.event_study_effects
-        vcov = results.event_study_vcov
-        index = results.event_study_vcov_index
+        es = results.aggregate("event_study")
+        effects = es_dict_from_container(es)
+        vcov = es.vcov
+        index = list(es.vcov_index)
         assert index == [
             e
             for e in sorted(effects)
@@ -2701,21 +2694,21 @@ class TestCallawaySantAnnaBootstrap:
         def fit(n_bootstrap):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=7).fit(
+                res = CallawaySantAnna(n_bootstrap=n_bootstrap, seed=7).fit(
                     data,
                     outcome="outcome",
                     unit="unit",
                     time="time",
                     first_treat="first_treat",
-                    aggregate="event_study",
                 )
+                return res.aggregate("event_study")
 
-        n_horizons = len(fit(50).event_study_vcov_index)
+        n_horizons = len(fit(50).vcov_index)
         at_limit = fit(n_horizons)
-        assert at_limit.event_study_vcov is None and at_limit.event_study_vcov_index is None
-        assert all(np.isfinite(d["se"]) for d in at_limit.event_study_effects.values())
+        assert at_limit.vcov is None and at_limit.vcov_index is None
+        assert np.all(np.isfinite(at_limit.se))
         above_limit = fit(n_horizons + 1)
-        assert above_limit.event_study_vcov.shape == (n_horizons, n_horizons)
+        assert above_limit.vcov.shape == (n_horizons, n_horizons)
 
 
 # =============================================================================
@@ -2827,14 +2820,13 @@ class TestCallawaySantAnnaSingleCohort:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        es = es_dict(results)
+        assert len(es) > 0
 
         # Event study should have multiple relative periods
-        rel_periods = sorted(results.event_study_effects.keys())
+        rel_periods = sorted(es.keys())
         assert len(rel_periods) >= 2, f"Expected multiple periods, got {rel_periods}"
 
         # With single cohort, all effects are for the same group
@@ -2842,7 +2834,7 @@ class TestCallawaySantAnnaSingleCohort:
         post_periods = [e for e in rel_periods if e >= 0]
         if post_periods:
             # At least some post-periods should show positive effect
-            post_effects = [results.event_study_effects[e]["effect"] for e in post_periods]
+            post_effects = [es[e]["effect"] for e in post_periods]
             assert any(
                 e > 0.5 for e in post_effects
             ), f"Expected positive post-period effects, got {post_effects}"
@@ -3097,8 +3089,8 @@ class TestCallawaySantAnnaAnalyticalSE:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_analytical = es_dict(results_analytical)
 
         # Bootstrap
         cs_bootstrap = CallawaySantAnna(n_bootstrap=n_boot, seed=42)
@@ -3108,20 +3100,20 @@ class TestCallawaySantAnnaAnalyticalSE:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es_bootstrap = es_dict(results_bootstrap)
 
         # Event study effects should exist
-        assert results_analytical.event_study_effects is not None
-        assert results_bootstrap.event_study_effects is not None
+        assert es_analytical
+        assert es_bootstrap
 
         # Check each event time SE is similar (wider tolerance when
         # min_n cap reduces bootstrap iterations in pure Python mode)
         threshold = 0.40 if n_boot < 100 else 0.20
-        for e in results_analytical.event_study_effects:
-            if e in results_bootstrap.event_study_effects:
-                se_analytical = results_analytical.event_study_effects[e]["se"]
-                se_bootstrap = results_bootstrap.event_study_effects[e]["se"]
+        for e in es_analytical:
+            if e in es_bootstrap:
+                se_analytical = es_analytical[e]["se"]
+                se_bootstrap = es_bootstrap[e]["se"]
 
                 if se_bootstrap > 0:
                     rel_diff = abs(se_analytical - se_bootstrap) / se_bootstrap
@@ -3239,11 +3231,9 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             unit="id",
             time="period",
             first_treat="cohort",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
-        assert len(results.event_study_effects) > 0
+        assert len(results.aggregate("event_study").event_time) > 0
 
     def test_non_standard_names_with_covariates(self):
         """Test non-standard column names with covariate adjustment."""
@@ -3436,13 +3426,12 @@ class TestCallawaySantAnnaPreTreatment:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None
+        es = results.aggregate("event_study")
 
         # Should have negative relative periods
-        rel_periods = list(results.event_study_effects.keys())
+        rel_periods = list(es.event_time)
         negative_periods = [e for e in rel_periods if e < 0]
         assert (
             len(negative_periods) > 0
@@ -3880,21 +3869,22 @@ class TestCallawaySantAnnaAnticipation:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        # Check group effects exist
-        if results.group_effects is not None and g in results.group_effects:
-            # The group effect for g should aggregate periods t >= g - 2
-            # Verify by checking which group-time effects exist
-            gt_for_group = [(gg, t) for (gg, t) in results.group_time_effects.keys() if gg == g]
+        # Check group effects exist (post-fit group aggregation)
+        grp = group_dict(results)
+        assert g in grp, f"expected a group effect for cohort {g}, got {sorted(grp)}"
+        # The group effect for g should aggregate periods t >= g - 2
+        # Verify by checking which group-time effects exist
+        gt_for_group = [(gg, t) for (gg, t) in results.group_time_effects.keys() if gg == g]
 
-            # There should be effects at t = g - anticipation = g - 2
-            # (if the data has that period)
-            # Note: the anticipation period t = g - 2 may or may not be
-            # present depending on base_period, so it is not asserted here;
-            # post-treatment periods (t >= g - anticipation) should exist.
+        # There should be effects at t = g - anticipation = g - 2
+        # (if the data has that period)
+        # Note: the anticipation period t = g - 2 may or may not be
+        # present depending on base_period, so it is not asserted here;
+        # post-treatment periods (t >= g - anticipation) should exist.
 
-            # Verify post-treatment periods t >= g are included
-            post_treatment = [t for (gg, t) in gt_for_group if t >= g]
-            assert len(post_treatment) > 0, "Should have post-treatment effects"
+        # Verify post-treatment periods t >= g are included
+        post_treatment = [t for (gg, t) in gt_for_group if t >= g]
+        assert len(post_treatment) > 0, "Should have post-treatment effects"
 
     def test_not_yet_treated_with_anticipation_excludes_anticipation_window(self):
         """Not-yet-treated controls must exclude cohorts in the anticipation window.
@@ -4000,25 +3990,21 @@ class TestCallawaySantAnnaTStatNaN:
                     f"expected {expected}, got {t_stat}"
                 )
 
-        # Check event study effects if present
-        if results.event_study_effects is not None:
-            for e, effect_data in results.event_study_effects.items():
-                se = effect_data["se"]
-                t_stat = effect_data["t_stat"]
+        # Check event study effects (post-fit aggregation, bootstrap replay)
+        for e, effect_data in es_dict(results).items():
+            se = effect_data["se"]
+            t_stat = effect_data["t_stat"]
 
-                if not np.isfinite(se) or se == 0:
-                    assert np.isnan(
-                        t_stat
-                    ), f"event study t_stat for e={e} should be NaN when SE={se}"
+            if not np.isfinite(se) or se == 0:
+                assert np.isnan(t_stat), f"event study t_stat for e={e} should be NaN when SE={se}"
 
-        # Check group effects if present
-        if results.group_effects is not None:
-            for g, effect_data in results.group_effects.items():
-                se = effect_data["se"]
-                t_stat = effect_data["t_stat"]
+        # Check group effects (post-fit aggregation, bootstrap replay)
+        for g, effect_data in group_dict(results).items():
+            se = effect_data["se"]
+            t_stat = effect_data["t_stat"]
 
-                if not np.isfinite(se) or se == 0:
-                    assert np.isnan(t_stat), f"group t_stat for g={g} should be NaN when SE={se}"
+            if not np.isfinite(se) or se == 0:
+                assert np.isnan(t_stat), f"group t_stat for g={g} should be NaN when SE={se}"
 
     def test_aggregated_tstat_nan_when_se_zero(self):
         """Aggregated t_stat (event-study and group) is NaN when SE is zero or non-finite.
@@ -4043,7 +4029,6 @@ class TestCallawaySantAnnaTStatNaN:
 
         df = pd.DataFrame(data)
 
-        # Fit with event study aggregation to get event_study_effects
         cs = CallawaySantAnna(n_bootstrap=0)
         results = cs.fit(
             df,
@@ -4051,13 +4036,16 @@ class TestCallawaySantAnnaTStatNaN:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",  # Get both event study and group effects
         )
+        # Both post-fit aggregation levels
+        es = es_dict(results)
+        grp = group_dict(results)
+        assert es and grp
 
         # Check that t_stat computation follows the correct pattern:
         # t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
-        if results.event_study_effects:
-            for e, data in results.event_study_effects.items():
+        if es:
+            for e, data in es.items():
                 se = data["se"]
                 t_stat = data["t_stat"]
                 effect = data["effect"]
@@ -4074,8 +4062,8 @@ class TestCallawaySantAnnaTStatNaN:
                         f"got {t_stat}"
                     )
 
-        if results.group_effects:
-            for g, data in results.group_effects.items():
+        if grp:
+            for g, data in grp.items():
                 se = data["se"]
                 t_stat = data["t_stat"]
                 effect = data["effect"]
@@ -4102,17 +4090,15 @@ class TestCallawaySantAnnaTStatNaN:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None, "event_study_effects should not be None"
+        es = es_dict(results)
 
         # Reference period should be included
-        assert -1 in results.event_study_effects, (
-            f"Reference period e=-1 should be in event_study_effects, "
-            f"got periods: {list(results.event_study_effects.keys())}"
-        )
-        ref = results.event_study_effects[-1]
+        assert (
+            -1 in es
+        ), f"Reference period e=-1 should be in the event study, got periods: {list(es)}"
+        ref = es[-1]
 
         # Effect is 0 by construction (normalization)
         assert ref["effect"] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
@@ -4140,17 +4126,17 @@ class TestCallawaySantAnnaTStatNaN:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None, "event_study_effects should not be None"
+        es = es_dict(results)
+        assert es
 
         # Varying mode: no single reference period, e=-1 computed normally or excluded
         # The key is we don't artificially add a 0-effect entry
-        if -1 in results.event_study_effects:
+        if -1 in es:
             # If it exists, it should be an actual computed effect, not 0.0 with n_groups=0
             assert (
-                results.event_study_effects[-1]["n_groups"] > 0
+                es[-1]["n_groups"] > 0
             ), "Varying mode should not artificially add e=-1 with n_groups=0"
 
     def test_event_study_universal_with_anticipation(self):
@@ -4164,17 +4150,16 @@ class TestCallawaySantAnnaTStatNaN:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        assert results.event_study_effects is not None, "event_study_effects should not be None"
+        es = es_dict(results)
 
         # With anticipation=1, reference is e=-2
-        assert -2 in results.event_study_effects, (
-            f"With anticipation=1, reference period e=-2 should be in event_study_effects, "
-            f"got periods: {list(results.event_study_effects.keys())}"
+        assert -2 in es, (
+            f"With anticipation=1, reference period e=-2 should be in the event study, "
+            f"got periods: {list(es)}"
         )
-        ref = results.event_study_effects[-2]
+        ref = es[-2]
         assert ref["effect"] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
         # Inference fields are NaN - normalization constraint
         assert np.isnan(ref["se"]), f"Reference period SE should be NaN, got {ref['se']}"
@@ -4209,7 +4194,6 @@ class TestCallawaySantAnnaTStatNaN:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
 
@@ -5841,7 +5825,6 @@ class TestCallawaySantAnnaClusterSafetyGates:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Sanity: the CS fit populated df_inference but not survey_metadata
@@ -5854,7 +5837,7 @@ class TestCallawaySantAnnaClusterSafetyGates:
 
         # Run HonestDiD; assert it threads df_inference into the returned df_survey
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        honest_res = honest.fit(cs_res)
+        honest_res = honest.fit(cs_res.aggregate("event_study"))
 
         assert honest_res.df_survey is not None, (
             "HonestDiD must preserve the cluster df from CS's df_inference. "
@@ -6125,8 +6108,9 @@ class TestCallawaySantAnnaClusterSafetyGates:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            # post-fit event study (replays the degenerate bootstrap)
+            es = es_dict(res)
 
         # Overall bootstrap inference must be NaN-consistent
         assert not np.isfinite(res.overall_se), (
@@ -6154,17 +6138,17 @@ class TestCallawaySantAnnaClusterSafetyGates:
             assert np.isnan(eff["p_value"])
             assert np.isnan(eff["conf_int"][0]) and np.isnan(eff["conf_int"][1])
 
-        # Requested aggregate (event-study) must also be NaN-consistent
+        # The event-study aggregation must also be NaN-consistent
         # for any aggregated horizon whose underlying cells are NaN
-        if res.event_study_effects:
-            for h, ev in res.event_study_effects.items():
-                if not np.isfinite(ev["se"]):
-                    assert np.isnan(ev["t_stat"])
-                    assert np.isnan(ev["p_value"])
-                    assert np.isnan(ev["conf_int"][0]) and np.isnan(ev["conf_int"][1])
+        assert es
+        for h, ev in es.items():
+            if not np.isfinite(ev["se"]):
+                assert np.isnan(ev["t_stat"])
+                assert np.isnan(ev["p_value"])
+                assert np.isnan(ev["conf_int"][0]) and np.isnan(ev["conf_int"][1])
 
     def test_grouped_aggregate_se_changes_with_cluster(self):
-        """The ``aggregate="group"`` aggregation path
+        """The ``aggregate("group")`` aggregation path
         (``_aggregate_by_group`` at ``staggered_aggregation.py:782-860``)
         has its own SE computation independent of overall + event-study.
         Asserts grouped SEs differ between cluster=None and cluster="state"
@@ -6182,7 +6166,6 @@ class TestCallawaySantAnnaClusterSafetyGates:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         cs_cluster = CallawaySantAnna(cluster="state")
@@ -6192,7 +6175,6 @@ class TestCallawaySantAnnaClusterSafetyGates:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         cs_explicit = CallawaySantAnna()
@@ -6202,37 +6184,37 @@ class TestCallawaySantAnnaClusterSafetyGates:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
             survey_design=SurveyDesign(psu="state"),
         )
 
-        assert res_unit.group_effects is not None
-        assert res_cluster.group_effects is not None
-        assert res_explicit.group_effects is not None
+        grp_unit = group_dict(res_unit)
+        grp_cluster = group_dict(res_cluster)
+        grp_explicit = group_dict(res_explicit)
+        assert grp_unit and grp_cluster and grp_explicit
 
         # Grouped SEs must differ under cluster vs unit-level (at least
         # one group)
-        common_groups = set(res_unit.group_effects.keys()) & set(res_cluster.group_effects.keys())
+        common_groups = set(grp_unit) & set(grp_cluster)
         assert common_groups, "expected overlapping groups"
 
         diffs = []
         for g in common_groups:
-            se_unit = res_unit.group_effects[g]["se"]
-            se_cluster = res_cluster.group_effects[g]["se"]
+            se_unit = grp_unit[g]["se"]
+            se_cluster = grp_cluster[g]["se"]
             if np.isfinite(se_unit) and np.isfinite(se_cluster):
                 diffs.append(abs(se_unit - se_cluster))
         max_diff = max(diffs) if diffs else 0.0
         assert max_diff > 1e-6, (
             f"Grouped SEs did not change with cluster= (max diff: "
-            f"{max_diff:.6g}). aggregate='group' may not be routing "
+            f"{max_diff:.6g}). aggregate('group') may not be routing "
             "through the cluster-aware IF aggregation."
         )
 
         # Bare cluster vs explicit SurveyDesign must agree on grouped surface
-        common = set(res_cluster.group_effects.keys()) & set(res_explicit.group_effects.keys())
+        common = set(grp_cluster) & set(grp_explicit)
         for g in common:
-            se_bare = res_cluster.group_effects[g]["se"]
-            se_explicit = res_explicit.group_effects[g]["se"]
+            se_bare = grp_cluster[g]["se"]
+            se_explicit = grp_explicit[g]["se"]
             if np.isfinite(se_bare) and np.isfinite(se_explicit):
                 assert se_bare == pytest.approx(se_explicit, rel=1e-10, abs=1e-12), (
                     f"Grouped SE divergence at g={g}: bare cluster=state "

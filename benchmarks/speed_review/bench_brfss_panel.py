@@ -93,20 +93,28 @@ def make_phases(micro, results):
         results["cs"] = cs.fit(
             results["panel"], outcome="y_mean",
             unit="state", time="year", first_treat="first_treat",
-            survey_design=results["stage2"], aggregate="all",
+            survey_design=results["stage2"],
         )
+        # Materialize BOTH post-fit containers ONCE inside the timed fit
+        # phase (the 3.x fit(aggregate="all") workload = fit + event-study
+        # + group aggregation): the fit is bootstrapped, so every
+        # aggregate() call replays the bootstrap.
+        results["cs_es"] = results["cs"].aggregate("event_study")
+        results["cs_grp"] = results["cs"].aggregate("group")
 
     def inspect_pretrends():
-        es = results["cs"].event_study_effects or {}
+        es = results["cs_es"].to_dataframe()
+        pre = es[es["event_time"] < 0]
         results["pretrends"] = {
-            rel_t: eff for rel_t, eff in es.items() if rel_t < 0
+            int(r.event_time): {"effect": float(r.att), "se": float(r.se)}
+            for r in pre.itertuples(index=False)
         }
 
     def honest_grid():
         out = {}
         for M in (0.5, 1.0, 1.5):
             out[M] = compute_honest_did(
-                results["cs"], method="relative_magnitude", M=M,
+                results["cs_es"], method="relative_magnitude", M=M,
             )
         results["honest"] = out
 

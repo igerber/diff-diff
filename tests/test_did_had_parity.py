@@ -257,7 +257,7 @@ class TestPointSEParity:
         py = _python_fit(panels[dgp_name], effects, placebo, trends_lin)
 
         # `overall_e1` returns a scalar HeterogeneousAdoptionDiDResults
-        # (aggregate="overall" path); all others return the array
+        # (two-period overall path); all others return the array
         # HeterogeneousAdoptionDiDEventStudyResults. Build a uniform
         # (rowname, py_att, py_se, py_ci_lo, py_ci_hi) iterator that
         # works on both.

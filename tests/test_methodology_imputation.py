@@ -49,23 +49,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import es_dict, group_dict
 
 from diff_diff import ImputationDiD
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 # =============================================================================
 # Module-level R-fixture availability + per-class seed decorrelation
@@ -184,12 +170,11 @@ class TestB2024Theorem2Imputation:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        effects = es_dict(res)
         for h, expected in tau_by_h.items():
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["effect"]
+            assert h in effects, f"missing horizon {h}"
+            got = effects[h]["effect"]
             assert abs(got - expected) < 0.06, f"h={h}: {got:.4f} vs {expected}"
 
     def test_step1_uses_untreated_only(self) -> None:
@@ -248,10 +233,8 @@ class TestB2024Theorem3Variance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
-        for h, eff in res.event_study_effects.items():
+        for h, eff in es_dict(res).items():
             # Skip the normalized reference period (effect=se=0 by construction).
             if h >= 0 and np.isfinite(eff["effect"]):
                 assert np.isfinite(eff["se"]) and eff["se"] > 0, f"h={h}"
@@ -406,38 +389,45 @@ class TestImputationVarianceFactorizationCache:
 
     @pytest.mark.parametrize("survey", [False, True])
     def test_projection_built_once_per_fit(self, survey: bool) -> None:
-        """The cache collapses the (1 + #horizons + #groups) per-target projection
-        builds -- and, with bootstrap, the analytical + precompute builds -- to a
-        single ``_build_untreated_projection`` per ``fit()``. Holds for the survey
-        path too (survey_weights is excluded from the cache key)."""
-        from diff_diff.imputation import ImputationDiD as _Cls
+        """The call-local cache collapses the per-target projection builds to a
+        single ``_build_untreated_projection`` per ``fit()`` and per post-fit
+        ``aggregate()`` call (the event-study call spans #horizons targets, the
+        group call #groups targets). Holds for the survey path too
+        (survey_weights is excluded from the cache key)."""
+        from diff_diff.imputation_aggregation import _ImputationAggregationMixin as _Mixin
 
         panel = self._cov_panel()
         base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
-        kw: Dict[str, Any] = dict(covariates=["x1", "x2"], aggregate="all")
+        kw: Dict[str, Any] = dict(covariates=["x1", "x2"])
         if survey:
             from diff_diff import SurveyDesign
 
             kw["survey_design"] = SurveyDesign(weights="weight")
 
-        orig = _Cls._build_untreated_projection
+        # Patch the mixin: the fit (ImputationDiD) and the post-fit kit
+        # aggregator (_ImputationKitAggregator) both inherit the builder.
+        orig = _Mixin._build_untreated_projection
         calls = {"n": 0}
 
         def counting(self, *a, **k):
             calls["n"] += 1
             return orig(self, *a, **k)
 
-        _Cls._build_untreated_projection = counting  # type: ignore[method-assign]
+        _Mixin._build_untreated_projection = counting  # type: ignore[method-assign]
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 res = ImputationDiD().fit(panel, **base, **kw)
+                assert calls["n"] == 1, f"expected 1 projection build, got {calls['n']}"
+                es = res.aggregate("event_study")
+                assert calls["n"] == 2, f"event-study aggregate: {calls['n']} builds"
+                grp = res.aggregate("group")
+                assert calls["n"] == 3, f"group aggregate: {calls['n']} builds"
         finally:
-            _Cls._build_untreated_projection = orig  # type: ignore[method-assign]
+            _Mixin._build_untreated_projection = orig  # type: ignore[method-assign]
 
         # Multiple aggregation targets exist (so the naive count would be > 1).
-        assert res.event_study_effects and res.group_effects
-        assert calls["n"] == 1, f"expected 1 projection build, got {calls['n']}"
+        assert len(es.event_time) > 1 and len(grp.label) > 1
 
     def test_projection_built_once_per_fit_with_bootstrap(self) -> None:
         """With ``n_bootstrap > 0`` the analytical aggregation AND the bootstrap
@@ -478,12 +468,13 @@ class TestImputationVarianceFactorizationCache:
         panel = self._cov_panel()
         base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         est = ImputationDiD()
-        r1 = est.fit(panel, **base, covariates=["x1", "x2"], aggregate="all")
-        r2 = est.fit(panel, **base, covariates=["x1", "x2"], aggregate="all")
+        r1 = est.fit(panel, **base, covariates=["x1", "x2"])
+        r2 = est.fit(panel, **base, covariates=["x1", "x2"])
         assert r1.overall_se == r2.overall_se
-        assert r1.event_study_effects is not None and r2.event_study_effects is not None
-        for h in r1.event_study_effects:
-            assert r1.event_study_effects[h]["se"] == r2.event_study_effects[h]["se"]
+        es1, es2 = r1.aggregate("event_study"), r2.aggregate("event_study")
+        assert len(es1.se) > 0
+        assert np.array_equal(es1.event_time, es2.event_time)
+        assert np.array_equal(es1.se, es2.se, equal_nan=True)
 
 
 # =============================================================================
@@ -902,12 +893,11 @@ class TestB2024AppendixA9LeaveOneOut:
         design = SurveyDesign(weights="weight", psu="psu")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = ImputationDiD(leave_one_out=True).fit(
-                panel, aggregate="all", survey_design=design, **self._COMMON
-            )
+            r = ImputationDiD(leave_one_out=True).fit(panel, survey_design=design, **self._COMMON)
+            effects, groups = es_dict(r), group_dict(r)
         assert np.isfinite(r.overall_se)
-        self._assert_inference_consistent(r.event_study_effects)
-        self._assert_inference_consistent(r.group_effects)
+        self._assert_inference_consistent(effects)
+        self._assert_inference_consistent(groups)
 
     @pytest.mark.slow
     def test_loo_coverage_geq_nominal(self):
@@ -971,11 +961,10 @@ class TestB2024Proposition5NoNeverTreated:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        assert res.event_study_effects is not None
+            effects = es_dict(res)
         h_bar = 2
-        for h, eff in res.event_study_effects.items():
+        for h, eff in effects.items():
             if h >= h_bar:
                 assert np.isnan(eff["effect"]), f"h={h} >= H_bar should be NaN"
 
@@ -996,13 +985,9 @@ class TestB2024Proposition5NoNeverTreated:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
         # With never-treated controls, post horizons are identified (finite).
-        assert any(
-            np.isfinite(eff["effect"]) and h >= 2 for h, eff in res.event_study_effects.items()
-        )
+        assert any(np.isfinite(eff["effect"]) and h >= 2 for h, eff in es_dict(res).items())
 
 
 # =============================================================================
@@ -1151,15 +1136,14 @@ class TestImputationDiDParityR:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        effects = es_dict(res)
         es = golden["event_study"]
         assert len(es["horizons"]) > 0
         for h, att in zip(es["horizons"], es["att"]):
             # Every golden horizon must be present and finite -- no silent skips.
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["effect"]
+            assert h in effects, f"missing horizon {h}"
+            got = effects[h]["effect"]
             assert np.isfinite(got), f"non-finite ATT at h={h}"
             assert got == pytest.approx(att, abs=1e-6), f"h={h}"
 
@@ -1173,15 +1157,14 @@ class TestImputationDiDParityR:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
+        effects = es_dict(res)
         es = golden["event_study"]
         assert len(es["horizons"]) > 0
         for h, se in zip(es["horizons"], es["se"]):
             # Every golden horizon must be present and finite -- no silent skips.
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["se"]
+            assert h in effects, f"missing horizon {h}"
+            got = effects[h]["se"]
             assert np.isfinite(got), f"non-finite SE at h={h}"
             assert got == pytest.approx(se, abs=1e-7), f"h={h}"
 
@@ -1239,13 +1222,12 @@ class TestImputationDiDCovariateParityR:
         assert res.overall_se == pytest.approx(golden["covariate"]["overall"]["se"], abs=1e-7)
 
     def test_event_study_atts_match_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
-        res = self._fit(covariate_panel, aggregate="event_study")
-        assert res.event_study_effects is not None
+        effects = es_dict(self._fit(covariate_panel))
         es = golden["covariate"]["event_study"]
         assert len(es["horizons"]) > 0
         for h, att in zip(es["horizons"], es["att"]):
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["effect"]
+            assert h in effects, f"missing horizon {h}"
+            got = effects[h]["effect"]
             assert np.isfinite(got), f"non-finite ATT at h={h}"
             assert got == pytest.approx(att, abs=1e-6), f"h={h}"
 
@@ -1253,11 +1235,10 @@ class TestImputationDiDCovariateParityR:
         """Per-horizon covariate-path SEs match R (the variance machinery under
         a covariate-augmented first stage) — ~2e-10 observed on the reference
         platform, asserted at abs=1e-7 for cross-platform robustness."""
-        res = self._fit(covariate_panel, aggregate="event_study")
-        assert res.event_study_effects is not None
+        effects = es_dict(self._fit(covariate_panel))
         es = golden["covariate"]["event_study"]
         for h, se in zip(es["horizons"], es["se"]):
-            assert h in res.event_study_effects, f"missing horizon {h}"
-            got = res.event_study_effects[h]["se"]
+            assert h in effects, f"missing horizon {h}"
+            got = effects[h]["se"]
             assert np.isfinite(got), f"non-finite SE at h={h}"
             assert got == pytest.approx(se, abs=1e-7), f"h={h}"

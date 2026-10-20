@@ -608,18 +608,15 @@ class TestEventStudyAggregation:
             noise_sd=0.5,
         )
         est = ContinuousDiD()
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        df = results.to_dataframe(level="event_study")
-        assert "relative_period" in df.columns
-        assert "att_glob" in df.columns
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        # analytic fits leave the legacy fit-time field None; the surface is
+        # the post-fit container
+        assert results.event_study_effects is None
+        with pytest.raises(ValueError, match=r"aggregate\('event_study'\)"):
+            results.to_dataframe(level="event_study")
+        df = results.aggregate("event_study").to_dataframe()
+        assert "event_time" in df.columns
+        assert "att" in df.columns
 
     def test_event_study_not_yet_treated(self):
         """Event study with control_group='not_yet_treated' and analytic SE."""
@@ -1766,8 +1763,9 @@ class TestCovariateAPI:
         assert "Covariates" in res.summary()
 
     def test_covariate_eventstudy_and_bootstrap(self):
-        """Covariate paths compose with aggregate='eventstudy' and n_bootstrap>0
-        (reg + dr), with finite inference and bootstrap SE near analytical."""
+        """Covariate paths compose with the post-fit event study and
+        n_bootstrap>0 (reg + dr), with finite inference and bootstrap SE near
+        analytical."""
         data = _cov_data(n_units=200)
         for method in ("reg", "dr"):
             es = ContinuousDiD(estimation_method=method).fit(
@@ -1777,10 +1775,10 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="eventstudy",
                 covariates=["x1"],
             )
             assert np.isfinite(es.overall_att) and np.isfinite(es.overall_att_se)
+            assert len(es.aggregate("event_study").event_time) > 0
             ana = ContinuousDiD(estimation_method=method).fit(
                 data,
                 "outcome",

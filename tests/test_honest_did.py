@@ -9,6 +9,7 @@ of parallel trends.
 import numpy as np
 import pandas as pd
 import pytest
+from legacy_surface import legacy_standin
 
 from diff_diff import MultiPeriodDiD
 from diff_diff.honest_did import (
@@ -862,12 +863,13 @@ class TestEdgeCases:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
-        )
+        ).aggregate("event_study")
 
         # Verify reference period exists with NaN SE
-        assert -1 in results.event_study_effects
-        assert np.isnan(results.event_study_effects[-1]["se"])
+        times = results.event_time.tolist()
+        assert -1 in times
+        assert bool(results.is_reference[times.index(-1)])
+        assert np.isnan(results.se[times.index(-1)])
 
         # HonestDiD should work without errors (reference period filtered out)
         honest = HonestDiD(method="relative_magnitude", M=1.0)
@@ -890,33 +892,41 @@ class TestEdgeCases:
         # Generate data with universal base period
         data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
         cs = CallawaySantAnna(base_period="universal")
-        results = cs.fit(
+        fit = cs.fit(
             data,
             outcome="outcome",
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        es = fit.aggregate("event_study")
 
-        # Verify reference period exists with n_groups=0
-        assert -1 in results.event_study_effects
-        assert results.event_study_effects[-1]["n_groups"] == 0
+        # Verify the reference period exists and is marked on the container
+        times = es.event_time.tolist()
+        assert -1 in times
+        assert bool(es.is_reference[times.index(-1)])
+        assert np.isnan(es.n[times.index(-1)])
 
         # The max pre-violation calculation should exclude the reference period
         honest = HonestDiD(method="relative_magnitude", M=1.0)
 
-        # Get pre_periods excluding reference (n_groups=0)
+        # Get pre_periods excluding the reference row
         real_pre_periods = [
-            t
-            for t in results.event_study_effects
-            if t < 0 and results.event_study_effects[t].get("n_groups", 1) > 0
+            int(t) for t, ref in zip(es.event_time, es.is_reference) if t < 0 and not ref
         ]
+
+        # ``_estimate_max_pre_violation`` reads the CS raw ``event_study_effects``
+        # dict (the 3.x fit-time shape, now the legacy-pickle route): feed it a
+        # stand-in carrying the container's surface. Its reference row is the
+        # zero-count sentinel the method excludes.
+        results = legacy_standin(fit)
+        assert results.event_study_effects[-1]["n_groups"] == 0
 
         # If there are real pre-periods, max_violation should be > 0
         # (based on actual pre-period effects, not the reference period's effect=0)
         if real_pre_periods:
             max_violation = honest._estimate_max_pre_violation(results, real_pre_periods)
+            assert max_violation == max(abs(es.att[times.index(t)]) for t in real_pre_periods)
             # Max violation should reflect actual pre-period coefficients, not 0
             # The actual effects are non-zero due to sampling variation
             assert max_violation > 0, "max_pre_violation should be > 0 when real pre-periods exist"
@@ -1246,25 +1256,29 @@ class TestSurveyVariance:
             "period",
             "first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
+        es = cs_result.aggregate("event_study")
 
         honest = HonestDiD(method="smoothness", M=0.0)
-        h_result = honest.fit(cs_result)
+        h_result = honest.fit(es)
 
-        # df_survey should be propagated
+        # df_survey should be propagated through the container's df_survey
         assert h_result.df_survey is not None
         assert h_result.df_survey > 0
-        assert h_result.survey_metadata is not None
-        # Single-source oracle: the CS branch resolves via the shared helper
-        # (aggregation.resolve_inference_df) - value-equal, float-typed.
+        assert h_result.df_survey == es.df_survey
+        # The container carries no survey-metadata OBJECT (documented
+        # divergence from the raw-field route); df_survey is its replacement.
+        assert h_result.survey_metadata is None
+        # Single-source oracle: the container's df_survey resolves via the
+        # shared helper (aggregation.resolve_inference_df) - value-equal,
+        # float-typed.
         from diff_diff.aggregation import resolve_inference_df
 
         assert h_result.df_survey == resolve_inference_df(cs_result)
         assert isinstance(h_result.df_survey, float)
 
     def test_event_study_vcov_computed(self):
-        """CallawaySantAnna event_study_vcov is computed and used by HonestDiD."""
+        """The CallawaySantAnna event-study container carries the full vcov HonestDiD uses."""
         from diff_diff import CallawaySantAnna, generate_staggered_data
 
         data = generate_staggered_data(n_units=100, n_periods=6, seed=42)
@@ -1274,23 +1288,32 @@ class TestSurveyVariance:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
         )
+        # Plain-fit invariant: no fit-time surface or vcov is stored.
+        assert cs_result.event_study_effects is None
+        assert cs_result.event_study_vcov is None
+        assert cs_result.event_study_vcov_index is None
 
-        # VCV should be computed
-        assert cs_result.event_study_vcov is not None
-        n_effects = len(
-            [
-                e
-                for e, d in cs_result.event_study_effects.items()
-                if d.get("n_groups", 1) > 0 and np.isfinite(d.get("se", np.nan))
-            ]
-        )
-        assert cs_result.event_study_vcov.shape == (n_effects, n_effects)
+        es = cs_result.aggregate("event_study")
+        # VCV should be computed on the container
+        assert es.vcov is not None
+        estimated = ~es.is_reference & np.isfinite(es.se)
+        n_effects = int(estimated.sum())
+        assert es.vcov.shape == (n_effects, n_effects)
+        np.testing.assert_array_equal(es.vcov_index, es.event_time[estimated])
 
-        # Diagonal should be positive
+        # Diagonal should be positive and equal the stored SEs squared
         for i in range(n_effects):
-            assert cs_result.event_study_vcov[i, i] > 0
+            assert es.vcov[i, i] > 0
+        np.testing.assert_allclose(np.diag(es.vcov), es.se[estimated] ** 2, rtol=1e-12)
+
+        # HonestDiD consumes it without the diagonal fallback
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            HonestDiD(method="smoothness", M=0.0).fit(es)
+        assert not [w for w in caught if "covariance" in str(w.message)]
 
     def test_survey_df_widens_bounds(self):
         """Survey df (t-distribution) should give wider CIs than normal."""
@@ -1319,13 +1342,12 @@ class TestSurveyVariance:
             "period",
             "first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
 
         # Use RM method (naive FLCI) which honors df via _get_critical_value.
         # The optimal FLCI (smoothness) uses folded normal which doesn't use df.
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        h_result = honest.fit(cs_result)
+        h_result = honest.fit(cs_result.aggregate("event_study"))
 
         # With df=8, t critical value (~2.31) > z critical value (1.96)
         # So CI width should be wider than 2*1.96*SE
@@ -1346,17 +1368,16 @@ class TestSurveyVariance:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
         )
 
         honest = HonestDiD(method="smoothness", M=0.0)
-        h_result = honest.fit(cs_result)
+        h_result = honest.fit(cs_result.aggregate("event_study"))
 
         assert h_result.df_survey is None
         assert h_result.survey_metadata is None
 
     def test_replicate_weight_uses_diagonal_fallback(self):
-        """Replicate-weight designs should NOT produce full event_study_vcov."""
+        """Replicate-weight designs should NOT produce a full event-study vcov."""
         from diff_diff import CallawaySantAnna, SurveyDesign, generate_staggered_data
 
         data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
@@ -1386,15 +1407,16 @@ class TestSurveyVariance:
             "period",
             "first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
 
-        # event_study_vcov should be None (diagonal fallback for replicate designs)
-        assert cs_result.event_study_vcov is None
+        # The container's vcov should be None (diagonal fallback for replicate designs)
+        es = cs_result.aggregate("event_study")
+        assert es.vcov is None and es.vcov_index is None
+        assert np.isfinite(es.se[~es.is_reference]).any()
 
     def test_bootstrap_fit_carries_bootstrap_vcov(self):
-        """Bootstrap CS results carry the covariance of the bootstrap draws
-        (never the analytical event_study_vcov): its diagonal is the
+        """A bootstrapped CS event-study container carries the covariance of
+        the bootstrap draws (never the analytical vcov): its diagonal is the
         bootstrap SEs squared, and HonestDiD uses it without the diagonal
         fallback."""
         from diff_diff import CallawaySantAnna, generate_staggered_data
@@ -1406,13 +1428,14 @@ class TestSurveyVariance:
             "unit",
             "period",
             "first_treat",
-            aggregate="event_study",
         )
+        es = cs_result.aggregate("event_study")
 
-        vcov = cs_result.event_study_vcov
-        index = cs_result.event_study_vcov_index
+        vcov = es.vcov
+        index = es.vcov_index
         assert vcov is not None and vcov.shape == (len(index), len(index))
-        ses = np.array([cs_result.event_study_effects[e]["se"] for e in index])
+        times = es.event_time.tolist()
+        ses = np.array([es.se[times.index(e)] for e in index])
         np.testing.assert_allclose(np.diag(vcov), ses**2, rtol=1e-12, atol=0.0)
 
         honest = HonestDiD(method="relative_magnitude", M=1.0)
@@ -1420,16 +1443,22 @@ class TestSurveyVariance:
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
-            h_result = honest.fit(cs_result)
-        diag_warnings = [w for w in caught if "diagonal covariance" in str(w.message)]
-        assert not diag_warnings
+            h_result = honest.fit(es)
+        fallback_warnings = [
+            w
+            for w in caught
+            if "diagonal covariance" in str(w.message) or "no full covariance" in str(w.message)
+        ]
+        assert not fallback_warnings
         assert np.isfinite(h_result.original_se)
         assert h_result.original_se > 0
 
     def test_bootstrap_vcov_same_on_native_and_container_routes(self):
-        """On a bootstrapped fit HonestDiD reads the bootstrap covariance on
-        both input routes: the native results object and the replayed
-        aggregate('event_study') container give the same sigma and bounds."""
+        """On a bootstrapped fit the replayed aggregate('event_study')
+        container's vcov diagonal is the stored bootstrap SEs squared, and
+        HonestDiD reads that covariance identically on the container route
+        and on the native (raw-field, legacy-pickle) route - here a stand-in
+        carrying the same surface in the 3.x fields."""
         import warnings as _w
 
         from diff_diff import CallawaySantAnna, generate_staggered_data
@@ -1443,15 +1472,20 @@ class TestSurveyVariance:
                 "unit",
                 "period",
                 "first_treat",
-                aggregate="event_study",
             )
             es = cs_result.aggregate("event_study")
-            native = _extract_event_study_params(cs_result)
+            standin = legacy_standin(cs_result)
+            native = _extract_event_study_params(standin)
             container = _extract_event_study_params(es)
-            h_native = HonestDiD(method="smoothness", M=0.0).fit(cs_result)
+            h_native = HonestDiD(method="smoothness", M=0.0).fit(standin)
             h_container = HonestDiD(method="smoothness", M=0.0).fit(es)
 
-        np.testing.assert_array_equal(native[1], cs_result.event_study_vcov)
+        # The fit itself stores no surface; the container's vcov is the
+        # bootstrap-draw covariance whose diagonal is se**2.
+        assert cs_result.event_study_vcov is None
+        in_vcov = np.isin(es.event_time, es.vcov_index)
+        np.testing.assert_allclose(np.diag(es.vcov), es.se[in_vcov] ** 2, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(native[1], standin.event_study_vcov)
         np.testing.assert_array_equal(container[0], native[0])
         np.testing.assert_allclose(container[1], native[1], rtol=1e-12, atol=0.0)
         np.testing.assert_allclose(h_container.original_se, h_native.original_se, rtol=1e-12)
@@ -1472,17 +1506,18 @@ class TestSurveyVariance:
         def fit(n_bootstrap):
             with _w.catch_warnings():
                 _w.simplefilter("ignore")
-                return CallawaySantAnna(
+                res = CallawaySantAnna(
                     n_bootstrap=n_bootstrap, seed=42, base_period="universal"
-                ).fit(data, "outcome", "unit", "period", "first_treat", aggregate="event_study")
+                ).fit(data, "outcome", "unit", "period", "first_treat")
+                return res, res.aggregate("event_study")
 
-        cs_result = fit(len(fit(49).event_study_vcov_index))
-        with _w.catch_warnings():
-            _w.simplefilter("ignore")
-            es = cs_result.aggregate("event_study")
-        assert cs_result.event_study_vcov is None and es.vcov is None
+        n_horizons = len(fit(49)[1].vcov_index)
+        cs_result, es = fit(n_horizons)
+        assert es.vcov is None and es.vcov_index is None
+        # Native (raw-field) route on the same surface: a stand-in with the
+        # dict but no vcov takes the diagonal fallback too.
         with pytest.warns(UserWarning, match="diagonal covariance"):
-            HonestDiD(method="relative_magnitude", M=1.0).fit(cs_result)
+            HonestDiD(method="relative_magnitude", M=1.0).fit(legacy_standin(cs_result))
         with pytest.warns(UserWarning, match="no full covariance"):
             HonestDiD(method="relative_magnitude", M=1.0).fit(es)
 
@@ -1503,15 +1538,16 @@ class TestSurveyVariance:
             _w.simplefilter("ignore")
             cs_result = CallawaySantAnna(
                 n_bootstrap=n_bootstrap, seed=1, base_period="universal", cluster="psu"
-            ).fit(data, "outcome", "unit", "period", "first_treat", aggregate="event_study")
+            ).fit(data, "outcome", "unit", "period", "first_treat")
             es = cs_result.aggregate("event_study")
-        vcov = cs_result.event_study_vcov
+            standin = legacy_standin(cs_result)
+        vcov = standin.event_study_vcov
         assert vcov is not None and vcov.shape[0] > 7
         # Precondition: both PSU-built matrices are genuinely rank-deficient.
         assert np.linalg.matrix_rank(vcov) < vcov.shape[0]
         assert np.linalg.matrix_rank(es.vcov) < es.vcov.shape[0]
         with pytest.raises(ValueError, match="singular"):
-            HonestDiD(method="relative_magnitude", M=1.0).fit(cs_result)
+            HonestDiD(method="relative_magnitude", M=1.0).fit(standin)
         with pytest.raises(ValueError, match="singular"):
             HonestDiD(method="relative_magnitude", M=1.0).fit(es)
 
