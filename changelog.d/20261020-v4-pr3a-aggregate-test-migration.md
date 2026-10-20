@@ -10,8 +10,9 @@
   adds the post-fit relay for them.
 - **Committed per-backend aggregation oracles.** `tests/test_aggregate_contract.py` no longer
   uses the fit-time route as its numerical reference: every analytic surface is pinned at
-  `rtol=1e-12` and every bootstrapped CS / EfficientDiD replay at the replay-parity
-  tolerances against `tests/fixtures/v4_aggregate_oracles.json`, captured on the unmodified
+  `rtol=1e-12` (confidence-interval bounds at `1e-9`: scipy's `t.ppf` moved by up to 3.4e-11
+  relative between 1.13 and 1.14+) and every bootstrapped CS / EfficientDiD replay at the
+  replay-parity tolerances against `tests/fixtures/v4_aggregate_oracles.json`, captured on the unmodified
   tree at `8724fecd` by `tests/_capture_v4_aggregate_oracles.py` under both weight backends
   (see `tests/fixtures/README.md`). New `tests/helpers/legacy_surface.py` (`es_dict`,
   `group_dict`, `legacy_standin`) gives consumer tests a faithful stand-in for the 3.x

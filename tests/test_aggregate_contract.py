@@ -57,6 +57,13 @@ from tests.conftest import assert_nan_inference
 #: Analytic surfaces: the kit recompute re-executes the fit-time arithmetic,
 #: so only BLAS summation-order noise separates it from the oracle.
 ANALYTIC_TOL = dict(rtol=1e-12, atol=1e-13)
+#: Confidence-interval bounds additionally cross scipy's ``t.ppf``: its
+#: quantile inverter moved between scipy 1.13 (the Python 3.9 CI leg) and
+#: 1.14+, shifting the two-sided critical value by up to 3.4e-11 relative for
+#: df in the 100-130 range (the survey arms), while ``t.sf`` (p-values) agrees
+#: to 1e-15. att/se/t_stat/p_value keep the arithmetic tolerance; CI bounds use
+#: at least this rtol.
+CI_RTOL = 1e-9
 #: Bootstrapped surfaces (replays + relays): the replayed weight stream is
 #: bit-identical and only GEMM tile reassociation differs (~1 ULP), with one
 #: order of headroom for quantile interpolation. p-values are COUNT statistics
@@ -105,6 +112,7 @@ def _assert_es_matches_oracle(es, orow, *, rtol, atol, p_atol=None, name=""):
     rows = orow["es"]
     assert rows is not None, f"{name}: oracle stored no event-study surface"
     p_atol = atol if p_atol is None else p_atol
+    ci_rtol = max(rtol, CI_RTOL)
     ref = np.asarray(es.is_reference, dtype=bool)
     labels = list(es.event_time)
     non_ref = {_oracle_key(e) for e, r in zip(labels, ref) if not r}
@@ -137,15 +145,19 @@ def _assert_es_matches_oracle(es, orow, *, rtol, atol, p_atol=None, name=""):
         _close(es.se[i], r["se"], rtol=rtol, atol=atol, what=f"{tag}.se")
         _close(es.t_stat[i], r["t_stat"], rtol=rtol, atol=atol, what=f"{tag}.t_stat")
         _close(es.p_value[i], r["p_value"], rtol=rtol, atol=p_atol, what=f"{tag}.p_value")
-        _close(es.conf_int_lower[i], r["ci_lo"], rtol=rtol, atol=atol, what=f"{tag}.ci_lo")
-        _close(es.conf_int_upper[i], r["ci_hi"], rtol=rtol, atol=atol, what=f"{tag}.ci_hi")
+        _close(es.conf_int_lower[i], r["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_lo")
+        _close(es.conf_int_upper[i], r["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_hi")
         for count_key in ("n_obs", "n_groups", "n_units"):
             if count_key in r:
                 _close(es.n[i], r[count_key], rtol=0, atol=0, what=f"{tag}.{count_key}")
         if "cband_lo" in r:
             assert es.cband_lower is not None and es.cband_upper is not None, tag
-            _close(es.cband_lower[i], r["cband_lo"], rtol=rtol, atol=atol, what=f"{tag}.cband_lo")
-            _close(es.cband_upper[i], r["cband_hi"], rtol=rtol, atol=atol, what=f"{tag}.cband_hi")
+            _close(
+                es.cband_lower[i], r["cband_lo"], rtol=ci_rtol, atol=atol, what=f"{tag}.cband_lo"
+            )
+            _close(
+                es.cband_upper[i], r["cband_hi"], rtol=ci_rtol, atol=atol, what=f"{tag}.cband_hi"
+            )
         compared += 1
     assert compared > 0, f"{name}: no non-reference event times compared"
     if orow.get("event_study_vcov") is not None:
@@ -180,6 +192,7 @@ def _assert_group_matches_oracle(agg, orow, *, rtol, atol, p_atol=None, name="")
     rows = orow["group"]
     assert rows is not None, f"{name}: oracle stored no group surface"
     p_atol = atol if p_atol is None else p_atol
+    ci_rtol = max(rtol, CI_RTOL)
     labels = list(agg.label)
     assert len(labels) == len(rows), f"{name}: group label set drifted: {labels} vs {sorted(rows)}"
     for i, g in enumerate(labels):
@@ -189,8 +202,8 @@ def _assert_group_matches_oracle(agg, orow, *, rtol, atol, p_atol=None, name="")
         _close(agg.se[i], r["se"], rtol=rtol, atol=atol, what=f"{tag}.se")
         _close(agg.t_stat[i], r["t_stat"], rtol=rtol, atol=atol, what=f"{tag}.t_stat")
         _close(agg.p_value[i], r["p_value"], rtol=rtol, atol=p_atol, what=f"{tag}.p_value")
-        _close(agg.conf_int_lower[i], r["ci_lo"], rtol=rtol, atol=atol, what=f"{tag}.ci_lo")
-        _close(agg.conf_int_upper[i], r["ci_hi"], rtol=rtol, atol=atol, what=f"{tag}.ci_hi")
+        _close(agg.conf_int_lower[i], r["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_lo")
+        _close(agg.conf_int_upper[i], r["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_hi")
         for count_key in ("n_obs", "n_groups", "n_units"):
             if count_key in r:
                 _close(agg.n[i], r[count_key], rtol=0, atol=0, what=f"{tag}.{count_key}")
@@ -214,8 +227,9 @@ def _assert_overall_matches_oracle(res, o, *, rtol, atol, p_atol=None, name=""):
     _close(res.overall_t_stat, o["t_stat"], rtol=rtol, atol=atol, what=f"{name}.overall_t")
     _close(res.overall_p_value, o["p_value"], rtol=rtol, atol=p_atol, what=f"{name}.overall_p")
     ci = res.overall_conf_int
-    _close(ci[0], o["ci_lo"], rtol=rtol, atol=atol, what=f"{name}.overall_ci_lo")
-    _close(ci[1], o["ci_hi"], rtol=rtol, atol=atol, what=f"{name}.overall_ci_hi")
+    ci_rtol = max(rtol, CI_RTOL)
+    _close(ci[0], o["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{name}.overall_ci_lo")
+    _close(ci[1], o["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{name}.overall_ci_hi")
 
 
 def _assert_simple_relays_stored_overall(res):
