@@ -7,26 +7,10 @@ when pretrends=True is set on the estimator.
 
 import numpy as np
 import pandas as pd
-import pytest
 from legacy_surface import es_dict
 
 from diff_diff.imputation import ImputationDiD
 from diff_diff.two_stage import TwoStageDiD
-
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed at the 4.0 cut) and
-# warns on ANY supplied value. Analytic sites read the post-fit
-# ``results.aggregate(...)`` container; the BOOTSTRAPPED sites below stay on the
-# fit-time route until the 4.0 relay lands (the post-fit route raises
-# NotImplementedError on a bootstrapped Imputation/TwoStage fit today). The shim
-# warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
 
 
 def generate_test_data(
@@ -546,12 +530,9 @@ class TestPretrends_Regressions:
             time="time",
             first_treat="first_treat",
             covariates=["x1"],
-            aggregate="event_study",
         )
 
-        negative = {
-            h: v for h, v in results.event_study_effects.items() if h < -1 and v["n_obs"] > 0
-        }
+        negative = {h: v for h, v in es_dict(results).items() if h < -1 and v["n_obs"] > 0}
         assert len(negative) > 0, "Should have pre-period horizons"
         for h, eff in negative.items():
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite with covariates"
@@ -572,7 +553,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # With bootstrap
@@ -582,15 +562,16 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        # Pre-period effects and SEs should be identical (bootstrap doesn't touch them)
-        for h in results_no_boot.event_study_effects:
-            if h >= 0 or results_no_boot.event_study_effects[h]["n_obs"] == 0:
+        # Pre-period effects and SEs should be identical (bootstrap doesn't
+        # touch them): the analytical recompute vs the relayed fit-time surface.
+        es_no_boot, es_boot = es_dict(results_no_boot), es_dict(results_boot)
+        for h in es_no_boot:
+            if h >= 0 or es_no_boot[h]["n_obs"] == 0:
                 continue
-            eff_nb = results_no_boot.event_study_effects[h]
-            eff_b = results_boot.event_study_effects[h]
+            eff_nb = es_no_boot[h]
+            eff_b = es_boot[h]
             np.testing.assert_allclose(
                 eff_nb["effect"],
                 eff_b["effect"],
@@ -692,7 +673,6 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         rng = np.random.default_rng(42)
@@ -704,14 +684,14 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        for h in results_default.event_study_effects:
-            if results_default.event_study_effects[h]["n_obs"] == 0:
+        es_default, es_perm = es_dict(results_default), es_dict(results_perm)
+        for h in es_default:
+            if es_default[h]["n_obs"] == 0:
                 continue
-            eff_d = results_default.event_study_effects[h]
-            eff_p = results_perm.event_study_effects[h]
+            eff_d = es_default[h]
+            eff_p = es_perm[h]
             np.testing.assert_allclose(
                 eff_d["effect"],
                 eff_p["effect"],
@@ -779,12 +759,9 @@ class TestPretrends_Regressions:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
-        negative = {
-            h: v for h, v in results.event_study_effects.items() if h < -1 and v["n_obs"] > 0
-        }
+        negative = {h: v for h, v in es_dict(results).items() if h < -1 and v["n_obs"] > 0}
         assert len(negative) > 0, "Should have pre-period horizons"
         for h, eff in negative.items():
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"

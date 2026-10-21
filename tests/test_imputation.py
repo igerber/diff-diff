@@ -16,21 +16,6 @@ from diff_diff.imputation import (
 )
 from diff_diff.survey import SurveyDesign
 
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
-
 # =============================================================================
 # Shared test data generation
 # =============================================================================
@@ -412,7 +397,7 @@ class TestImputationDiD:
         with pytest.raises(ValueError, match="Unknown level"):
             results.to_dataframe("invalid")
 
-        with pytest.raises(ValueError, match="Event study effects not computed"):
+        with pytest.raises(ValueError, match="Event study effects not stored on this fit"):
             results.to_dataframe("event_study")
 
     def test_get_params(self):
@@ -961,7 +946,8 @@ class TestImputationBootstrap:
         assert r1.overall_se != r2.overall_se
 
     def test_bootstrap_event_study(self, ci_params):
-        """Test bootstrap with event study aggregation."""
+        """A bootstrapped fit materializes the percentile event-study surface
+        at fit and ``aggregate('event_study')`` relays it."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
         est = ImputationDiD(n_bootstrap=n_boot, seed=42)
@@ -971,15 +957,23 @@ class TestImputationBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         br = results.bootstrap_results
         assert br.event_study_ses is not None
         assert len(br.event_study_ses) > 0
+        assert results.event_study_effects is not None
+        relayed = es_dict(results)
+        assert set(relayed) == set(results.event_study_effects)
+        for h, eff in results.event_study_effects.items():
+            if eff["n_obs"] == 0:
+                continue  # reference row: the container reports NaN inference
+            assert relayed[h]["effect"] == eff["effect"]
+            assert relayed[h]["se"] == eff["se"]
 
     def test_bootstrap_group(self, ci_params):
-        """Test bootstrap with group aggregation."""
+        """A bootstrapped fit materializes the percentile group surface at
+        fit and ``aggregate('group')`` relays it."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
         est = ImputationDiD(n_bootstrap=n_boot, seed=42)
@@ -989,62 +983,48 @@ class TestImputationBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         br = results.bootstrap_results
         assert br.group_ses is not None
         assert len(br.group_ses) == 3
+        assert results.group_effects is not None
+        relayed = group_dict(results)
+        assert set(relayed) == set(results.group_effects)
+        for g, eff in results.group_effects.items():
+            assert relayed[g]["effect"] == eff["effect"]
+            assert relayed[g]["se"] == eff["se"]
 
-    def test_bootstrap_balance_e_consistency(self, ci_params):
-        """Test bootstrap event study respects balance_e filtering."""
+    def test_bootstrap_balance_e_rejected_post_fit(self, ci_params):
+        """The fit-time percentile surface is computed with balance_e=None
+        and the per-target draws are not retained, so ``balance_e`` on a
+        bootstrapped fit is rejected post-fit (the unrestricted relay stays
+        available)."""
         data = generate_test_data(n_units=150, seed=42)
         n_boot = ci_params.bootstrap(50)
 
-        # Run WITH balance_e
-        est_bal = ImputationDiD(n_bootstrap=n_boot, seed=42)
-        results_bal = est_bal.fit(
+        est = ImputationDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
             data,
             outcome="outcome",
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
-            balance_e=2,
         )
 
-        # Run WITHOUT balance_e
-        est_nobal = ImputationDiD(n_bootstrap=n_boot, seed=42)
-        results_nobal = est_nobal.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-        )
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.event_study_ses is not None
 
-        assert results_bal.bootstrap_results is not None
-        assert results_bal.bootstrap_results.event_study_ses is not None
+        with pytest.raises(NotImplementedError, match="balance_e"):
+            results.aggregate("event_study", balance_e=2)
 
-        # Verify SEs are finite
-        for h in results_bal.event_study_effects:
-            eff = results_bal.event_study_effects[h]
-            if eff.get("n_obs", 0) > 0 and np.isfinite(eff["effect"]):
-                if h in results_bal.bootstrap_results.event_study_ses:
-                    assert np.isfinite(results_bal.bootstrap_results.event_study_ses[h])
-
-        # Verify balance_e changed bootstrap SEs at some horizon
-        if results_nobal.bootstrap_results is not None:
-            bal_ses = results_bal.bootstrap_results.event_study_ses
-            nobal_ses = results_nobal.bootstrap_results.event_study_ses
-            shared_h = set(bal_ses.keys()) & set(nobal_ses.keys())
-            any_different = any(
-                not np.isclose(bal_ses[h], nobal_ses[h], rtol=0.05)
-                for h in shared_h
-                if np.isfinite(bal_ses[h]) and np.isfinite(nobal_ses[h])
-            )
-            assert any_different, "balance_e should change bootstrap SEs for at least one horizon"
+        # The unrestricted relay still works and its SEs are the bootstrap SEs.
+        relayed = es_dict(results)
+        for h, eff in relayed.items():
+            if eff["n_obs"] > 0 and np.isfinite(eff["effect"]):
+                if h in results.bootstrap_results.event_study_ses:
+                    assert np.isfinite(results.bootstrap_results.event_study_ses[h])
+                    assert eff["se"] == results.bootstrap_results.event_study_ses[h]
 
     def test_bootstrap_p_value_significance(self, ci_params):
         """Test bootstrap p-value for significant effect."""
@@ -1159,7 +1139,6 @@ class TestImputationBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         br = results.bootstrap_results
@@ -1181,7 +1160,6 @@ class TestImputationBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         br = results.bootstrap_results
@@ -2365,8 +2343,17 @@ class TestImputationDiDVcovType:
 
     # ---- Surface 1: default bit-equal across aggregation modes ------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_default_hc1_bit_equal_baseline(self, aggregate):
+    @staticmethod
+    def _assert_levels_bit_equal(r_default, r_explicit):
+        """Post-fit event-study and group containers agree bit-for-bit."""
+        for level in ("event_study", "group"):
+            pd.testing.assert_frame_equal(
+                r_default.aggregate(level).to_dataframe(),
+                r_explicit.aggregate(level).to_dataframe(),
+                check_exact=True,
+            )
+
+    def test_default_hc1_bit_equal_baseline(self):
         data = generate_test_data(seed=53, n_units=80, n_periods=8)
         common = dict(
             data=data,
@@ -2374,17 +2361,16 @@ class TestImputationDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
+        self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 2: cluster path bit-equal --------------------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_cluster_hc1_bit_equal_baseline(self, aggregate):
+    def test_cluster_hc1_bit_equal_baseline(self):
         data = _imputation_clustered_panel()
         common = dict(
             data=data,
@@ -2392,17 +2378,16 @@ class TestImputationDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
         r_default = ImputationDiD(cluster="state").fit(**common)
         r_explicit = ImputationDiD(cluster="state", vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
+        self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 3: TSL-survey path bit-equal -----------------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_survey_tsl_hc1_bit_equal_baseline(self, aggregate):
+    def test_survey_tsl_hc1_bit_equal_baseline(self):
         data = _imputation_survey_panel()
         design = SurveyDesign(
             weights="weight",
@@ -2416,18 +2401,18 @@ class TestImputationDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
             survey_design=design,
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
+        self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 4: replicate-survey path bit-equal -----------------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_survey_replicate_hc1_bit_equal_baseline(self, aggregate):
+    @pytest.mark.parametrize("level", ["event_study", "group"])
+    def test_survey_replicate_hc1_bit_equal_baseline(self, level):
         data, rep_cols = _imputation_replicate_panel()
         design = SurveyDesign(
             weights="weight",
@@ -2442,32 +2427,36 @@ class TestImputationDiDVcovType:
             time="time",
             first_treat="first_treat",
             survey_design=design,
-            aggregate=aggregate,
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
         # Per-horizon / per-group SE override branches must also agree under
-        # the replicate-weight variance path.
-        if aggregate == "event_study":
-            assert r_default.event_study_effects is not None
-            assert r_explicit.event_study_effects is not None
-            for h in r_default.event_study_effects:
-                assert (
-                    r_default.event_study_effects[h]["se"]
-                    == r_explicit.event_study_effects[h]["se"]
-                )
-        if aggregate == "group":
-            assert r_default.group_effects is not None
-            assert r_explicit.group_effects is not None
-            for g in r_default.group_effects:
-                assert r_default.group_effects[g]["se"] == r_explicit.group_effects[g]["se"]
+        # the replicate-weight variance path (post-fit replicate replay).
+        a_default = r_default.aggregate(level)
+        a_explicit = r_explicit.aggregate(level)
+        assert len(a_default.se) > 0
+        assert np.array_equal(a_default.se, a_explicit.se, equal_nan=True)
+        assert np.array_equal(a_default.att, a_explicit.att, equal_nan=True)
 
     # ---- Surface 5: bootstrap × cluster / × survey bit-equal --------------
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_bootstrap_cluster_hc1_bit_equal(self, ci_params, aggregate):
+    @staticmethod
+    def _assert_bootstrap_surfaces_bit_equal(r_default, r_explicit):
+        """Per-horizon / per-group bootstrap SE override branches at
+        imputation_aggregation.py::_replicate_override_aggregates must agree
+        (bootstrapped fits always materialize both surfaces)."""
+        assert r_default.bootstrap_results.event_study_ses is not None
+        assert r_explicit.bootstrap_results.event_study_ses is not None
+        for h, se in r_default.bootstrap_results.event_study_ses.items():
+            assert se == r_explicit.bootstrap_results.event_study_ses[h]
+        assert r_default.bootstrap_results.group_ses is not None
+        assert r_explicit.bootstrap_results.group_ses is not None
+        for g, se in r_default.bootstrap_results.group_ses.items():
+            assert se == r_explicit.bootstrap_results.group_ses[g]
+
+    def test_bootstrap_cluster_hc1_bit_equal(self, ci_params):
         data = _imputation_clustered_panel()
         n_boot = ci_params.bootstrap(199)
         common = dict(
@@ -2476,7 +2465,6 @@ class TestImputationDiDVcovType:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate=aggregate,
         )
         r_default = ImputationDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
         r_explicit = ImputationDiD(
@@ -2488,21 +2476,9 @@ class TestImputationDiDVcovType:
             r_default.bootstrap_results.overall_att_se
             == r_explicit.bootstrap_results.overall_att_se
         )
-        # Per-horizon / per-group bootstrap SE override branches at
-        # imputation_aggregation.py::_replicate_override_aggregates must also agree.
-        if aggregate == "event_study":
-            assert r_default.bootstrap_results.event_study_ses is not None
-            assert r_explicit.bootstrap_results.event_study_ses is not None
-            for h, se in r_default.bootstrap_results.event_study_ses.items():
-                assert se == r_explicit.bootstrap_results.event_study_ses[h]
-        if aggregate == "group":
-            assert r_default.bootstrap_results.group_ses is not None
-            assert r_explicit.bootstrap_results.group_ses is not None
-            for g, se in r_default.bootstrap_results.group_ses.items():
-                assert se == r_explicit.bootstrap_results.group_ses[g]
+        self._assert_bootstrap_surfaces_bit_equal(r_default, r_explicit)
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group"])
-    def test_bootstrap_survey_hc1_bit_equal(self, ci_params, aggregate):
+    def test_bootstrap_survey_hc1_bit_equal(self, ci_params):
         data = _imputation_survey_panel()
         design = SurveyDesign(
             weights="weight",
@@ -2518,7 +2494,6 @@ class TestImputationDiDVcovType:
             time="time",
             first_treat="first_treat",
             survey_design=design,
-            aggregate=aggregate,
         )
         r_default = ImputationDiD(n_bootstrap=n_boot, seed=23).fit(**common)
         r_explicit = ImputationDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
@@ -2528,16 +2503,7 @@ class TestImputationDiDVcovType:
             r_default.bootstrap_results.overall_att_se
             == r_explicit.bootstrap_results.overall_att_se
         )
-        if aggregate == "event_study":
-            assert r_default.bootstrap_results.event_study_ses is not None
-            assert r_explicit.bootstrap_results.event_study_ses is not None
-            for h, se in r_default.bootstrap_results.event_study_ses.items():
-                assert se == r_explicit.bootstrap_results.event_study_ses[h]
-        if aggregate == "group":
-            assert r_default.bootstrap_results.group_ses is not None
-            assert r_explicit.bootstrap_results.group_ses is not None
-            for g, se in r_default.bootstrap_results.group_ses.items():
-                assert se == r_explicit.bootstrap_results.group_ses[g]
+        self._assert_bootstrap_surfaces_bit_equal(r_default, r_explicit)
 
     # ---- Surface 6: eager transactional validation (BaseEstimator) --------
 
@@ -3312,46 +3278,43 @@ class TestImputationDfConvention:
             assert e["conf_int"] == e0["conf_int"]
 
     def test_inert_config_warns_on_explicit_nondefault(self):
-        """M-127 REACHABILITY predicate (revised with the M-021 post-fit
-        migration): warn iff the per-lead inference is unreachable on every
-        route for this fit config — pretrends=False always warns;
-        pretrends=True analytical fits never warn (post-fit
-        results.aggregate('event_study') reaches the leads regardless of
-        the deprecated fit-time aggregate value); pretrends=True with
-        n_bootstrap>0 and aggregate unset warns (no ES surface is built
-        and post-fit aggregate() fails closed); pretrends=True with the
-        deprecated fit-time ES supplied never warns, bootstrap included
-        (fit-time leads use analytical inference)."""
+        """M-127 REACHABILITY predicate (4.0, fit-time aggregate= removed):
+        the per-lead inference is reachable iff ``pretrends and not
+        replicate`` - analytical fits recompute the leads in
+        results.aggregate('event_study'), bootstrapped fits materialize the
+        lead surface at fit and relay it; under a replicate-weight design
+        the post-fit route fails closed. So warn iff pretrends=False, or
+        pretrends=True with a replicate-weight design."""
         data = self._panel()
         base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         with pytest.warns(UserWarning, match="affects only the pretrends"):
             ImputationDiD(df_convention="cluster").fit(data, **base)
-        # pretrends=True + deprecated aggregate='group': the knob is NO
-        # LONGER inert (post-fit ES reaches the leads) — no inert-config
-        # warning (the FutureWarning from aggregate= is separate).
+        # pretrends=True, analytical: reachable post-fit -> no warning.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            ImputationDiD(pretrends=True, df_convention="cluster").fit(
-                data, aggregate="group", **base
-            )
+            ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **base)
         assert not any("affects only the pretrends" in str(w.message) for w in caught)
+        # pretrends=True + bootstrap: the lead surface is materialized at
+        # fit (analytical lead inference) and relayed -> no warning.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
-        assert not any("affects only the pretrends" in str(w.message) for w in caught)
-        # pretrends=True + bootstrap, aggregate unset: unreachable → warns.
-        with pytest.warns(UserWarning, match="affects only the pretrends"):
             ImputationDiD(pretrends=True, df_convention="cluster", n_bootstrap=9, seed=1).fit(
                 data, **base
             )
-        # pretrends=True + bootstrap + deprecated fit-time ES: reachable
-        # (analytical lead inference rides the fit-time surface) → no warn.
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            ImputationDiD(pretrends=True, df_convention="cluster", n_bootstrap=9, seed=1).fit(
-                data, aggregate="event_study", **base
-            )
         assert not any("affects only the pretrends" in str(w.message) for w in caught)
+        # pretrends=True + replicate-weight design: the post-fit lead route
+        # fails closed (no per-replicate lead refits) -> unreachable -> warns.
+        rep_data, rep_cols = _imputation_replicate_panel()
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        with pytest.warns(UserWarning, match="affects only the pretrends"):
+            ImputationDiD(pretrends=True, df_convention="cluster").fit(
+                rep_data, survey_design=design, **base
+            )
 
     def test_validation_and_transactional_set_params(self):
         with pytest.raises(ValueError, match="df_convention"):

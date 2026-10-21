@@ -307,7 +307,7 @@ serves a different purpose: R-parity accuracy). They complement it.
   ```
 - **Operation chain.** (1) ContinuousDiD fit - produces
   overall ATT, overall ACRT, and the dose-response curves
-  unconditionally (the fit-time `aggregate=` kwarg is deprecated, row
+  unconditionally (`fit()` takes no `aggregate=` kwarg since 4.0, row
   M-025); (2) extract
   `results.to_dataframe(level="dose_response")` and
   `level="group_time"`; (3) a second analytical ContinuousDiD fit followed by

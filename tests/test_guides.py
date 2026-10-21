@@ -297,9 +297,8 @@ def test_module_docstring_mentions_helper():
 # llms-full.txt — HeterogeneousAdoptionDiD coverage (Phase 5)
 # ---------------------------------------------------------------------------
 def _assert_no_fit_time_aggregation_lines(fit_block: str, label: str) -> None:
-    """4.0 (PR 3b): a documented fit() signature whose fit-time ``aggregate`` /
-    ``balance_e`` keywords were removed carries no such line - aggregation is
-    post-fit only there."""
+    """4.0 (PRs 3b/3c): no documented fit() signature carries a fit-time
+    ``aggregate`` / ``balance_e`` line - aggregation is post-fit only."""
     offending = [
         line
         for line in fit_block.splitlines()
@@ -1041,42 +1040,25 @@ class TestLLMsFullEfficientDiDShimLine:
         nxt = text.index("\n### ", start + 1)
         return text[start:nxt]
 
-    def _assert_shim_lines(self, section, fit_call, agg_row, bal_row=None):
-        """``bal_row=None`` skips the balance_e-line lookup - required for
-        estimators without a balance_e param (ContinuousDiD, M-025), where
-        the unconditional ``next(...)`` would raise StopIteration."""
-        fit_start = section.index(fit_call)
-        fit_block = section[fit_start : section.index("\n)", fit_start)]
-        agg_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
-        )
-        assert "NOT_SUPPLIED" in agg_line
-        assert f"DEPRECATED ({agg_row})" in agg_line
-        assert "results.aggregate()" in agg_line
-        if bal_row is not None:
-            bal_line = next(
-                line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
-            )
-            assert "NOT_SUPPLIED" in bal_line
-            assert f"DEPRECATED ({bal_row})" in bal_line
-
     def _assert_no_shim_lines(self, section, fit_call):
         fit_start = section.index(fit_call)
         fit_block = section[fit_start : section.index("\n)", fit_start)]
         _assert_no_fit_time_aggregation_lines(fit_block, fit_call)
         assert "NOT_SUPPLIED" not in fit_block
 
-    def test_llms_full_imputation_fit_aggregate_line_documents_shim(self):
-        # The M-021/M-118 twin of the EfficientDiD pin above - no other
-        # test covers the ImputationDiD signature block's shim comments.
-        self._assert_shim_lines(self._section("### ImputationDiD"), "imp.fit(", "M-021", "M-118")
+    def test_llms_full_imputation_fit_block_has_no_fit_time_aggregate(self):
+        # M-021 / M-118 (removed at 4.0, PR 3c): the M-021/M-118 twin of the
+        # EfficientDiD pin above - no other test covers the ImputationDiD
+        # signature block.
+        self._assert_no_shim_lines(self._section("### ImputationDiD"), "imp.fit(")
 
-    def test_llms_full_two_stage_fit_aggregate_line_documents_shim(self):
-        self._assert_shim_lines(self._section("### TwoStageDiD"), ".fit(", "M-022", "M-119")
+    def test_llms_full_two_stage_fit_block_has_no_fit_time_aggregate(self):
+        # M-022 / M-119 (removed at 4.0, PR 3c).
+        self._assert_no_shim_lines(self._section("### TwoStageDiD"), ".fit(")
 
-    def test_llms_full_continuous_fit_aggregate_line_documents_shim(self):
-        # M-025: no balance_e twin exists - bal_row stays None.
-        self._assert_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(", "M-025")
+    def test_llms_full_continuous_fit_block_has_no_fit_time_aggregate(self):
+        # M-025 (removed at 4.0, PR 3c; no balance_e twin exists).
+        self._assert_no_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(")
 
     def test_llms_full_had_fit_block_has_no_fit_time_aggregate(self):
         # M-027 (removed at 4.0, PR 3b): the mode selector is gone from the

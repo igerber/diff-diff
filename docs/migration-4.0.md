@@ -133,9 +133,10 @@ may still need a replacement call — see its `Fix` cell.
 
 **Dropped `fit()` parameters shift the positional slots after them.** Removing the fit-time
 `aggregate=`/`balance_e=` keywords moves every later positional parameter left: on
-`CallawaySantAnna` `survey_design` moves from slot 9 to 7; on `EfficientDiD` `survey_design`
-9 -> 7 and `store_eif` 10 -> 8; on `StackedDiD` (`aggregate` sat before them)
-`population`/`survey_design`/`covariates` move 7/8/9 -> 6/7/8; on `ChaisemartinDHaultfoeuille`
+`CallawaySantAnna`, `ImputationDiD` and `TwoStageDiD` `survey_design` moves from slot 9 to 7;
+on `EfficientDiD` `survey_design` 9 -> 7 and `store_eif` 10 -> 8; on `StackedDiD` (`aggregate`
+sat before them) `population`/`survey_design`/`covariates` move 7/8/9 -> 6/7/8; on
+`ContinuousDiD` `survey_design`/`covariates` move 8/9 -> 7/8; on `ChaisemartinDHaultfoeuille`
 `L_max`, `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`,
 `design2` and `survey_design` each move one slot left (7..14 -> 6..13). `HeterogeneousAdoptionDiD`
 and `did_had_pretest_workflow` shift nothing (everything after the removed slot is keyword-only;
@@ -167,18 +168,27 @@ surface (nothing to derive), and ChaisemartinDHaultfoeuille's pre-period
 checks read `placebo_event_study` directly.
 
 ```{warning}
-**Bootstrapped fits: CallawaySantAnna, DMLDiD, and EfficientDiD are covered; the remaining recompute adopters are not yet.**
-On `CallawaySantAnna`, `DMLDiD` (which inherits the CS replay channel), and `EfficientDiD`, the post-fit recompute levels now REPLAY the
+**Bootstrapped fits: every adopter has a post-fit route - two mechanisms.**
+On `CallawaySantAnna`, `DMLDiD` (which inherits the CS replay channel), and `EfficientDiD`, the post-fit recompute levels REPLAY the
 fit-time multiplier bootstrap from the fit-retained RNG state (percentile inference
-matching a fit-time aggregation to floating-point reassociation) — no fit-time keyword
-needed; only pre-replay legacy pickles and artifacts moved across the Rust/NumPy weight
-backend fail closed with a refit message. On `ImputationDiD`, `TwoStageDiD` and
-`ContinuousDiD`, the recompute levels still raise `NotImplementedError` when the fit used
-`n_bootstrap > 0` — keep the fit-time call there for now and track their open `TODO.md`
-rows.
-`aggregate("simple")` — and, on its five adopters, `aggregate("total")` (3.10; DMLDiD joined in 3.11 — panel non-survey fits only: RCS fits, declared-`survey_design=` fits, and bare-`cluster=` fits with incomplete treated support fail `total` closed) — does relay,
-and `StackedDiD`, `ChaisemartinDHaultfoeuille` and `HeterogeneousAdoptionDiD` are unaffected —
-their `aggregate()` is a pure view over stored fields.
+matching a fit-time aggregation to floating-point reassociation); only pre-replay legacy
+pickles and artifacts moved across the Rust/NumPy weight backend fail closed with a refit
+message. On `ImputationDiD`, `TwoStageDiD` and `ContinuousDiD` a fit with `n_bootstrap > 0`
+ALWAYS computes the event-study (and, on Imputation/TwoStage, group) percentile surface at fit
+and `aggregate('event_study')` / `aggregate('group')` RELAYS it - the same numbers the
+3.x `fit(aggregate="all")` route produced, with a NaN `df` column and no `vcov`. Two limits
+there: `balance_e=` is unavailable on those bootstrapped fits (`NotImplementedError` - the
+stored surface was computed unrestricted; re-fit with `n_bootstrap=0` for a balanced window),
+and a bootstrapped pickle written by 3.9-3.13 stores no surface (or, if it was fitted with
+`balance_e=`, a restricted one), so re-fit under 4.0 for the relayed surface. If the surface
+could not be materialized at fit, the fit warns once, the headline bootstrap is unchanged,
+and the relay raises with that reason.
+`aggregate("simple")` - and, on its five adopters, `aggregate("total")` (3.10; DMLDiD joined in 3.11 - panel non-survey fits only: RCS fits, declared-`survey_design=` fits, and bare-`cluster=` fits with incomplete treated support fail `total` closed) - relays on every adopter,
+and `StackedDiD`, `ChaisemartinDHaultfoeuille` and `HeterogeneousAdoptionDiD` are unaffected -
+their `aggregate()` is a pure view over stored fields. One residual delta on
+replicate-weight `ImputationDiD`/`TwoStageDiD` designs: the plain fit's replicate stack is
+`[overall]`-only, so on degenerate designs the OVERALL row's se/CI/df can differ from what a
+3.x `fit(aggregate=...)` call reported (each surface self-consistent).
 ```
 
 ## Results fields
@@ -387,16 +397,16 @@ does not mean no action is required, so read the `Fix` cell.
 | Row | Group | Old | New | Fix |
 |---|---|---|---|---|
 | M-020 | aggregate-postfit | `diff_diff:CallawaySantAnna.fit[aggregate]` | `diff_diff:CallawaySantAnnaResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
-| M-021 | aggregate-postfit | `diff_diff:ImputationDiD.fit[aggregate]` | `diff_diff:ImputationDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
-| M-022 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[aggregate]` | `diff_diff:TwoStageDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
+| M-021 | aggregate-postfit | `diff_diff:ImputationDiD.fit[aggregate]` | `diff_diff:ImputationDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits compute the surface at fit and `aggregate()` relays it - see the aggregation section. |
+| M-022 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[aggregate]` | `diff_diff:TwoStageDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits compute the surface at fit and `aggregate()` relays it - see the aggregation section. |
 | M-023 | aggregate-postfit | `diff_diff:EfficientDiD.fit[aggregate]` | `diff_diff:EfficientDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-024 | aggregate-postfit | `diff_diff:StackedDiD.fit[aggregate]` | `diff_diff:StackedDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. |
-| M-025 | aggregate-postfit | `diff_diff:ContinuousDiD.fit[aggregate]` | `diff_diff:ContinuousDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
+| M-025 | aggregate-postfit | `diff_diff:ContinuousDiD.fit[aggregate]` | `diff_diff:ContinuousDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits compute the surface at fit and `aggregate()` relays it - see the aggregation section. |
 | M-026 | aggregate-postfit | `diff_diff:ChaisemartinDHaultfoeuille.fit[aggregate]` | `diff_diff:ChaisemartinDHaultfoeuilleResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. |
 | M-027 | aggregate-postfit | `diff_diff:HeterogeneousAdoptionDiD.fit[aggregate]` | `diff_diff:HeterogeneousAdoptionDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. |
 | M-117 | aggregate-postfit | `diff_diff:CallawaySantAnna.fit[balance_e]` | `diff_diff:CallawaySantAnnaResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
-| M-118 | aggregate-postfit | `diff_diff:ImputationDiD.fit[balance_e]` | `diff_diff:ImputationDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
-| M-119 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[balance_e]` | `diff_diff:TwoStageDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
+| M-118 | aggregate-postfit | `diff_diff:ImputationDiD.fit[balance_e]` | `diff_diff:ImputationDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Unavailable on a bootstrapped fit (`NotImplementedError`; re-fit with `n_bootstrap=0`) - see the aggregation section. |
+| M-119 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[balance_e]` | `diff_diff:TwoStageDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Unavailable on a bootstrapped fit (`NotImplementedError`; re-fit with `n_bootstrap=0`) - see the aggregation section. |
 | M-120 | aggregate-postfit | `diff_diff:EfficientDiD.fit[balance_e]` | `diff_diff:EfficientDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-139 | aggregate-postfit | `diff_diff:did_had_pretest_workflow[aggregate]` | — | Remove `aggregate=`; the battery is inferred from panel shape - two periods select the overall battery, more than two select the event-study battery. It is not selected post-fit (`HADPretestReport.aggregate` is a metadata field, not a method). |
 | M-060 | alias-table | `EventStudy` | — | Import `TwoWayFixedEffects(...).fit(..., event_study=True)` - the alias is dropped, not retargeted instead of the `EventStudy` alias. |

@@ -266,15 +266,14 @@ def test_df_survey_bare_cluster_falls_back_to_df_inference():
 def surfaces():
     """Build every producer's surface once; return {label: (native, surface)}.
 
-    Producer routes as they stand after 4.0 PR 3b: the CallawaySantAnna and
-    EfficientDiD "native" sides are ``legacy_standin``s carrying
-    ``aggregate("event_study")`` in the 3.x fields (neither fit stores a
-    fit-time dict any more - the keyword is gone; the stand-in is the
-    legacy-pickle shape ``build_event_study_surface`` still accepts), while the
-    ImputationDiD, TwoStageDiD and ContinuousDiD producers still use the
-    deprecated fit-time ``aggregate=`` route, which populates the dict directly.
-    Those sites move to stand-ins / the post-fit relay when their fit-time
-    keywords are removed (4.0 PR 3c).
+    Since 4.0 no CallawaySantAnna / EfficientDiD fit, and no ANALYTIC
+    ImputationDiD / TwoStageDiD / ContinuousDiD fit, stores a fit-time
+    event-study dict, so for those producers the "native" side is a legacy
+    stand-in carrying ``aggregate("event_study")`` in the 3.x fields (the
+    legacy-pickle shape ``build_event_study_surface`` still accepts). The
+    BOOTSTRAPPED ImputationDiD / TwoStageDiD / ContinuousDiD fits populate the
+    dict themselves (the percentile surface the relay serves) and enter as
+    genuine native producers.
     """
     out = {}
 
@@ -316,7 +315,7 @@ def surfaces():
             time="period",
             first_treat="first_treat",
         )
-        assert cs.event_study_effects is None  # plain fit: not populated at fit
+        assert cs.event_study_effects is None  # 4.0: never populated at fit
         cs = legacy_standin(cs)
         out["CallawaySantAnna"] = (cs, build_event_study_surface(cs))
 
@@ -335,9 +334,22 @@ def surfaces():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        assert imp.event_study_effects is None  # analytic fit: no surface stored
+        imp = legacy_standin(imp)
         out["ImputationDiD"] = (imp, build_event_study_surface(imp))
+
+        # 3b. Bootstrapped ImputationDiD: a GENUINE native producer (the fit
+        # stores the percentile surface the relay serves).
+        imp_boot = ImputationDiD(n_bootstrap=49, seed=42).fit(
+            imp_data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert imp_boot.event_study_effects is not None
+        out["ImputationDiD_bootstrap"] = (imp_boot, build_event_study_surface(imp_boot))
 
         # 4. TwoStageDiD (same panel shape)
         ts = TwoStageDiD().fit(
@@ -346,9 +358,21 @@ def surfaces():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
+        assert ts.event_study_effects is None
+        ts = legacy_standin(ts)
         out["TwoStageDiD"] = (ts, build_event_study_surface(ts))
+
+        # 4b. Bootstrapped TwoStageDiD: genuine native producer.
+        ts_boot = TwoStageDiD(n_bootstrap=49, seed=42).fit(
+            imp_data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert ts_boot.event_study_effects is not None
+        out["TwoStageDiD_bootstrap"] = (ts_boot, build_event_study_surface(ts_boot))
 
         # 5. StackedDiD
         st_data = dgp_staggered(
@@ -392,14 +416,23 @@ def surfaces():
             n_units=200, n_periods=5, cohort_periods=[2, 4], seed=42, noise_sd=0.5
         )
         cd = ContinuousDiD(control_group="not_yet_treated", n_bootstrap=0).fit(
-            cd_data, "outcome", "unit", "period", "first_treat", "dose", aggregate="eventstudy"
+            cd_data, "outcome", "unit", "period", "first_treat", "dose"
         )
+        assert cd.event_study_effects is None
+        cd = legacy_standin(cd)
         out["ContinuousDiD"] = (cd, build_event_study_surface(cd))
+
+        # 7b. Bootstrapped ContinuousDiD: genuine native producer.
+        cd_boot = ContinuousDiD(control_group="not_yet_treated", n_bootstrap=49, seed=42).fit(
+            cd_data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        assert cd_boot.event_study_effects is not None
+        out["ContinuousDiD_bootstrap"] = (cd_boot, build_event_study_surface(cd_boot))
 
         # 8. EfficientDiD
         ed_data = _efficient_panel()
         ed = EfficientDiD().fit(ed_data, "y", "unit", "time", "first_treat")
-        assert ed.event_study_effects is None  # 4.0 (PR 3b): never populated at fit
+        assert ed.event_study_effects is None
         ed = legacy_standin(ed)
         out["EfficientDiD"] = (ed, build_event_study_surface(ed))
 
@@ -468,10 +501,13 @@ ALL_PRODUCERS = [
     "CallawaySantAnna",
     "SunAbraham",
     "ImputationDiD",
+    "ImputationDiD_bootstrap",
     "TwoStageDiD",
+    "TwoStageDiD_bootstrap",
     "StackedDiD",
     "SpilloverDiD",
     "ContinuousDiD",
+    "ContinuousDiD_bootstrap",
     "EfficientDiD",
     "WooldridgeDiD",
     "StaggeredTripleDifference",
@@ -1044,7 +1080,7 @@ def test_absent_surface_raises():
     from diff_diff.prep import generate_staggered_data as prep_staggered
 
     data = prep_staggered(n_units=60, n_periods=6, cohort_periods=[3], treatment_effect=2.0, seed=1)
-    # A plain CallawaySantAnna fit does not populate event_study_effects; the builder
+    # 4.0: no CallawaySantAnna fit populates event_study_effects; the builder
     # distinguishes that ABSENT surface (raise) from an empty one.
     cs = CallawaySantAnna(n_bootstrap=0).fit(
         data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
@@ -1321,6 +1357,19 @@ def test_two_stage_vcov_alignment(surfaces):
             np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
         else:
             assert np.isnan(diag[i])  # rank-guard NaN row == NaN marginal SE
+
+
+@pytest.mark.parametrize(
+    "label", ["ImputationDiD_bootstrap", "TwoStageDiD_bootstrap", "ContinuousDiD_bootstrap"]
+)
+def test_bootstrap_relay_native_surface_has_no_vcov(label, surfaces):
+    # The bootstrapped adopters store the percentile surface; its SEs are
+    # not the diagonal of any stored matrix, so the surface carries no vcov
+    # and the relay container is the same surface.
+    native, surface = surfaces[label]
+    assert surface.vcov is None and surface.vcov_index is None
+    relay = native.aggregate("event_study")
+    pd.testing.assert_frame_equal(relay.to_dataframe(), surface.to_dataframe())
 
 
 def test_two_stage_prop5_horizons_excluded_from_vcov_index():

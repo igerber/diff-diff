@@ -1,7 +1,7 @@
 """Post-fit aggregation surface (4.0 program Phase 2, spec section 6).
 
-``results.aggregate(type=...)`` replaces the fit-time ``fit(aggregate=)``
-argument (ledger rows M-020..M-027): estimate once, aggregate as a post-fit
+``results.aggregate(type=...)`` is the one aggregation surface - the fit-time
+``aggregate=`` keyword was removed at 4.0 (ledger rows M-020..M-027): estimate once, aggregate as a post-fit
 step - the ecosystem's strongest norm (``did::aggte``, ``etwfe::emfx``, Stata
 ``estat aggregation``).
 
@@ -70,6 +70,24 @@ AGGREGATION_SCHEMA: Tuple[str, ...] = (
     "weight",
     "df",
 )
+
+
+def absent_bootstrap_surface_message(cls_name: str, level: str) -> str:
+    """Shared ValueError text for a bootstrapped fit storing no relay surface.
+
+    Bootstrapped ImputationDiD / TwoStageDiD / ContinuousDiD fits materialize
+    their event-study (and group) surfaces at fit and ``aggregate()`` RELAYS
+    them (4.0 PR 3c). A fit WITH bootstrap inference but WITHOUT the stored
+    surface is either a pre-4.0 pickle (a bootstrapped plain fit built none)
+    or a fit whose fail-soft materialization dropped it; both raise this.
+    """
+    return (
+        f"This bootstrapped {cls_name} carries no stored {level} surface: either it "
+        "was fitted before 4.0 (a bootstrapped plain fit built none) or the surface "
+        "could not be materialized at fit (see the fit-time warning). Re-fit with "
+        "diff-diff >= 4.0 for the relayed surface, or with n_bootstrap=0 for the "
+        "analytical post-fit recompute."
+    )
 
 
 def resolve_inference_df(results: Any) -> Optional[float]:

@@ -109,7 +109,7 @@ def cs_fit():
     # methodology-critical reason (Rambachan-Roth bounds are not valid for
     # interpretation on consecutive-comparison pre-periods). See the
     # round-5 CI review on PR #318.
-    # Plain fit, no fit-time surface - DR derives the event study via
+    # 4.0: no fit-time surface - DR derives the event study via
     # results.aggregate("event_study") (the default route).
     cs = CallawaySantAnna(base_period="universal").fit(
         sdf,
@@ -401,7 +401,7 @@ class TestPrecomputed:
         fit, data = cs_fit
 
         # Precompute the power result from the same fit's event-study
-        # container (the consumer takes the post-fit container). The
+        # container (4.0: the consumer takes the post-fit container). The
         # compute function records ``covariance_source`` and populates
         # ``original_results`` on the output for DR's precomputed adapter.
         es = fit.aggregate("event_study")
@@ -3507,7 +3507,7 @@ def imp_pretrends_fits():
 
     ``pretrends=True`` is REQUIRED for estimated pre-period horizons to
     exist at all — under the default ``pretrends=False`` the derived
-    surface carries only the reference lead. A plain analytic fit
+    surface carries only the reference lead. Since 4.0 an analytic fit
     stores no surface, so the raw-field route is a legacy stand-in with the
     container's surface hand-set in the 3.x fields.
     """
@@ -4200,22 +4200,79 @@ class TestDerivedEventStudySurface:
             assert any("single-copy caveat" in w for w in d[check].get("warnings", []))
         assert sum("single-copy caveat" in w for w in d["warnings"]) == 1
 
-    def test_bootstrap_failure_heterogeneity_skips_with_context(self):
-        # Derived heterogeneity producers on a bootstrapped fit: the runner
-        # section fails closed with the derivation context and publishes no
-        # numeric heterogeneity fields.
-        from diff_diff import ImputationDiD
+    @staticmethod
+    def _bootstrapped_relay_fits():
+        from diff_diff import ImputationDiD, TwoStageDiD
 
         sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            imp = ImputationDiD(pretrends=True, n_bootstrap=19, seed=1).fit(
-                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
-            )
-        d = DiagnosticReport(imp).run_all().to_dict()
+            imp = ImputationDiD(pretrends=True, n_bootstrap=19, seed=1).fit(sdf, **kw)
+            ts = TwoStageDiD(pretrends=True, n_bootstrap=19, seed=1).fit(sdf, **kw)
+        return imp, ts
+
+    def test_bootstrap_relay_heterogeneity_runs_from_group_effects(self):
+        # 4.0: a bootstrapped plain ImputationDiD / TwoStageDiD fit STORES the
+        # percentile event-study AND group surfaces (aggregate() relays them),
+        # so DR heterogeneity RUNS - sourced from the stored ``group_effects``
+        # (``_collect_effect_scalars`` reads group_effects first) - and
+        # publishes numeric fields that match the relayed group container.
+        for res in self._bootstrapped_relay_fits():
+            assert res.bootstrap_results is not None
+            assert res.event_study_effects is not None
+            assert res.group_effects is not None
+            het = DiagnosticReport(res).run_all().to_dict()["heterogeneity"]
+            assert het["status"] == "ran", het
+            assert het["source"] == "group_effects"
+            grp = res.aggregate("group")
+            finite = grp.att[np.isfinite(grp.att)]
+            assert het["n_effects"] == finite.size > 0
+            np.testing.assert_allclose(het["mean"], float(np.mean(finite)), rtol=1e-12)
+            np.testing.assert_allclose(het["min"], float(np.min(finite)), rtol=1e-12)
+            np.testing.assert_allclose(het["max"], float(np.max(finite)), rtol=1e-12)
+            assert het["sign_consistent"] == bool(np.all(finite >= 0) or np.all(finite <= 0))
+
+    def test_bootstrap_relay_parallel_trends_runs_on_relayed_surface(self):
+        # The percentile event-study surface (pretrends=True leads) the
+        # bootstrapped fit STORES - and aggregate("event_study") relays -
+        # feeds DR's parallel-trends check: it RUNS. DR reads the stored raw
+        # field first, so this is the raw-field route (no derived-route
+        # provenance key), and the field equals the relayed container.
+        for res in self._bootstrapped_relay_fits():
+            es = res.aggregate("event_study")
+            assert es.vcov is None  # percentile surface: no covariance
+            assert ((es.event_time < -1) & np.isfinite(es.p_value)).any()
+            times = es.event_time.tolist()
+            for e, row in res.event_study_effects.items():
+                assert row["effect"] == es.att[times.index(e)]
+            pt = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+            assert pt["status"] == "ran", pt
+            assert "pre_period_source" not in pt
+            # No covariance -> the per-row Bonferroni path, never a joint Wald.
+            assert pt["method"] == "bonferroni"
+            assert np.isfinite(pt["joint_p_value"])
+            assert {p["period"] for p in pt["per_period"]} == {
+                int(e) for e, p in zip(es.event_time, es.p_value) if e < -1 and np.isfinite(p)
+            }
+
+    def test_bootstrap_absent_surface_heterogeneity_skips_with_context(self):
+        # A bootstrapped fit WITHOUT the stored surfaces (a pre-4.0 pickle,
+        # or a fit whose fail-soft materialization dropped them) fails
+        # closed: BOTH raw fields cleared (the collector reads group_effects
+        # first), the derivation hits the relay's absent-surface ValueError,
+        # and the section publishes the context and no numeric fields.
+        import dataclasses
+
+        imp, _ = self._bootstrapped_relay_fits()
+        stripped = dataclasses.replace(imp, event_study_effects=None, group_effects=None)
+        with pytest.raises(ValueError, match="no stored event_study surface"):
+            stripped.aggregate("event_study")
+        d = DiagnosticReport(stripped).run_all().to_dict()
         het = d["heterogeneity"]
         assert het["status"] == "skipped"
         assert "aggregate('event_study')" in het["reason"]
-        assert "NotImplementedError" in het["reason"]
+        assert "ValueError" in het["reason"]
+        assert "no stored event_study surface" in het["reason"]
         assert "n_effects" not in het
         assert "mean" not in het

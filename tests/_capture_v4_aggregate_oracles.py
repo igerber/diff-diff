@@ -1,9 +1,9 @@
 """Capture the pre-removal aggregation oracles for tests/test_aggregate_contract.py.
 
-HISTORICAL since the 4.0 cut (PR 3b): this script drives the REMOVED fit-time
-``aggregate=`` / ``balance_e=`` route on CallawaySantAnna / EfficientDiD / StackedDiD
-/ dCDH / HAD (and imports the contract module's retired ``_boot_fit_time`` /
-``_efficient_boot_fit_time`` helpers), so it is runnable only at the recorded
+HISTORICAL since the 4.0 cut (PR 3b, completed by PR 3c): this script drives the
+REMOVED fit-time ``aggregate=`` / ``balance_e=`` route on every adopter (and imports
+the contract module's retired ``_boot_fit_time`` / ``_efficient_boot_fit_time``
+helpers), so it is runnable only at the recorded
 ``provenance.captured_at_head`` of ``tests/fixtures/v4_aggregate_oracles.json``
 (``8724fecd``, whose ``diff_diff/`` is byte-identical to the capture tree) - the
 same convention as ``tests/_capture_v4_merge_ddd_oracles.py``. It is kept as the

@@ -12,14 +12,15 @@ Design principles:
   not a traffic-light enum. See ``docs/methodology/REPORTING.md``.
 - No estimator fitting. Every effect, SE, p-value, CI, and sensitivity
   bound is either read from ``results``, derived from the result's own
-  post-fit ``aggregate('event_study')`` surface (a view or retained-kit
-  recompute — for ImputationDiD a panel-backed recompute, for TwoStageDiD
-  a fresh Stage-2 OLS + GMM sandwich over the retained frame; used only
-  when the raw ``event_study_effects`` field is absent, and failing
-  closed to an explicit skip on kit-less/legacy-pickle fits, the sibling
-  estimators' bootstrap gates, and backend-mismatched CS bootstrap
-  replays — bootstrapped CS fits themselves derive successfully via the
-  percentile-bootstrap replay), or
+  post-fit ``aggregate('event_study')`` surface (a view, a retained-kit
+  recompute, or a relay of the surface a bootstrapped fit materialized -
+  for analytical ImputationDiD a panel-backed recompute, for analytical
+  TwoStageDiD a fresh Stage-2 OLS + GMM sandwich over the retained frame,
+  for every CallawaySantAnna / EfficientDiD fit the kit recompute or the
+  percentile-bootstrap replay; used only when the raw
+  ``event_study_effects`` field is absent, and failing closed to an
+  explicit skip on kit-less/legacy-pickle fits, fail-soft-cleared
+  bootstrapped surfaces, and backend-mismatched CS bootstrap replays), or
   produced by an existing diff-diff utility. May call
   ``check_parallel_trends`` / ``BaconDecomposition`` /
   ``EfficientDiD.hausman_pretest`` when the caller supplies the panel +
@@ -806,12 +807,14 @@ class DiagnosticReport:
           authoritative).
 
         The raw ``event_study_effects`` field always takes precedence when it
-        is not ``None`` — including the requested-but-empty ``{}`` sentinel,
-        which encodes fit-time configuration (e.g. an ImputationDiD
-        ``balance_e=`` that emptied the window) that a re-derivation without
-        those settings would silently overturn. Derivation failures
-        (bootstrapped fits, missing kits) are cached as skip reasons, never
-        raised; warnings emitted by a kit recompute are captured into
+        is not ``None`` — including the materialized-but-empty ``{}``
+        sentinel. Since 4.0 the raw field is populated only by producers
+        that materialize the surface at fit (StackedDiD, SunAbraham,
+        bootstrapped ImputationDiD / TwoStageDiD / ContinuousDiD - always
+        with ``balance_e=None``), so an empty dict records that the fit
+        itself found no estimable horizon, which a re-derivation would
+        silently overturn. Derivation failures (missing kits, cleared
+        bootstrapped surfaces) are cached as skip reasons, never raised; warnings emitted by a kit recompute are captured into
         ``self._derived_es_warnings`` and re-published by the consuming
         runners (record-and-republish, mirroring the sensitivity helper).
         """
@@ -827,9 +830,8 @@ class DiagnosticReport:
         why: Optional[str] = None
         if getattr(r, "event_study_effects", None) is not None:
             # Raw precedence, ``is not None`` deliberately: ``{}`` is the
-            # REQUESTED-but-no-estimable-horizons sentinel and must never be
-            # silently re-derived (the fit-time balance_e/aggregate settings
-            # behind it are not retained for replay).
+            # materialized-but-no-estimable-horizons sentinel (a fit-time
+            # producer found nothing) and must never be silently re-derived.
             pass
         elif name == "WooldridgeDiDResults":
             # Its bespoke aggregate() MUTATES the results object in place;
@@ -889,11 +891,12 @@ class DiagnosticReport:
                         surface = candidate
                         surface_dict = _surface_to_event_study_dict(candidate)
             except Exception as exc:  # noqa: BLE001 — fail-soft by design:
-                # expected failures are NotImplementedError (the sibling
-                # estimators' bootstrap gates, pretrends+replicate, CS
-                # legacy-pickle/backend-mismatch replay refusals — a
-                # bootstrapped CS fit itself now derives via the replay)
-                # and ValueError (missing kit),
+                # expected failures are NotImplementedError
+                # (pretrends+replicate, CS legacy-pickle/backend-mismatch
+                # replay refusals — a bootstrapped CS fit itself derives via
+                # the replay) and ValueError (missing kit; a bootstrapped
+                # Imputation/TwoStage/Continuous fit whose fail-soft
+                # materialization left no surface to relay),
                 # but the surface builder can raise bare TypeError and this
                 # resolver runs on the applicable_checks path with no outer
                 # guard; an escaped exception would hard-fail the report.
@@ -994,9 +997,9 @@ class DiagnosticReport:
                 if not pre_coefs and n_dropped_undefined == 0:
                     # SpilloverDiD's event-study switch is the
                     # ``SpilloverDiD(..., event_study=True)`` constructor
-                    # kwarg, not the ``aggregate='event_study'`` argument
-                    # the generic staggered-estimator message points at
-                    # (SpilloverDiD has no ``aggregate`` kwarg). Emit an
+                    # kwarg, not the post-fit ``aggregate('event_study')``
+                    # route the generic staggered-estimator message points
+                    # at (SpilloverDiD has no post-fit aggregation). Emit an
                     # estimator-accurate remediation for this family.
                     if name == "SpilloverDiDResults":
                         return (

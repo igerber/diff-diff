@@ -484,8 +484,7 @@ Aggregate treatment effects may mask important variation.
 ### For CallawaySantAnna, EfficientDiD, ImputationDiD, TwoStageDiD (post-fit `aggregate()`)
 ```python
 # Post-fit, no refit needed (the fit-time aggregate= / balance_e= keywords
-# were removed at 4.0 on CS/StackedDiD/EfficientDiD and remain deprecated on
-# ImputationDiD/TwoStageDiD until their removal):
+# were removed at 4.0 on CS/StackedDiD/EfficientDiD/ImputationDiD/TwoStageDiD):
 results = cs.fit(data, ...)
 print(results.overall_att)                              # Overall ATT
 print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
@@ -497,23 +496,25 @@ print(results.aggregate('event_study', balance_e=2).to_dataframe())
 print(results.aggregate('total').to_dataframe())
 # BOOTSTRAPPED fits: the CS, DMLDiD, and EfficientDiD recompute levels
 # (event_study/group) REPLAY the fit-time multiplier bootstrap post-fit
-# (percentile inference; no refit needed) — but they still RAISE on
-# ImputationDiD/TwoStageDiD, where aggregate('simple') and, where
-# supported, aggregate('total') relay the stored bootstrap inference and
-# the deprecated fit-time aggregation remains the ES/group route:
-results = imp.fit(data, ..., aggregate='all')  # ImputationDiD/TwoStageDiD only
+# (percentile inference; no refit needed). ImputationDiD/TwoStageDiD compute
+# the percentile ES/group surfaces AT FIT when n_bootstrap > 0 and
+# aggregate('event_study') / aggregate('group') RELAY them (balance_e= is
+# unavailable there - re-fit with n_bootstrap=0 for a balanced window);
+# aggregate('simple') / aggregate('total') relay the stored inference:
+results = imp.fit(data, ...)                            # ImputationDiD(n_bootstrap=199)
+print(results.aggregate('event_study').to_dataframe())  # relayed percentile surface
 ```
 
 ### For ContinuousDiD (MIXED post-fit `aggregate()`, row M-025)
 ```python
 # Dose-response curves + overall ATT/ACRT are ALWAYS computed by fit();
 # 'dose' and 'simple' are views that work on ANY fit (bootstrapped too):
-results = cdid.fit(data, ...)          # no aggregate= kwarg (deprecated)
+results = cdid.fit(data, ...)          # no aggregate= kwarg (removed at 4.0)
 print(results.aggregate('dose').to_dataframe())    # ATT(d) + ACRT(d) rows
 print(results.aggregate('simple').to_dataframe())  # att + acrt overall rows
-# The binarized event study RECOMPUTES from the retained kit - analytical
-# fits only (a bootstrapped fit raises; re-fit with n_bootstrap=0 or use
-# the deprecated fit-time aggregate='eventstudy' until 4.0):
+# The binarized event study RECOMPUTES from the retained kit on analytical
+# fits; a bootstrapped fit (n_bootstrap > 0) computes the percentile event
+# study at fit and aggregate('event_study') relays it (4.0):
 print(results.aggregate('event_study').to_dataframe())
 ```
 

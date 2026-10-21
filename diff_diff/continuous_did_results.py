@@ -12,7 +12,11 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.aggregation import (
+    AggregationMixin,
+    AggregationResult,
+    absent_bootstrap_surface_message,
+)
 from diff_diff.continuous_did_aggregation import _ContinuousDiDAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import (
@@ -192,8 +196,8 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     # 'simple'/'dose' are views.
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
     # Scalar survey df governing the event-study rows' t-inference. None on
-    # non-survey fits, on bootstrapped fits (percentile inference; the ES
-    # recompute also fails closed there), when no event-study surface was
+    # non-survey fits, on bootstrapped fits (percentile inference; the
+    # relayed surface carries no df), when no event-study surface was
     # built, and for the replicate-undefined 0 sentinel. Appended last per
     # the positional-__init__ convention above.
     event_study_df: Optional[float] = None
@@ -503,12 +507,12 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed. Call "
+                    "Event study effects not stored (only bootstrapped fits "
+                    "materialize the surface at fit). Call "
                     "results.aggregate('event_study') for the unified "
-                    "post-fit container (on a bootstrapped fit, re-fit "
-                    "with n_bootstrap=0 or use the deprecated fit-time "
-                    "aggregate='eventstudy'); a result unpickled from an "
-                    "older release must be re-fit with diff-diff >= 3.9."
+                    "post-fit container - analytic fits recompute it from "
+                    "the retained kit; a result unpickled from an older "
+                    "release must be re-fit with diff-diff >= 3.9."
                 )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
@@ -544,9 +548,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     # MIXED architecture: 'simple' and 'dose' are pure VIEWS over stored
     # public fields (the dCDH precedent - nothing recomputed, so they
     # work on ANY fit including bootstrap fits and legacy pickles,
-    # relaying the stored inference verbatim); 'event_study' is a KIT
-    # RECOMPUTE (the EfficientDiD class) from the pruned per-cell IF
-    # payload, failing closed on bootstrap fits.
+    # relaying the stored inference verbatim); 'event_study' is a HYBRID:
+    # a KIT RECOMPUTE (the EfficientDiD class) from the pruned per-cell IF
+    # payload on analytic fits, and a RELAY of the percentile surface
+    # fit() materialized on bootstrapped fits (the kit is scalars-only
+    # there; balance_e is rejected by the mixin for this producer).
     # ------------------------------------------------------------------
 
     def _stored_inference_df(self) -> float:
@@ -675,16 +681,27 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
             )
         bk = kit.bookkeeping
         if bk["n_bootstrap"] > 0:
-            raise NotImplementedError(
-                "aggregate('event_study') on a bootstrapped ContinuousDiD "
-                "fit is not implemented - the fit-time event study used "
-                "multiplier-bootstrap inference whose per-cell draws are "
-                "not retained, and an analytical recompute would silently "
-                "differ. Until 4.0 the deprecated fit-time "
-                "aggregate='eventstudy' still computes the bootstrap "
-                "surface, or re-fit with n_bootstrap=0 for the analytical "
-                "post-fit route."
+            # 4.0 PR 3c: the kit is scalars-only on every bootstrapped fit
+            # (no recompute is possible), so RELAY the percentile surface
+            # fit() materialized, with kit-snapshot provenance. Gate on the
+            # KIT scalar, not the mutable public field (no new kit key: a
+            # 3.9-3.13 pickle must not KeyError). A bootstrapped fit storing
+            # no surface (pre-4.0 pickle, fail-soft drop, or the
+            # no-post-cells fit whose bootstrap never ran) raises.
+            if self.event_study_effects is None:
+                raise ValueError(
+                    absent_bootstrap_surface_message(type(self).__name__, "event_study")
+                )
+            meta_b = bk["survey_metadata"]
+            carrier_b = dataclasses.replace(
+                self,
+                survey_metadata=(dataclasses.replace(meta_b) if meta_b is not None else None),
+                alpha=kit.alpha,
+                anticipation=kit.anticipation,
+                base_period=bk["base_period"],
+                event_study_df=None,  # percentile inference governs no df
             )
+            return build_event_study_surface(carrier_b)
         host = _ContinuousKitAggregator(alpha=kit.alpha)
         es = host._aggregate_event_study(
             bk["gt_summary"],

@@ -451,7 +451,7 @@ class TestImputationVarianceFactorizationCache:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 res = ImputationDiD(n_bootstrap=50, seed=99).fit(
-                    panel, **base, covariates=["x1", "x2"], aggregate="all"
+                    panel, **base, covariates=["x1", "x2"]
                 )
         finally:
             _Cls._build_untreated_projection = orig  # type: ignore[method-assign]
@@ -852,38 +852,38 @@ class TestB2024AppendixA9LeaveOneOut:
         assert n_finite > 0
 
     def test_loo_aggregate_all_analytical(self):
-        """aggregate="all": LOO routes through the event-study AND group
-        aggregators (not just overall). ATT unchanged vs non-LOO, overall LOO SE
-        >= non-LOO, and both aggregation surfaces have consistent finite inference."""
+        """LOO routes through the post-fit event-study AND group aggregators
+        (not just overall). ATT unchanged vs non-LOO, overall LOO SE >= non-LOO,
+        and both aggregation surfaces have consistent finite inference."""
         rng = np.random.default_rng(_BASE_SEED_EQ8 + 19)
         panel = _make_staggered_panel(
             rng, cohorts=[3, 4], n_per_cohort=40, n_periods=6, tau_constant=1.0
         )
-        r0 = ImputationDiD(leave_one_out=False).fit(panel, aggregate="all", **self._COMMON)
-        r1 = ImputationDiD(leave_one_out=True).fit(panel, aggregate="all", **self._COMMON)
+        r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
+        r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
         np.testing.assert_allclose(r1.overall_att, r0.overall_att, rtol=0, atol=1e-12)
         assert r1.overall_se > r0.overall_se
-        self._assert_inference_consistent(r1.event_study_effects)
-        self._assert_inference_consistent(r1.group_effects)
+        self._assert_inference_consistent(es_dict(r1))
+        self._assert_inference_consistent(group_dict(r1))
 
     def test_loo_aggregate_all_bootstrap(self):
-        """aggregate="all" under the multiplier bootstrap: event-study and group
-        inference fields are populated and consistent."""
+        """Under the multiplier bootstrap the event-study and group surfaces
+        are materialized at fit: populated, consistent, and relayed post-fit."""
         rng = np.random.default_rng(_BASE_SEED_EQ8 + 20)
         panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=30, n_periods=6)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = ImputationDiD(leave_one_out=True, n_bootstrap=99, seed=3).fit(
-                panel, aggregate="all", **self._COMMON
-            )
+            r = ImputationDiD(leave_one_out=True, n_bootstrap=99, seed=3).fit(panel, **self._COMMON)
         assert np.isfinite(r.overall_se)
         self._assert_inference_consistent(r.event_study_effects)
         self._assert_inference_consistent(r.group_effects)
+        self._assert_inference_consistent(es_dict(r))
+        self._assert_inference_consistent(group_dict(r))
 
     def test_loo_aggregate_all_analytical_survey(self):
-        """aggregate="all" with an analytical survey design (weights + PSU): the
-        LOO rescale composes through the survey TSL variance with consistent
-        inference on every surface."""
+        """Analytical survey design (weights + PSU): the LOO rescale composes
+        through the survey TSL variance with consistent inference on every
+        post-fit surface."""
         from diff_diff.survey import SurveyDesign
 
         rng = np.random.default_rng(_BASE_SEED_EQ8 + 21)

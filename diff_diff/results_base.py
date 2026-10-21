@@ -774,12 +774,14 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     # Post-fit only by design (no fit-time surface ever exists).
     "DMLDiDResults": "call results.aggregate('event_study')",
     "ImputationDiDResults": (
-        "call results.aggregate('event_study') (on a bootstrapped fit, "
-        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+        "call results.aggregate('event_study') (a bootstrapped fit from before "
+        "4.0 stores no surface - re-fit with diff-diff >= 4.0, which computes "
+        "it at fit)"
     ),
     "TwoStageDiDResults": (
-        "call results.aggregate('event_study') (on a bootstrapped fit, "
-        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+        "call results.aggregate('event_study') (a bootstrapped fit from before "
+        "4.0 stores no surface - re-fit with diff-diff >= 4.0, which computes "
+        "it at fit)"
     ),
     # Absence only possible on pre-3.9 pickles: 3.9+ fits always
     # materialize the surface (row M-024).
@@ -787,8 +789,9 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
     "EfficientDiDResults": "call results.aggregate('event_study')",
     "ContinuousDiDResults": (
-        "call results.aggregate('event_study') (on a bootstrapped fit, "
-        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+        "call results.aggregate('event_study') (a bootstrapped fit from before "
+        "4.0 stores no surface - re-fit with diff-diff >= 4.0, which computes "
+        "it at fit)"
     ),
     "WooldridgeDiDResults": "call results.aggregate('event_study') first",
     "SpilloverDiDResults": "refit with event_study=True",
