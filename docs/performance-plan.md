@@ -835,11 +835,12 @@ These are developer-ergonomics / API-consistency smells surfaced during
 scenario development. None are silent-failures and none belong in this PR
 or in the silent-failures audit; logging here for awareness.
 
-1. **`aggregate` / `level` parameter naming is inconsistent.** CS accepts
-   `aggregate="event_study"`; ContinuousDiD historically required
+1. **`aggregate` / `level` parameter naming was inconsistent (historical; resolved at
+   4.0).** CS accepted `aggregate="event_study"` on `fit()`; ContinuousDiD required
    `aggregate="eventstudy"` on `fit()` **but** `level="event_study"` on
    `to_dataframe()`. Two different spellings within one estimator plus a
-   third cross-estimator spelling. Surfaced when the P1 exit-propagation
+   third cross-estimator spelling. Both fit-time keywords were removed at 4.0 (PRs 3b/3c);
+   `results.aggregate("event_study")` is the single post-fit spelling. Surfaced when the P1 exit-propagation
    fix stopped silently swallowing the resulting `ValueError` in the
    dose-response benchmark. RESOLVED by row M-025: the fit-time kwarg is
    deprecated (removed in 4.0, its `"eventstudy"` spelling with it) and

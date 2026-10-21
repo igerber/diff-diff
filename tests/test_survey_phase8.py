@@ -12,21 +12,6 @@ from diff_diff.survey import (
 )
 
 # ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -1311,11 +1296,11 @@ class TestImputationPretrendsSurvey:
             first_treat="first_treat",
             covariates=["x1"],
             survey_design=sd,
-            aggregate="event_study",
         )
-        pre = [h for h in result.event_study_effects if h < -1]
-        for h in pre:
-            assert np.isfinite(result.event_study_effects[h]["se"])
+        es = result.aggregate("event_study")
+        pre = es.event_time < -1
+        assert pre.any()
+        assert np.all(np.isfinite(es.se[pre]))
 
     def test_pretrends_survey_with_bootstrap(self, staggered_data):
         """Survey pretrends + bootstrap: bootstrap doesn't overwrite pre-period SEs."""
@@ -1331,12 +1316,19 @@ class TestImputationPretrendsSurvey:
             time="time",
             first_treat="first_treat",
             survey_design=sd,
-            aggregate="event_study",
         )
+        # Bootstrapped fits materialize the surface at fit time.
+        assert result.event_study_effects is not None
         pre = [h for h in result.event_study_effects if h < -1]
+        assert pre
         for h in pre:
             # Pre-period SEs come from lead regression, not bootstrap
             assert np.isfinite(result.event_study_effects[h]["se"])
+        # The relay reproduces the stored surface.
+        es = result.aggregate("event_study")
+        for h in pre:
+            i = list(es.event_time).index(h)
+            assert es.se[i] == result.event_study_effects[h]["se"]
 
     def test_pretrends_survey_always_treated_psu(self):
         """Survey pretrends with a PSU/stratum that has no untreated obs."""

@@ -15,21 +15,6 @@ from diff_diff.two_stage import (
     TwoStageDiDResults,
 )
 
-# ---------------------------------------------------------------------------
-# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
-# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
-# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
-# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
-# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
-# the post-fit ``results.aggregate(...)`` container route does not reproduce
-# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
-# these two estimators only - every other FutureWarning (including the other
-# estimators' aggregate() shims) still surfaces.
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
-)
-
 # =============================================================================
 # Shared test data generation
 # =============================================================================
@@ -310,13 +295,14 @@ class TestTwoStageDiDBasic:
             results.to_dataframe("invalid")
 
     def test_to_dataframe_no_event_study(self):
-        """Test to_dataframe raises when event study not computed."""
+        """to_dataframe raises on an analytic fit (no fit-time event-study
+        surface) and steers to the post-fit aggregate() route."""
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        with pytest.raises(ValueError, match="Event study effects not computed"):
+        with pytest.raises(ValueError, match="not stored on this fit"):
             results.to_dataframe("event_study")
 
     def test_repr(self):
@@ -1306,13 +1292,19 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         assert results.bootstrap_results is not None
         assert results.bootstrap_results.event_study_ses is not None
         for h, se in results.bootstrap_results.event_study_ses.items():
             assert se > 0
+        # Bootstrapped fits materialize the percentile surface at fit time and
+        # aggregate() relays it.
+        assert results.event_study_effects is not None
+        es = results.aggregate("event_study")
+        for h, se in zip(es.event_time, es.se):
+            if h in results.bootstrap_results.event_study_ses:
+                assert se == results.event_study_effects[h]["se"]
 
     def test_bootstrap_weights_mammen(self, ci_params):
         """Bootstrap with mammen weights should produce valid results."""
@@ -1352,7 +1344,6 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         br = results.bootstrap_results
@@ -1373,7 +1364,6 @@ class TestTwoStageDiDBootstrap:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="group",
         )
 
         br = results.bootstrap_results
@@ -1790,9 +1780,10 @@ class TestTwoStageStage2BreadWarning:
                     unit="unit",
                     time="time",
                     first_treat="first_treat",
-                    aggregate="all",
                 )
+        # Bootstrapped fits materialize the percentile surface at fit time.
         es = res.event_study_effects
+        assert es is not None
         nan_h = [h for h, e in es.items() if np.isnan(e["se"])]
         fin_h = [h for h, e in es.items() if np.isfinite(e["se"]) and e["se"] > 0]
         assert nan_h, (
@@ -2216,23 +2207,45 @@ def _fit_ts(est, data, **kw):
 
 
 def _assert_results_bit_equal(r0, r1):
-    """Assert two TwoStageDiDResults are numerically identical (NaN-aware)."""
+    """Assert two TwoStageDiDResults are numerically identical (NaN-aware).
+
+    Bootstrapped fits materialize the percentile ``event_study_effects`` /
+    ``group_effects`` at fit time, so those legacy fields are compared
+    directly; analytic fits store no fit-time surface, so the post-fit
+    ``aggregate()`` containers are compared instead.
+    """
 
     def _eq(a, b):
         return a == b or (np.isnan(a) and np.isnan(b))
 
     assert _eq(r0.overall_att, r1.overall_att)
     assert _eq(r0.overall_se, r1.overall_se)
+    assert (r0.bootstrap_results is None) == (r1.bootstrap_results is None)
+    if r0.bootstrap_results is not None:
+        for attr in ("event_study_effects", "group_effects"):
+            e0 = getattr(r0, attr)
+            e1 = getattr(r1, attr)
+            assert e0 is not None and e1 is not None, f"bootstrapped fit left {attr} None"
+            assert set(e0) == set(e1)
+            for k in e0:
+                for f in ("effect", "se"):
+                    assert _eq(e0[k][f], e1[k][f]), f"{attr}[{k}][{f}] differs"
+        return
     for attr in ("event_study_effects", "group_effects"):
-        e0 = getattr(r0, attr)
-        e1 = getattr(r1, attr)
-        if e0 is None:
-            assert e1 is None
-            continue
-        assert set(e0) == set(e1)
-        for k in e0:
-            for f in ("effect", "se"):
-                assert _eq(e0[k][f], e1[k][f]), f"{attr}[{k}][{f}] differs"
+        assert getattr(r0, attr) is None and getattr(r1, attr) is None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pairs = [
+            (level, r0.aggregate(level), r1.aggregate(level)) for level in ("event_study", "group")
+        ]
+    for level, c0, c1 in pairs:
+        labels = "event_time" if level == "event_study" else "label"
+        np.testing.assert_array_equal(getattr(c0, labels), getattr(c1, labels))
+        for f in ("att", "se"):
+            # Exact (NaN-aware) equality: vcov_type="hc1" is a pure no-op.
+            np.testing.assert_array_equal(
+                getattr(c0, f), getattr(c1, f), err_msg=f"{level}.{f} differs"
+            )
 
 
 def _assert_full_bootstrap_nan(r):
@@ -2375,41 +2388,37 @@ class TestTwoStageDiDVcovType:
 
     # ---- bit-equality regression guards (vcov_type='hc1' is a pure no-op) ----
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_default_path_bit_equal(self, aggregate):
+    def test_default_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=10)
-        r0 = _fit_ts(TwoStageDiD(), data, aggregate=aggregate)
-        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, aggregate=aggregate)
+        r0 = _fit_ts(TwoStageDiD(), data)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
 
-    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
-    def test_cluster_path_bit_equal(self, aggregate):
+    def test_cluster_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=11)
         data["st"] = data["unit"] % 7
-        r0 = _fit_ts(TwoStageDiD(cluster="st"), data, aggregate=aggregate)
-        r1 = _fit_ts(TwoStageDiD(cluster="st", vcov_type="hc1"), data, aggregate=aggregate)
+        r0 = _fit_ts(TwoStageDiD(cluster="st"), data)
+        r1 = _fit_ts(TwoStageDiD(cluster="st", vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
 
     def test_tsl_survey_path_bit_equal(self):
         data, _ = _add_survey_cols(generate_test_data(n_units=80, seed=12))
         design = SurveyDesign(weights="w")
-        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design, aggregate="all")
-        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design, aggregate="all")
+        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
         _assert_results_bit_equal(r0, r1)
 
     def test_replicate_survey_path_bit_equal(self):
         data, rep_cols = _add_survey_cols(generate_test_data(n_units=80, seed=13))
         design = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
-        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design, aggregate="event_study")
-        r1 = _fit_ts(
-            TwoStageDiD(vcov_type="hc1"), data, survey_design=design, aggregate="event_study"
-        )
+        r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
+        r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
         _assert_results_bit_equal(r0, r1)
 
     def test_bootstrap_path_bit_equal(self):
         data = generate_test_data(n_units=80, seed=14)
-        r0 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99), data, aggregate="all")
-        r1 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99, vcov_type="hc1"), data, aggregate="all")
+        r0 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99), data)
+        r1 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99, vcov_type="hc1"), data)
         _assert_results_bit_equal(r0, r1)
         b0, b1 = r0.bootstrap_results, r1.bootstrap_results
         assert b0.overall_att_se == b1.overall_att_se
@@ -2447,12 +2456,7 @@ class TestTwoStageDiDVcovType:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                # Fit-time aggregation kept on this BOOTSTRAPPED fit until the
-                # 4.0 relay: the NaN guard must cover the per-horizon and
-                # per-group payloads, not just the overall quintet.
-                aggregate="all",
             )
-        assert r.event_study_effects and r.group_effects
         _assert_full_bootstrap_nan(r)
 
     def test_bootstrap_single_psu_survey_returns_nan(self):
@@ -2468,9 +2472,7 @@ class TestTwoStageDiDVcovType:
                 time="time",
                 first_treat="first_treat",
                 survey_design=design,
-                aggregate="event_study",  # bootstrapped: fit-time route until the 4.0 relay
             )
-        assert r.event_study_effects
         _assert_full_bootstrap_nan(r)
 
     # ---- metadata reflects the post-drop fit sample (codex P2) ----
@@ -2648,16 +2650,22 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
-        assert res.event_study_vcov is not None
-        assert res.event_study_vcov_index is not None
-        ses = {h: d["se"] for h, d in res.event_study_effects.items()}
-        diag = np.sqrt(np.maximum(np.diag(res.event_study_vcov), 0.0))
-        for i, h in enumerate(res.event_study_vcov_index):
+            es = res.aggregate("event_study")
+        # Analytic fits store no fit-time surface; the GMM matrix travels on
+        # the container.
+        assert res.event_study_vcov is None
+        assert res.event_study_vcov_index is None
+        assert es.vcov is not None
+        assert es.vcov_index is not None
+        ses = dict(zip(es.event_time.tolist(), es.se.tolist()))
+        diag = np.sqrt(np.maximum(np.diag(es.vcov), 0.0))
+        for i, h in enumerate(es.vcov_index.tolist()):
             np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
         # Non-survey GMM inference is normal-theory: no df provenance.
         assert res.event_study_df is None
+        assert es.df_survey is None
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
 
     def test_bootstrap_clears_vcov_and_df(self):
         # Bootstrap replaces the stored ES se/p/CI with percentile values:
@@ -2671,12 +2679,18 @@ class TestEventStudyVcovPersistence:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
+            es = res.aggregate("event_study")
         assert res.bootstrap_results is not None
+        assert res.event_study_effects is not None
         assert res.event_study_vcov is None
         assert res.event_study_vcov_index is None
         assert res.event_study_df is None
+        # The relay carries neither matrix nor df.
+        assert es.vcov is None
+        assert es.vcov_index is None
+        assert es.df_survey is None
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
 
     def test_replicate_weight_survey_clears_vcov_and_threads_final_df(self):
         # Replicate-weight designs: reported ES SEs come from the replicate

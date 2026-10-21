@@ -1,34 +1,33 @@
 """Behavioral contract for post-fit ``results.aggregate()`` (spec section 6).
 
 The ``test_ref`` for every aggregate-postfit ledger row this file pins:
-M-020/M-023/M-021/M-022 (the CS / EfficientDiD fit-time ``aggregate=`` removals
-- 4.0 PR 3b - and the Imputation / TwoStage shims, deprecated since 3.9),
-M-024/M-026 (the Stacked / dCDH removals + view relays), M-025 (the ContinuousDiD shim + MIXED
-view/recompute aggregate() - 'simple'/'dose' views, 'event_study'
-pruned-IF-payload kit on analytic fits), M-117/M-120/M-118/M-119 (``balance_e``
-lives on ``aggregate()`` only), M-027/M-139 (the HAD fit + pretest-workflow
-mode-selector removals with panel-shape inference, and the two PURE-VIEW results
-classes) and M-122 (``AggregationResult``).
+M-020/M-023/M-021/M-022 (the CS / EfficientDiD / Imputation / TwoStage
+fit-time ``aggregate=`` removals - 4.0 PRs 3b/3c), M-024/M-026 (the Stacked / dCDH
+removals + view relays), M-025 (the ContinuousDiD removal + MIXED
+view/relay/recompute aggregate() - 'simple'/'dose' views, 'event_study'
+pruned-IF-payload kit on analytic fits, RELAY of the fit-time percentile
+surface on bootstrapped fits), M-117/M-120/M-118/M-119 (``balance_e`` lives on
+``aggregate()`` only), M-027/M-139 (the HAD fit + pretest-workflow
+mode-selector removals with panel-shape inference, and the two PURE-VIEW
+results classes) and M-122 (``AggregationResult``).
 
 The headline gate is ORACLE PARITY: the deprecated fit-time route that used to
-serve as this file's numerical reference is gone on CallawaySantAnna / EfficientDiD
-/ StackedDiD / dCDH / HAD (PR 3b) and scheduled for removal on ImputationDiD /
-TwoStageDiD / ContinuousDiD (PR 3c), so every aggregation surface is pinned against
-``tests/fixtures/v4_aggregate_oracles.json`` - captured on the unmodified tree by
-``tests/_capture_v4_aggregate_oracles.py`` while that route still existed (see
-``tests/fixtures/README.md``).
-Analytic surfaces must match at ``rtol=1e-12, atol=1e-13``; bootstrapped
-surfaces (the CS/EfficientDiD replays and the plain-fit overall quintets) match
-the backend-matched oracle at the replay-parity tolerances (``rtol=1e-13,
-atol=1e-13`` on att/se/t/CI, ``atol=2/n_bootstrap`` on the count-statistic
-p-values). Drift here means a regression, not a design change.
+serve as this file's numerical reference is gone, so every aggregation surface
+is pinned against ``tests/fixtures/v4_aggregate_oracles.json`` - captured on the
+unmodified tree by ``tests/_capture_v4_aggregate_oracles.py`` while that route
+still existed (see ``tests/fixtures/README.md``). Analytic surfaces must match
+at ``rtol=1e-12, atol=1e-13``; bootstrapped surfaces (the CS/EfficientDiD
+replays, the Imputation/TwoStage/ContinuousDiD relays and the plain-fit overall
+quintets) match the backend-matched oracle at the replay-parity tolerances
+(``rtol=1e-13, atol=1e-13`` on att/se/t/CI, ``atol=2/n_bootstrap`` on the
+count-statistic p-values). Drift here means a regression, not a design change.
 
-Since PR 3b the fit-time keywords are gone outright on CallawaySantAnna,
-EfficientDiD, StackedDiD, dCDH and HAD (and ``did_had_pretest_workflow``):
-``fit(aggregate=...)`` / ``fit(balance_e=...)`` raise Python's native ``TypeError``
-(the ``Test*Removal`` classes). The remaining ``Test*Shim`` classes pin the
-Imputation/TwoStage/ContinuousDiD keywords' 3.9 FutureWarning behaviour until PR 3c
-removes them together with the bootstrapped-fit relay.
+Since 4.0 the fit-time keywords are gone outright: ``fit(aggregate=...)`` /
+``fit(balance_e=...)`` raise Python's native ``TypeError`` (pinned per
+estimator below), and bootstrapped Imputation/TwoStage/ContinuousDiD fits
+materialize their event-study (+ group) surfaces at fit - FAIL-SOFT - so
+``aggregate()`` can relay them (the fail-soft path is pinned by failure
+injection).
 """
 
 import copy
@@ -3367,7 +3366,7 @@ class TestEfficientInternalCallers:
 
 
 # --------------------------------------------------------------------------- #
-# ImputationDiD (rows M-021/M-118): fit(aggregate=/balance_e=) shim pins + the
+# ImputationDiD (rows M-021/M-118): fit(aggregate=/balance_e=) removal pins + the
 # PANEL-BACKED recompute aggregate() (kit refs = the _fit_data objects) on
 # analytic fits; bootstrapped fits RELAY the fit-time percentile surfaces
 # --------------------------------------------------------------------------- #
@@ -3450,12 +3449,6 @@ def imputation_fitted(imputation_panel):
     return _fit_imputation(imputation_panel)
 
 
-@pytest.fixture(scope="module")
-def imputation_fit_time(imputation_panel):
-    """Deprecated fit-time aggregate="all" - the analytical inertness reference."""
-    return _fit_imputation(imputation_panel, aggregate="all")
-
-
 def _im_oracle(arm):
     return load_oracles()["analytic"]["ImputationDiD"][arm]
 
@@ -3468,7 +3461,52 @@ _IM_BOOT_KW = {"n_bootstrap": 19, "seed": 1}
 _IM_P_ATOL = 2.0 / _IM_BOOT_KW["n_bootstrap"]
 
 
-class TestImputationShim:
+def _assert_relay_matches_stored_surfaces(res, es, grp, *, has_vcov_fields=True):
+    """The relay IS the stored fit-time surface: ``aggregate('event_study')``
+    equals ``build_event_study_surface(res)`` frame-for-frame and the stored
+    legacy dict entries row-for-row; ``aggregate('group')`` equals the stored
+    ``group_effects``; percentile provenance (NaN df, no joint vcov)."""
+    _frame_equal(es.to_dataframe(), build_event_study_surface(res).to_dataframe())
+    assert es.vcov is None and es.vcov_index is None
+    assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+    stored = res.event_study_effects
+    ref = np.asarray(es.is_reference, dtype=bool)
+    for i, e in enumerate(es.event_time):
+        row = stored[int(e)]
+        if ref[i]:
+            assert row["effect"] == 0.0 and row.get("n_obs", 0) == 0
+            continue
+        for col, key in (
+            ("att", "effect"),
+            ("se", "se"),
+            ("t_stat", "t_stat"),
+            ("p_value", "p_value"),
+        ):
+            got, want = float(getattr(es, col)[i]), float(row[key])
+            assert got == want or (np.isnan(got) and np.isnan(want)), (e, col)
+        assert (float(es.conf_int_lower[i]), float(es.conf_int_upper[i])) == tuple(
+            float(x) for x in row["conf_int"]
+        ) or np.isnan(row["conf_int"][0])
+    assert np.all(np.isnan(np.asarray(grp.df, dtype=float)))
+    for i, g in enumerate(grp.label):
+        row = res.group_effects[g]
+        for col, key in (
+            ("att", "effect"),
+            ("se", "se"),
+            ("t_stat", "t_stat"),
+            ("p_value", "p_value"),
+        ):
+            got, want = float(getattr(grp, col)[i]), float(row[key])
+            assert got == want or (np.isnan(got) and np.isnan(want)), (g, col)
+        assert row.get("df_used") is None
+    if has_vcov_fields:
+        assert res.event_study_vcov is None and res.event_study_vcov_index is None
+    assert res.event_study_df is None
+
+
+class TestImputationRemoval:
+    """M-021 / M-118 removed."""
+
     def test_plain_fit_does_not_warn(self, imputation_panel):
         from diff_diff import ImputationDiD
 
@@ -3477,45 +3515,32 @@ class TestImputationShim:
             ImputationDiD().fit(imputation_panel, **IMPUTATION_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, imputation_panel):
+    @pytest.mark.parametrize("kw", ["aggregate", "balance_e"])
+    def test_removed_keyword_is_a_type_error(self, imputation_panel, kw):
         from diff_diff import ImputationDiD
 
-        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(aggregate=\)"):
-            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, aggregate=None)
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, **{kw: None})
+        value = "event_study" if kw == "aggregate" else 0
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, **{kw: value})
 
-    def test_balance_e_kwarg_warns_alone(self, imputation_panel):
+    def test_signature_and_seventh_positional_is_survey_design(self):
         from diff_diff import ImputationDiD
 
-        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(balance_e=\)"):
-            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, balance_e=None)
-
-    def test_joint_supply_warns_once_naming_both(self, imputation_panel):
-        from diff_diff import ImputationDiD
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            ImputationDiD().fit(
-                imputation_panel, **IMPUTATION_KW, aggregate="event_study", balance_e=0
+        params = list(inspect.signature(ImputationDiD.fit).parameters)
+        assert "aggregate" not in params and "balance_e" not in params
+        assert params[7] == "survey_design"
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            positional = ImputationDiD().fit(
+                d, "outcome", "unit", "period", "first_treat", None, sd
             )
-        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1
-        msg = str(fw[0].message)
-        assert "aggregate=" in msg and "balance_e=" in msg
-
-    def test_unknown_string_still_acts_like_none(self, imputation_panel):
-        res = _fit_imputation(imputation_panel, aggregate="nonsense")
-        plain = _fit_imputation(imputation_panel)
-        assert res.event_study_effects is None and res.group_effects is None
-        assert res.overall_att == plain.overall_att
-
-    def test_warn_and_still_work(self, imputation_fitted, imputation_fit_time):
-        assert imputation_fit_time.event_study_effects is not None
-        assert imputation_fit_time.group_effects is not None
-        es = imputation_fitted.aggregate("event_study")
-        for e, row in imputation_fit_time.event_study_effects.items():
-            i = list(es.event_time).index(e)
-            if np.isfinite(row["effect"]) and not es.is_reference[i]:
-                np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+            keyword = ImputationDiD().fit(d, survey_design=sd, **IMPUTATION_KW)
+        assert positional.survey_metadata is not None
+        assert positional.overall_se == keyword.overall_se
 
 
 class TestImputationAggregate:
@@ -3722,16 +3747,213 @@ class TestImputationAggregate:
         b = imputation_fitted.aggregate("group").to_dataframe()
         pd.testing.assert_frame_equal(a, b)
 
-    # ---------------- bootstrapped fits (fail closed until the PR 3c relay) ----------------
+    # ---------------- bootstrapped fits: the RELAY (4.0 PR 3c) ----------------
 
-    def test_bootstrap_recompute_levels_fail_closed(self, imputation_panel):
-        res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+    def test_bootstrap_relays_fit_time_surfaces(self, imputation_panel):
+        res = _fit_imputation(imputation_panel, est_kw=_IM_BOOT_KW)
+        assert res.bootstrap_results is not None
+        es, grp = res.aggregate("event_study"), res.aggregate("group")
+        _assert_relay_matches_stored_surfaces(res, es, grp, has_vcov_fields=False)
+        orow = _im_boot_oracle("default_all")
+        _assert_es_matches_oracle(es, orow, **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot")
+        _assert_group_matches_oracle(grp, orow, **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot")
+        _assert_overall_matches_oracle(
+            res, _im_boot_oracle("default_plain_overall"), **BOOT_TOL, p_atol=_IM_P_ATOL
+        )
+        _assert_overall_matches_oracle(res, orow["overall"], **BOOT_TOL, p_atol=_IM_P_ATOL)
+        _assert_bootstrap_p_values_in_unit_interval(es)
+        with pytest.raises(NotImplementedError, match="balance_e"):
+            res.aggregate("event_study", balance_e=1)
+        _assert_bootstrap_simple_relay(res)
+
+    def test_bootstrap_pretrends_relay_matches_oracle(self, imputation_panel):
+        res = _fit_imputation(imputation_panel, est_kw={**_IM_BOOT_KW, "pretrends": True})
+        es = res.aggregate("event_study")
+        _assert_es_matches_oracle(
+            es, _im_boot_oracle("pretrends_all"), **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot/pre"
+        )
+        # Lead rows ride the lead regression (analytical) but the relay still
+        # publishes NO df (identical to the pre-removal bootstrapped surface).
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        _assert_overall_matches_oracle(
+            res, _im_boot_oracle("pretrends_plain_overall"), **BOOT_TOL, p_atol=_IM_P_ATOL
+        )
+
+    def test_bootstrap_survey_tsl_relay_matches_oracle(self):
+        d, _ = _imputation_survey_panel()
+        res = _fit_imputation(d, est_kw=_IM_BOOT_KW, survey_design=_imputation_survey_design())
+        orow = _im_boot_oracle("survey_tsl_all")
+        es = res.aggregate("event_study")
+        _assert_es_matches_oracle(es, orow, **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot/tsl")
+        _assert_group_matches_oracle(
+            res.aggregate("group"), orow, **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot/tsl"
+        )
+        _assert_overall_matches_oracle(
+            res, _im_boot_oracle("survey_tsl_plain_overall"), **BOOT_TOL, p_atol=_IM_P_ATOL
+        )
+        assert es.df_survey == res.survey_metadata.df_survey
+
+    def test_legacy_fields_populated_iff_bootstrapped(self, imputation_panel, imputation_fitted):
+        assert imputation_fitted.event_study_effects is None
+        assert imputation_fitted.group_effects is None
+        boot = _fit_imputation(imputation_panel, est_kw=_IM_BOOT_KW)
+        assert boot.event_study_effects and boot.group_effects
+        assert boot.event_study_df is None
+
+    def test_pre_4_0_pickle_without_surface_raises(self, imputation_panel):
+        """A 3.x bootstrapped plain fit stored no surface: the relay refuses
+        with the refit message instead of recomputing analytically."""
+        res = _fit_imputation(imputation_panel, est_kw=_IM_BOOT_KW)
+        legacy = dataclasses.replace(res, event_study_effects=None, group_effects=None)
+        with pytest.raises(ValueError, match="carries no stored event_study surface"):
+            legacy.aggregate("event_study")
+        with pytest.raises(ValueError, match="carries no stored group surface"):
+            legacy.aggregate("group")
+        _assert_bootstrap_simple_relay(legacy)  # the scalar relays still work
+
+    def test_relay_is_a_view_of_the_public_field(self, imputation_panel):
+        """The relay payload reads the MUTABLE public field by definition
+        (StackedDiD precedent); only alpha/anticipation/survey metadata come
+        from kit snapshots."""
+        res = _fit_imputation(imputation_panel, est_kw=_IM_BOOT_KW)
+        res.event_study_effects[0]["effect"] = 123.0
+        es = res.aggregate("event_study")
+        assert float(es.att[list(es.event_time).index(0)]) == 123.0
+        object.__setattr__(res, "alpha", 0.5)
+        assert res.aggregate("event_study").alpha == 0.05
+
+    # ---------------- fail-soft materialization (failure injection) ----------------
+
+    @staticmethod
+    def _boot_est(**extra):
+        from diff_diff import ImputationDiD
+
+        return ImputationDiD(**_IM_BOOT_KW, **extra)
+
+    def _assert_fail_soft_outcome(self, res, panel_kw):
+        """Surfaces dropped, bootstrap intact: the overall quintet is the
+        backend-matched PLAIN-fit oracle and the relay refuses."""
+        assert res.event_study_effects is None and res.group_effects is None
+        assert res.bootstrap_results is not None
+        _assert_overall_matches_oracle(
+            res, _im_boot_oracle("default_plain_overall"), **BOOT_TOL, p_atol=_IM_P_ATOL
+        )
         for level in ("event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
+            with pytest.raises(ValueError, match="could not be materialized"):
                 res.aggregate(level)
-            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
-                exc.value
+        _assert_bootstrap_simple_relay(res)
+
+    def test_failsoft_a_surface_hook_failure(self, imputation_panel, monkeypatch):
+        from diff_diff import ImputationDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected surface failure")
+
+        monkeypatch.setattr(ImputationDiD, "_aggregate_event_study", boom)
+        with pytest.warns(UserWarning, match="could not be materialized") as rec:
+            res = self._boot_est().fit(imputation_panel, **IMPUTATION_KW)
+        assert any("injected surface failure" in str(w.message) for w in rec)
+        self._assert_fail_soft_outcome(res, IMPUTATION_KW)
+
+    def test_failsoft_b_psi_stage_failure_retries_overall_only(self, imputation_panel, monkeypatch):
+        from diff_diff import ImputationDiD
+
+        orig = ImputationDiD._precompute_bootstrap_psi
+        calls = []
+
+        def flaky(self, *a, **k):
+            calls.append(k.get("event_study_effects") is not None)
+            if k.get("event_study_effects") is not None:
+                raise RuntimeError("injected psi failure")
+            return orig(self, *a, **k)
+
+        monkeypatch.setattr(ImputationDiD, "_precompute_bootstrap_psi", flaky)
+        with pytest.warns(UserWarning, match="could not be materialized"):
+            res = self._boot_est().fit(imputation_panel, **IMPUTATION_KW)
+        assert calls == [True, False]  # attempt 1 with surfaces, ONE retry without
+        self._assert_fail_soft_outcome(res, IMPUTATION_KW)
+
+    def test_failsoft_b2_total_psi_failure_falls_back_analytical(
+        self, imputation_panel, monkeypatch
+    ):
+        from diff_diff import ImputationDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected total psi failure")
+
+        monkeypatch.setattr(ImputationDiD, "_precompute_bootstrap_psi", boom)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = self._boot_est().fit(imputation_panel, **IMPUTATION_KW)
+        msgs = [str(w.message) for w in caught]
+        assert any("Bootstrap pre-computation failed" in m for m in msgs)  # today's fallback
+        assert not any("could not be materialized" in m for m in msgs)  # no "unavailable" claim
+        assert res.bootstrap_results is None
+        assert res.event_study_effects is None and res.group_effects is None  # storage rule
+        analytic = _fit_imputation(imputation_panel)
+        assert res.overall_se == analytic.overall_se  # analytical overall
+        # ...and aggregate() RECOMPUTES analytically (no raise).
+        _frame_equal(
+            res.aggregate("event_study").to_dataframe(),
+            analytic.aggregate("event_study").to_dataframe(),
+        )
+        _frame_equal(
+            res.aggregate("group").to_dataframe(), analytic.aggregate("group").to_dataframe()
+        )
+
+    def test_failsoft_b2_run_bootstrap_failure_on_retry_propagates(
+        self, imputation_panel, monkeypatch
+    ):
+        from diff_diff import ImputationDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected engine failure")
+
+        monkeypatch.setattr(ImputationDiD, "_run_bootstrap", boom)
+        with pytest.raises(RuntimeError, match="injected engine failure"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self._boot_est().fit(imputation_panel, **IMPUTATION_KW)
+
+    def test_failsoft_b3_n_valid_zero_bootstrapped_fit_recomputes(self):
+        """Storage-rule corner: every treated cell unidentified (no untreated
+        observations in any post period) -> n_valid == 0 skips the bootstrap
+        stage, the surfaces are None and aggregate() recomputes analytically."""
+        rng = np.random.default_rng(0)
+        rows = [
+            {"unit": u, "period": t, "first_treat": 4, "outcome": rng.normal() + 0.1 * t}
+            for u in range(30)
+            for t in range(1, 7)
+        ]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = self._boot_est().fit(pd.DataFrame(rows), **IMPUTATION_KW)
+        assert np.isnan(res.overall_att)
+        assert res.bootstrap_results is None
+        assert res.event_study_effects is None and res.group_effects is None
+        assert not any("could not be materialized" in str(w.message) for w in caught)
+        es = res.aggregate("event_study")  # recompute, no raise
+        assert len(es.event_time) > 0
+
+    def test_failsoft_c_real_trigger_lead_collinear_covariate(self, imputation_panel):
+        """The real trigger: pretrends=True + rank_deficient_action='error' +
+        a covariate equal to the lead-1 indicator makes the lead regression
+        raise ValueError (which the engine's (IndexError, LinAlgError) catch
+        does not cover). The plain fit SUCCEEDS with the fail-soft warning
+        (the pre-removal fit(aggregate='event_study') aborted)."""
+        from diff_diff import ImputationDiD
+
+        d = imputation_panel.copy()
+        d["lead1"] = ((d["first_treat"] > 0) & (d["period"] == d["first_treat"] - 1)).astype(float)
+        with pytest.warns(UserWarning, match="could not be materialized"):
+            res = ImputationDiD(pretrends=True, rank_deficient_action="error", **_IM_BOOT_KW).fit(
+                d, covariates=["lead1"], **IMPUTATION_KW
             )
+        assert res.bootstrap_results is not None
+        assert res.event_study_effects is None and res.group_effects is None
+        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        with pytest.raises(ValueError, match="could not be materialized"):
+            res.aggregate("event_study")
 
     def test_bootstrap_simple_relays_stored_quintet(self, imputation_panel):
         res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
@@ -3804,14 +4026,15 @@ class TestImputationAggregate:
         assert np.isnan(plain2.aggregate("group").to_dataframe()["df"].to_numpy()).all()
 
     def test_bootstrap_group_rows_clear_df_used(self, imputation_panel):
-        # Fit-time bootstrap override must never publish an analytical df
-        # beside percentile inference (public group_effects row dicts).
-        res = _fit_imputation(
-            imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1}, aggregate="group"
-        )
+        # The fit-time bootstrap override must never publish an analytical df
+        # beside percentile inference - on the STORED group_effects rows of a
+        # bootstrapped plain fit (populated since 4.0) and on the relay.
+        res = _fit_imputation(imputation_panel, est_kw=_IM_BOOT_KW)
+        assert res.group_effects
         for row in res.group_effects.values():
             if np.isfinite(row["effect"]):
                 assert row.get("df_used") is None
+        assert np.all(np.isnan(np.asarray(res.aggregate("group").df, dtype=float)))
 
     def test_empty_balance_window(self, imputation_fitted):
         with pytest.warns(UserWarning, match="no horizons"):
@@ -3821,7 +4044,7 @@ class TestImputationAggregate:
 
 
 # --------------------------------------------------------------------------- #
-# TwoStageDiD (rows M-022/M-119): fit(aggregate=/balance_e=) shim pins + the
+# TwoStageDiD (rows M-022/M-119): fit(aggregate=/balance_e=) removal pins + the
 # PANEL-BACKED recompute aggregate() (column-subset working-frame kit) on
 # analytic fits; bootstrapped fits RELAY the fit-time percentile surfaces
 # --------------------------------------------------------------------------- #
@@ -3917,11 +4140,6 @@ def twostage_fitted(twostage_panel):
     return _fit_twostage(twostage_panel)
 
 
-@pytest.fixture(scope="module")
-def twostage_fit_time(twostage_panel):
-    return _fit_twostage(twostage_panel, aggregate="all")
-
-
 def _ts_oracle(arm):
     return load_oracles()["analytic"]["TwoStageDiD"][arm]
 
@@ -3934,7 +4152,9 @@ _TS_BOOT_KW = {"n_bootstrap": 19, "seed": 1}
 _TS_P_ATOL = 2.0 / _TS_BOOT_KW["n_bootstrap"]
 
 
-class TestTwoStageShim:
+class TestTwoStageRemoval:
+    """M-022 / M-119 removed."""
+
     def test_plain_fit_does_not_warn(self, twostage_panel):
         from diff_diff import TwoStageDiD
 
@@ -3943,43 +4163,30 @@ class TestTwoStageShim:
             TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, twostage_panel):
+    @pytest.mark.parametrize("kw", ["aggregate", "balance_e"])
+    def test_removed_keyword_is_a_type_error(self, twostage_panel, kw):
         from diff_diff import TwoStageDiD
 
-        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(aggregate=\)"):
-            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, aggregate=None)
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, **{kw: None})
+        value = "event_study" if kw == "aggregate" else 0
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, **{kw: value})
 
-    def test_balance_e_kwarg_warns_alone(self, twostage_panel):
+    def test_signature_and_seventh_positional_is_survey_design(self):
         from diff_diff import TwoStageDiD
 
-        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(balance_e=\)"):
-            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, balance_e=None)
-
-    def test_joint_supply_warns_once_naming_both(self, twostage_panel):
-        from diff_diff import TwoStageDiD
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, aggregate="event_study", balance_e=0)
-        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1
-        msg = str(fw[0].message)
-        assert "aggregate=" in msg and "balance_e=" in msg
-
-    def test_unknown_string_still_acts_like_none(self, twostage_panel):
-        res = _fit_twostage(twostage_panel, aggregate="nonsense")
-        plain = _fit_twostage(twostage_panel)
-        assert res.event_study_effects is None and res.group_effects is None
-        assert res.overall_att == plain.overall_att
-
-    def test_warn_and_still_work(self, twostage_fitted, twostage_fit_time):
-        assert twostage_fit_time.event_study_effects is not None
-        assert twostage_fit_time.group_effects is not None
-        es = twostage_fitted.aggregate("event_study")
-        for e, row in twostage_fit_time.event_study_effects.items():
-            i = list(es.event_time).index(e)
-            if np.isfinite(row["effect"]) and not es.is_reference[i]:
-                np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+        params = list(inspect.signature(TwoStageDiD.fit).parameters)
+        assert "aggregate" not in params and "balance_e" not in params
+        assert params[7] == "survey_design"
+        d, _ = _twostage_survey_panel()
+        sd = _twostage_survey_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            positional = TwoStageDiD().fit(d, "outcome", "unit", "period", "first_treat", None, sd)
+            keyword = TwoStageDiD().fit(d, survey_design=sd, **TWOSTAGE_KW)
+        assert positional.survey_metadata is not None
+        assert positional.overall_se == keyword.overall_se
 
 
 class TestTwoStageAggregate:
@@ -4268,16 +4475,196 @@ class TestTwoStageAggregate:
         b = twostage_fitted.aggregate("group").to_dataframe()
         pd.testing.assert_frame_equal(a, b)
 
-    # ---------------- bootstrapped fits (fail closed until the PR 3c relay) ----------------
+    # ---------------- bootstrapped fits: the RELAY (4.0 PR 3c) ----------------
 
-    def test_bootstrap_recompute_levels_fail_closed(self, twostage_panel):
-        res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+    def test_bootstrap_relays_fit_time_surfaces(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, est_kw=_TS_BOOT_KW)
+        assert res.bootstrap_results is not None
+        es, grp = res.aggregate("event_study"), res.aggregate("group")
+        _assert_relay_matches_stored_surfaces(res, es, grp)
+        orow = _ts_boot_oracle("default_all")
+        _assert_es_matches_oracle(es, orow, **BOOT_TOL, p_atol=_TS_P_ATOL, name="ts/boot")
+        _assert_group_matches_oracle(grp, orow, **BOOT_TOL, p_atol=_TS_P_ATOL, name="ts/boot")
+        _assert_overall_matches_oracle(
+            res, _ts_boot_oracle("default_plain_overall"), **BOOT_TOL, p_atol=_TS_P_ATOL
+        )
+        _assert_overall_matches_oracle(res, orow["overall"], **BOOT_TOL, p_atol=_TS_P_ATOL)
+        _assert_bootstrap_p_values_in_unit_interval(es)
+        with pytest.raises(NotImplementedError, match="balance_e"):
+            res.aggregate("event_study", balance_e=1)
+        _assert_bootstrap_simple_relay(res)
+
+    def test_bootstrap_pretrends_relay_matches_oracle(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, est_kw={**_TS_BOOT_KW, "pretrends": True})
+        es = res.aggregate("event_study")
+        _assert_es_matches_oracle(
+            es, _ts_boot_oracle("pretrends_all"), **BOOT_TOL, p_atol=_TS_P_ATOL, name="ts/boot/pre"
+        )
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+
+    def test_bootstrap_prop5_relay_matches_oracle_and_aggregator_warnings_fire(self):
+        """The Prop-5 panel: the relay matches the oracle (NaN rows kept with
+        n > 0) AND the ES aggregator's own fit-time UserWarnings now fire on
+        the bootstrapped PLAIN fit (documented 4.0 PR 3c change)."""
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = TwoStageDiD(**_TS_BOOT_KW).fit(_twostage_prop5_panel(), **TWOSTAGE_KW)
+        msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("Proposition 5" in m for m in msgs)
+        assert not any("could not be materialized" in m for m in msgs)
+        assert res.bootstrap_results is not None and res.event_study_effects
+        orow = _ts_boot_oracle("prop5_all")
+        _assert_es_matches_oracle(
+            res.aggregate("event_study"), orow, **BOOT_TOL, p_atol=_TS_P_ATOL, name="ts/boot/p5"
+        )
+        _assert_group_matches_oracle(
+            res.aggregate("group"), orow, **BOOT_TOL, p_atol=_TS_P_ATOL, name="ts/boot/p5"
+        )
+        _assert_overall_matches_oracle(
+            res, _ts_boot_oracle("prop5_plain_overall"), **BOOT_TOL, p_atol=_TS_P_ATOL
+        )
+
+    def test_legacy_fields_populated_iff_bootstrapped(self, twostage_panel, twostage_fitted):
+        assert twostage_fitted.event_study_effects is None
+        assert twostage_fitted.group_effects is None
+        boot = _fit_twostage(twostage_panel, est_kw=_TS_BOOT_KW)
+        assert boot.event_study_effects and boot.group_effects
+        assert boot.event_study_vcov is None and boot.event_study_vcov_index is None
+        assert boot.event_study_df is None
+
+    def test_pre_4_0_pickle_without_surface_raises(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, est_kw=_TS_BOOT_KW)
+        legacy = dataclasses.replace(res, event_study_effects=None, group_effects=None)
+        with pytest.raises(ValueError, match="carries no stored event_study surface"):
+            legacy.aggregate("event_study")
+        with pytest.raises(ValueError, match="carries no stored group surface"):
+            legacy.aggregate("group")
+        _assert_bootstrap_simple_relay(legacy)
+
+    # ---------------- fail-soft materialization (failure injection) ----------------
+
+    @staticmethod
+    def _boot_est(**extra):
+        from diff_diff import TwoStageDiD
+
+        return TwoStageDiD(**_TS_BOOT_KW, **extra)
+
+    def _assert_fail_soft_outcome(self, res):
+        assert res.event_study_effects is None and res.group_effects is None
+        assert res.event_study_vcov is None and res.event_study_vcov_index is None
+        assert res.bootstrap_results is not None
+        _assert_overall_matches_oracle(
+            res, _ts_boot_oracle("default_plain_overall"), **BOOT_TOL, p_atol=_TS_P_ATOL
+        )
         for level in ("event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
+            with pytest.raises(ValueError, match="could not be materialized"):
                 res.aggregate(level)
-            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
-                exc.value
-            )
+        _assert_bootstrap_simple_relay(res)
+
+    def test_failsoft_a_surface_hook_failure(self, twostage_panel, monkeypatch):
+        from diff_diff import TwoStageDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected surface failure")
+
+        monkeypatch.setattr(TwoStageDiD, "_stage2_event_study", boom)
+        with pytest.warns(UserWarning, match="could not be materialized") as rec:
+            res = self._boot_est().fit(twostage_panel, **TWOSTAGE_KW)
+        assert any("injected surface failure" in str(w.message) for w in rec)
+        self._assert_fail_soft_outcome(res)
+
+    def test_failsoft_b_engine_failure_with_surfaces_retries_overall_only(
+        self, twostage_panel, monkeypatch
+    ):
+        from diff_diff import TwoStageDiD
+
+        orig = TwoStageDiD._run_bootstrap
+        calls = []
+
+        def flaky(self, *a, **k):
+            calls.append(k.get("original_event_study") is not None)
+            if k.get("original_event_study") is not None:
+                raise RuntimeError("injected engine failure")
+            return orig(self, *a, **k)
+
+        monkeypatch.setattr(TwoStageDiD, "_run_bootstrap", flaky)
+        with pytest.warns(UserWarning, match="could not be materialized"):
+            res = self._boot_est().fit(twostage_panel, **TWOSTAGE_KW)
+        assert calls == [True, False]
+        self._assert_fail_soft_outcome(res)
+
+    def test_failsoft_b1_lsmr_unconverged_none_return_retries(self, twostage_panel, monkeypatch):
+        """(b') the None-return path: `_compute_cluster_S_scores` hits
+        `_LSMRUnconvergedError` only on the multi-column ES/group designs
+        (the single-column static call succeeds), so attempt 1 RETURNS None
+        with surfaces present -> dropped, retried overall-only."""
+        from diff_diff import TwoStageDiD
+        from diff_diff.two_stage import _LSMRUnconvergedError
+
+        orig = TwoStageDiD._compute_cluster_S_scores
+        widths = []
+
+        def selective(self, *a, **k):
+            x2 = k["X_2"]
+            widths.append(int(x2.shape[1]))
+            if x2.shape[1] > 1:
+                raise _LSMRUnconvergedError("injected LSMR non-convergence")
+            return orig(self, *a, **k)
+
+        monkeypatch.setattr(TwoStageDiD, "_compute_cluster_S_scores", selective)
+        with pytest.warns(UserWarning, match="could not be materialized") as rec:
+            res = self._boot_est().fit(twostage_panel, **TWOSTAGE_KW)
+        assert any("returned no results" in str(w.message) for w in rec)
+        assert widths[0] == 1 and max(widths) > 1 and widths[-1] == 1  # static, ES, retry static
+        self._assert_fail_soft_outcome(res)
+
+    def test_failsoft_b2_total_engine_failure_falls_back_analytical(
+        self, twostage_panel, monkeypatch
+    ):
+        from diff_diff import TwoStageDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected total engine failure")
+
+        monkeypatch.setattr(TwoStageDiD, "_run_bootstrap", boom)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = self._boot_est().fit(twostage_panel, **TWOSTAGE_KW)
+        msgs = [str(w.message) for w in caught]
+        assert any("Bootstrap failed" in m for m in msgs)  # today's catch-all
+        assert not any("could not be materialized" in m for m in msgs)
+        assert res.bootstrap_results is None
+        assert res.event_study_effects is None and res.group_effects is None
+        analytic = _fit_twostage(twostage_panel)
+        assert res.overall_se == analytic.overall_se
+        _frame_equal(
+            res.aggregate("event_study").to_dataframe(),
+            analytic.aggregate("event_study").to_dataframe(),
+        )
+        _frame_equal(
+            res.aggregate("group").to_dataframe(), analytic.aggregate("group").to_dataframe()
+        )
+
+    def test_failsoft_b2_none_return_on_both_attempts_falls_back_analytical(
+        self, twostage_panel, monkeypatch
+    ):
+        from diff_diff import TwoStageDiD
+
+        monkeypatch.setattr(TwoStageDiD, "_run_bootstrap", lambda self, *a, **k: None)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = self._boot_est().fit(twostage_panel, **TWOSTAGE_KW)
+        assert not any("could not be materialized" in str(w.message) for w in caught)
+        assert res.bootstrap_results is None
+        assert res.event_study_effects is None and res.group_effects is None
+        analytic = _fit_twostage(twostage_panel)
+        assert res.overall_se == analytic.overall_se
+        _frame_equal(
+            res.aggregate("event_study").to_dataframe(),
+            analytic.aggregate("event_study").to_dataframe(),
+        )
 
     def test_bootstrap_simple_relays_stored_quintet(self, twostage_panel):
         res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
@@ -4329,7 +4716,7 @@ class TestTwoStageAggregate:
 
 
 # --------------------------------------------------------------------------- #
-# ContinuousDiD (row M-025): fit(aggregate=) shim pin + the MIXED
+# ContinuousDiD (row M-025): fit(aggregate=) removal pin + the MIXED
 # view/relay/recompute aggregate() - 'simple'/'dose' are pure VIEWS over stored
 # fields (permitted on bootstrap fits), 'event_study' is a pruned-IF-payload kit
 # recompute on analytic fits and a RELAY of the fit-time percentile surface on
@@ -4474,12 +4861,6 @@ def cont_fitted(cont_panel):
 
 
 @pytest.fixture(scope="module")
-def cont_fit_time(cont_panel):
-    """Deprecated fit-time aggregate='eventstudy' - the inertness reference."""
-    return _fit_cont(cont_panel, aggregate="eventstudy")
-
-
-@pytest.fixture(scope="module")
 def cont_bootstrap(cont_panel):
     return _fit_cont(cont_panel, est_kw=dict(n_bootstrap=30, seed=3))
 
@@ -4509,7 +4890,11 @@ def _assert_cont_overall_matches_oracle(res, orow, *, p_atol=_CO_P_ATOL):
     _close(res.overall_acrt_se, orow["overall_acrt_se"], **BOOT_TOL, what="cont.acrt_se")
 
 
-class TestContinuousShim:
+class TestContinuousRemoval:
+    """M-025 removed: ``fit(aggregate=)`` - including the ``"eventstudy"``
+    spelling and the always-inert ``"dose"`` - is a TypeError; the 7th
+    positional slot is ``survey_design``."""
+
     def test_plain_fit_does_not_warn(self, cont_panel):
         from diff_diff import ContinuousDiD
 
@@ -4518,41 +4903,29 @@ class TestContinuousShim:
             ContinuousDiD().fit(cont_panel, **CONT_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, cont_panel):
+    @pytest.mark.parametrize("value", [None, "dose", "eventstudy", "event_study"])
+    def test_aggregate_keyword_is_a_type_error(self, cont_panel, value):
         from diff_diff import ContinuousDiD
 
-        with pytest.warns(FutureWarning, match=r"ContinuousDiD\.fit\(aggregate=\)"):
-            ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate=None)
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
+            ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate=value)
 
-    def test_dose_value_warns_and_is_inert(self, cont_panel, cont_fitted):
-        """aggregate='dose' was always a fit-time no-op - the deprecated
-        call warns (the message says so) and produces the identical fit."""
+    def test_signature_and_seventh_positional_is_survey_design(self):
         from diff_diff import ContinuousDiD
 
-        with pytest.warns(FutureWarning, match="already[\\s\\n ]*redundant"):
-            res = ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate="dose")
-        assert res.overall_att == cont_fitted.overall_att
-        assert res.overall_acrt_se == cont_fitted.overall_acrt_se
-        np.testing.assert_array_equal(
-            res.dose_response_att.effects, cont_fitted.dose_response_att.effects
-        )
-        assert res.event_study_effects is None
-
-    def test_warn_and_still_work(self, cont_fit_time):
-        """The deprecated 'eventstudy' value still computes the fit-time
-        surface (legacy routing unchanged until 4.0)."""
-        assert cont_fit_time.event_study_effects is not None
-        assert any(np.isfinite(v["se"]) for v in cont_fit_time.event_study_effects.values())
-
-    def test_invalid_value_warns_then_raises(self, cont_panel):
-        """The PRE-EXISTING fit-time value validation survives the shim
-        (a delta vs the EfficientDiD/Imputation no-validation shims):
-        unknown strings still raise ValueError - after the warning."""
-        from diff_diff import ContinuousDiD
-
-        with pytest.warns(FutureWarning):
-            with pytest.raises(ValueError, match="Invalid aggregate"):
-                ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate="event_study")
+        params = list(inspect.signature(ContinuousDiD.fit).parameters)
+        assert "aggregate" not in params and "balance_e" not in params
+        assert params[7] == "survey_design"
+        d, _ = _cont_survey_panel()
+        sd = _cont_survey_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            positional = ContinuousDiD().fit(
+                d, "outcome", "unit", "period", "first_treat", "dose", sd
+            )
+            keyword = ContinuousDiD().fit(d, survey_design=sd, **CONT_KW)
+        assert positional.survey_metadata is not None
+        assert positional.overall_att_se == keyword.overall_att_se
 
 
 class TestContinuousAggregate:
@@ -4834,11 +5207,30 @@ class TestContinuousAggregate:
         assert list(frame["target"]) == ["att", "att", "acrt", "acrt"]
         assert "target" in agg.summary()
 
-    # ---------------- bootstrap: fail-closed gate (relay lands in PR 3c) + kit shape ----------------
+    # ---------------- bootstrap: the RELAY (4.0 PR 3c) + kit shape ----------------
 
-    def test_bootstrap_event_study_fails_closed(self, cont_bootstrap):
-        with pytest.raises(NotImplementedError, match="bootstrap"):
-            cont_bootstrap.aggregate("event_study")
+    def test_bootstrap_event_study_relays(self, cont_bootstrap):
+        assert cont_bootstrap.event_study_effects  # materialized at fit
+        assert cont_bootstrap.event_study_df is None
+        es = cont_bootstrap.aggregate("event_study")
+        _frame_equal(es.to_dataframe(), build_event_study_surface(cont_bootstrap).to_dataframe())
+        assert es.vcov is None and es.vcov_index is None
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        stored = cont_bootstrap.event_study_effects
+        for i, e in enumerate(es.event_time):
+            row = stored[int(e)]
+            assert float(es.att[i]) == float(row["effect"])
+            assert float(es.se[i]) == float(row["se"])
+            assert float(es.p_value[i]) == float(row["p_value"])
+        _assert_es_matches_oracle(
+            es,
+            _co_boot_oracle("default_eventstudy"),
+            **BOOT_TOL,
+            p_atol=_CO_P_ATOL,
+            name="cont/boot",
+        )
+        _assert_bootstrap_p_values_in_unit_interval(es)
+        assert es.n_kind is None
 
     def test_bootstrap_plain_overall_matches_oracle(self, cont_bootstrap):
         """The headline bootstrap (overall ATT + ACRT) is untouched by the
@@ -4861,6 +5253,88 @@ class TestContinuousAggregate:
         assert bk["resolved_survey"] is None
         assert bk["n_bootstrap"] == 30
 
+    def test_pre_4_0_pickle_without_surface_raises(self, cont_bootstrap):
+        legacy = dataclasses.replace(cont_bootstrap, event_study_effects=None)
+        with pytest.raises(ValueError, match="carries no stored event_study surface"):
+            legacy.aggregate("event_study")
+        assert legacy.aggregate("simple") is not None  # views still work
+
+    def test_bootstrap_without_post_cells_stores_no_surface(self):
+        """Storage-rule corner: no post-treatment cells -> the bootstrap never
+        runs, the surface is None and the relay raises the absent-surface
+        error (pre-4.0 this raised NotImplementedError from the gate)."""
+        from diff_diff import ContinuousDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = ContinuousDiD(**_CO_BOOT_KW).fit(_cont_empty_post_panel(), **CONT_KW)
+        assert any("No post-treatment" in str(w.message) for w in caught)
+        assert not any("could not be materialized" in str(w.message) for w in caught)
+        assert np.isnan(res.overall_att)
+        assert res.event_study_effects is None
+        with pytest.raises(ValueError, match="carries no stored event_study surface"):
+            res.aggregate("event_study")
+
+    # ---------------- fail-soft materialization (failure injection) ----------------
+
+    def _assert_cont_fail_soft_outcome(self, res, cont_bootstrap):
+        assert res.event_study_effects is None
+        _assert_cont_overall_matches_oracle(res, _co_boot_oracle("default_plain"))
+        # The dose curves equal the plain bootstrapped fit's (same seed -> same draws).
+        for name in ("dose_response_att", "dose_response_acrt"):
+            got, want = getattr(res, name), getattr(cont_bootstrap, name)
+            np.testing.assert_array_equal(np.asarray(got.effects), np.asarray(want.effects))
+            np.testing.assert_array_equal(np.asarray(got.se), np.asarray(want.se))
+            np.testing.assert_array_equal(np.asarray(got.p_value), np.asarray(want.p_value))
+        with pytest.raises(ValueError, match="could not be materialized"):
+            res.aggregate("event_study")
+        assert res.aggregate("simple") is not None
+
+    def test_failsoft_a_surface_hook_failure(self, cont_panel, cont_bootstrap, monkeypatch):
+        from diff_diff import ContinuousDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected surface failure")
+
+        monkeypatch.setattr(ContinuousDiD, "_aggregate_event_study", boom)
+        with pytest.warns(UserWarning, match="could not be materialized") as rec:
+            res = ContinuousDiD(**_CO_BOOT_KW).fit(cont_panel, **CONT_KW)
+        assert any("injected surface failure" in str(w.message) for w in rec)
+        self._assert_cont_fail_soft_outcome(res, cont_bootstrap)
+
+    def test_failsoft_b_engine_failure_with_surface_retries(
+        self, cont_panel, cont_bootstrap, monkeypatch
+    ):
+        from diff_diff import ContinuousDiD
+
+        orig = ContinuousDiD._run_bootstrap
+        calls = []
+
+        def flaky(self, *a, **k):
+            es = a[12] if len(a) > 12 else k.get("event_study_effects")
+            calls.append(es is not None)
+            if es is not None:
+                raise RuntimeError("injected engine failure")
+            return orig(self, *a, **k)
+
+        monkeypatch.setattr(ContinuousDiD, "_run_bootstrap", flaky)
+        with pytest.warns(UserWarning, match="could not be materialized"):
+            res = ContinuousDiD(**_CO_BOOT_KW).fit(cont_panel, **CONT_KW)
+        assert calls == [True, False]
+        self._assert_cont_fail_soft_outcome(res, cont_bootstrap)
+
+    def test_failsoft_retry_failure_propagates(self, cont_panel, monkeypatch):
+        from diff_diff import ContinuousDiD
+
+        def boom(self, *a, **k):
+            raise RuntimeError("injected total engine failure")
+
+        monkeypatch.setattr(ContinuousDiD, "_run_bootstrap", boom)
+        with pytest.raises(RuntimeError, match="injected total engine failure"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ContinuousDiD(**_CO_BOOT_KW).fit(cont_panel, **CONT_KW)
+
     # ---------------- isolation (ES route only - views are views) ----------------
 
     def test_es_isolation_from_public_field_mutation(self, cont_panel):
@@ -4878,12 +5352,13 @@ class TestContinuousAggregate:
         pd.testing.assert_frame_equal(baseline, again)
 
     def test_bootstrap_gate_reads_kit_not_field(self, cont_panel):
-        """The sharpest isolation arm: mutating res.n_bootstrap = 0 must
-        NOT bypass the fail-closed gate (it reads the kit)."""
-        res = _fit_cont(cont_panel, est_kw=dict(n_bootstrap=30, seed=3))
+        """The sharpest isolation arm: mutating res.n_bootstrap = 0 must NOT
+        flip the gate (it reads the kit) - the relay still serves the stored
+        percentile surface instead of attempting a scalars-only recompute."""
+        res = _fit_cont(cont_panel, est_kw=_CO_BOOT_KW)
+        before = res.aggregate("event_study").to_dataframe()
         res.n_bootstrap = 0
-        with pytest.raises(NotImplementedError, match="bootstrap"):
-            res.aggregate("event_study")
+        _frame_equal(res.aggregate("event_study").to_dataframe(), before)
 
     def test_repeated_calls_idempotent(self, cont_fitted):
         a = cont_fitted.aggregate("event_study").to_dataframe()
@@ -6047,7 +6522,7 @@ class TestPerRowDfProvenanceCompletion:
     contract: the scalar ``df_survey`` (the fit's resolved scalar inference
     df) persists on bootstrapped surfaces, while the per-row ``df`` column is
     the inference-provenance channel and is cleared under percentile
-    bootstrap (M-027). The container is the canonical surface on
+    bootstrap (M-027). Since 4.0 the container is the only surface on
     analytic fits and bootstrapped Imputation/ContinuousDiD fits RELAY their
     stored percentile surface."""
 
@@ -6167,13 +6642,25 @@ class TestPerRowDfProvenanceCompletion:
         assert es.df_survey == 0.0
         assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
 
-    def test_imputation_bootstrap_clears_at_fit_and_replay_fails_closed(self):
+    def test_imputation_bootstrap_clears_at_fit_and_relays(self):
+        """The bootstrapped Imputation fit stores its percentile surface with
+        a cleared df and the relay publishes a NaN df column beside the
+        persisted survey scalar (Row B) - and matches the oracle."""
         d, _ = _imputation_survey_panel()
         sd = _imputation_survey_design()
-        boot = _fit_imputation(d, survey_design=sd, est_kw={"n_bootstrap": 30, "seed": 1})
+        boot = _fit_imputation(d, survey_design=sd, est_kw=_IM_BOOT_KW)
         assert boot.event_study_df is None
-        with pytest.raises(NotImplementedError):
-            boot.aggregate("event_study")
+        assert boot.event_study_effects
+        es = boot.aggregate("event_study")
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        assert es.df_survey == boot.survey_metadata.df_survey
+        _assert_es_matches_oracle(
+            es,
+            _im_boot_oracle("survey_tsl_all"),
+            **BOOT_TOL,
+            p_atol=_IM_P_ATOL,
+            name="imp/boot/tsl",
+        )
 
     # ---- ContinuousDiD ------------------------------------------------
 
@@ -6192,7 +6679,7 @@ class TestPerRowDfProvenanceCompletion:
         assert float(expected) == _co_oracle("survey_tsl_eventstudy")["event_study_df"]
 
     def test_cont_bootstrap_fit_clears_df_scalar_is_unit_level(self):
-        # Bootstrapped fit: _survey_df stays None -> attr None; the fit-time
+        # Bootstrapped fit: _survey_df stays None -> attr None; the relayed
         # surface's per-row df is all-NaN while the df_survey scalar reports
         # the (now unit-level) design df - the Row A container pin on an
         # implicit-PSU design.
@@ -6200,14 +6687,11 @@ class TestPerRowDfProvenanceCompletion:
         from diff_diff import SurveyDesign
 
         sd = SurveyDesign(weights="w")  # implicit-PSU
-        boot = _fit_cont(
-            d,
-            survey_design=sd,
-            aggregate="eventstudy",
-            est_kw={"n_bootstrap": 20, "seed": 3},
-        )
+        boot = _fit_cont(d, survey_design=sd, est_kw={"n_bootstrap": 20, "seed": 3})
         assert boot.event_study_df is None
-        surface = build_event_study_surface(boot)
+        assert boot.event_study_effects  # materialized at fit, relayed below
+        surface = boot.aggregate("event_study")
+        _frame_equal(surface.to_dataframe(), build_event_study_surface(boot).to_dataframe())
         assert np.all(np.isnan(np.asarray(surface.df, dtype=float)))
         # Unit-level scalar: n_units - 1 (implicit PSU = unit), not obs-level.
         n_units = boot.survey_metadata.n_psu

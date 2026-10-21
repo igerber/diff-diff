@@ -12,7 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
+from diff_diff.aggregation import (
+    AggregationMixin,
+    AggregationResult,
+    absent_bootstrap_surface_message,
+    build_total_relay_row,
+)
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import (
     BaseResults,
@@ -250,26 +255,54 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         # Per-level bootstrap policy (v4-design section 6, converged with row
         # M-027): 'simple' is a bit-exact RELAY of the stored overall quintet
         # - faithful under any inference regime, bootstrap included - so it
-        # dispatches BEFORE the bootstrap gate. Only the RECOMPUTE levels
-        # below fail closed on bootstrapped fits. (This supersedes the
+        # dispatches BEFORE the bootstrap branch. (This supersedes the
         # uniform-conservatism decision recorded with M-022; its rationale is
         # honored by the relay's NaN df column.)
         if level == "simple":
             return self._aggregate_simple_result(kit)
         if level == "total":
             return self._aggregate_total_result(kit)
-        if self.bootstrap_results is not None:
-            raise NotImplementedError(
-                f"aggregate({level!r}) is not yet available on a bootstrapped "
-                "fit (n_bootstrap > 0): the per-target bootstrap draws are "
-                "not retained, so post-fit re-aggregation cannot replay "
-                "percentile inference and analytical inference would "
-                "misrepresent the fit. aggregate('simple') and, where "
-                "supported, aggregate('total') relay the stored "
-                "bootstrap inference and remain available; otherwise re-fit "
-                "with the aggregation you need, or use n_bootstrap=0."
-            )
         bk = dict(kit.bookkeeping)
+        if self.bootstrap_results is not None:  # the fit's bootstrap SUCCEEDED
+            # 4.0 PR 3c: bootstrapped fits materialize ES + group at fit
+            # (balance_e=None, percentile overrides applied, vcov/df cleared);
+            # no replay state is retained, so RELAY the stored surface with
+            # kit-snapshot provenance (StackedDiD view mechanics). The relay
+            # reads the MUTABLE public field by definition (a view); only
+            # alpha/anticipation/survey metadata come from kit snapshots.
+            cls_name = type(self).__name__
+            if level == "group":
+                if self.group_effects is None:
+                    raise ValueError(absent_bootstrap_surface_message(cls_name, "group"))
+                # The bootstrap override replaced se/p/CI - no analytical df
+                # may leak beside percentile inference -> NaN df column.
+                return self._group_effects_to_aggregation(self.group_effects, kit, group_df=None)
+            if balance_e is not None:
+                raise NotImplementedError(
+                    "aggregate('event_study', balance_e=...) is not available on a "
+                    "bootstrapped TwoStageDiD fit: the fit-time percentile surface "
+                    "was computed with balance_e=None and the per-target draws are "
+                    "not retained. Call aggregate('event_study') for the stored "
+                    "surface, or re-fit with n_bootstrap=0 to recompute with "
+                    "balance_e."
+                )
+            if self.event_study_effects is None:
+                raise ValueError(absent_bootstrap_surface_message(cls_name, "event_study"))
+            meta = bk["survey_metadata"]
+            carrier = dataclasses.replace(
+                self,
+                survey_metadata=(dataclasses.replace(meta) if meta is not None else None),
+                anticipation=kit.anticipation,
+                alpha=kit.alpha,
+                event_study_vcov=None,
+                event_study_vcov_index=None,
+                event_study_df=None,  # percentile inference governs no df
+            )
+            return build_event_study_surface(carrier)
+        # bootstrap_results is None: n_bootstrap == 0, OR the fit's bootstrap
+        # failed and the fit fell back to analytical inference (two_stage.py
+        # stores no surface then) - the analytical kit RECOMPUTE below matches
+        # the fit's analytical provenance.
         # Fresh throwaway host per call, populated from KIT snapshots only
         # (estimator/config mutation after fit() must not leak in).
         agg = _TwoStageKitAggregator(
@@ -304,8 +337,8 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
             effects = agg._stage2_group(**common)
             replay_df_g: Optional[int] = bk["survey_df_stage2"]
             if bk["uses_replicate"]:
-                # LEVEL-MATCHED replay: [overall, groups] - reproduces
-                # fit(aggregate='group') exactly (see the replay docstring).
+                # LEVEL-MATCHED replay: [overall, groups] (see the replay
+                # docstring).
                 _, _, replay_df_g = agg._replay_replicate_inference(
                     df=bk["df"],
                     outcome=bk["outcome"],
@@ -356,7 +389,7 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         # Carrier + shared builder, reproducing fit's M-092 mode gates
         # exactly (two_stage.py): analytical -> recomputed V + index + the
         # finite-and->0 df scalar; replicate -> vcov/index None with the
-        # REPLAYED level-matched df; bootstrap unreachable (failed closed
+        # REPLAYED level-matched df; bootstrap unreachable (relayed
         # above). The carrier's metadata is a copy-on-use of the KIT's
         # fit-final metadata copy (never the mutable public field).
         if bk["uses_replicate"]:
@@ -752,12 +785,11 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed. Aggregate post-fit "
-                    "instead - results.aggregate('event_study') returns the "
-                    "EventStudyResults container (on a bootstrapped fit, "
-                    "re-fit with n_bootstrap=0 or use the deprecated "
-                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
-                    "release carries no kit and must be re-fit)."
+                    "Event study effects not stored on this fit. Use "
+                    "results.aggregate('event_study') - analytical fits "
+                    "recompute from the retained kit; bootstrapped fits relay "
+                    "the surface computed at fit. A result unpickled from a "
+                    "pre-3.9 release carries no kit and must be re-fit."
                 )
             rows = []
             for h, data in sorted(self.event_study_effects.items()):
@@ -778,12 +810,11 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         elif level == "group":
             if self.group_effects is None:
                 raise ValueError(
-                    "Group effects not computed. Aggregate post-fit instead "
-                    "- results.aggregate('group') returns the "
-                    "AggregationResult container (on a bootstrapped fit, "
-                    "re-fit with n_bootstrap=0 or use the deprecated "
-                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
-                    "release carries no kit and must be re-fit)."
+                    "Group effects not stored on this fit. Use "
+                    "results.aggregate('group') - analytical fits recompute "
+                    "from the retained kit; bootstrapped fits relay the "
+                    "surface computed at fit. A result unpickled from a "
+                    "pre-3.9 release carries no kit and must be re-fit."
                 )
             rows = []
             for g, data in sorted(self.group_effects.items()):

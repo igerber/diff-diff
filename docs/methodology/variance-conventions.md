@@ -143,9 +143,10 @@ output).
   characterization-anchored only (DoubleML's RCS score differs and omits the
   Chang lambda-correction; equation-level fixtures validate the variance).
   **ImputationDiD is conditional**: its pretrends=True lead regression DOES
-  run the shared clustered CR1 — surfaced fit-time via the deprecated
-  aggregate="event_study" or post-fit via results.aggregate('event_study')
-  since the M-021 migration — and carries the K_reference increment there
+  run the shared clustered CR1 — surfaced via results.aggregate('event_study')
+  since the M-021 migration (analytic fits recompute it; bootstrapped fits
+  relay the surface materialized at fit, 4.0 PR 3c) — and carries the
+  K_reference increment there
   (+6, the [time, unit] no-intercept
   increment on df_0 — pinned via expected_adjustment on its matrix row).
 - **L4 — hc2/hc2_bm/hc3** (leverage / Satterthwaite DOF — no CR1 factor; hc3 squares the leverage denominator and is one-way only; under `fweight` the leverage is each replicate row's UNWEIGHTED quadratic form against the weighted bread — frequency weights are replicated data, and compressed HC2/HC3 equal literal expansion exactly — while aweight/pweight keep the WLS-hat `w_i x_i'(X'WX)^{-1}x_i` convention),

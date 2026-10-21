@@ -81,7 +81,7 @@ def main():
             first_treat="first_treat",
         )
         # Post-fit event study stays inside the timed region (the 3.x
-        # fit(aggregate="event_study") route, deprecated since 3.9 and removed at the 4.0 cut).
+        # fit(aggregate="event_study") route, removed at 4.0).
         es = results.aggregate("event_study")
 
     estimation_time = estimation_timer.elapsed

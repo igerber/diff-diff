@@ -631,11 +631,43 @@ provenance beside percentile statistics; a RECOMPUTE level on a
 bootstrapped fit either REPLAYS the fit-time bootstrap from retained RNG
 state (CS [M-020], EfficientDiD [M-023], DMLDiD via the inherited CS kit
 channel [M-093 seventh amendment]) or RAISES - it never silently
-returns analytical inference. **Amendment (4.0 cut PR 3b, [M-020] [M-023]
-[M-117] [M-120]):** on CallawaySantAnna and EfficientDiD the fit-time
-`aggregate=`/`balance_e=` branches are deleted outright (the post-fit replay
-exists) and their legacy `event_study_effects`/`group_effects` fields are None
-after EVERY fit. **View-relay exception (Phase 2b PRs 1-2):**
+returns analytical inference. **Amendment (4.0 cut PRs 3b/3c, the fit-time
+`aggregate=`/`balance_e=` removals [M-020]..[M-027] [M-117]..[M-120]
+[M-139]):** the deprecated keyword was the only route to bootstrap
+event-study/group inference on ImputationDiD, TwoStageDiD and ContinuousDiD
+(no per-draw state is retained for a replay), so its removal (PR 3c) RELAYS
+that surface instead of closing it: a fit with `n_bootstrap > 0` on those
+three estimators ALWAYS computes the fit-time bootstrap surfaces with the
+pre-existing code (event study on all three, group on Imputation/TwoStage -
+exactly what `aggregate="all"` computed, `balance_e=None`), stores them in
+the legacy `event_study_effects`/`group_effects` fields, and
+`aggregate('event_study'|'group')` RELAYS the stored dict with kit-snapshot
+provenance (alpha, anticipation, survey metadata from the kit; the per-row df
+column NaN, `vcov`/`vcov_index` None). `balance_e is not None` on such a fit
+fails closed (`NotImplementedError`) - the stored surface was computed
+unrestricted and cannot be re-masked. Analytic fits are unchanged (legacy
+fields None, kit recompute on demand). Storage rule: the legacy fields hold a
+surface IFF the fit carries bootstrap inference; on Imputation/TwoStage a
+bootstrapped fit that ends analytical (zero valid draws, total bootstrap
+failure) clears them and `aggregate()` recomputes analytically, while a fit
+WITH bootstrap inference and no stored surface (pre-4.0 pickle, fail-soft
+drop) raises the shared absent-surface error. ContinuousDiD's kit is
+scalars-only on every bootstrapped fit, so there is no analytical fallback
+there: a bootstrapped fit with no post-treatment cells never runs its
+bootstrap (its overall ATT is already NaN with a `UserWarning`), stores no
+surface, and `aggregate('event_study')` raises the absent-surface error
+rather than recomputing. Materialization is FAIL-SOFT with a one-shot
+overall-only retry: an exception while building the surfaces, or a bootstrap
+attempt that raises/returns `None` with surfaces present, leaves them None,
+warns once, and re-runs the bootstrap overall-only (a seeded fit reproduces
+attempt 1's weight draws), so a plain bootstrapped fit's headline quintet and
+its success/abort outcome are unchanged by the removal. On CallawaySantAnna
+and EfficientDiD the fit-time branches are deleted outright (PR 3b; the
+post-fit replay exists) and their legacy fields are None after EVERY fit.
+Measured cost of the always-on surfaces (199 draws, 300 units x 12 periods):
+Imputation 0.01s -> 0.08s, TwoStage 0.01s -> 0.04s, Continuous 0.05s ->
+0.05s - a few hundredths of a second per small bootstrapped fit; all three
+default to `n_bootstrap=0`. **View-relay exception (Phase 2b PRs 1-2):**
 estimators whose `aggregate()` RELAYS stored fields without recomputation
 need no influence-function kit - there is nothing to re-weight. The
 retention requirement binds RECOMPUTING estimators (the CallawaySantAnna
@@ -644,7 +676,13 @@ verbatim, and StackedDiD [M-024] always materializes its event-study
 surface at fit (the pooled regression always includes the interactions)
 so both its levels are pure views - which is also why bootstrap-style
 fail-closing does not apply to them: every stored inference mode relays
-faithfully. Estimators whose
+faithfully. ImputationDiD [M-021], TwoStageDiD [M-022] and ContinuousDiD
+[M-025] are HYBRIDS since the 4.0 cut (PR 3c): they RECOMPUTE from their kits
+on analytic fits and RELAY the fit-materialized surface on bootstrapped fits,
+so the retention requirement binds their analytic path only - the relayed
+dict is read from the mutable public field (the StackedDiD view precedent),
+with only alpha/anticipation/survey metadata taken from kit snapshots.
+Estimators whose
 estimand is already a single aggregation (SunAbraham's saturated event study,
 LPDiD's per-horizon design) expose `aggregate()` where meaningful as additive
 surface; their native params (`only_event`/`only_pooled` etc.) are documented
@@ -1031,7 +1069,7 @@ tests-first PR that flips no rows).
      already exists (CallawaySantAnna, EfficientDiD, StackedDiD, dCDH, HAD,
      the HAD pretest workflow) (SHIPPED, PR 3b).
    - 3c - the ImputationDiD/TwoStageDiD/ContinuousDiD removals plus the
-     bootstrapped-fit relay (section 6 amendment).
+     bootstrapped-fit relay (section 6 amendment) (SHIPPED, PR 3c).
 4. The three merges: the MultiPeriodDiD class, `MultiPeriodDiDResults`,
    `PeriodEffect` and `EventStudy`; the QDiD class and `QDiDResults`; the
    `StaggeredTripleDifference` CLASS and `SDDD` - but NOT

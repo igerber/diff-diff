@@ -1,7 +1,6 @@
 """Test helpers bridging the post-fit aggregation containers and the 3.x dict shapes.
 
-The post-fit ``results.aggregate(...)`` container is the canonical route (the 3.9
-fit-time ``fit(aggregate=...)`` keyword is deprecated and removed at the 4.0 cut), so a
+Since the 4.0 cut (PRs 3b/3c) the fit-time ``fit(aggregate=...)`` route is gone, so a
 test that used to read ``results.event_study_effects[h]["effect"]`` after a
 fit-time aggregation reads the post-fit container instead::
 
@@ -27,7 +26,7 @@ SUBJECT is the native (legacy-pickle) route build a faithful stand-in:
     (``event_study_effects`` + ``event_study_vcov``/``_index`` + the surface's
     ``reference_event_times`` + ``cband_crit_value`` + ``event_study_df``), i.e.
     what a 3.x ``fit(aggregate="event_study", balance_e=...)`` stored. Use it ONLY
-    where a test exercises the native route that plain fits do not
+    where a test exercises the native route that live 4.0 fits no longer
     populate (plotter / HonestDiD / PreTrendsPower raw-field branches,
     ``build_event_study_surface(native)`` fixtures).
 

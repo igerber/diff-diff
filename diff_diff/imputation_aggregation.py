@@ -1723,10 +1723,11 @@ class _ImputationAggregationMixin:
         dicts are non-None. ``compute_replicate_refit_variance`` validates
         replicates JOINTLY (all-finite rows, ``survey.py``), so inference is
         LEVEL-MATCHED: post-fit ``aggregate('event_study')`` replays
-        ``[overall, ES]`` and reproduces ``fit(aggregate='event_study')``
-        exactly; a ``fit(aggregate='all')`` surface is NOT the equivalence
-        target when a replicate NaNs on exactly one family's targets (its
-        joint stack drops that replicate for every row).
+        ``[overall, ES]`` and ``aggregate('group')`` replays
+        ``[overall, groups]``; a joint ``[overall, ES, groups]`` stack is
+        NOT the equivalence target when a replicate NaNs on exactly one
+        family's targets (its joint stack drops that replicate for every
+        row).
 
         Overrides ``se``/``t_stat``/``p_value``/``conf_int`` (and, on group
         rows, the ``df_used`` provenance key) IN PLACE on the passed dicts

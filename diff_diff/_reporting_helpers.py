@@ -50,7 +50,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
 
     - ``ImputationDiD`` / ``TwoStageDiD``: horizon / group tables come
       from post-fit ``results.aggregate('event_study'/'group')`` since
-      3.9 (the fit-time ``aggregate`` kwarg is deprecated) and never
+      3.9 (the fit-time ``aggregate`` kwarg was removed at 4.0) and never
       change ``overall_att``. The headline is always the sample-mean
       overall ATT (per BJS 2024 Step 3 with ``w_it = 1/N_1``);
       disambiguate via the event-study or group aggregate if you need
@@ -250,7 +250,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "imputed from a unit+time fixed-effects model fitted on "
                 "untreated observations only (BJS 2024 Step 3). Post-fit "
                 "``results.aggregate('event_study'/'group')`` (3.9; the "
-                "fit-time ``aggregate`` kwarg is deprecated) yields the "
+                "fit-time ``aggregate`` kwarg was removed at 4.0) yields the "
                 "horizon / group tables and does NOT change ``overall_att`` "
                 "— for the horizon or group estimand, consult the "
                 "event-study or group aggregate directly."

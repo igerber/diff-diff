@@ -20,13 +20,6 @@ from diff_diff.continuous_did_bspline import (
 from diff_diff.continuous_did_results import ContinuousDiDResults
 from diff_diff.prep_dgp import generate_continuous_did_data
 
-# M-025: sites deliberately kept on the deprecated fit-time aggregate=
-# (bootstrap event studies - the aggregated bootstrap surface is
-# fit-time-only until replay ships - and legacy-surface pins) run under
-# this module-scoped suppression; the shim behavior itself is pinned in
-# tests/test_aggregate_contract.py::TestContinuousShim.
-pytestmark = pytest.mark.filterwarnings(r"ignore:ContinuousDiD\.fit\(aggregate=\):FutureWarning")
-
 # =============================================================================
 # B-Spline Basis Tests
 # =============================================================================
@@ -372,8 +365,9 @@ class TestContinuousDiDDataValidation:
         with pytest.raises(ValueError, match="[Uu]nbalanced"):
             est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
 
-    def test_invalid_aggregate_raises(self):
-        """Invalid aggregate value should raise ValueError."""
+    def test_fit_time_aggregate_kwarg_removed(self):
+        """4.0: the fit-time ``aggregate=`` keyword is gone (native TypeError);
+        the event study is a post-fit ``results.aggregate("event_study")``."""
         data = pd.DataFrame(
             {
                 "unit": [1, 1, 2, 2],
@@ -384,19 +378,16 @@ class TestContinuousDiDDataValidation:
             }
         )
         est = ContinuousDiD()
-        # M-025: the shim warns on ANY supplied value BEFORE the surviving
-        # value validation raises - both must fire, in that order.
-        with pytest.warns(FutureWarning, match=r"ContinuousDiD\.fit\(aggregate=\)"):
-            with pytest.raises(ValueError, match="Invalid aggregate"):
-                est.fit(
-                    data,
-                    "outcome",
-                    "unit",
-                    "period",
-                    "first_treat",
-                    "dose",
-                    aggregate="event_study",
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "dose",
+                aggregate="event_study",
+            )
 
     def test_no_never_treated_error(self):
         data = pd.DataFrame(
@@ -507,10 +498,19 @@ class TestContinuousDiDResults:
         assert "time" in df.columns
         assert "att_glob" in df.columns
 
-    def test_to_dataframe_event_study_error(self, results):
-        """Should error if event study not computed."""
-        with pytest.raises(ValueError, match="[Ee]vent study"):
-            results.to_dataframe(level="event_study")
+    def test_to_dataframe_event_study_bootstrapped_populated(self, results):
+        """A bootstrapped fit materializes the event-study surface at fit
+        time (4.0: always, no fit-time kwarg), so the legacy frame is
+        available and agrees row-for-row with the relayed container; the
+        analytic-fit error is pinned in test_event_study_to_dataframe."""
+        assert results.event_study_effects is not None
+        df = results.to_dataframe(level="event_study")
+        assert "relative_period" in df.columns
+        assert "att_glob" in df.columns
+        es = results.aggregate("event_study")
+        assert len(df) == len(es.event_time)
+        np.testing.assert_array_equal(df["relative_period"].to_numpy(), es.event_time)
+        np.testing.assert_allclose(df["att_glob"].to_numpy(), es.att, rtol=1e-14, atol=0)
 
     def test_to_dataframe_invalid_level(self, results):
         with pytest.raises(ValueError, match="Unknown level"):
@@ -584,20 +584,16 @@ class TestEventStudyAggregation:
             noise_sd=0.5,
         )
         est = ContinuousDiD(n_bootstrap=49, seed=42)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        # bootstrapped fits materialize the event-study surface at fit time
+        # and the post-fit container relays it
         assert results.event_study_effects is not None
+        es = results.aggregate("event_study")
         # Should have pre and post relative periods
         rel_periods = sorted(results.event_study_effects.keys())
         assert min(rel_periods) < 0  # Pre-treatment
         assert max(rel_periods) >= 0  # Post-treatment
+        assert sorted(int(e) for e in es.event_time) == rel_periods
 
     def test_event_study_to_dataframe(self):
         data = generate_continuous_did_data(
@@ -669,15 +665,8 @@ class TestEventStudyAggregation:
             n_bootstrap=n_boot,
             seed=42,
         )
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        # bootstrapped fits populate the surface at fit time
         assert results.event_study_effects is not None
         rel_periods = sorted(results.event_study_effects.keys())
         assert min(rel_periods) < 0  # Pre-treatment

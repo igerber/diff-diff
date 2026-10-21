@@ -2,9 +2,10 @@
 Shared event-study aggregation machinery for ContinuousDiD (row M-025).
 
 Leaf module: hosts ``_ContinuousDiDAggregationMixin``, the binarized
-event-study aggregation shared between fit-time ``fit(aggregate=
-"eventstudy")`` (deprecated) and the post-fit
-``ContinuousDiDResults.aggregate("event_study")`` recompute. The import
+event-study aggregation shared between the fit-time surface a BOOTSTRAPPED
+``fit()`` materializes (relayed by ``aggregate("event_study")``) and the
+post-fit ``ContinuousDiDResults.aggregate("event_study")`` recompute on
+analytic fits. The import
 DAG forces the split: ``continuous_did.py`` imports
 ``continuous_did_results.py``, so the results module cannot reach the
 estimator module - both instead import this leaf (numpy + diff_diff.utils
@@ -108,12 +109,14 @@ class _ContinuousDiDAggregationMixin:
         """Fill analytical se/t/p/CI on the binarized event-study rows.
 
         The verbatim body of fit's former inline "Event study analytical
-        SEs" block: mutates ``event_study_effects`` rows in place. The
-        fit-time caller passes its ``gt_results`` / ``gt_bootstrap_info``
-        locals; the post-fit caller passes the kit's ``gt_summary`` /
-        pruned ``gt_es_payload`` (key-compatible by construction). Only
-        runs when the fit was analytical with post-treatment cells - the
-        callers own that gating.
+        SEs" block: mutates ``event_study_effects`` rows in place. Since
+        4.0 the post-fit kit recompute is the only caller (the analytical
+        fit-time arm was deleted - analytic fits materialize no ES surface);
+        it passes the kit's ``gt_summary`` / pruned ``gt_es_payload``
+        (key-compatible with fit's full ``gt_results`` /
+        ``gt_bootstrap_info`` locals by construction). Only runs when the
+        fit was analytical with post-treatment cells - the caller owns
+        that gating.
         """
         unit_sw = unit_survey_weights
 
