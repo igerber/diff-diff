@@ -1757,7 +1757,7 @@ class TestRankGuardedAnalyticalSE:
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_survey_weighted_constant_covariate_finite_se(self, method):
         # Exercises the *survey-weighted* CS bread / PS-Hessian branches
-        # (W includes survey weights), mirroring the TD/SDDD weighted tests.
+        # (W includes survey weights), mirroring the TripleDifference weighted tests.
         # Panel estimator -> weights constant within unit.
         from diff_diff.survey import SurveyDesign
 

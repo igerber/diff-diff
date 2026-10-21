@@ -970,8 +970,8 @@ def generate_rao_wu_weights_batch(
 # Extracted verbatim from CallawaySantAnna.fit()'s inline blocks (and adopted
 # by EfficientDiD's fit/replay) so the post-fit aggregate() replay applies
 # EXACTLY the same percentile overrides the fit-time path applies — one
-# implementation, no twin drift. (The deprecated StaggeredTripleDifference
-# keeps its OWN copy of the group replacement loop; unifying it is sequenced
+# implementation, no twin drift. (The staggered DDD engine behind
+# TripleDifference keeps its OWN copy of the group replacement loop; unifying it is sequenced
 # with the M-014 container port.) Note on warning attribution: when the
 # engines run under the post-fit replay their fit-tuned stacklevels resolve
 # into library frames rather than the user's aggregate() call — accepted as

@@ -1432,7 +1432,7 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
         f"{type(results).__name__} does not expose an event-study surface. "
         "Supported producers: CallawaySantAnna, DMLDiD, SunAbraham, ImputationDiD, "
         "TwoStageDiD, StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, "
-        "WooldridgeDiD, StaggeredTripleDifference, MultiPeriodDiD, LPDiD, "
+        "WooldridgeDiD, TripleDifference (staggered mode), MultiPeriodDiD, LPDiD, "
         "ChaisemartinDHaultfoeuille, and HeterogeneousAdoptionDiD "
         "event-study results."
     )

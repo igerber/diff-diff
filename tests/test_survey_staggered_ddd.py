@@ -1,4 +1,5 @@
-"""Survey support tests for StaggeredTripleDifference estimator.
+"""Survey support tests for TripleDifference's staggered mode (the staggered-DDD
+engine; formerly the ``StaggeredTripleDifference`` class, removed at the 4.0 cut, PR 4a).
 
 Tests follow the patterns from test_survey_phase4.py and test_survey_phase7a.py:
 uniform weight equivalence, scale invariance, nontrivial weight effects,
@@ -11,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import StaggeredTripleDifference
+from diff_diff import TripleDifference
 from diff_diff.survey import SurveyDesign
 
 # ---------------------------------------------------------------------------
@@ -94,14 +95,14 @@ class TestSmokeSDDDSurvey:
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_finite_results(self, sddd_data, method):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method=method)
+        est = TripleDifference(estimation_method=method)
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
         assert np.isfinite(res.overall_att)
@@ -111,14 +112,14 @@ class TestSmokeSDDDSurvey:
     @pytest.mark.parametrize("agg", ["simple", "event_study", "group", "all"])
     def test_aggregation(self, sddd_data, agg):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate=agg,
             survey_design=sd,
         )
@@ -142,27 +143,27 @@ class TestUniformWeightEquivalence:
         data = sddd_data.copy()
         data["uniform_w"] = 1.0
 
-        est = StaggeredTripleDifference(estimation_method=method)
+        est = TripleDifference(estimation_method=method)
 
         # Unweighted
         res_uw = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
         )
 
         # Uniform weights
         sd = SurveyDesign(weights="uniform_w")
         res_w = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
 
@@ -192,27 +193,27 @@ class TestScaleInvariance:
         data = sddd_data.copy()
         data["weight_2x"] = data["weight"] * 2.0
 
-        est = StaggeredTripleDifference(estimation_method="dr")
+        est = TripleDifference(estimation_method="dr")
 
         sd1 = SurveyDesign(weights="weight")
         res1 = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd1,
         )
 
         sd2 = SurveyDesign(weights="weight_2x")
         res2 = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd2,
         )
 
@@ -237,25 +238,25 @@ class TestNontrivialWeightsChangeSE:
     """Variable survey weights should produce different SEs than unweighted."""
 
     def test_weighted_se_differs(self, sddd_data):
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
 
         res_uw = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
         )
 
         sd = SurveyDesign(weights="weight")
         res_w = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
 
@@ -279,14 +280,14 @@ class TestFullDesign:
             strata="stratum",
             psu="psu",
         )
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd,
         )
@@ -298,14 +299,14 @@ class TestFullDesign:
 
     def test_metadata_populated(self, sddd_data):
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
-        est = StaggeredTripleDifference(estimation_method="dr")
+        est = TripleDifference(estimation_method="dr")
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
         sm = res.survey_metadata
@@ -324,17 +325,17 @@ class TestDesignBasedAggSE:
     """Aggregated SEs with strata/PSU differ from pweight-only SEs."""
 
     def test_design_se_differs_from_pweight_only(self, sddd_data):
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
 
         # pweight only
         sd_pw = SurveyDesign(weights="weight")
         res_pw = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd_pw,
         )
@@ -347,11 +348,11 @@ class TestDesignBasedAggSE:
         )
         res_full = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd_full,
         )
@@ -398,14 +399,14 @@ class TestReplicateWeights:
             replicate_weights=rep_cols,
             replicate_method="BRR",
         )
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         res = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd,
         )
@@ -440,18 +441,18 @@ class TestReplicateBootstrapRejection:
             replicate_weights=rep_cols,
             replicate_method="BRR",
         )
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="reg",
             n_bootstrap=49,
         )
         with pytest.raises(NotImplementedError, match="replicate"):
             est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 survey_design=sd,
             )
 
@@ -489,14 +490,14 @@ class TestReplicateScaleInvariance:
             replicate_weights=rep_cols,
             replicate_method="BRR",
         )
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         res1 = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate=agg,
             survey_design=sd1,
         )
@@ -514,11 +515,11 @@ class TestReplicateScaleInvariance:
         )
         res2 = est.fit(
             data_k,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate=agg,
             survey_design=sd2,
         )
@@ -593,16 +594,16 @@ class TestSurveyWeightedAggregation:
                 w_map[uid] = 3.0 + rng.uniform(0, 0.5)
         data["skewed_w"] = data["unit"].map(w_map)
 
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
 
         # Unweighted
         res_uw = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
         )
 
@@ -610,11 +611,11 @@ class TestSurveyWeightedAggregation:
         sd = SurveyDesign(weights="skewed_w")
         res_w = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd,
         )
@@ -642,15 +643,15 @@ class TestPweightOnlyValidation:
         data = sddd_data.copy()
         data["fweight"] = 1
         sd = SurveyDesign(weights="fweight", weight_type="fweight")
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         with pytest.raises(ValueError, match="pweight"):
             est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 survey_design=sd,
             )
 
@@ -658,15 +659,15 @@ class TestPweightOnlyValidation:
         data = sddd_data.copy()
         data["aweight"] = 1.0
         sd = SurveyDesign(weights="aweight", weight_type="aweight")
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         with pytest.raises(ValueError, match="pweight"):
             est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 survey_design=sd,
             )
 
@@ -681,18 +682,18 @@ class TestBootstrapSurvey:
 
     def test_bootstrap_with_survey(self, sddd_data):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="reg",
             n_bootstrap=49,
             seed=42,
         )
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd,
         )
@@ -709,20 +710,20 @@ class TestBootstrapSurvey:
 class TestControlGroupSurvey:
     """Both control_group settings work with survey."""
 
-    @pytest.mark.parametrize("cg", ["nevertreated", "notyettreated"])
+    @pytest.mark.parametrize("cg", ["never_treated", "not_yet_treated"])
     def test_control_group(self, sddd_data, cg):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="reg",
             control_group=cg,
         )
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
         assert np.isfinite(res.overall_att)
@@ -740,17 +741,17 @@ class TestBasePeriodSurvey:
     @pytest.mark.parametrize("bp", ["varying", "universal"])
     def test_base_period(self, sddd_data, bp):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="reg",
             base_period=bp,
         )
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=sd,
         )
         assert np.isfinite(res.overall_att)
@@ -768,14 +769,14 @@ class TestCovariateAdjustedSurvey:
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_covariate_survey(self, sddd_data, method):
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method=method)
+        est = TripleDifference(estimation_method=method)
         res = est.fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             covariates=["x1"],
             survey_design=sd,
         )
@@ -811,14 +812,14 @@ class TestReplicateCombinedWeightsFalse:
             replicate_method="BRR",
             combined_weights=False,
         )
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         res = est.fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="simple",
             survey_design=sd,
         )
@@ -845,18 +846,18 @@ class TestWeightedPscoreFallback:
         # logit failure in at least some subgroups
         data["collinear_x"] = data["eligibility"].astype(float) * 100.0
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method="ipw", pscore_fallback="unconditional")
+        est = TripleDifference(estimation_method="ipw", pscore_fallback="unconditional")
         import warnings
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 covariates=["collinear_x"],
                 survey_design=sd,
             )
@@ -881,18 +882,18 @@ class TestZeroMassSubgroupSkip:
         data.loc[mask, "weight"] = 0.0
 
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         import warnings
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 survey_design=sd,
             )
         # Should have produced at least one empty/zero-mass subgroup warning
@@ -918,23 +919,23 @@ class TestSurveyOverallAttEs:
         data = _make_staggered_ddd_data(n_units=200, seed=42)
         data["weight"] = 1.0
         sd = SurveyDesign(weights="weight")
-        res_w = StaggeredTripleDifference(estimation_method="reg").fit(
+        res_w = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
             survey_design=sd,
         )
-        res_u = StaggeredTripleDifference(estimation_method="reg").fit(
+        res_u = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         assert res_w.overall_att_es is not None and res_u.overall_att_es is not None
@@ -945,23 +946,23 @@ class TestSurveyOverallAttEs:
     def test_nontrivial_weights_change_se(self):
         data = _make_staggered_ddd_data(n_units=200, seed=42)  # variable weights
         sd = SurveyDesign(weights="weight")
-        res_w = StaggeredTripleDifference(estimation_method="reg").fit(
+        res_w = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
             survey_design=sd,
         )
-        res_u = StaggeredTripleDifference(estimation_method="reg").fit(
+        res_u = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         assert res_w.overall_se_es is not None and res_u.overall_se_es is not None
@@ -971,13 +972,13 @@ class TestSurveyOverallAttEs:
     def test_full_design_overall_es_finite(self):
         data = _make_staggered_ddd_data(n_units=200, seed=42)
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
-        res = StaggeredTripleDifference(estimation_method="reg").fit(
+        res = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
             survey_design=sd,
         )
@@ -1005,13 +1006,13 @@ class TestSurveyOverallAttEs:
             replicate_weights=[f"rep_{r}" for r in range(n_rep)],
             replicate_method="BRR",
         )
-        res = StaggeredTripleDifference(estimation_method="reg").fit(
+        res = TripleDifference(estimation_method="reg").fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
             survey_design=sd,
         )
@@ -1038,13 +1039,13 @@ class TestSurveyOverallAttEs:
         sd = SurveyDesign(weights="weight", psu="psu", fpc="fpc_col")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            res = StaggeredTripleDifference(estimation_method="reg", n_bootstrap=50, seed=7).fit(
+            res = TripleDifference(estimation_method="reg", n_bootstrap=50, seed=7).fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 aggregate="event_study",
                 survey_design=sd,
             )

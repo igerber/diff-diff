@@ -14,8 +14,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import ChangesInChanges, ChangesInChangesResults, QDiD, QDiDResults
+from diff_diff import ChangesInChanges, ChangesInChangesResults
 from tests.conftest import assert_nan_inference
+
+
+def QDiD(**kw):
+    """The qdid method on the merged surface (the standalone QDiD class was
+    removed at the 4.0 cut, PR 4a); keeps the suite's two-arm parametrization
+    readable."""
+    kw.setdefault("method", "qdid")
+    return ChangesInChanges(**kw)
+
 
 BOTH = pytest.mark.parametrize("cls", [ChangesInChanges, QDiD], ids=["cic", "qdid"])
 
@@ -910,5 +919,10 @@ class TestResultsAPI:
         )
 
 
-def test_qdid_results_alias():
-    assert QDiDResults is ChangesInChangesResults
+def test_qdid_results_alias_is_gone():
+    """The QDiDResults alias (M-061) was retired at the 4.0 cut; the shared
+    container is ChangesInChangesResults for both methods."""
+    import diff_diff
+
+    assert not hasattr(diff_diff, "QDiDResults")
+    assert type(fit_quiet(QDiD(n_bootstrap=0), make_2x2())) is ChangesInChangesResults

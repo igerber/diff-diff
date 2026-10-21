@@ -100,7 +100,7 @@ results = ChangesInChanges(method="qdid", n_bootstrap=200, seed=42).fit(
     data, outcome="y", treatment="treat", time="post")
 ```
 
-**Only the class spelling is deprecated, not the estimator.** `method="qdid"` is a fully
+**Only the class spelling was removed, not the estimator.** `method="qdid"` is a fully
 supported comparison mode and emits no warning of its own — the numbers are unchanged, because
 it is the same engine. `method="cic"` is the default and encodes Athey–Imbens' recommendation.
 
@@ -284,8 +284,8 @@ removal/deprecation fields and appear here only.
   inputs (`None`, strings, `Decimal`/`Fraction`, 1-element arrays) raise `ValueError` instead of
   `TypeError` (or being silently accepted, for the 1-element array). `CallawaySantAnna` gains the
   same type guard; `TripleDifference`, `CallawaySantAnna`, and `ContinuousDiD` now store the value
-  coerced to built-in `float`; `LWDiD`'s message wording changed. The deprecated
-  `StaggeredTripleDifference` keeps its permissive construction shape.
+  coerced to built-in `float`; `LWDiD`'s message wording changed. (The removed
+  `StaggeredTripleDifference` class kept its permissive construction shape through 3.x.)
 
 - `summary(alpha=...)` / `print_summary(alpha=...)` on the results classes family-wide
   ([M-146], landing at 4.0; the staggered family first, then the non-staggered summaries -

@@ -33,12 +33,10 @@ regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
    diff_diff.WooldridgeDiD
    diff_diff.LPDiD
    diff_diff.ChangesInChanges
-   diff_diff.QDiD
    diff_diff.LWDiD
    diff_diff.DMLDiD
    diff_diff.DurationDiD
    diff_diff.BaconDecomposition
-   diff_diff.StaggeredTripleDifference
    diff_diff.RegressionDiscontinuity
 
 Results Classes

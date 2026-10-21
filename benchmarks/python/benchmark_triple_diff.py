@@ -83,7 +83,7 @@ def main():
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=covariates,
         )
 

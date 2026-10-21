@@ -65,8 +65,8 @@ def _distributional_kind(results: Any) -> Any:
 def _estimator_display(type_name: str, results: Any) -> str:
     """Per-instance display name.
 
-    ``ChangesInChangesResults`` is shared by CiC and QDiD (``QDiDResults``
-    is an alias), so the static per-type map cannot distinguish them; the
+    ``ChangesInChangesResults`` is shared by the CiC and QDiD methods, so
+    the static per-type map cannot distinguish them; the
     ``method`` field ("cic"/"qdid") does. ``DMLDiDResults`` likewise
     serves two lanes: a fit with ``bad_control`` set runs the Caetano,
     Callaway, Payne & Sant'Anna (2026) bad-control score and is named for
@@ -1739,8 +1739,9 @@ def _cic_fit_snippet(
 ) -> str:
     """Render a ChangesInChanges constructor+fit snippet preserving the fit's design.
 
-    Always emits ``ChangesInChanges(...)``: row M-015 deprecates the QDiD
-    CLASS, so guidance must never hand the reader a ``QDiD(...)`` call. Pass
+    Always emits ``ChangesInChanges(...)``: the standalone QDiD class was
+    removed at 4.0 (row M-015), so guidance never hands the reader a
+    ``QDiD(...)`` call. Pass
     ``method="qdid"`` to select that estimator on the merged surface; any other
     value (including the default ``None``) emits no ``method=`` argument at
     all, keeping CiC snippets byte-identical to the pre-merge text.
@@ -1811,8 +1812,8 @@ def _did_anchor_snippet(results: Any) -> str:
 def _handle_cic(results: Any):
     """ChangesInChanges / QDiD guidance (shared results class).
 
-    CiC and QDiD share ``ChangesInChangesResults`` (``QDiDResults`` is an
-    alias), so this single handler branches on the ``method`` field
+    The CiC and QDiD methods share ``ChangesInChangesResults``, so this
+    single handler branches on the ``method`` field
     ("cic"/"qdid"; unknown or missing kinds fall to the CiC branch - the
     paper-primary, safe-voiced default) and on covariate status
     (truthiness, not ``is not None``: fit() normalizes ``covariates=[]``
@@ -1824,8 +1825,8 @@ def _handle_cic(results: Any):
     """
     is_qdid = _distributional_kind(results) == "qdid"
     has_cov = bool(getattr(results, "covariates", None))
-    # Display name for step LABELS (still the estimator's own name - the METHOD
-    # "QDiD" is not deprecated, only the class spelling is).
+    # Display name for step LABELS (the estimator's own name - the METHOD
+    # "QDiD" is fully supported; only the class spelling was removed at 4.0).
     est_name = "QDiD" if is_qdid else "ChangesInChanges"
     # Constructor argument for emitted SNIPPETS: every snippet now builds
     # ChangesInChanges, selecting the estimator via method= (row M-015).

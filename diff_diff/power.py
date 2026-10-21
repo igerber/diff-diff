@@ -355,7 +355,7 @@ def _ddd_panel_fit_kwargs(
     n_periods: int,
     treatment_period: int,
 ) -> Dict[str, Any]:
-    # Panel DDD: time="post" is generate_ddd_panel_data's derived binary
+    # Panel DDD: post="post" is generate_ddd_panel_data's derived binary
     # pre/post indicator (vs the cross-sectional "time"). Clustering is NOT a
     # fit kwarg — it resolves from the estimator's cluster="unit" attribute
     # against the DGP's "unit" column.

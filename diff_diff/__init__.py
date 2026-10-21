@@ -55,11 +55,9 @@ from diff_diff.chaisemartin_dhaultfoeuille_results import (
 )
 from diff_diff.changes_in_changes import (
     ChangesInChanges,
-    QDiD,
 )
 from diff_diff.changes_in_changes_results import (
     ChangesInChangesResults,
-    QDiDResults,
 )
 from diff_diff.continuous_did import (
     ContinuousDiD,
@@ -258,9 +256,6 @@ from diff_diff.staggered import (
     CSBootstrapResults,
     GroupTimeEffect,
 )
-from diff_diff.staggered_triple_diff import (
-    StaggeredTripleDifference,
-)
 from diff_diff.staggered_triple_diff_results import (
     StaggeredTripleDiffResults,
 )
@@ -332,7 +327,6 @@ CS = CallawaySantAnna
 SA = SunAbraham
 BJS = ImputationDiD
 DDD = TripleDifference
-SDDD = StaggeredTripleDifference
 Bacon = BaconDecomposition
 EDiD = EfficientDiD
 ETWFE = WooldridgeDiD
@@ -352,7 +346,6 @@ __all__ = [
     "CallawaySantAnna",
     "ChaisemartinDHaultfoeuille",
     "ChangesInChanges",
-    "QDiD",
     "ContinuousDiD",
     "SunAbraham",
     "ImputationDiD",
@@ -373,7 +366,6 @@ __all__ = [
     "SA",
     "BJS",
     "DDD",
-    "SDDD",
     "SCM",
     "Bacon",
     # Bacon Decomposition
@@ -389,7 +381,6 @@ __all__ = [
     "CSBootstrapResults",
     "GroupTimeEffect",
     "ChangesInChangesResults",
-    "QDiDResults",
     "ContinuousDiDResults",
     "DoseResponseCurve",
     "SunAbrahamResults",
@@ -400,7 +391,6 @@ __all__ = [
     "TwoStageBootstrapResults",
     "SpilloverDiDResults",
     "TripleDifferenceResults",
-    "StaggeredTripleDifference",
     "StaggeredTripleDiffResults",
     "TROPResults",
     "SyntheticControlResults",

@@ -1,5 +1,11 @@
 """Step 0: capture the pre-merge oracles for tests/test_v4_merge_cic.py.
 
+HISTORICAL since the 4.0 cut (PR 4a): this script imports and drives the REMOVED
+``QDiD`` class, so it is runnable only at the recorded provenance commit below
+(``c2941caa``). It is kept as the oracle literals' provenance record; the test
+module now carries its own copy of ``make_2x2``. Re-capturing means checking out
+that commit.
+
 MUST run on the UNMODIFIED tree (before ``method=`` lands on ChangesInChanges),
 under DIFF_DIFF_BACKEND=python:
 
@@ -26,9 +32,9 @@ Scope decisions, both deliberate:
     golden at atol=1e-10, rtol=0 for cic/qdid x panel/rcs. That is a stronger
     absolute cross-tree pin than anything this file would add.
 
-The DGP lives HERE, not in the test module: this script runs at step 1 while
-the test module is written at step 7, so the dependency must point this way.
-tests/test_v4_merge_cic.py imports ``make_2x2`` from this module.
+The DGP lived HERE, not in the test module, because this script ran at step 1
+while the test module was written at step 7; since PR 4a the test module keeps
+its own copy of ``make_2x2`` (this module no longer imports on the 4.0 tree).
 
 PROVENANCE of the literals committed in tests/test_v4_merge_cic.py:
     commit  c2941caa2a7865c9458c6092359e75238fdbabb1  (origin/main, pre-3(c))

@@ -30,11 +30,11 @@ TripleDifference
 Main estimator class for Triple Difference designs.
 
 Since 3.9 this class serves BOTH triple-difference designs (ledger row M-013):
-the 2x2x2 design, and the staggered-adoption design that
-:class:`~diff_diff.StaggeredTripleDifference` used to own. ``first_treat=``
-selects the staggered engine; mixing the two designs' parameters raises rather
-than guessing. The estimation cores are unchanged - both surfaces share one
-engine, so the staggered numbers are identical to the deprecated class's.
+the 2x2x2 design, and the staggered-adoption design that the
+``StaggeredTripleDifference`` class owned through 3.x (removed at 4.0).
+``first_treat=`` selects the staggered engine; mixing the two designs' parameters
+raises rather than guessing. The estimation core is unchanged - the staggered
+numbers are identical to the removed class's.
 
 .. code-block:: python
 

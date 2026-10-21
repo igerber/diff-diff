@@ -170,9 +170,7 @@ Supported Estimators
    * - :class:`~diff_diff.EfficientDiD`
      - Chen, Sant'Anna & Xie (2025) efficient DiD
    * - :class:`~diff_diff.TripleDifference`
-     - Triple difference (DDD) estimator
-   * - :class:`~diff_diff.StaggeredTripleDifference`
-     - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT (deprecated 3.9 - use :class:`~diff_diff.TripleDifference` with ``first_treat=``)
+     - Triple difference (DDD) estimator; staggered adoption per Ortiz-Villavicencio & Sant'Anna (2025) via ``first_treat=``
    * - :class:`~diff_diff.ContinuousDiD`
      - Callaway, Goodman-Bacon & Sant'Anna (2024) continuous-treatment dose-response DiD
    * - :class:`~diff_diff.HeterogeneousAdoptionDiD`
@@ -189,8 +187,6 @@ Supported Estimators
      - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners (panel or declared repeated cross sections; survey/cluster support); Caetano et al. (2026) bad-control score via ``fit(bad_control=)`` (bad-control lane: panel only, ``cluster=`` only)
    * - :class:`~diff_diff.DurationDiD`
      - Deaner & Ku (2026) causal duration DiD for binary absorbing outcomes; untreated-hazard restriction (common dynamics or proportional hazards), whole-individual bootstrap bands
-   * - :class:`~diff_diff.QDiD`
-     - Quantile DiD comparison estimator applying DiD quantile-by-quantile (deprecated 3.9 - use :class:`~diff_diff.ChangesInChanges` with ``method="qdid"``)
    * - :class:`~diff_diff.RegressionDiscontinuity`
      - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`

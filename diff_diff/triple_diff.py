@@ -38,7 +38,6 @@ from diff_diff._base import BaseEstimator
 from diff_diff._deprecation import (
     NOT_SUPPLIED,
     require_arg,
-    resolve_renamed_kwarg,
 )
 from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
@@ -473,8 +472,8 @@ class TripleDifference(
         Comparison cohort for staggered mode: ``"not_yet_treated"`` (units
         whose enabling period is still in the future) or ``"never_treated"``
         (the never-enabled cohort only). The compact R spellings
-        ``"notyettreated"``/``"nevertreated"`` are accepted only by the
-        deprecated ``StaggeredTripleDifference`` and die with it at 4.0.
+        ``"notyettreated"``/``"nevertreated"`` were accepted only by the
+        removed ``StaggeredTripleDifference`` class (4.0, row M-013).
     anticipation : int, default=0
         Number of periods before the enabling period in which units may
         already respond. Must be a non-negative integer; ``bool`` is
@@ -619,8 +618,8 @@ class TripleDifference(
             )
         # Staggered-mode value contracts (M-013). The merged class uses the
         # UNDERSCORED library vocabulary from birth; R's compact spellings
-        # ("notyettreated"/"nevertreated") die with StaggeredTripleDifference
-        # at 4.0 and are deliberately NOT accepted here.
+        # ("notyettreated"/"nevertreated") died with the StaggeredTripleDifference
+        # class at 4.0 and are deliberately NOT accepted here.
         if control_group not in ("never_treated", "not_yet_treated"):
             raise ValueError(
                 f"control_group must be 'never_treated' or 'not_yet_treated', "
@@ -751,9 +750,10 @@ class TripleDifference(
             all estimation methods ("reg", "ipw", "dr").
         time : str
             In STAGGERED mode, the calendar period column (keyword). In 2x2x2
-            mode it is the deprecated alias for ``post`` (row M-031) and warns
-            with ``FutureWarning``. From 4.0 it means the calendar column only
-            (row M-085).
+            mode ``time=`` is not accepted: since 4.0 it means the calendar
+            column only, and passing it raises ``ValueError`` naming ``post=``
+            (row M-085; through 3.x it was the deprecated alias for ``post``,
+            row M-031).
         unit : str, keyword-only
             Staggered mode. Unit identifier column.
         first_treat : str, keyword-only
@@ -784,9 +784,9 @@ class TripleDifference(
         # A bad `aggregate` value must not be masked by a mode error (3(a)'s
         # `spec` precedent). Consequence, deliberate: fit(aggregate="bogus")
         # WITHOUT first_treat reports the invalid value, not the mode error.
-        # `_validate_vcov_type` is deliberately NOT hoisted here - moving it
-        # ahead of the M-031 shim would make a direct-attribute-mutated
-        # vcov_type raise BEFORE the rename FutureWarning that fires today.
+        # `_validate_vcov_type` is deliberately NOT hoisted here - it stays
+        # after the 2x2x2 keyword checks so a direct-attribute-mutated vcov_type
+        # is reported after, not instead of, a wrong-keyword error.
         if aggregate is not None and aggregate not in ("event_study", "group", "simple", "all"):
             raise ValueError(
                 f"aggregate must be 'event_study', 'group', 'simple', or 'all', "
@@ -794,8 +794,8 @@ class TripleDifference(
             )
 
         # ---- Step 1: staggered mode ---------------------------------------
-        # Raw sentinels forwarded: the 2x2x2 rename shim must not run, because
-        # `time=` is the calendar column on this path, not a deprecated alias.
+        # Raw sentinels forwarded: the 2x2x2 `time=` check must not run, because
+        # `time=` is the calendar column on this path.
         if first_treat is not NOT_SUPPLIED:
             return self._fit_staggered(
                 data,
@@ -853,24 +853,28 @@ class TripleDifference(
                 f"parameter(s), or pass first_treat= to fit the staggered design."
             )
 
-        # ---- Step 4: 2x2x2 mode, the M-031 rename shim --------------------
+        # ---- Step 4: 2x2x2 mode, the time=/post= contract (M-085) --------
         # group/partition are sentinel-defaulted now (they must be omissible in
         # staggered mode), so their missing-argument TypeErrors are restored
-        # here. They run BEFORE the rename shim: after it, fit(df, "y",
-        # time="t") would newly emit the M-031 FutureWarning before raising the
-        # missing-group TypeError (today it raises immediately, with no
-        # warning, and under -W error the surfaced exception type would flip).
+        # here. They run BEFORE the time= check so a missing group is reported
+        # as the TypeError, not as the M-085 ValueError.
         require_arg("TripleDifference.fit", "group", group)
         require_arg("TripleDifference.fit", "partition", partition)
-        post = resolve_renamed_kwarg(
-            "TripleDifference.fit",
-            "time",
-            time,
-            "post",
-            post,
-            default=NOT_SUPPLIED,
-            extra="From 4.0, time= means the calendar column only.",
-        )
+        # Since 4.0 `time` means the staggered calendar column ONLY (row M-085;
+        # through 3.x it was the deprecated alias for `post`, row M-031): both
+        # supplied is the old both-supplied error, time= alone raises rather
+        # than being reinterpreted as the post dummy.
+        if post is not NOT_SUPPLIED and time is not NOT_SUPPLIED:
+            raise ValueError(
+                "TripleDifference.fit: got both post= and time=; in the 2x2x2 design "
+                "pass only post= (time= is the staggered calendar column, row M-085)."
+            )
+        if time is not NOT_SUPPLIED:
+            raise ValueError(
+                "TripleDifference.fit: in the 2x2x2 design time= is the staggered "
+                "calendar column only (4.0, row M-085); pass the 0/1 post-treatment "
+                "indicator as post=."
+            )
         require_arg("TripleDifference.fit", "post", post)
         # Body-local name; the public parameter is post (M-031).
         time = post
@@ -1102,7 +1106,8 @@ class TripleDifference(
 
         Reached only when ``first_treat=`` was supplied. Rejects the other
         design's parameters rather than ignoring them, then hands off to the
-        engine shared with the deprecated ``StaggeredTripleDifference``.
+        staggered engine (``_staggered_triple_diff_engine.py``, formerly the
+        ``StaggeredTripleDifference`` class, removed at 4.0).
         """
         # Step 1: the 2x2x2 params are rejected, not ignored. A positional 3rd
         # or 5th argument lands in group/post and is caught here.
@@ -1143,8 +1148,8 @@ class TripleDifference(
         require_arg("TripleDifference.fit", "partition", partition)
 
         # Step 4: cluster= is a CONSTRUCTOR param and the staggered engine has
-        # no clustered analytical path. The deprecated class accepts-then-warns
-        # -then-ignores it; this surface is new, so it raises from birth rather
+        # no clustered analytical path. The removed StaggeredTripleDifference
+        # class accepted-then-warned-then-ignored it; this surface raises rather
         # than shipping an accepted-but-unhonored parameter (3(a)'s precedent).
         if self.cluster is not None:
             raise ValueError(

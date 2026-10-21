@@ -16,7 +16,7 @@ Start here and follow the questions:
 
    - **No** → Go to question 1
    - **Yes, simultaneous treatment (2×2×2)** → Use :class:`~diff_diff.TripleDifference`
-   - **Yes, with staggered timing** → Use :class:`~diff_diff.TripleDifference` with ``first_treat=`` (:class:`~diff_diff.StaggeredTripleDifference` is deprecated in 3.9 and runs the same engine until its 4.0 removal)
+   - **Yes, with staggered timing** → Use :class:`~diff_diff.TripleDifference` with ``first_treat=``
 
 1. **Is treatment continuous?** (Units receive different doses or intensities)
 
@@ -39,7 +39,7 @@ Start here and follow the questions:
 4. **Do you have panel data?** (Multiple observations per unit over time)
 
    - **No** → Use :class:`~diff_diff.DifferenceInDifferences` (basic 2x2)
-   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling in unconditional fits; optional numeric covariates via quantile-regression conditioning - the covariate branch's linear quantile regressions are not equivariant to nonlinear monotone transforms; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.ChangesInChanges` with ``method="qdid"`` is the quantile-DiD comparison estimator (the standalone ``QDiD`` class is deprecated in 3.9); Athey & Imbens (2006) recommend CiC over it
+   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling in unconditional fits; optional numeric covariates via quantile-regression conditioning - the covariate branch's linear quantile regressions are not equivariant to nonlinear monotone transforms; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.ChangesInChanges` with ``method="qdid"`` is the quantile-DiD comparison estimator (the standalone ``QDiD`` class was removed in 4.0); Athey & Imbens (2006) recommend CiC over it
    - **Yes** → Go to question 5
 
 5. **Do you need period-specific effects?** (Event study design)
@@ -124,7 +124,7 @@ Quick Reference
      - Two eligibility criteria (DDD)
      - Parallel trends for both dimensions
      - DDD ATT (regression, IPW, or DR)
-   * - ``StaggeredTripleDifference``
+   * - ``TripleDifference`` (``fit(..., first_treat=)``)
      - Staggered DDD with treatment timing
      - Conditional parallel trends (DDD)
      - Group-time ATT(g,t), aggregations
@@ -144,7 +144,7 @@ Quick Reference
      - Binary absorbing outcome (spell ended), two groups, common timing
      - Constant gap (CD) or ratio (PH) between the groups' untreated hazards
      - Per-date absorption ATT + uniform average (whole-individual bootstrap bands, pretest)
-   * - ``QDiD`` (deprecated 3.9; use ``ChangesInChanges(method="qdid")``)
+   * - ``ChangesInChanges(method="qdid")``
      - 2x2 quantile-DiD comparison alongside ChangesInChanges
      - Additive quantile model (scale-dependent, testable restrictions)
      - ATT + quantile treatment effects (bootstrap inference)
@@ -1092,7 +1092,7 @@ estimation. The depth of support varies by estimator and variance method:
      - Full (TSL; df = ``n_PSU - n_strata``)
      - Full (IF-reweighting; per-cell + aggregate)
      - Multiplier (PSU)
-   * - ``ChangesInChanges`` / ``QDiD``
+   * - ``ChangesInChanges`` (both methods)
      - --
      - --
      - --

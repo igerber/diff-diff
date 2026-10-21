@@ -1,13 +1,18 @@
-"""Phase 3(b) merge gates: TripleDifference absorbs StaggeredTripleDifference.
+"""Merge gates: TripleDifference absorbed StaggeredTripleDifference (phase 3(b));
+the class and its ``SDDD`` alias were removed at the 4.0 cut (PR 4a).
 
-Ledger rows under test: M-013 (the class merge), M-064 (the SDDD alias warning
-riding the class), M-140/M-141 (fit-time aggregate=/balance_e= carried on the
-surviving class), M-142 (the pscore_trim validation tightening).
+Ledger rows under test: M-013 (the class merge, now removed), M-064 (the retired
+``SDDD`` alias), M-085 (2x2x2 ``time=`` raises), M-140/M-141 (fit-time
+aggregate=/balance_e= carried on the surviving class), M-142 (the pscore_trim
+validation tightening).
 
 TOLERANCE DOCTRINE
 ------------------
-Every merge-PARITY gate is BIT-EXACT (``assert_array_equal``): both sides run
-the same engine in the same process, so a needed tolerance IS the finding.
+Through 3.x the merge-PARITY gates compared the two surfaces BIT-EXACTLY
+(``assert_array_equal``). With the class gone, the merged surface's absolute
+pins are the committed oracles below; any in-process comparison that remains
+(e.g. the cross-mode refit) stays bit-exact, so a needed tolerance IS the
+finding.
 
 Two deliberate exceptions, both comparing against literals captured in a
 DIFFERENT process:
@@ -29,16 +34,18 @@ Captured on the UNMODIFIED pre-merge tree, before any source edit::
 
     DIFF_DIFF_BACKEND=python python3 capture_oracles.py
 
-commit be694f493ac4e1640cdcccb5bdf7997a5b1f24dd.
+commit be694f493ac4e1640cdcccb5bdf7997a5b1f24dd. The capture script
+(``tests/_capture_v4_merge_ddd_oracles.py``) drives the removed class and is
+HISTORICAL: runnable only at that commit.
 
 Why two oracles, not one. ORACLE_2X2X2 guards the rewritten fit prologue,
 signature and dispatch. ORACLE_STAGGERED guards the ~1700-line relocation of
 the staggered engine into ``diff_diff/_staggered_triple_diff_engine.py``:
-nothing else in CI pins that engine in ABSOLUTE terms, because the parity gates
-compare two callers of the same relocated core, the four SDDD suites carry no
-committed numeric pins, and the R-golden lane skips whenever the gitignored
-CSVs are absent (``.gitignore``). Without it a transcription slip in the move
-would be invisible.
+nothing else in CI pins that engine in ABSOLUTE terms - the three staggered-DDD
+suites (ported to the merged surface in PR 4a) carry no committed numeric
+pins, and the R-golden lane skips whenever the gitignored CSVs are absent
+(``.gitignore``). Without it a transcription slip in the move would have been
+invisible, and a regression in the engine would be now.
 
 Two capture-config notes worth keeping:
 
@@ -70,20 +77,18 @@ fixture, never against ``stag_dr_all``.
 """
 
 import os
-import re
 import warnings
 
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 
-from diff_diff import SDDD, StaggeredTripleDifference, TripleDifference
+from diff_diff import TripleDifference
 from diff_diff.prep_dgp import (
     generate_ddd_data,
     generate_ddd_panel_data,
     generate_staggered_ddd_data,
 )
-from diff_diff.staggered_triple_diff import _SDDD_DEPRECATION_MSG
 from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
 from diff_diff.survey import SurveyDesign
 from diff_diff.triple_diff import TripleDifferenceResults
@@ -378,15 +383,6 @@ COVS = ["age", "education"]
 STAG_COVS = ["x1", "x2"]
 
 
-# The dying class emits a FutureWarning per construction; the pyproject filter
-# keeps the legacy suites quiet, but a test-local simplefilter RESETS the filter
-# list, so build it through this helper inside any recording block.
-def _sddd(**kwargs):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        return StaggeredTripleDifference(**kwargs)
-
-
 @pytest.fixture(scope="module")
 def cross():
     return generate_ddd_data(**CROSS_KW)
@@ -421,7 +417,6 @@ def stag_survey(stag):
 
 C_COLS = dict(outcome="outcome", group="group", partition="partition", post="time")
 S_NEW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
-S_OLD = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
 
 
 def _fit_new(df, **kwargs):
@@ -429,11 +424,6 @@ def _fit_new(df, **kwargs):
     return TripleDifference(**kwargs.pop("ctor", {})).fit(
         df, partition="eligibility", **S_NEW, **kwargs
     )
-
-
-def _fit_old(df, **kwargs):
-    """Staggered fit through the DEPRECATED surface."""
-    return _sddd(**kwargs.pop("ctor", {})).fit(df, eligibility="eligibility", **S_OLD, **kwargs)
 
 
 def _eq_with_nans(a, b):
@@ -538,12 +528,20 @@ class TestGateA2x2x2Unchanged:
         keyword = TripleDifference().fit(cross, **C_COLS)
         _eq_with_nans(_quintet(positional), _quintet(keyword))
 
-    def test_time_alias_still_warns_and_routes_identically(self, cross):
-        with pytest.warns(FutureWarning, match="calendar column only"):
-            aliased = TripleDifference().fit(
+    def test_time_in_2x2x2_raises_naming_post(self, cross):
+        """M-085 (4.0): in the 2x2x2 design `time=` is the staggered calendar
+        column only; passing it raises and points at `post=` instead of being
+        reinterpreted as the post dummy (the 3.x M-031 FutureWarning shim)."""
+        with pytest.raises(ValueError, match="staggered calendar column only") as exc:
+            TripleDifference().fit(
                 cross, outcome="outcome", group="group", partition="partition", time="time"
             )
-        _eq_with_nans(_quintet(aliased), _quintet(TripleDifference().fit(cross, **C_COLS)))
+        assert "post=" in str(exc.value)
+        # The canonical keyword still fits, warning-free.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            r = TripleDifference().fit(cross, **C_COLS)
+        assert np.isfinite(r.att)
 
 
 # ---------------------------------------------------------------------------
@@ -555,10 +553,12 @@ class TestGateA2x2x2Unchanged:
 class TestGateBPrimeStaggeredOracle:
     """The engine that actually moved, pinned in ABSOLUTE terms.
 
-    Gate B below compares two callers of the same relocated core, so it cannot
-    see a transcription slip in the move itself; the SDDD suites carry no
+    Through 3.x Gate B compared the two callers of the relocated core (removed
+    with the StaggeredTripleDifference class), which could not see a
+    transcription slip in the move itself; the staggered-DDD suites carry no
     committed numeric pins; and the R-golden lane skips whenever the gitignored
-    CSVs are absent. This gate is the one that would catch it.
+    CSVs are absent. This gate is the current numerical regression check on the
+    engine.
     """
 
     def test_base_config_matches_oracle(self, stag):
@@ -587,12 +587,13 @@ class TestGateBPrimeStaggeredOracle:
     # -- branch coverage for the rest of the relocated engine -----------------
     # The two lanes above ride DR-without-covariates. _compute_pscore,
     # _compute_or, the never-treated comparison fork and the survey path all
-    # moved too, and Gate B cannot see a slip in any of them (both of its sides
-    # run the moved code). These are absolute pins on each.
+    # moved too, and nothing else pins them in absolute terms (the 3.x
+    # old-vs-new parity lanes ran the moved code on both sides). These are
+    # absolute pins on each.
 
     def test_never_treated_branch_matches_oracle(self, stag):
         """The _is_never_treated fork. The merged surface passes the UNDERSCORED
-        spelling; the oracle was captured through the dying class's compact one,
+        spelling; the oracle was captured through the removed class's compact one,
         so this also pins the vocabulary bridge onto real numbers."""
         exp = ORACLE_STAGGERED["stag_dr_nevertreated"]
         r = _fit_new(stag, aggregate="all", ctor=dict(control_group="never_treated"))
@@ -655,33 +656,6 @@ class TestGateBPrimeStaggeredOracle:
             assert_allclose(got[k]["se"], v["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
 
 
-# ---------------------------------------------------------------------------
-# Gate B - merged staggered mode == deprecated class, bit-exact
-# ---------------------------------------------------------------------------
-
-# ONE AXIS AT A TIME against a fixed base, not a Cartesian product: the full
-# cross-product is ~5.8k configs x two fits x bootstrap draws, which is not
-# runnable. Named interaction cells cover the couplings that matter.
-_BASE = dict(estimation_method="dr")
-_AXES = [
-    ("method_ipw", dict(estimation_method="ipw"), {}),
-    ("method_reg", dict(estimation_method="reg"), {}),
-    ("base_period_universal", dict(base_period="universal"), {}),
-    ("anticipation_1", dict(anticipation=1), {}),
-    ("cband_off", dict(n_bootstrap=49, seed=7, cband=False), {}),
-    ("weights_mammen", dict(n_bootstrap=49, seed=7, bootstrap_weights="mammen"), {}),
-    ("weights_webb", dict(n_bootstrap=49, seed=7, bootstrap_weights="webb"), {}),
-    ("aggregate_none", {}, dict(aggregate=None)),
-    ("aggregate_event_study", {}, dict(aggregate="event_study")),
-    ("aggregate_group", {}, dict(aggregate="group")),
-    ("aggregate_simple", {}, dict(aggregate="simple")),
-    ("balance_e", {}, dict(aggregate="event_study", balance_e=1)),
-    ("covariates", {}, dict(covariates=["x1"])),
-    # named interaction cells
-    ("boot_x_cband", dict(n_bootstrap=49, seed=7, cband=True), dict(aggregate="all")),
-    ("universal_x_anticipation", dict(base_period="universal", anticipation=1), {}),
-]
-
 _STAG_FIELDS = [
     "overall_att",
     "overall_se",
@@ -720,45 +694,24 @@ def _assert_staggered_parity(old, new):
             _eq_dicts_with_nans(a, b, keys=("effect", "se"))
 
 
-class TestGateBStaggeredParity:
-    """Every lane: merged staggered mode is BIT-EXACT vs the dying class."""
+# ---------------------------------------------------------------------------
+# Gate B - merged-surface contracts (the 3.x old-vs-new parity lanes went with the class)
+# ---------------------------------------------------------------------------
 
-    @pytest.mark.parametrize("label,ctor,fit_kw", _AXES, ids=[a[0] for a in _AXES])
-    def test_axis_parity(self, stag, label, ctor, fit_kw):
-        full_ctor = {**_BASE, **ctor}
-        base_fit = dict(aggregate="all")
-        base_fit.update(fit_kw)
-        if "covariates" in fit_kw:
-            df = generate_staggered_ddd_data(**STAG_KW, add_covariates=True)
-            base_fit["covariates"] = ["x1"]
-        else:
-            df = stag
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            old = _fit_old(df, ctor=dict(full_ctor), **base_fit)
-            new = _fit_new(df, ctor=dict(full_ctor), **base_fit)
-        _assert_staggered_parity(old, new)
 
-    @pytest.mark.parametrize(
-        "new_value,old_value",
-        [("not_yet_treated", "notyettreated"), ("never_treated", "nevertreated")],
-    )
-    def test_control_group_vocabulary_parity(self, stag, new_value, old_value):
-        """Each class takes only ITS OWN spelling, so a parity pair is the
-        underscored value on the new surface vs the compact one on the old."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            old = _fit_old(stag, ctor=dict(control_group=old_value), aggregate="all")
-            new = _fit_new(stag, ctor=dict(control_group=new_value), aggregate="all")
-        _assert_staggered_parity(old, new)
+class TestGateBMergedSurfaceContracts:
+    """Merged-surface contracts that the 3.x old-vs-new parity lanes carried.
+
+    The parity lanes themselves (axis-by-axis and vocabulary pairs against the
+    removed class) are gone with the class; the absolute pins live in
+    ``TestGateBPrimeStaggeredOracle``."""
 
     def test_control_group_values_are_SEMANTICALLY_different(self, stag):
         """Guards a _is_never_treated that collapses both spellings.
 
-        Parity alone cannot catch it: both surfaces route through the same
-        helper, so a collapsing helper keeps every parity gate green while
-        silently switching the comparison-group semantics. Nothing else in the
-        repo differentiates the two values (the R-golden lane skips in CI).
+        The oracle alone cannot catch it on every design: a collapsing helper
+        would silently switch the comparison-group semantics. Nothing else in
+        the repo differentiates the two values (the R-golden lane skips in CI).
         """
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -769,21 +722,19 @@ class TestGateBStaggeredParity:
             "comparison-group branch is not reading control_group"
         )
 
-    def test_first_treat_inf_recode_warning_parity(self, stag):
+    def test_first_treat_inf_recode_warns(self, stag):
         df = stag.copy()
         df["first_treat"] = df["first_treat"].astype(float)
         df.loc[df["first_treat"] == 0, "first_treat"] = np.inf
-        msgs = []
-        for fit in (_fit_old, _fit_new):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                fit(df, aggregate="simple")
-            msgs.append([str(x.message) for x in w if "first_treat=inf" in str(x.message)])
-        assert msgs[0] == msgs[1] and msgs[0], msgs
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _fit_new(df, aggregate="simple")
+        msgs = [str(x.message) for x in w if "first_treat=inf" in str(x.message)]
+        assert msgs, [str(x.message) for x in w]
 
-    def test_bootstrap_x_replicate_survey_raises_on_BOTH_surfaces(self, stag):
-        """Excluded from the parity matrix by construction: this combination
-        raises before any parity field exists, so it is exception-parity."""
+    def test_bootstrap_x_replicate_survey_raises_naming_the_surface(self, stag):
+        """This combination raises before any result field exists; the message
+        must name the class the user fit."""
         df = stag.copy()
         rng = np.random.default_rng(3)
         df["w"] = 1.0
@@ -798,10 +749,9 @@ class TestGateBStaggeredParity:
             replicate_weights=[f"rw{i}" for i in range(1, 4)],
             replicate_method="JK1",
         )
-        for fit, name in ((_fit_old, "StaggeredTripleDifference"), (_fit_new, "TripleDifference")):
-            with pytest.raises(NotImplementedError) as exc:
-                fit(df, ctor=dict(n_bootstrap=49, seed=7), survey_design=design)
-            assert name in str(exc.value), f"{name} not named: {exc.value}"
+        with pytest.raises(NotImplementedError) as exc:
+            _fit_new(df, ctor=dict(n_bootstrap=49, seed=7), survey_design=design)
+        assert "TripleDifference" in str(exc.value), exc.value
 
 
 # ---------------------------------------------------------------------------
@@ -880,9 +830,9 @@ class TestGateCRejectionMatrix:
             TripleDifference().fit(cross, **kw)
 
     def test_missing_group_raises_without_the_rename_warning(self, cross):
-        """require_arg for group/partition runs BEFORE the M-031 shim: after
-        it, this call would newly emit the rename FutureWarning before raising,
-        and under -W error the surfaced exception type would flip."""
+        """require_arg for group/partition runs BEFORE the 2x2x2 `time=` check, so
+        a missing group is reported as the TypeError, not as the M-085
+        ValueError (and nothing warns on the way)."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             with pytest.raises(TypeError, match="missing required argument: 'group'"):
@@ -910,18 +860,13 @@ class TestGateCRejectionMatrix:
 
 
 class TestGateDTimeSemantics:
-    def test_staggered_time_emits_no_rename_warning(self, stag):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            _fit_new(stag, aggregate="simple")
-        assert not [x for x in w if "calendar column only" in str(x.message)]
-
-    def test_staggered_time_is_bit_exact_vs_the_dying_surface(self, stag):
+    def test_staggered_time_is_the_calendar_column(self, stag):
+        """`time=` is accepted (and required) in staggered mode: the M-085 2x2x2
+        check must never fire on this path."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            _assert_staggered_parity(
-                _fit_old(stag, aggregate="all"), _fit_new(stag, aggregate="all")
-            )
+            r = _fit_new(stag, aggregate="simple")
+        assert np.isfinite(r.overall_att)
 
     def test_2x2x2_both_post_and_time_raises(self, cross):
         with pytest.raises(ValueError, match="pass only post="):
@@ -934,63 +879,45 @@ class TestGateDTimeSemantics:
                 time="time",
             )
 
-    def test_m085_is_not_live_in_3_9(self, cross):
-        """2x2x2 time= WARNS; it does not raise. The 4.0 flip is M-085's job."""
-        with pytest.warns(FutureWarning):
-            r = TripleDifference().fit(
-                cross, outcome="outcome", group="group", partition="partition", time="time"
-            )
-        assert np.isfinite(r.att)
-
 
 # ---------------------------------------------------------------------------
-# Gate E - deprecation choreography (M-013 / M-064)
+# Gate E - removal pins (M-013 / M-064; 4.0 cut, PR 4a)
 # ---------------------------------------------------------------------------
 
 
-class TestGateEDeprecation:
-    def test_construction_warns_with_the_pinned_message(self):
-        with pytest.warns(FutureWarning, match=re.escape(_SDDD_DEPRECATION_MSG)):
-            StaggeredTripleDifference()
+class TestGateERemoval:
+    """The class, its module and the ``SDDD`` alias are gone; the merged surface
+    constructs silently; the results container (M-014) is still exported."""
 
-    def test_sddd_alias_is_the_same_class_and_warns_once(self):
-        assert SDDD is StaggeredTripleDifference
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            SDDD()
-        fired = [
-            x
-            for x in w
-            if x.category is FutureWarning
-            and "StaggeredTripleDifference is deprecated" in str(x.message)
-        ]
-        assert len(fired) == 1, [str(x.message) for x in w]
-        assert "SDDD alias is deprecated with it" in str(fired[0].message)
+    @pytest.mark.parametrize("name", ["StaggeredTripleDifference", "SDDD"])
+    def test_name_is_absent(self, name):
+        import diff_diff
 
-    def test_warns_and_still_works(self, stag):
-        with pytest.warns(FutureWarning):
-            est = StaggeredTripleDifference()
-        r = est.fit(stag, eligibility="eligibility", **S_OLD, aggregate="simple")
-        assert np.isfinite(r.overall_att)
+        assert not hasattr(diff_diff, name)
+        assert name not in diff_diff.__all__
+        assert name not in dir(diff_diff)
+        with pytest.raises(ImportError):
+            exec(f"from diff_diff import {name}")
+
+    def test_module_is_gone(self):
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("diff_diff.staggered_triple_diff")
+
+    def test_results_container_still_exported(self):
+        """M-014 dies in PR 6, not here."""
+        import diff_diff
+
+        assert diff_diff.StaggeredTripleDiffResults is StaggeredTripleDiffResults
+        assert "StaggeredTripleDiffResults" in diff_diff.__all__
 
     def test_successor_does_not_warn(self, stag):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             TripleDifference()
+            TripleDifference().set_params(alpha=0.10)
         assert not [x for x in w if x.category is FutureWarning]
-
-    def test_deprecation_attributes_to_the_caller(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            StaggeredTripleDifference()
-        assert w[0].filename.endswith("test_v4_merge_ddd.py")
-
-    def test_set_params_re_emits(self):
-        """Documented side effect of BaseEstimator's transactional probe
-        re-init, shared with MultiPeriodDiD's shim."""
-        est = _sddd()
-        with pytest.warns(FutureWarning, match="StaggeredTripleDifference is deprecated"):
-            est.set_params(alpha=0.10)
 
 
 # ---------------------------------------------------------------------------
@@ -1020,31 +947,9 @@ class TestGateFIntrospectionAndValidation:
     def test_merged_param_set_is_pinned(self):
         assert set(TripleDifference().get_params()) == _MERGED_PARAMS
 
-    def test_dying_class_param_set_is_frozen(self):
-        assert set(_sddd().get_params()) == {
-            "estimation_method",
-            "control_group",
-            "alpha",
-            "anticipation",
-            "base_period",
-            "n_bootstrap",
-            "bootstrap_weights",
-            "seed",
-            "cband",
-            "pscore_trim",
-            "cluster",
-            "rank_deficient_action",
-            "epv_threshold",
-            "pscore_fallback",
-        }
-
-    def test_round_trip_both_classes(self):
+    def test_round_trip(self):
         est = TripleDifference(control_group="never_treated", n_bootstrap=9)
         assert TripleDifference(**est.get_params()).get_params() == est.get_params()
-        old = _sddd(control_group="nevertreated")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            assert StaggeredTripleDifference(**old.get_params()).get_params() == old.get_params()
 
     def test_set_params_round_trip(self):
         est = TripleDifference()
@@ -1118,28 +1023,10 @@ class TestGateFIntrospectionAndValidation:
                 stag, partition="eligibility", **S_NEW, aggregate="simple"
             )
 
-    @pytest.mark.parametrize("bad", [-1, 1.5, True])
-    def test_deprecated_sibling_also_fails_closed_on_anticipation(self, stag, bad):
-        """The dying class's frozen 3.x API SHAPE (param names, `eligibility=`,
-        the compact control_group vocabulary, accepted-then-ignored `cluster=`)
-        was never a licence to emit silently-biased numbers: it runs the SAME
-        engine, where a negative window selects an already-treated base period
-        and admits contaminated controls. So the guard lives in the engine and
-        BOTH surfaces fail closed.
-
-        The split is deliberate and pinned below: CONSTRUCTION still succeeds on
-        the deprecated class (its signature contract is untouched), while FIT
-        raises - the check is an identification guard, not an API change."""
-        est = _sddd(anticipation=bad)
-        assert est.anticipation == bad, "the dying class's constructor contract is unchanged"
-        with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
-            est.fit(stag, eligibility="eligibility", **S_OLD, aggregate="simple")
-
     # -- first_treat cohort encoding (silent-population guard) ----------------
 
     @pytest.mark.parametrize("sentinel", [-1, -np.inf, -0.5])
-    @pytest.mark.parametrize("surface", ["merged", "deprecated"])
-    def test_negative_cohorts_fail_closed_on_both_surfaces(self, stag, sentinel, surface):
+    def test_negative_cohorts_fail_closed(self, stag, sentinel):
         """_precompute_structures builds the treated set from `g > 0` and the
         never-enabled set from `g == 0`, so a unit encoded with the common `-1`
         never-treated convention belonged to NEITHER: still counted in n_obs,
@@ -1155,9 +1042,8 @@ class TestGateFIntrospectionAndValidation:
         df = stag.copy()
         df["first_treat"] = df["first_treat"].astype(float)
         df.loc[df["first_treat"] == 0, "first_treat"] = sentinel
-        fit = _fit_new if surface == "merged" else _fit_old
         with pytest.raises(ValueError, match="negative cohort value"):
-            fit(df, aggregate="simple")
+            _fit_new(df, aggregate="simple")
 
     # -- degenerate enabling cohort (honest-reporting guard) ------------------
 
@@ -1168,30 +1054,18 @@ class TestGateFIntrospectionAndValidation:
         out.loc[out["unit"].isin(units), "eligibility"] = 0
         return out
 
-    @pytest.mark.parametrize("surface", ["merged", "deprecated"])
-    def test_degenerate_cohort_is_named_and_dropped_from_groups(self, stag, surface):
+    def test_degenerate_cohort_is_named_and_dropped_from_groups(self, stag):
         """A positive cohort whose units are ALL partition==0 cannot identify
         ATT(g,t), so it contributes to no aggregate - but it was still advertised
         in `groups`/`n_groups`, and no warning named it (the ones mentioning it
         describe its role as a COMPARISON cohort for other g). The estimate is
         deliberately unchanged: it is valid for the cohorts that do identify."""
         df = self._strip_eligibility_from_cohort(stag, 4)
-        fit = _fit_new if surface == "merged" else _fit_old
         with pytest.warns(UserWarning, match=r"cohort g=4\.0 has no eligible treated units"):
-            r = fit(df, aggregate="simple")
+            r = _fit_new(df, aggregate="simple")
         assert list(r.groups) == [3.0], "groups must not advertise a non-contributing cohort"
         assert r.to_dict()["n_groups"] == 1
         assert {g for g, _ in r.group_time_effects} == {3.0}
-
-    def test_degenerate_cohort_does_not_move_the_estimate(self, stag):
-        """The fix is reporting-only - pinned so a later 'improvement' cannot
-        quietly turn it into an estimand change."""
-        df = self._strip_eligibility_from_cohort(stag, 4)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            new, old = _fit_new(df, aggregate="simple"), _fit_old(df, aggregate="simple")
-        _eq_with_nans([new.overall_att, new.overall_se], [old.overall_att, old.overall_se])
-        assert list(new.groups) == list(old.groups)
 
     def test_healthy_cohorts_are_untouched(self, stag):
         """Negative pin: no warning and no groups change on a well-posed panel."""
@@ -1235,16 +1109,10 @@ class TestGateFIntrospectionAndValidation:
 
     @pytest.mark.parametrize("compact", ["notyettreated", "nevertreated"])
     def test_merged_class_rejects_the_compact_vocabulary(self, compact):
-        """The boundary Design 3's bridge and Gate B's pairing rest on."""
+        """The merged class speaks the underscored vocabulary only; R's compact
+        spellings died with the StaggeredTripleDifference class."""
         with pytest.raises(ValueError, match="control_group must be"):
             TripleDifference(control_group=compact)
-
-    @pytest.mark.parametrize("underscored", ["not_yet_treated", "never_treated"])
-    def test_dying_class_rejects_the_underscored_vocabulary(self, underscored):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            with pytest.raises(ValueError, match="control_group must be"):
-                StaggeredTripleDifference(control_group=underscored)
 
     def test_base_period_and_bootstrap_weights_contracts(self):
         with pytest.raises(ValueError, match="base_period must be"):
@@ -1292,31 +1160,29 @@ class TestGateFIntrospectionAndValidation:
 
 
 class TestGateGAttributionAndThreading:
-    def test_user_attributed_warnings_land_on_the_CALLER_on_both_surfaces(self, stag):
+    def test_user_attributed_warnings_land_on_the_CALLER(self, stag):
         """The facade adds a frame; _frame_offset must absorb it. Uses the
         base-period-outside-panel warning, which fires from the fit body."""
         df = generate_staggered_ddd_data(**{**STAG_KW, "cohort_periods": [1, 3]})
-        for fit in (_fit_old, _fit_new):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                fit(df, aggregate="simple")
-            fired = [x for x in w if "outside the observed panel" in str(x.message)]
-            assert fired, "expected the base-period warning"
-            assert all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
-                x.filename for x in fired
-            ]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _fit_new(df, aggregate="simple")
+        fired = [x for x in w if "outside the observed panel" in str(x.message)]
+        assert fired, "expected the base-period warning"
+        assert all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
+            x.filename for x in fired
+        ]
 
-    def test_low_bootstrap_warning_attributes_to_the_caller_on_both_surfaces(self, stag):
+    def test_low_bootstrap_warning_attributes_to_the_caller(self, stag):
         """Shared with CallawaySantAnna via the bootstrap mixin, so it reads the
         offset through getattr rather than taking it as an argument."""
-        for fit in (_fit_old, _fit_new):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                fit(stag, ctor=dict(n_bootstrap=9, seed=1), aggregate="simple")
-            fired = [x for x in w if "is low" in str(x.message)]
-            assert fired and all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
-                (x.filename, str(x.message)[:40]) for x in fired
-            ]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _fit_new(stag, ctor=dict(n_bootstrap=9, seed=1), aggregate="simple")
+        fired = [x for x in w if "is low" in str(x.message)]
+        assert fired and all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
+            (x.filename, str(x.message)[:40]) for x in fired
+        ]
 
     def test_callawaysantanna_attribution_is_unchanged(self):
         """CS never sets _warn_frame_offset, so the shared site's getattr
@@ -1337,10 +1203,9 @@ class TestGateGAttributionAndThreading:
         df = stag.copy()
         df["w"] = 1.0
         design = SurveyDesign(weights="w", weight_type="fweight")
-        for fit, name in ((_fit_old, "StaggeredTripleDifference"), (_fit_new, "TripleDifference")):
-            with pytest.raises(ValueError) as exc:
-                fit(df, survey_design=design)
-            assert str(exc.value).startswith(f"{name} survey support requires")
+        with pytest.raises(ValueError) as exc:
+            _fit_new(df, survey_design=design)
+        assert str(exc.value).startswith("TripleDifference survey support requires")
 
     def test_partition_vocabulary_never_leaks_on_the_merged_surface(self, stag):
         """BOTH sentences of the time-invariance error are parameterized - the
@@ -1352,26 +1217,18 @@ class TestGateGAttributionAndThreading:
         msg = str(exc.value)
         assert "Partition must be time-invariant" in msg
         assert "eligibility" not in msg, msg
-        with pytest.raises(ValueError) as exc_old:
-            _fit_old(df)
-        assert "Eligibility must be time-invariant" in str(exc_old.value)
-        assert "varying eligibility" in str(exc_old.value)
 
     def test_no_valid_group_time_message_uses_the_right_vocabulary(self, stag):
         """An anticipation window wider than the panel skips every cell, which
         is the cheapest route to this message. (Filtering the partition instead
         would trip the Q-notation validator first - that message is paper
         vocabulary and is deliberately NOT parameterized.)"""
-        for fit, word, wrong in (
-            (_fit_new, "partition", "eligibility"),
-            (_fit_old, "eligibility", "partition"),
-        ):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                with pytest.raises(ValueError, match="No valid group-time effects") as exc:
-                    fit(stag, ctor=dict(anticipation=10))
-            assert word in str(exc.value)
-            assert wrong not in str(exc.value)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="No valid group-time effects") as exc:
+                _fit_new(stag, ctor=dict(anticipation=10))
+        assert "partition" in str(exc.value)
+        assert "eligibility" not in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1380,29 +1237,20 @@ class TestGateGAttributionAndThreading:
 
 
 class TestGateHConsumers:
-    def test_event_study_surface_identical_across_surfaces(self, stag):
-        from diff_diff.results_base import build_event_study_surface
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            old = build_event_study_surface(_fit_old(stag, aggregate="event_study"))
-            new = build_event_study_surface(_fit_new(stag, aggregate="event_study"))
-        _eq_with_nans(old.att, new.att)
-        _eq_with_nans(old.se, new.se)
-        assert old.source == new.source
-
-    def test_business_report_handles_both_control_group_vocabularies(self, stag):
+    def test_business_report_handles_both_control_groups(self, stag):
+        """BusinessReport renders the staggered container under either
+        control_group and reports the never-enabled count for both."""
         from diff_diff.business_report import BusinessReport
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            new = BusinessReport(
+            nyt = BusinessReport(
                 _fit_new(stag, ctor=dict(control_group="not_yet_treated"), aggregate="simple")
             ).to_dict()
-            old = BusinessReport(
-                _fit_old(stag, ctor=dict(control_group="notyettreated"), aggregate="simple")
+            nev = BusinessReport(
+                _fit_new(stag, ctor=dict(control_group="never_treated"), aggregate="simple")
             ).to_dict()
-        assert new["sample"]["n_never_enabled"] == old["sample"]["n_never_enabled"]
+        assert nyt["sample"]["n_never_enabled"] == nev["sample"]["n_never_enabled"] > 0
 
     def test_summary_renders_in_both_modes(self, cross, stag):
         """summary()/print_summary() delegate to results_, so the merged class
@@ -1416,15 +1264,6 @@ class TestGateHConsumers:
             est.fit(stag, partition="eligibility", **S_NEW, aggregate="all")
         text = est.summary()
         assert "ATT" in text and len(text.splitlines()) > 10
-
-    def test_describe_target_parameter_unchanged(self, stag):
-        from diff_diff._reporting_helpers import describe_target_parameter
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            assert describe_target_parameter(
-                _fit_new(stag, aggregate="simple")
-            ) == describe_target_parameter(_fit_old(stag, aggregate="simple"))
 
     def test_power_rejects_staggered_config_at_all_three_entry_points(self):
         from diff_diff.power import simulate_mde, simulate_power, simulate_sample_size
@@ -1519,10 +1358,9 @@ class TestGateHConsumers:
                 TripleDifference(), n_units=48, n_simulations=1, estimator_kwargs={key: value}
             )
 
-    @pytest.mark.parametrize("surface", ["merged", "deprecated"])
-    def test_bootstrap_warning_names_the_estimator_that_was_fit(self, stag, surface):
+    def test_bootstrap_warning_names_the_estimator_that_was_fit(self, stag):
         """The single-PSU/degenerate-design warning lives in the mixin shared by
-        CallawaySantAnna and BOTH DDD classes, so the hard-coded literal named
+        CallawaySantAnna and TripleDifference, so a hard-coded literal would name
         CallawaySantAnna no matter which surface was fit - a misleading diagnosis
         on a fit that is failing closed.
 
@@ -1535,12 +1373,11 @@ class TestGateHConsumers:
         df["fpc_col"] = 10**6  # design-based variance so the PSU is retained
         design = SurveyDesign(weights="w", psu="psu", fpc="fpc_col")
         ctor = dict(estimation_method="reg", n_bootstrap=20, seed=7)
-        fit = _fit_new if surface == "merged" else _fit_old
-        expected = "TripleDifference" if surface == "merged" else "StaggeredTripleDifference"
+        expected = "TripleDifference"
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            fit(df, aggregate="event_study", survey_design=design, ctor=ctor)
+            _fit_new(df, aggregate="event_study", survey_design=design, ctor=ctor)
         hits = [
             str(w.message)
             for w in caught
@@ -1557,7 +1394,6 @@ class TestGateHConsumers:
 
         assert CallawaySantAnna._BOOTSTRAP_LABEL == "CallawaySantAnna"
         assert TripleDifference._BOOTSTRAP_LABEL == "TripleDifference"
-        assert StaggeredTripleDifference._BOOTSTRAP_LABEL == "StaggeredTripleDifference"
 
     @pytest.mark.parametrize(
         "staggered", ["control_group", "anticipation", "base_period", "n_bootstrap"]
@@ -1632,8 +1468,8 @@ class TestGateHConsumers:
 class TestGateGRParity:
     """The R-golden lane SKIPS in CI: the generated CSVs are gitignored
     (.gitignore benchmarks/data/synthetic/*.csv), so `_load_r_data` calls
-    pytest.skip. It is therefore paired with a substitute that always runs and
-    proves the routing is identity-preserving on the same config.
+    pytest.skip; locally, with the CSVs present, it pins the merged surface
+    against R's triplediff on the golden's config.
     """
 
     def test_r_golden_through_the_merged_surface(self):
@@ -1688,20 +1524,3 @@ class TestGateGRParity:
             assert_allclose(
                 py_gt[key_gt]["effect"], scenario["gt_att"][i], rtol=ATT_RTOL, atol=ATT_ATOL
             )
-
-    def test_always_running_substitute_on_the_same_config(self, stag):
-        """What the merge actually needs to establish: the routing is
-        identity-preserving on the golden's config, even when R data is absent."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            old = _fit_old(
-                stag,
-                ctor=dict(estimation_method="dr", control_group="notyettreated"),
-                aggregate="simple",
-            )
-            new = _fit_new(
-                stag,
-                ctor=dict(estimation_method="dr", control_group="not_yet_treated"),
-                aggregate="simple",
-            )
-        _assert_staggered_parity(old, new)

@@ -534,7 +534,6 @@ def test_guide_api_strings_resolve_against_public_api():
         "SyntheticDiD",
         "TROP",
         "TripleDifference",
-        "StaggeredTripleDifference",
         "ContinuousDiD",
         "HeterogeneousAdoptionDiD",
     ):
@@ -719,7 +718,7 @@ def test_guide_api_strings_resolve_against_public_api():
         "EfficientDiD",
         "SyntheticDiD",
         "HeterogeneousAdoptionDiD",
-        "StaggeredTripleDifference",
+        "TripleDifference staggered mode",
     ):
         idx = 0
         found = False
@@ -791,10 +790,9 @@ def test_guide_api_strings_resolve_against_public_api():
 
     # Repeated-cross-section (§4.10) must not claim broad
     # applicability. The documented RCS-capable estimators are
-    # CallawaySantAnna(panel=False), DMLDiD(panel=False),
-    # TripleDifference, and
-    # StaggeredTripleDifference; EfficientDiD and
-    # HeterogeneousAdoptionDiD explicitly reject RCS per REGISTRY.md.
+    # CallawaySantAnna(panel=False), DMLDiD(panel=False) and the two-period
+    # TripleDifference; EfficientDiD, HeterogeneousAdoptionDiD and
+    # TripleDifference's staggered mode explicitly reject RCS per REGISTRY.md.
     assert "most estimators remain applicable" not in text, (
         "§4.10 must not claim broad RCS applicability; only the "
         "explicitly documented RCS-capable subset is applicable."
@@ -811,26 +809,25 @@ def test_guide_api_strings_resolve_against_public_api():
     for panel_only in (
         "EfficientDiD",
         "HeterogeneousAdoptionDiD",
-        "StaggeredTripleDifference",
+        "TripleDifference staggered mode",
     ):
         assert panel_only in rcs_section, (
             f"§4.10 must explicitly name {panel_only!r} as panel-only "
             "so RCS data is not routed to it"
         )
 
-    # The explicit RCS-capable bullet list must NOT put
-    # StaggeredTripleDifference next to the RCS-support language.
-    # The estimator has no panel=False mode and fit() rejects
-    # unbalanced input; only TripleDifference (non-staggered) is
-    # cross-sectional-DDD-capable.
+    # The explicit RCS-capable bullet list must NOT put the staggered
+    # TripleDifference mode next to the RCS-support language. That mode has
+    # no panel=False and fit() rejects unbalanced input; only the two-period
+    # TripleDifference design is cross-sectional-DDD-capable.
     explicit_support_block = text.find("Explicit RCS support", rcs_section_start)
     rejected_block = text.find("Explicitly rejected for RCS", rcs_section_start)
     assert 0 <= explicit_support_block < rejected_block, (
         "§4.10 must separate an Explicit RCS support list from the " "Explicitly rejected list"
     )
     explicit_segment = text[explicit_support_block:rejected_block]
-    assert "StaggeredTripleDifference" not in explicit_segment, (
-        "StaggeredTripleDifference must NOT appear in the Explicit RCS "
+    assert "staggered mode" not in explicit_segment, (
+        "TripleDifference staggered mode must NOT appear in the Explicit RCS "
         "support list — it is panel-only and balance-enforced."
     )
 

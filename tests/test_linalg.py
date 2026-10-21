@@ -2581,7 +2581,7 @@ class TestRankGuardedInv:
     """Contract tests for _rank_guarded_inv (rank-guarded generalized inverse).
 
     Used by the influence-function SE path of CallawaySantAnna /
-    TripleDifference / StaggeredTripleDifference. A near-singular covariate Gram
+    TripleDifference (both modes). A near-singular covariate Gram
     matrix must yield a finite generalized inverse on the identified subspace
     (NaN only on true rank-0), and well-conditioned matrices must be unchanged.
     """

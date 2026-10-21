@@ -15,11 +15,9 @@ Roster notes:
   keyword-only XOR ``treatment``/``first_treat`` interface doesn't fit
   this suite's shared invocation); the other adopters are pinned HERE in
   the mutation lanes.
-- The deprecated ``StaggeredTripleDifference`` stays
-  construction-permissive BY DESIGN (frozen 3.x API shape; the shared
-  staggered engine validates at fit) — pinned by
-  test_v4_merge_ddd.py::test_deprecated_sibling_also_fails_closed_on_anticipation,
-  and deliberately NOT in this roster.
+- The ``StaggeredTripleDifference`` class (removed at the 4.0 cut, PR 4a) was
+  the one construction-permissive exception through 3.x; the roster is now
+  exactly the validated classes.
 
 Message pins match the FULL text via ``re.escape`` (repo convention),
 except numpy-scalar values whose repr is NEP-51-dependent — those use the
@@ -43,7 +41,6 @@ from diff_diff import (
     ImputationDiD,
     SpilloverDiD,
     StackedDiD,
-    StaggeredTripleDifference,
     SunAbraham,
     TripleDifference,
     TwoStageDiD,
@@ -127,14 +124,11 @@ class TestAnticipationRoster:
                 params = inspect.signature(obj.__init__).parameters
                 if "anticipation" in params:
                     discovered.append(obj)
-        assert set(discovered) == set(VALIDATED_CLASSES) | {StaggeredTripleDifference}, (
+        assert set(discovered) == set(VALIDATED_CLASSES), (
             "The `anticipation` roster changed. A future estimator exposing "
             "`anticipation` must join the family-wide validation policy "
             "(ledger row M-144): validate via utils.validate_anticipation at "
-            "__init__ AND re-check on the fit path via the assignment form. "
-            "The deprecated StaggeredTripleDifference is the one documented "
-            "construction-permissive exception (fit-validated via the shared "
-            "engine)."
+            "__init__ AND re-check on the fit path via the assignment form."
         )
 
 

@@ -283,7 +283,7 @@ def surfaces():
         LPDiD,
         MultiPeriodDiD,
         StackedDiD,
-        StaggeredTripleDifference,
+        TripleDifference,
         WooldridgeDiD,
         generate_staggered_ddd_data,
     )
@@ -444,18 +444,18 @@ def surfaces():
         wd.aggregate("event_study")
         out["WooldridgeDiD"] = (wd, build_event_study_surface(wd))
 
-        # 10. StaggeredTripleDifference
+        # 10. TripleDifference, staggered mode (the staggered-DDD engine)
         sddd_data = generate_staggered_ddd_data(n_units=300, treatment_effect=3.0, seed=42)
-        sddd = StaggeredTripleDifference().fit(
+        sddd = TripleDifference().fit(
             sddd_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
-        out["StaggeredTripleDifference"] = (sddd, build_event_study_surface(sddd))
+        out["TripleDifference_staggered"] = (sddd, build_event_study_surface(sddd))
 
         # 11. MultiPeriodDiD
         mpd_data = _mpd_panel()
@@ -510,7 +510,7 @@ ALL_PRODUCERS = [
     "ContinuousDiD_bootstrap",
     "EfficientDiD",
     "WooldridgeDiD",
-    "StaggeredTripleDifference",
+    "TripleDifference_staggered",
     "MultiPeriodDiD",
     "LPDiD",
     "ChaisemartinDHaultfoeuille",

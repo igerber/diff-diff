@@ -50,7 +50,6 @@ The following estimators/features MUST have documentation:
 | ContinuousDiD | "ContinuousDiD" | "ContinuousDiD" | continuous_did.rst | "Multi-Period and Staggered" |
 | HeterogeneousAdoptionDiD | "HeterogeneousAdoptionDiD" | "HeterogeneousAdoptionDiD" | had.rst | "Heterogeneous Adoption (No-Untreated Designs)" |
 | TripleDifference | "TripleDifference" | "TripleDifference" | triple_diff.rst | "Triple Difference" |
-| StaggeredTripleDifference | "StaggeredTripleDifference" | "StaggeredTripleDifference" | staggered.rst | "Triple Difference" |
 | WooldridgeDiD | "WooldridgeDiD" | "WooldridgeDiD" | wooldridge_etwfe.rst | "Multi-Period and Staggered" |
 | TROP | "TROP" | "TROP" | trop.rst | "Triply Robust Panel" |
 | HonestDiD | n/a (in `## Diagnostics`) | n/a (in `## Diagnostics`) | honest_did.rst | "Honest DiD" |

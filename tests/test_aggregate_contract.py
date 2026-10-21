@@ -42,7 +42,7 @@ import pandas as pd
 import pytest
 from legacy_surface import boot_oracles, load_oracles, oracle_value
 
-from diff_diff import CallawaySantAnna, StaggeredTripleDifference
+from diff_diff import CallawaySantAnna, TripleDifference
 from diff_diff.aggregation import AGGREGATION_SCHEMA, AggregationResult
 from diff_diff.results_base import EventStudyResults, build_event_study_surface
 from diff_diff.utils import safe_inference
@@ -1477,18 +1477,20 @@ class TestInferenceDfProvenance:
 
     @pytest.mark.parametrize("survey", [False, True])
     def test_sddd_bootstrap_clears_group_df_provenance(self, survey):
-        """StaggeredTripleDifference carries its OWN copy of the bootstrap
-        group-replacement loop, so the clearing rule has to hold there too -
+        """The staggered DDD engine (TripleDifference's staggered mode) carries
+        its OWN copy of the bootstrap group-replacement loop, so the clearing
+        rule has to hold there too -
         fixing one twin and testing only the other is how this class of bug
         survived in the first place.
 
         Coverage is ASYMMETRIC and deliberately so: only ``survey=True``
         exercises the clearing (verified by reverting the fix - just that case
-        fails). SDDD's plain-``cluster`` path never resolves a finite analytical
-        df, so ``df_used`` is already None there and nothing needs clearing. The
+        fails). The engine's plain path never resolves a finite analytical df, so
+        ``df_used`` is already None there and nothing needs clearing. The
         non-survey case is kept as a cheap guard in case that ever changes, not
-        because it currently reproduces the bug. The CallawaySantAnna
-        equivalent above DOES fail in both configurations.
+        because it currently reproduces the bug (TripleDifference rejects
+        ``cluster=`` in staggered mode, so neither arm clusters). The
+        CallawaySantAnna equivalent above DOES fail in both configurations.
         """
         from diff_diff import SurveyDesign
 
@@ -1511,7 +1513,7 @@ class TestInferenceDfProvenance:
                         "outcome": 0.3 * t + (1.2 if treated else 0.0) + rng.normal(0, 0.2),
                     }
                 )
-        ctor = {} if survey else {"cluster": "psu"}
+        ctor = {}
         fit_extra = (
             {"survey_design": SurveyDesign(weights="w", strata="stratum", psu="psu")}
             if survey
@@ -1519,19 +1521,19 @@ class TestInferenceDfProvenance:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = StaggeredTripleDifference(n_bootstrap=40, seed=3, **ctor).fit(
+            res = TripleDifference(n_bootstrap=40, seed=3, **ctor).fit(
                 pd.DataFrame(rows),
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 aggregate="all",
                 **fit_extra,
             )
-        assert res.group_effects, "fixture produced no SDDD group rows"
+        assert res.group_effects, "fixture produced no staggered-DDD group rows"
         for g, eff in res.group_effects.items():
-            assert eff.get("df_used") is None, f"SDDD group {g} kept analytical df on bootstrap"
+            assert eff.get("df_used") is None, f"DDD group {g} kept analytical df on bootstrap"
 
     def test_group_df_is_not_the_event_study_df(self, fitted):
         """``group`` must not borrow ``event_study_df``: on a plain fit that
@@ -1663,7 +1665,7 @@ class TestContainerNormalization:
 
 
 def test_staggered_triple_diff_overall_att_es_still_works():
-    """StaggeredTripleDifference inherits the CS aggregation mixin and is the
+    """TripleDifference (staggered mode) inherits the CS aggregation mixin and is the
     ONLY reader of the Eq. 4.14 overall, which the purity refactor converted
     from a self-attribute to a returned value."""
     rng = np.random.default_rng(5)
@@ -1685,13 +1687,13 @@ def test_staggered_triple_diff_overall_att_es_still_works():
     data = pd.DataFrame(rows)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = StaggeredTripleDifference().fit(
+        res = TripleDifference().fit(
             data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
     assert res.overall_att_es is not None

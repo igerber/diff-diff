@@ -11,7 +11,6 @@ from diff_diff import (
     HeterogeneousAdoptionDiDEventStudyResults,
     HeterogeneousAdoptionDiDResults,
     MultiPeriodDiD,
-    QDiD,
     generate_did_data,
     generate_staggered_data,
 )
@@ -1413,7 +1412,7 @@ def cic_fit_results(cic_2x2_data):
 
 @pytest.fixture(scope="module")
 def qdid_fit_results(cic_2x2_data):
-    est = QDiD(n_bootstrap=20, panel=True, seed=42)
+    est = ChangesInChanges(method="qdid", n_bootstrap=20, panel=True, seed=42)
     return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", unit="unit")
 
 
@@ -1428,7 +1427,7 @@ def cic_cov_fit_results(cic_2x2_data):
 
 @pytest.fixture(scope="module")
 def qdid_cov_fit_results(cic_2x2_data):
-    est = QDiD(n_bootstrap=0)
+    est = ChangesInChanges(method="qdid", n_bootstrap=0)
     return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", covariates=["x1"])
 
 
