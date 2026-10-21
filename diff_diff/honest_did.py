@@ -1312,9 +1312,7 @@ def _extract_event_study_params(
                         f"{type(results).__name__} must have event_study_effects "
                         "for HonestDiD. Pass the post-fit container "
                         "(compute_honest_did(results.aggregate('event_study')))"
-                        " instead; CallawaySantAnna fits can alternatively use "
-                        "the deprecated aggregate='event_study' to populate "
-                        "the fit-time surface."
+                        " instead."
                     )
 
                 # Common-reference guard, mirroring the container branch:

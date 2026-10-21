@@ -807,7 +807,7 @@ class DiagnosticReport:
 
         The raw ``event_study_effects`` field always takes precedence when it
         is not ``None`` — including the requested-but-empty ``{}`` sentinel,
-        which encodes fit-time configuration (e.g. an EfficientDiD
+        which encodes fit-time configuration (e.g. an ImputationDiD
         ``balance_e=`` that emptied the window) that a re-derivation without
         those settings would silently overturn. Derivation failures
         (bootstrapped fits, missing kits) are cached as skip reasons, never
@@ -1006,9 +1006,9 @@ class DiagnosticReport:
                             "per-event-time direct-effect output."
                         )
                     # StackedDiD (3.9, row M-024): the event-study surface
-                    # is ALWAYS computed, so ``aggregate='event_study'`` is
-                    # inert (and deprecated - it now warns). Zero estimated
-                    # pre-periods here means the event window has none:
+                    # is ALWAYS computed at fit (no aggregation keyword
+                    # exists since 4.0). Zero estimated pre-periods here
+                    # means the event window has none:
                     # the default ``kappa_pre=1`` grid minus the reference
                     # leaves no pre-period columns. Estimator-accurate
                     # remediation, per the SpilloverDiD precedent above.

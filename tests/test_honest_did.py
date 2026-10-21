@@ -1289,7 +1289,7 @@ class TestSurveyVariance:
             "period",
             "first_treat",
         )
-        # Plain-fit invariant: no fit-time surface or vcov is stored.
+        # 4.0 invariant: no CS fit stores the fit-time surface or its vcov.
         assert cs_result.event_study_effects is None
         assert cs_result.event_study_vcov is None
         assert cs_result.event_study_vcov_index is None

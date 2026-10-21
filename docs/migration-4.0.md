@@ -131,13 +131,23 @@ it to `post=`; if you pass a calendar column to an event-study or staggered fit,
 **Dropped parameters are not always deletions.** A parameter with no successor in the appendix
 may still need a replacement call — see its `Fix` cell.
 
+**Dropped `fit()` parameters shift the positional slots after them.** Removing the fit-time
+`aggregate=`/`balance_e=` keywords moves every later positional parameter left: on
+`CallawaySantAnna` `survey_design` moves from slot 9 to 7; on `EfficientDiD` `survey_design`
+9 -> 7 and `store_eif` 10 -> 8; on `StackedDiD` (`aggregate` sat before them)
+`population`/`survey_design`/`covariates` move 7/8/9 -> 6/7/8; on `ChaisemartinDHaultfoeuille`
+`L_max`, `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`,
+`design2` and `survey_design` each move one slot left (7..14 -> 6..13). `HeterogeneousAdoptionDiD`
+and `did_had_pretest_workflow` shift nothing (everything after the removed slot is keyword-only;
+a seventh positional on `fit()` now raises). Pass these by keyword.
+
 ## Post-fit aggregation
 
 Aggregation moves off `fit()` onto the results object:
 
 ```python
-# 3.x
-results = CallawaySantAnna().fit(data, ..., aggregate="event_study")
+# 3.x (a TypeError from 4.0 - the keyword is gone):
+#   results = CallawaySantAnna().fit(data, ..., aggregate="event_study")
 
 # 4.0
 results = CallawaySantAnna().fit(data, ...)

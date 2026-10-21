@@ -346,8 +346,12 @@ class TestOutputFormats:
     def test_to_dataframe_raises_without_aggregation(self):
         df = _make_simple_panel()
         result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
-        with pytest.raises(ValueError, match="Event study effects not computed"):
+        # 4.0: the legacy fit-time field is never populated; the error
+        # steers to the post-fit container route.
+        with pytest.raises(ValueError, match=r"not stored on 4.0 fits.*aggregate\('event_study'\)"):
             result.to_dataframe("event_study")
+        with pytest.raises(ValueError, match=r"not stored on 4.0 fits.*aggregate\('group'\)"):
+            result.to_dataframe("group")
 
     def test_repr(self):
         df = _make_simple_panel()
@@ -646,7 +650,7 @@ class TestFusedConditionalPath:
     @staticmethod
     def _surfaces(res):
         gt = {k: (v["effect"], v["se"]) for k, v in res.group_time_effects.items()}
-        # post-fit container (a plain fit stores no fit-time surface)
+        # post-fit container (the fit-time surface is gone since 4.0)
         es = {k: (v["effect"], v["se"]) for k, v in es_dict(res).items()}
         return gt, es, (res.overall_att, res.overall_se)
 
@@ -1904,7 +1908,7 @@ class TestBootstrap:
             df, "y", "unit", "time", "first_treat"
         )
         assert result.bootstrap_results is not None
-        # the legacy fit-time fields are None on a plain EDiD fit; the
+        # the legacy fit-time fields are None on EVERY 4.0 EDiD fit; the
         # post-fit aggregate() REPLAYS the fit-time bootstrap
         assert result.event_study_effects is None
         assert result.group_effects is None
@@ -3072,7 +3076,7 @@ class TestEfficientDiDVcovType:
             r_default.bootstrap_results.overall_att_se
             == r_explicit.bootstrap_results.overall_att_se
         )
-        # A plain EDiD fit computes no aggregated bootstrap SEs; the
+        # A plain 4.0 EDiD fit computes no aggregated bootstrap SEs; the
         # post-fit aggregate() REPLAYS the fit-time bootstrap, so the
         # per-horizon / per-group override branches are compared on the
         # replayed containers.

@@ -257,7 +257,8 @@ QR — Phase 3 candidate).
 
 **R `did` yardstick** (did 2.5.1 — the 2.5.0 performance release with `faster_mode` and
 the tiled-contraction bootstrap — R 4.5.2 + OpenBLAS 0.3.33; equal work: `att_gt` +
-`aggte` simple+dynamic+group vs `fit(aggregate="all")`; identical `biters`/`cband`;
+`aggte` simple+dynamic+group vs a plain `fit()` followed by post-fit `aggregate("event_study")` +
+`aggregate("group")` (the 3.x `fit(aggregate="all")` route, removed at 4.0 - same work); identical `biters`/`cband`;
 medians of 3; run configs recorded in each JSON artifact's metadata):
 
 | Scenario | diff-diff | R 1-core | R 14-core (`pl=TRUE, cores=14`) |

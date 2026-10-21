@@ -231,8 +231,6 @@ cs.fit(
     time: str,
     first_treat: str,              # Column: first treatment period (0 or inf for never-treated)
     covariates: list[str] = None,
-    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
-    balance_e: int = None,         # Balance event study at this relative period
 ) -> CallawaySantAnnaResults
 ```
 
@@ -254,29 +252,30 @@ event_study = results.aggregate('event_study')   # -> EventStudyResults
 by_cohort   = results.aggregate('group')         # -> AggregationResult
 ```
 
-Fit-time `aggregate=` / `balance_e=` are DEPRECATED since 3.9 (removed in 4.0,
-ledger rows M-020 / M-117) and emit a `FutureWarning`. The downstream consumers
-all accept the post-fit container directly - `plot_event_study`,
-`compute_honest_did` and `compute_pretrends_power` each take
-`results.aggregate('event_study')` - bootstrapped fits included: the
-RECOMPUTE levels ('event_study'/'group') REPLAY the fit-time multiplier
-bootstrap from the kit-retained RNG state (percentile se/CI/cband matching a
-fit-time aggregation to floating-point reassociation; the container carries
-vcov=None). Only pre-replay legacy pickles and artifacts moved across the
-Rust/NumPy weight backend fail closed with a refit message - never a silent
-substitution of analytical inference for percentile statistics.
+`fit()` takes no `aggregate=` / `balance_e=` keyword (removed at 4.0, ledger
+rows M-020 / M-117; passing them is a `TypeError`) and computes no event-study
+or group surface: `results.event_study_effects` / `results.group_effects` are
+`None` after every fit. Aggregation is post-fit, and the downstream consumers
+all accept the container directly - `plot_event_study`, `compute_honest_did`
+and `compute_pretrends_power` each take `results.aggregate('event_study')` -
+bootstrapped fits included: the RECOMPUTE levels ('event_study'/'group')
+REPLAY the fit-time multiplier bootstrap from the kit-retained RNG state
+(percentile se/CI/cband matching a fit-time aggregation to floating-point
+reassociation; the container carries the bootstrap-draw covariance as vcov).
+Only pre-replay legacy pickles and artifacts moved across the Rust/NumPy
+weight backend fail closed with a refit message - never a silent substitution
+of analytical inference for percentile statistics.
 
 ```python
-# Post-fit route (recommended): aggregate once, feed any consumer.
+# Aggregate once post-fit, feed any consumer (analytical or bootstrapped fit).
 es = results.aggregate('event_study')
 plot_event_study(es)
 honest = compute_honest_did(es, M=1.0)
 
-# Bootstrap fits only: aggregate at fit time.
 boot = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
-plotted = boot.fit(data, outcome='outcome', unit='unit', time='period',
-                   first_treat='first_treat', aggregate='event_study')
-plot_event_study(plotted)
+boot_res = boot.fit(data, outcome='outcome', unit='unit', time='period',
+                    first_treat='first_treat')
+plot_event_study(boot_res.aggregate('event_study'))   # replays the bootstrap
 ```
 
 ### ChaisemartinDHaultfoeuille
@@ -313,7 +312,6 @@ est.fit(
     # ---- multi-horizon ----
     L_max: int | None = None,                    # Max horizon; None = l=1 only
     # ---- covariates and extensions ----
-    aggregate: Any = NOT_SUPPLIED,               # DEPRECATED (M-026): warns; non-None raises - use results.aggregate() post-fit
     covariates: list[str] | None = None,         # DID^X residualization-style covariates
     trends_linear: bool | None = None,           # DID^{fd} group-specific linear trends
     trends_nonparam: Any | None = None,          # DID^s state-set-specific trends
@@ -323,7 +321,7 @@ est.fit(
 ) -> ChaisemartinDHaultfoeuilleResults
 ```
 
-`L_max` controls multi-horizon computation. `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported. Fit-time `aggregate=` is DEPRECATED (row M-026: it never computed anything here; supplying it warns and any non-None value raises) - aggregation is post-fit: `results.aggregate('event_study')` returns the unified `EventStudyResults` view (Phase-1 fits the 2-row l=1 view, `L_max>=1` the multi-horizon surface) and `results.aggregate('simple')` a one-row `AggregationResult` relaying the overall estimand (DID_M / DID_1 / delta) bit-exactly; both are pure views, so bootstrap fits are permitted. The dCDH container is deliberately NOT accepted by `compute_honest_did`/`compute_pretrends_power` (their l1 placebo semantics need the native dCDH branch - pass the results object itself). The 3.8 names `group=` and `controls=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
+`L_max` controls multi-horizon computation. `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported. `fit()` takes no `aggregate=` keyword (removed at 4.0, row M-026: it never computed anything here) - aggregation is post-fit: `results.aggregate('event_study')` returns the unified `EventStudyResults` view (Phase-1 fits the 2-row l=1 view, `L_max>=1` the multi-horizon surface) and `results.aggregate('simple')` a one-row `AggregationResult` relaying the overall estimand (DID_M / DID_1 / delta) bit-exactly; both are pure views, so bootstrap fits are permitted. The dCDH container is deliberately NOT accepted by `compute_honest_did`/`compute_pretrends_power` (their l1 placebo semantics need the native dCDH branch - pass the results object itself). The 3.8 names `group=` and `controls=` were removed in 4.0 - use `unit=` and `covariates=`.
 
 **Usage:**
 
@@ -844,7 +842,6 @@ had.fit(
     time: str,
     unit: str,
     first_treat: str | None = None,            # Required on staggered panels (last-cohort auto-filter trigger)
-    aggregate: Any = NOT_SUPPLIED,             # DEPRECATED (M-027) - removed in 4.0; fit() selects the mode from the panel shape (2 distinct periods -> overall scalar WAS; more -> per-horizon event-study WAS) and post-fit results.aggregate() is the aggregation surface; supplying a value warns then runs the legacy routing
     *,
     cband: bool = True,                        # Simultaneous (sup-t) confidence bands on event-study fits that are survey-weighted OR clustered (keyword-only)
     survey_design: SurveyDesign | None = None, # Survey-design kwarg (weights, strata, PSU, FPC) — the sole weighting entry
@@ -1118,7 +1115,6 @@ stacked.fit(
     unit: str,
     time: str,
     first_treat: str,
-    aggregate: Any = NOT_SUPPLIED, # DEPRECATED (M-024): warns; surface always computed - use results.aggregate() post-fit
     population: str = None,        # Required when weighting="population"
     covariates: list[str] = None,  # Columns to balance (requires balance="entropy"); values read at t=a-1-anticipation; balanced windows only
 ) -> StackedDiDResults
@@ -1168,8 +1164,6 @@ edid.fit(
     time: str,
     first_treat: str,
     covariates: list[str] = None,  # Time-invariant unit-level covariates; uses doubly-robust sieve path when non-None
-    aggregate: Any = NOT_SUPPLIED, # DEPRECATED (M-023): warns, still works - use results.aggregate() post-fit
-    balance_e: Any = NOT_SUPPLIED, # DEPRECATED (M-120): moves onto results.aggregate(balance_e=)
 ) -> EfficientDiDResults
 ```
 
@@ -1900,10 +1894,10 @@ Returned by `CallawaySantAnna.fit()`.
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |
 | `n_obs` | `int` | Number of observations |
-| `event_study_effects` | `dict[int, dict]` | Event study effects by relative time. Populated only by the DEPRECATED fit-time `aggregate=`; `None` after a plain fit - use `aggregate("event_study")` instead |
-| `group_effects` | `dict` | Group-level aggregated effects. Same: populated only by fit-time `aggregate=` |
+| `event_study_effects` | `dict[int, dict] | None` | Legacy field - `None` on EVERY fit since 4.0 (fit() computes no event-study surface); use `aggregate("event_study")` |
+| `group_effects` | `dict | None` | Legacy field - `None` on EVERY fit since 4.0; use `aggregate("group")` |
 
-**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"group_time"|"group")`
+**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="group_time")` (the event-study / group tables come from `aggregate(...).to_dataframe()`; `level="event_study"|"group"` raises on 4.0 fits)
 
 `aggregate("simple"|"event_study"|"group"|"total")` re-aggregates POST-FIT
 with no
@@ -2115,9 +2109,9 @@ ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDRes
 | `overall_t_stat` | `float` | T-statistic |
 | `overall_p_value` | `float` | P-value |
 | `overall_conf_int` | `tuple[float, float]` | CI |
-| `event_study_effects` | `dict[int, dict]` | Event study effects (if the DEPRECATED fit-time aggregate included event_study; ALWAYS populated for StackedDiD since 3.9 - row M-024; post-fit `aggregate('event_study')` returns a CONTAINER, it does not populate this field) |
+| `event_study_effects` | `dict[int, dict] | None` | Legacy field. `None` on every EfficientDiD fit since 4.0 (PR 3b) and on plain ImputationDiD/TwoStageDiD fits that omit `aggregate=`; ImputationDiD/TwoStageDiD still populate it via the deprecated fit-time `aggregate=` (removal pending, PR 3c); StackedDiD always populates it (row M-024). The canonical surface is the `aggregate('event_study')` CONTAINER |
 | `event_study_df` | `float | dict | None` | Producer-side per-row df channel for the unified event-study container. On `EfficientDiDResults`/`ImputationDiDResults` (3.12, M-092 completion): the scalar survey df governing the ES rows' t-inference (ImputationDiD threads the FINAL replicate-override value; leads included on survey fits); `None` on non-survey fits, on bootstrapped fits (percentile inference used no df), when no fit-time ES surface was built, and for the replicate-undefined `0` sentinel |
-| `group_effects` | `dict` | Group-level effects (if the deprecated fit-time aggregate included group; post-fit `aggregate('group')` returns an AggregationResult container) |
+| `group_effects` | `dict | None` | Legacy field. `None` on every EfficientDiD fit since 4.0 (PR 3b) and on plain ImputationDiD/TwoStageDiD fits that omit `aggregate=`; ImputationDiD/TwoStageDiD still populate it via the deprecated fit-time `aggregate=` (removal pending, PR 3c). The canonical surface is the `aggregate('group')` AggregationResult container |
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |
 | `n_obs` | `int` | Number of observations |

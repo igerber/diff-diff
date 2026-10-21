@@ -484,8 +484,9 @@ a library setting.
   fields. Pretrends POWER: natively
   `compute_pretrends_power()` supports MPD / CS / SunAbraham fits;
   since row M-024 a Stacked `results.aggregate('event_study')`
-  CONTAINER also admits (kappa_pre >= 2). On plain (no fit-time
-  `aggregate=`) CS fits, `DiagnosticReport` internally derives the CS
+  CONTAINER also admits (kappa_pre >= 2). On CS fits (whose raw
+  `event_study_effects` is None on every fit since 4.0),
+  `DiagnosticReport` internally derives the CS
   container and feeds it to `compute_pretrends_power` /
   `HonestDiD.sensitivity_analysis` — CS is M-093-admitted with pinned
   raw-route parity; the admission set itself is unchanged (widening

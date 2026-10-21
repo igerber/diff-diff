@@ -131,7 +131,7 @@ class TestCallawaySantAnna:
             first_treat="first_treat",
         )
 
-        # A plain fit does not populate the fit-time surface; aggregation is post-fit
+        # 4.0: fit never populates the fit-time surface; aggregation is post-fit
         assert results.event_study_effects is None
         assert results.group_effects is None
         es = results.aggregate("event_study")
@@ -337,7 +337,7 @@ class TestCallawaySantAnnaResults:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        with pytest.raises(ValueError, match="Event study effects not computed"):
+        with pytest.raises(ValueError, match="not stored on 4.0 fits"):
             results.to_dataframe(level="event_study")
 
 

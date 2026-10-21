@@ -193,7 +193,7 @@ class TestCSDIDCoreEstimation:
         assert (
             abs(results.overall_att - 1.0) < 0.5
         ), f"Simple ATT = {results.overall_att:.3f}, expected ≈ 1.0"
-        # A plain fit stores no aggregation surface; both levels are post-fit
+        # 4.0: the fit stores no aggregation surface; both levels are post-fit
         assert results.event_study_effects is None and results.group_effects is None
         # Event study: post-treatment effect ≈ 1
         post_effects = {e: v for e, v in es_dict(results).items() if e >= 0}

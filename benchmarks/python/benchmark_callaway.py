@@ -124,7 +124,7 @@ def main():
         )
         # Post-fit aggregations stay inside the timed region: the R `aggte`
         # yardstick is fit + simple/dynamic/group aggregation (the 3.x
-        # fit(aggregate="all") route, deprecated since 3.9 and removed at the 4.0 cut).
+        # fit(aggregate="all") route, removed at 4.0).
         es = results.aggregate("event_study")
         grp = results.aggregate("group")
 

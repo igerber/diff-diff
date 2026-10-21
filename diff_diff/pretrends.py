@@ -1182,10 +1182,7 @@ class PreTrendsPower(BaseEstimator):
                         f"{type(results).__name__} must have "
                         "event_study_effects. Pass the post-fit container "
                         "(compute_pretrends_power(results.aggregate("
-                        "'event_study'), ...)) instead; CallawaySantAnna "
-                        "fits can alternatively use the deprecated "
-                        "aggregate='event_study' to populate the fit-time "
-                        "surface."
+                        "'event_study'), ...)) instead."
                     )
 
                 # Common-reference guard, mirroring the container branch

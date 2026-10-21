@@ -16,7 +16,8 @@ Contents:
 - ``_EfficientAggregationMixin`` — the six estimator methods that compute
   the overall / event-study / group aggregations from the per-(g,t) EIF
   dict plus O(n_units) bookkeeping.  ``EfficientDiD`` inherits it for the
-  fit-time path, and ``EfficientDiDResults._aggregate_compute`` runs the
+  fit-time OVERALL aggregation (since 4.0 the fit materializes no event-study
+  or group surface), and ``EfficientDiDResults._aggregate_compute`` runs the
   same methods post-fit on a throwaway ``_EDiDKitAggregator`` host built
   from the retained :class:`~diff_diff.aggregation.AggregationKit` — which
   is what keeps ``aggregate()`` off an ``_estimator_ref``.
@@ -96,7 +97,7 @@ def _compute_se_from_eif(
 
 
 class _EfficientAggregationMixin:
-    """EIF-based aggregation methods shared by fit-time and post-fit paths.
+    """EIF-based aggregation methods shared by the fit (overall) and post-fit paths.
 
     Not intended for standalone use.  A host class must expose exactly the
     five attributes declared below — this is the ``_EDiDKitAggregator``

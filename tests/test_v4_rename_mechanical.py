@@ -35,6 +35,7 @@ from diff_diff._deprecation import (
     deprecated_kwarg_message,
     require_arg,
     resolve_renamed_kwarg,
+    warn_deprecated_kwarg,
 )
 
 
@@ -75,6 +76,14 @@ class TestDeprecationHelpers:
         assert msg == (
             "Cls.fit(old=) is deprecated and will be removed in 4.0; " "use new= instead."
         )
+
+    def test_warn_deprecated_kwarg_emits_future_warning(self):
+        # Retained 5.0-window helper (spec section 8 rule 11): its last library
+        # caller (dCDH fit(aggregate=), M-026) was removed at 4.0, so this pin
+        # keeps the helper itself under test.
+        with pytest.warns(FutureWarning, match=r"Cls\.fit\(old=\) is deprecated") as rec:
+            warn_deprecated_kwarg("Cls.fit", "old", "use new= instead", stacklevel=2)
+        assert str(rec[0].message) == deprecated_kwarg_message("Cls.fit", "old", "use new= instead")
 
     def test_resolve_neither_returns_default(self):
         with warnings.catch_warnings():

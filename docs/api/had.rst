@@ -160,8 +160,8 @@ et al. (2026). The composite orchestrator
 does NOT pick the HAD design path (``continuous_at_zero`` /
 ``continuous_near_d_lower`` / ``mass_point``); that is auto-detected inside
 :meth:`HeterogeneousAdoptionDiD.fit` from the dose support. The workflow has
-two modes selected from the panel shape (row M-139; the deprecated
-``aggregate=`` override warns and dies in 4.0): a two-period
+two modes selected from the panel shape (row M-139; the former
+``aggregate=`` override was removed at 4.0): a two-period
 first-differenced sample runs the single-period tests; a multi-period panel
 (three or more periods) runs the joint multi-period tests. Both modes return
 a unified :class:`~diff_diff.HADPretestReport`.

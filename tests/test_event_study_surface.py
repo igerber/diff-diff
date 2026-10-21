@@ -266,15 +266,15 @@ def test_df_survey_bare_cluster_falls_back_to_df_inference():
 def surfaces():
     """Build every producer's surface once; return {label: (native, surface)}.
 
-    Producer routes as they stand in this (tests-first) migration step: the
-    CallawaySantAnna "native" side is a ``legacy_standin`` carrying
-    ``aggregate("event_study")`` in the 3.x fields (a plain CS fit stores no
-    fit-time dict; the stand-in is the legacy-pickle shape
-    ``build_event_study_surface`` still accepts), while the ImputationDiD,
-    TwoStageDiD, ContinuousDiD and EfficientDiD producers still use the
+    Producer routes as they stand after 4.0 PR 3b: the CallawaySantAnna and
+    EfficientDiD "native" sides are ``legacy_standin``s carrying
+    ``aggregate("event_study")`` in the 3.x fields (neither fit stores a
+    fit-time dict any more - the keyword is gone; the stand-in is the
+    legacy-pickle shape ``build_event_study_surface`` still accepts), while the
+    ImputationDiD, TwoStageDiD and ContinuousDiD producers still use the
     deprecated fit-time ``aggregate=`` route, which populates the dict directly.
-    Those sites move to stand-ins / the post-fit relay when the fit-time
-    keywords are removed (4.0 PRs 3b/3c).
+    Those sites move to stand-ins / the post-fit relay when their fit-time
+    keywords are removed (4.0 PR 3c).
     """
     out = {}
 
@@ -398,9 +398,9 @@ def surfaces():
 
         # 8. EfficientDiD
         ed_data = _efficient_panel()
-        ed = EfficientDiD().fit(
-            ed_data, "y", "unit", "time", "first_treat", aggregate="event_study"
-        )
+        ed = EfficientDiD().fit(ed_data, "y", "unit", "time", "first_treat")
+        assert ed.event_study_effects is None  # 4.0 (PR 3b): never populated at fit
+        ed = legacy_standin(ed)
         out["EfficientDiD"] = (ed, build_event_study_surface(ed))
 
         # 9. WooldridgeDiD (post-fit aggregate)

@@ -2333,10 +2333,9 @@ class TestMultiPeriodWorkflow:
     def test_overall_battery_rejects_multi_period_on_supplied_path(self):
         """Registry/docstring contract: the overall battery is two-period only.
 
-        A PLAIN multi-period workflow call now selects the event-study
-        battery (M-139 panel-shape inference); the two-period requirement
-        still binds when the legacy aggregate='overall' override is
-        supplied, so the registry text and the validator stay in lock-step.
+        A PLAIN multi-period workflow call selects the event-study battery
+        (M-139 panel-shape inference); since 4.0 there is no mode override -
+        the removed ``aggregate=`` keyword is a native TypeError.
         """
         df = _make_multi_period_panel(
             G=40,
@@ -2344,11 +2343,10 @@ class TestMultiPeriodWorkflow:
             first_treat_period=1999,
             seed=313,
         )
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match=r"exactly two time periods"):
-                did_had_pretest_workflow(
-                    df, "y", "d", "period", "unit", n_bootstrap=199, seed=0, aggregate="overall"
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'aggregate'"):
+            did_had_pretest_workflow(
+                df, "y", "d", "period", "unit", n_bootstrap=199, seed=0, aggregate="overall"
+            )
 
     def test_event_study_linear_dgp_all_pass(self):
         df = self._linear_panel(seed=101)
@@ -2456,20 +2454,6 @@ class TestMultiPeriodWorkflow:
         # QUG T statistic should be large (shifted support) -> reject.
         if report.qug.reject:
             assert report.verdict.startswith("support infimum rejected")
-
-    def test_invalid_aggregate_raises(self):
-        df = self._linear_panel(seed=102)
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="aggregate must be one of"):
-                did_had_pretest_workflow(
-                    df,
-                    "y",
-                    "d",
-                    "period",
-                    "unit",
-                    aggregate="bogus",
-                    n_bootstrap=199,
-                )
 
     def test_single_pre_period_yields_pretrends_skipped(self):
         """If t_pre_list has only the base pre-period, no earlier placebos

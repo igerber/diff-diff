@@ -329,7 +329,7 @@ class TestCSBootstrapChunkInvariance:
         return pd.DataFrame({"unit": units, "period": periods, "y": y, "first_treat": ft})
 
     def _fit(self):
-        # A plain fit stores no fit-time surface; the post-fit aggregate() REPLAYS the
+        # 4.0: the fit-time surface is gone; the post-fit aggregate() REPLAYS the
         # bootstrap, so it runs here - inside whatever monkeypatch the caller set.
         res = CallawaySantAnna(
             control_group="never_treated",
@@ -621,7 +621,7 @@ class TestCSBootstrapTileInvariance:
 def _with_aggregates(res):
     """``(results, aggregate("event_study"), aggregate("group"))`` for a bootstrapped fit.
 
-    A plain fit stores no fit-time surface, so each post-fit ``aggregate()`` call
+    Since 4.0 the fit-time surface is gone and each post-fit ``aggregate()`` call
     REPLAYS the multiplier bootstrap, so the containers are materialized right
     after the fit - inside the caller's chunk/tile monkeypatch context.
     """
@@ -725,7 +725,7 @@ class TestEfficientDiDBootstrapChunkInvariance:
                 "first_treat",
                 survey_design=survey_design,
             )
-            # A plain EfficientDiD fit stores no fit-time surface; the post-fit
+            # 4.0: EfficientDiD stores no fit-time surface; the post-fit
             # containers replay the bootstrap under the caller's monkeypatch.
             assert res.event_study_effects is None and res.group_effects is None
             return _with_aggregates(res)

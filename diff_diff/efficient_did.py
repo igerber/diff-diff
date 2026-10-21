@@ -29,12 +29,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.aggregation import AggregationKit, BootstrapReplaySpec
-from diff_diff.bootstrap_utils import (
-    apply_bootstrap_event_study_overrides,
-    apply_bootstrap_group_overrides,
-)
 from diff_diff.efficient_did_aggregation import (
     _cluster_aggregate,
     _compute_se_from_eif,
@@ -131,13 +126,13 @@ def _build_edid_aggregation_kit(
     per-(g,t) EIF dict, O(n_units x n_gt) (full enumeration in the
     ``docs/methodology/REGISTRY.md`` EfficientDiD M-023 Note).
 
-    ``df_survey`` MUST be the post-overall snapshot captured in ``fit()``
-    immediately after the overall inference and before the ES/group gates —
-    NOT a read of ``estimator._survey_df`` at kit-build time, which on a
-    deprecated ``fit(aggregate="group"/"all")`` replicate fit is the
-    post-group value (``_compute_survey_eif_se`` can set it to ``None`` on
-    a degenerate replicate design).  The snapshot is the exact value every
-    fit-time aggregation seeded from, so post-fit recompute replays it.
+    ``df_survey`` is the post-overall snapshot captured in ``fit()``
+    immediately after the overall inference - the kit's named seed for
+    every post-fit recompute (``results.aggregate('event_study' |
+    'group')``).  Since 4.0 no fit-time aggregation runs after it, so the
+    snapshot equals a fit-end read of ``estimator._survey_df``; it is
+    still captured by name so the post-fit route seeds from an explicit
+    value rather than from estimator state.
     """
     if not eif_by_gt:
         # Unreachable after fit()'s empty-effects raise; kept for the CS
@@ -498,8 +493,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Any = NOT_SUPPLIED,
-        balance_e: Any = NOT_SUPPLIED,
         survey_design: Optional[Any] = None,
         store_eif: bool = False,
     ) -> EfficientDiDResults:
@@ -522,34 +515,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             Column names for time-invariant unit-level covariates.
             When provided, uses the doubly robust path (outcome regression
             + propensity score ratios).
-        aggregate : str, optional
-            DEPRECATED (3.9, removed in 4.0, row M-023): supplying any
-            value (``None`` included) emits a FutureWarning; the
-            deprecated path still computes and stores the requested
-            surfaces exactly as before (``None``, ``"simple"``,
-            ``"event_study"``, ``"group"``, or ``"all"``; unknown strings
-            act like ``None``, unchanged).  Aggregate as a post-fit step
-            instead: ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')`` /
-            ``.aggregate('total')``.  On
-            bootstrapped fits (``n_bootstrap > 0``) the post-fit
-            RECOMPUTE levels (``'event_study'``/``'group'``) REPLAY the
-            fit-time multiplier bootstrap from the kit-retained RNG
-            state (percentile inference, allclose to a fit-time
-            aggregation; no refit needed), while ``aggregate('simple')``
-            and, where supported, ``aggregate('total')`` relay the
-            stored bootstrap inference (the per-level policy converged
-            with row M-027).
-        balance_e : int, optional
-            DEPRECATED (3.9, removed in 4.0, row M-120): moves onto
-            post-fit ``aggregate()`` —
-            ``results.aggregate('event_study', balance_e=2)``.  EDiD's
-            balance rule is the ANCHOR-HORIZON rule (keep cohorts with a
-            finite effect at the anchor horizon), the same rule shape
-            CallawaySantAnna uses — with one keying-granularity
-            difference: EDiD anchors on the ``int(t - g)`` bucket while
-            CS keys raw ``t - g`` (identical on integer-period panels;
-            see the REGISTRY truncation Note).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference.
             Applies survey weights to all means, covariances, and cohort
@@ -566,6 +531,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         Returns
         -------
         EfficientDiDResults
+            Aggregations are a post-fit step: ``results.aggregate('event_study'
+            | 'group' | 'simple' | 'total', balance_e=...)``.  On bootstrapped
+            fits (``n_bootstrap > 0``) the recompute levels replay the fit-time
+            multiplier bootstrap from the kit-retained RNG state.  EDiD's
+            balance rule is the ANCHOR-HORIZON rule (keep cohorts with a
+            finite effect at the anchor horizon), the same rule shape
+            CallawaySantAnna uses - with one keying-granularity difference:
+            EDiD anchors on the ``int(t - g)`` bucket while CS keys raw
+            ``t - g`` (identical on integer-period panels; see the REGISTRY
+            truncation Note).
 
         Raises
         ------
@@ -573,35 +548,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             Missing columns, unbalanced panel, non-absorbing treatment,
             or PT-Post without a never-treated group.
         """
-        # M-023/M-120 deprecation shim (CS-style joint warning): a plain
-        # fit() never warns; supplying EITHER param with ANY value (None
-        # included) warns once, then the legacy routing below runs
-        # unchanged - the deprecated path returns exactly the numbers it
-        # always did (no new value validation; unknown strings still act
-        # like None). The post-fit successor validates its own vocabulary.
-        _deprecated_passed = [
-            n
-            for n, v in (("aggregate", aggregate), ("balance_e", balance_e))
-            if v is not NOT_SUPPLIED
-        ]
-        if _deprecated_passed:
-            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
-            warnings.warn(
-                f"EfficientDiD.fit({_args}) is deprecated and will be "
-                "removed in 4.0. Fit once, then aggregate as a post-fit "
-                "step: results = EfficientDiD().fit(...); "
-                "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
-                "alongside it: results.aggregate('event_study', "
-                "balance_e=2).",
-                FutureWarning,
-                stacklevel=2,
-            )
-        if aggregate is NOT_SUPPLIED:
-            aggregate = None
-        if balance_e is NOT_SUPPLIED:
-            balance_e = None
-
         self._validate_params()
 
         if self.cluster is not None and survey_design is not None:
@@ -1306,43 +1252,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=self._survey_df
         )
-        # M-023 kit snapshot: the post-overall ``_survey_df`` is the exact
-        # value fit-time ES/group aggregation seeds from (the gates below run
-        # next), and post-fit aggregate() must replay from the same seed.
-        # Captured HERE, not at fit end: ``_aggregate_by_group`` can mutate
-        # ``self._survey_df`` through ``_compute_survey_eif_se`` on degenerate
-        # replicate designs, so a fit-end read on a deprecated
-        # ``fit(aggregate="group"/"all")`` would seed recompute from the
-        # post-group value and break post-fit/fit-time inertness.
+        # M-023 kit snapshot: the post-overall ``_survey_df`` is the kit's
+        # named seed for every post-fit aggregate() recompute. Since 4.0 no
+        # fit-time ES/group aggregation runs after it (the legacy
+        # ``event_study_effects`` / ``group_effects`` fields are None on
+        # every fit; ``results.aggregate('event_study' | 'group')`` is the
+        # surface), so the snapshot equals a fit-end read - it is kept by
+        # name so the post-fit route seeds from an explicit value.
         _survey_df_post_overall = self._survey_df
-
-        event_study_effects = None
-        group_effects = None
-
-        if aggregate in ("event_study", "all"):
-            event_study_effects = self._aggregate_event_study(
-                group_time_effects,
-                eif_by_gt,
-                n_units,
-                cohort_fractions,
-                treatment_groups,
-                time_periods,
-                balance_e,
-                unit_cohorts=unit_cohorts,
-                cluster_indices=unit_cluster_indices,
-                n_clusters=n_clusters,
-            )
-        if aggregate in ("group", "all"):
-            group_effects = self._aggregate_by_group(
-                group_time_effects,
-                eif_by_gt,
-                n_units,
-                cohort_fractions,
-                treatment_groups,
-                unit_cohorts=unit_cohorts,
-                cluster_indices=unit_cluster_indices,
-                n_clusters=n_clusters,
-            )
 
         # ----- Bootstrap -----
         # Reject replicate-weight designs for bootstrap — replicate variance
@@ -1363,8 +1280,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 group_time_effects=group_time_effects,
                 eif_by_gt=eif_by_gt,
                 n_units=n_units,
-                aggregate=aggregate,
-                balance_e=balance_e,
+                aggregate=None,
+                balance_e=None,
                 treatment_groups=treatment_groups,
                 cohort_fractions=cohort_fractions,
                 cluster_indices=unit_cluster_indices,
@@ -1387,15 +1304,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                     se = float(group_time_effects[gt]["se"])
                     group_time_effects[gt]["t_stat"] = safe_inference(eff, se, alpha=self.alpha)[0]
 
-            # ES/group percentile overrides via the shared appliers (the same
-            # implementations the post-fit aggregate() replay runs — one
-            # code path, no fit-vs-replay drift). The appliers carry the
-            # availability guards and the group df_used clearing internally.
-            apply_bootstrap_event_study_overrides(
-                event_study_effects, bootstrap_results, self.alpha
-            )
-            apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
-
         # ----- Build results -----
         # Raw (pre-normalization) unit weights for the metadata recompute:
         # compute_survey_metadata expects the ORIGINAL scale (resolve()
@@ -1413,16 +1321,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 else np.ones(len(data), dtype=np.float64)
             )
             raw_unit_w_meta = raw_obs_w_meta[self._unit_first_panel_row]
-        # Per-row ES df provenance (M-092 completion): the post-overall
-        # survey-df snapshot is the df the ES rows' safe_inference used.
-        # None when no ES surface was built, under bootstrap (percentile
-        # inference used no df — the shipped producer convention), and for
-        # the replicate-undefined 0 sentinel (representable only via
-        # survey_metadata.df_survey).
-        _es_df_final: Optional[float] = None
-        if event_study_effects is not None and bootstrap_results is None:
-            if _survey_df_post_overall is not None and _survey_df_post_overall > 0:
-                _es_df_final = float(_survey_df_post_overall)
         self.results_ = EfficientDiDResults(
             group_time_effects=group_time_effects,
             overall_att=overall_att,
@@ -1441,9 +1339,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             n_bootstrap=self.n_bootstrap,
             bootstrap_weights=self.bootstrap_weights,
             seed=self.seed,
-            event_study_effects=event_study_effects,
-            event_study_df=_es_df_final,
-            group_effects=group_effects,
+            # No fit-time ES/group surface since 4.0 (post-fit aggregate()
+            # recomputes / replays them); the legacy fields are None on
+            # every fit, as is the ES df provenance.
+            event_study_effects=None,
+            event_study_df=None,
+            group_effects=None,
             efficient_weights=stored_weights if stored_weights else None,
             omega_condition_numbers=stored_cond if stored_cond else None,
             control_group=self.control_group,
