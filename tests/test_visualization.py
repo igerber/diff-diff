@@ -99,7 +99,7 @@ class TestPlotEventStudy:
 
     @pytest.fixture
     def cs_fit(self):
-        """A plain CallawaySantAnna fit (no fit-time event-study surface)."""
+        """A plain CallawaySantAnna fit (4.0: no fit-time event-study surface)."""
         data = generate_staggered_data()
         cs = CallawaySantAnna()
         return cs.fit(
@@ -130,7 +130,7 @@ class TestPlotEventStudy:
         assert ax is not None
 
     def test_cs_results_object_has_no_fit_time_surface(self, cs_fit):
-        """Plain-fit invariant: a CS results object carries no event-study surface.
+        """4.0 invariant: a CS results object carries no event-study surface.
 
         Every CallawaySantAnna fit leaves the legacy field None; plotting the
         results object itself fails closed and points at the container.
@@ -838,7 +838,7 @@ class TestEfficientDiDPlotReference:
             time="period",
             first_treat="first_treat",
         )
-        # A plain EfficientDiD fit stores no fit-time surface, so the MEMBERSHIP-GATED
+        # 4.0: EfficientDiD stores no fit-time surface, so the MEMBERSHIP-GATED
         # property is None on the results object itself ...
         assert res.event_study_effects is None
         assert res.reference_period is None

@@ -65,7 +65,7 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
         first_treat="first_treat",
         covariates=covariates,
     )
-    # Post-fit containers (the 3.x fit(aggregate="all") route is deprecated and goes at the 4.0 cut);
+    # Post-fit containers (the 3.x fit(aggregate="all") route, removed at 4.0);
     # the fit is bootstrapped, so each call replays the fit-time bootstrap.
     es_container = results.aggregate("event_study")
     grp_container = results.aggregate("group")

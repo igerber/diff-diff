@@ -16,9 +16,14 @@ groups ``renames-*``; rules in ``docs/v4-design.md`` section 8):
   default. ``resolve_renamed_kwarg`` maps old to new with a single
   ``FutureWarning``, rejects both-supplied calls loudly, and returns the
   caller-declared default when neither is passed.
-- Dropped parameter (no successor name, e.g. the fit-time ``aggregate=``
-  override): the parameter keeps its position with a sentinel default; the
-  owner calls ``warn_deprecated_kwarg`` when a value was actually supplied.
+- Dropped parameter (no successor name): the parameter keeps its position
+  with a sentinel default; the owner calls ``warn_deprecated_kwarg`` when a
+  value was actually supplied. (The 3.9 fit-time ``aggregate=`` shims on
+  CallawaySantAnna, EfficientDiD, StackedDiD, ChaisemartinDHaultfoeuille and
+  HeterogeneousAdoptionDiD were this shape; they were deleted at the 4.0 cut
+  (PR 3b) and ImputationDiD / TwoStageDiD / ContinuousDiD follow in PR 3c.
+  ``warn_deprecated_kwarg`` has no library caller any more (dCDH was the
+  last) and is retained per section 8 rule 11 for the 5.0 window.)
 - Renamed results field: the dataclass field takes the new name and
   ``deprecated_field_property`` builds the read-only warning alias under the
   old name (a plain class attribute, so it is a descriptor but NOT a

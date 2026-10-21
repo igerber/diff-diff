@@ -386,7 +386,7 @@ ROWS = [
     dict(
         key="imputation_pretrends_event_study",
         # The pretrends lead regression runs on the post-fit event-study
-        # route (no fit-time aggregate=), so the row spies fit + aggregate.
+        # route (4.0: no fit-time aggregate=), so the row spies fit + aggregate.
         fit=lambda df: diff_diff.ImputationDiD(pretrends=True)
         .fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
         .aggregate("event_study"),

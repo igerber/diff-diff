@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.balancing import BalanceError, entropy_balance
 from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
@@ -301,7 +300,6 @@ class StackedDiD(BaseEstimator):
         unit: str,
         time: str,
         first_treat: str,
-        aggregate: Any = NOT_SUPPLIED,
         population: Optional[str] = None,
         survey_design=None,
         covariates: Optional[List[str]] = None,
@@ -322,17 +320,6 @@ class StackedDiD(BaseEstimator):
         first_treat : str
             Name of column indicating when unit was first treated.
             Use 0 or np.inf for never-treated units.
-        aggregate : str, optional
-            DEPRECATED (3.9, removed in 4.0; ledger row M-024): the
-            event-study surface is now always computed at fit, so this
-            parameter is behaviorally inert - passing it (any value,
-            ``None`` included) emits a ``FutureWarning``. Aggregate as a
-            post-fit step instead: ``results.aggregate('event_study')`` /
-            ``results.aggregate('simple')``. Value validation is
-            unchanged: ``"group"``/``"all"`` raise ``ValueError``
-            (the pooled stacked regression cannot produce
-            cohort-specific effects - use CallawaySantAnna or
-            ImputationDiD), as do unknown values.
         population : str, optional
             Column name for population weights. Required only when
             weighting="population".
@@ -352,56 +339,25 @@ class StackedDiD(BaseEstimator):
         Returns
         -------
         StackedDiDResults
-            Object containing all estimation results.
+            Object containing all estimation results. The event-study surface
+            is always computed at fit; aggregate as a post-fit step via
+            ``results.aggregate('event_study')`` / ``results.aggregate('simple')``
+            (``'group'`` is not available: the pooled stacked regression
+            cannot produce cohort-specific effects - use CallawaySantAnna or
+            ImputationDiD for cohort-level estimates).
 
         Raises
         ------
         ValueError
             If required columns are missing or data validation fails.
         """
-        # ---- fit(aggregate=) shim (row M-024) ----
-        # Deprecated in 3.9, removed at 4.0: the event-study surface is now
-        # ALWAYS computed at fit (see the extraction block below), so the
-        # param is behaviorally inert and aggregation moves to the post-fit
-        # results.aggregate(type=...). The sentinel default means the
-        # warning fires ONLY when the caller supplies the argument (None
-        # included), never on a plain fit(). Value validation below is
-        # unchanged, so the deprecated path returns exactly what a plain
-        # fit does - or raises exactly as it always did.
-        if aggregate is not NOT_SUPPLIED:
-            warnings.warn(
-                "StackedDiD.fit(aggregate=) is deprecated and will be "
-                "removed in 4.0. The event-study surface is now always "
-                "computed; aggregate as a post-fit step: "
-                "results.aggregate('event_study') / "
-                "results.aggregate('simple').",
-                FutureWarning,
-                stacklevel=2,
-            )
-        else:
-            aggregate = None
-
         # Fit-time re-check: __init__ and set_params validate eagerly, so
         # this only catches DIRECT attribute mutation (est.anticipation = ...)
         # — an out-of-domain value silently changes the ESTIMAND. The
-        # assignment also re-normalizes a mutated numpy scalar to int. Placed
-        # AFTER the deprecation shim so a caller who both mutated and passed
-        # a deprecated argument still sees the FutureWarning before the raise.
+        # assignment also re-normalizes a mutated numpy scalar to int.
         self.anticipation = validate_anticipation(self.anticipation)
 
         # ---- Validate inputs ----
-        if aggregate in ("group", "all"):
-            raise ValueError(
-                f"aggregate='{aggregate}' is not supported by StackedDiD. "
-                "The pooled stacked regression cannot produce cohort-specific "
-                "effects. Use CallawaySantAnna or ImputationDiD for "
-                "cohort-level estimates."
-            )
-        if aggregate not in (None, "simple", "event_study"):
-            raise ValueError(
-                f"aggregate must be None, 'simple', or 'event_study', " f"got '{aggregate}'"
-            )
-
         required_cols = [outcome, unit, time, first_treat]
         if population is not None:
             required_cols.append(population)
@@ -780,8 +736,8 @@ class StackedDiD(BaseEstimator):
             # 3.9 (row M-024): the per-event contrasts are ALWAYS built -
             # the event-study surface is always materialized so the
             # post-fit results.aggregate("event_study") view is total.
-            # (The pre-M-024 gate skipped them when aggregate !=
-            # "event_study"; that gate's premise died with the post-fit
+            # (The pre-3.9 gate skipped them unless an event study was
+            # requested at fit; that gate's premise died with the post-fit
             # surface.) NB: the dof helper's degeneracy guard is
             # batch-relative for m > 1 (linalg.py), so the overall-ATT
             # contrast now shares a batch with the per-event contrasts;
@@ -939,8 +895,8 @@ class StackedDiD(BaseEstimator):
         # ---- Extract event study effects ----
         # 3.9 (row M-024): the surface is ALWAYS materialized - the
         # regression always includes the event-time interactions, and the
-        # post-fit results.aggregate("event_study") view must be total.
-        # fit(aggregate=) no longer affects what is computed or stored.
+        # post-fit results.aggregate("event_study") view must be total:
+        # the event-study surface is always computed at fit.
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         es_vcov: Optional[np.ndarray] = None
         es_vcov_index: Optional[List[int]] = None

@@ -63,13 +63,13 @@ results.att          # ATT
 results.se           # Standard error
 results.conf_int     # Confidence interval
 
-# CallawaySantAnna (with aggregate parameter):
+# CallawaySantAnna (post-fit aggregate(); fit() takes no aggregate= keyword):
 results.overall_att       # Overall ATT
 results.overall_se        # Standard error
-results.group_effects     # Per-cohort ATTs (deprecated fit-time route only;
-                          # post-fit: results.aggregate('group'))
-results.event_study_effects  # Dynamic effects (deprecated fit-time route only;
-                             # post-fit: results.aggregate('event_study'))
+results.aggregate('group')        # Per-cohort ATTs (results.group_effects is
+                                  # None on every 4.0 fit)
+results.aggregate('event_study')  # Dynamic effects (results.event_study_effects
+                                  # is None on every 4.0 fit)
 
 # SunAbraham (no aggregate parameter — effects computed automatically):
 results.overall_att           # Overall ATT
@@ -405,8 +405,8 @@ Works with MultiPeriodDiD (deprecated - the TWFE event-study surface also admits
 estimated pre-periods exist).
 
 - For CS: pass the post-fit container - `compute_honest_did(
-  results.aggregate('event_study'))` - no refit needed (the fit-time
-  `aggregate=` route is deprecated since 3.9). BOOTSTRAPPED fits
+  results.aggregate('event_study'))` - no refit needed (`fit()` takes no
+  `aggregate=` keyword since 4.0). BOOTSTRAPPED fits
   (`n_bootstrap > 0`) included: the recompute levels REPLAY the
   fit-time multiplier bootstrap from the kit-retained RNG state
   (percentile inference; the container's vcov is the covariance of the
@@ -483,8 +483,9 @@ Aggregate treatment effects may mask important variation.
 
 ### For CallawaySantAnna, EfficientDiD, ImputationDiD, TwoStageDiD (post-fit `aggregate()`)
 ```python
-# Post-fit, no refit needed (fit-time aggregate= is deprecated since 3.9
-# for CS/StackedDiD/EfficientDiD/ImputationDiD/TwoStageDiD; removed in 4.0):
+# Post-fit, no refit needed (the fit-time aggregate= / balance_e= keywords
+# were removed at 4.0 on CS/StackedDiD/EfficientDiD and remain deprecated on
+# ImputationDiD/TwoStageDiD until their removal):
 results = cs.fit(data, ...)
 print(results.overall_att)                              # Overall ATT
 print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs

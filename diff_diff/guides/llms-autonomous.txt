@@ -757,7 +757,7 @@ intensity of exposure differs):
   comparison under Assumption 6. `fit()` selects the mode from the panel
   shape: a two-period panel returns a single scalar WAS (Phase 2a);
   a multi-period panel returns per-event-time WAS estimates (Phase
-  2b). The `aggregate=` override is deprecated (M-027). `did_had_pretest_workflow()`
+  2b). The `aggregate=` override was removed at 4.0 (M-027). `did_had_pretest_workflow()`
   runs the paper's three-step TWFE-suitability battery: (1) QUG null
   via `qug_test`, (2) Assumption 7 pre-trends via `stute_test` /
   `stute_joint_pretest` (event-study path only; the two-period overall

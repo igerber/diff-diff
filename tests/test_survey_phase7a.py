@@ -83,7 +83,7 @@ class TestSmokeIPWDRSurvey:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        # A plain CS fit leaves the legacy field None
+        # 4.0: the fit-time surface is gone - CS leaves the legacy field None
         # on every fit and the post-fit container carries the event study.
         assert result.event_study_effects is None
         es = result.aggregate("event_study")

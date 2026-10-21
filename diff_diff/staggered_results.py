@@ -970,8 +970,8 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed. "
-                    "Call results.aggregate('event_study') to compute them post-fit "
+                    "Event study effects are not stored on 4.0 fits; use "
+                    "results.aggregate('event_study').to_dataframe() "
                     "(no refit required)."
                 )
             rows = []
@@ -995,8 +995,8 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         elif level == "group":
             if self.group_effects is None:
                 raise ValueError(
-                    "Group effects not computed. "
-                    "Call results.aggregate('group') to compute them post-fit "
+                    "Group effects are not stored on 4.0 fits; use "
+                    "results.aggregate('group').to_dataframe() "
                     "(no refit required)."
                 )
             rows = []

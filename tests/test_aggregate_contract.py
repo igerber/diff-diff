@@ -1,30 +1,34 @@
 """Behavioral contract for post-fit ``results.aggregate()`` (spec section 6).
 
 The ``test_ref`` for every aggregate-postfit ledger row this file pins:
-M-020/M-023/M-021/M-022 (the CS / EfficientDiD / Imputation / TwoStage
-fit-time ``aggregate=`` shims, deprecated since 3.9), M-024/M-026 (the Stacked /
-dCDH shims + view relays), M-025 (the ContinuousDiD shim + MIXED
+M-020/M-023/M-021/M-022 (the CS / EfficientDiD fit-time ``aggregate=`` removals
+- 4.0 PR 3b - and the Imputation / TwoStage shims, deprecated since 3.9),
+M-024/M-026 (the Stacked / dCDH removals + view relays), M-025 (the ContinuousDiD shim + MIXED
 view/recompute aggregate() - 'simple'/'dose' views, 'event_study'
 pruned-IF-payload kit on analytic fits), M-117/M-120/M-118/M-119 (``balance_e``
 lives on ``aggregate()`` only), M-027/M-139 (the HAD fit + pretest-workflow
-mode selectors with panel-shape inference, and the two PURE-VIEW results
+mode-selector removals with panel-shape inference, and the two PURE-VIEW results
 classes) and M-122 (``AggregationResult``).
 
-The headline gate is ORACLE PARITY: the deprecated fit-time route is scheduled
-for removal at the 4.0 cut (PRs 3b/3c), so it no longer serves as this file's
-numerical reference; every aggregation surface is pinned against
+The headline gate is ORACLE PARITY: the deprecated fit-time route that used to
+serve as this file's numerical reference is gone on CallawaySantAnna / EfficientDiD
+/ StackedDiD / dCDH / HAD (PR 3b) and scheduled for removal on ImputationDiD /
+TwoStageDiD / ContinuousDiD (PR 3c), so every aggregation surface is pinned against
 ``tests/fixtures/v4_aggregate_oracles.json`` - captured on the unmodified tree by
-``tests/_capture_v4_aggregate_oracles.py`` (see ``tests/fixtures/README.md``).
+``tests/_capture_v4_aggregate_oracles.py`` while that route still existed (see
+``tests/fixtures/README.md``).
 Analytic surfaces must match at ``rtol=1e-12, atol=1e-13``; bootstrapped
 surfaces (the CS/EfficientDiD replays and the plain-fit overall quintets) match
 the backend-matched oracle at the replay-parity tolerances (``rtol=1e-13,
 atol=1e-13`` on att/se/t/CI, ``atol=2/n_bootstrap`` on the count-statistic
 p-values). Drift here means a regression, not a design change.
 
-The ``Test*Shim`` classes pin the deprecated fit-time keywords' 3.9 FutureWarning
-behaviour until the removals land (CS/EfficientDiD/Stacked/dCDH/HAD in PR 3b;
-Imputation/TwoStage/ContinuousDiD, together with the bootstrapped-fit relay, in
-PR 3c).
+Since PR 3b the fit-time keywords are gone outright on CallawaySantAnna,
+EfficientDiD, StackedDiD, dCDH and HAD (and ``did_had_pretest_workflow``):
+``fit(aggregate=...)`` / ``fit(balance_e=...)`` raise Python's native ``TypeError``
+(the ``Test*Removal`` classes). The remaining ``Test*Shim`` classes pin the
+Imputation/TwoStage/ContinuousDiD keywords' 3.9 FutureWarning behaviour until PR 3c
+removes them together with the bootstrapped-fit relay.
 """
 
 import copy
@@ -48,6 +52,10 @@ from tests.conftest import assert_nan_inference
 # --------------------------------------------------------------------------- #
 # Removal-pin helper (shared wording with tests/test_v4_rename_mechanical.py)
 # --------------------------------------------------------------------------- #
+
+
+def _unexpected(old: str) -> str:
+    return rf"unexpected keyword argument '{old}'"
 
 
 # --------------------------------------------------------------------------- #
@@ -402,80 +410,12 @@ def panel():
 
 @pytest.fixture(scope="module")
 def fitted(panel):
-    """A plain fit - the canonical route (no fit-time aggregation keywords)."""
+    """A plain fit - the only route since 4.0 (no fit-time aggregation keywords)."""
     return CallawaySantAnna().fit(panel, **FIT_KW)
-
-
-@pytest.fixture(scope="module")
-def fit_time(panel):
-    """The DEPRECATED fit-time aggregation, for the inertness comparison."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        return CallawaySantAnna().fit(panel, aggregate="all", **FIT_KW)
 
 
 def _cs_oracle(arm):
     return load_oracles()["analytic"]["CallawaySantAnna"][arm]
-
-
-class TestInertness:
-    def test_simple_matches_fit_time(self, fitted, fit_time):
-        got = fitted.aggregate("simple")
-        assert np.allclose(got.att[0], fit_time.overall_att, rtol=1e-14, atol=1e-14)
-        assert np.allclose(got.se[0], fit_time.overall_se, rtol=1e-14, atol=1e-14)
-        assert np.allclose(got.p_value[0], fit_time.overall_p_value, rtol=1e-14, atol=1e-14)
-
-    def test_group_matches_fit_time(self, fitted, fit_time):
-        frame = fitted.aggregate("group").to_dataframe()
-        assert len(frame) == len(fit_time.group_effects)
-        for _, row in frame.iterrows():
-            native = fit_time.group_effects[row["label"]]
-            for col, key in (
-                ("att", "effect"),
-                ("se", "se"),
-                ("t_stat", "t_stat"),
-                ("p_value", "p_value"),
-            ):
-                assert np.allclose(
-                    row[col], native[key], rtol=1e-14, atol=1e-14, equal_nan=True
-                ), f"group[{row['label']}].{col} drifted"
-
-    def test_event_study_matches_fit_time(self, fitted, fit_time):
-        frame = fitted.aggregate("event_study").to_dataframe()
-        compared = 0
-        for _, row in frame.iterrows():
-            if bool(row["is_reference"]):
-                continue
-            native = fit_time.event_study_effects[row["event_time"]]
-            for col, key in (
-                ("att", "effect"),
-                ("se", "se"),
-                ("t_stat", "t_stat"),
-                ("p_value", "p_value"),
-            ):
-                assert np.allclose(
-                    row[col], native[key], rtol=1e-14, atol=1e-14, equal_nan=True
-                ), f"event_study[{row['event_time']}].{col} drifted"
-            compared += 1
-        assert compared > 0, "no non-reference event times compared"
-
-    @pytest.mark.parametrize("balance_e", [0, 1, 2])
-    def test_balance_e_matches_fit_time(self, panel, fitted, balance_e):
-        """M-117: balance_e on aggregate() reproduces fit(balance_e=)."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            native = CallawaySantAnna().fit(
-                panel, aggregate="event_study", balance_e=balance_e, **FIT_KW
-            )
-        frame = fitted.aggregate("event_study", balance_e=balance_e).to_dataframe()
-        non_ref = frame[~frame["is_reference"].astype(bool)]
-        assert len(non_ref) == len(
-            [e for e in native.event_study_effects if e in set(non_ref["event_time"])]
-        )
-        for _, row in non_ref.iterrows():
-            got = native.event_study_effects[row["event_time"]]
-            assert np.allclose(row["att"], got["effect"], rtol=1e-14, atol=1e-14, equal_nan=True)
-            assert np.allclose(row["se"], got["se"], rtol=1e-14, atol=1e-14, equal_nan=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -557,7 +497,7 @@ class TestOracleParity:
             _assert_analytic_inference_contract(fitted.aggregate(level), alpha=fitted.alpha)
 
     def test_legacy_fields_none_after_analytic_fit(self, fitted):
-        """A plain CS fit materializes no fit-time surface."""
+        """4.0 PR 3b: CS never materializes a fit-time surface any more."""
         assert fitted.event_study_effects is None
         assert fitted.group_effects is None
         assert fitted.event_study_vcov is None and fitted.event_study_df is None
@@ -774,22 +714,6 @@ def _boot_fit(data, *, seed=42, n_bootstrap=50, fit_kwargs=None, **ctor):
         warnings.simplefilter("ignore")
         return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=seed, **ctor).fit(
             data, **FIT_KW, **(fit_kwargs or {})
-        )
-
-
-def _boot_fit_time(data, *, seed=42, n_bootstrap=50, aggregate="all", fit_kwargs=None, **ctor):
-    """The parity REFERENCE: the deprecated fit-time aggregation route.
-
-    The reference is the NATIVE fit-time surface (`event_study_effects` /
-    `group_effects` dict entries + `cband_crit_value`), never a second
-    aggregate() call — the kit is attached unconditionally at the end of
-    fit(), so a fit-time-aggregated result's own aggregate() would ALSO
-    replay, and replay-vs-replay proves nothing.
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=seed, **ctor).fit(
-            data, aggregate=aggregate, **FIT_KW, **(fit_kwargs or {})
         )
 
 
@@ -1246,29 +1170,57 @@ class TestAggregationResult:
 
 
 # --------------------------------------------------------------------------- #
-# Fit-time keyword shim (M-020 / M-117; removal lands in PR 3b)
+# Fit-time keyword removal (M-020 / M-117)
 # --------------------------------------------------------------------------- #
 
 
-class TestFitShim:
+class TestFitRemoval:
+    """M-020 / M-117 removed: the fit-time keywords are gone outright."""
+
     def test_plain_fit_does_not_warn(self, panel):
-        """The sentinel default is what makes this true - a bare None default
-        could not tell 'not passed' from 'passed None'."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             CallawaySantAnna().fit(panel, **FIT_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    @pytest.mark.parametrize("kwargs", [{"aggregate": "group"}, {"balance_e": 1}])
-    def test_deprecated_args_warn(self, panel, kwargs):
-        with pytest.warns(FutureWarning, match="aggregate"):
-            CallawaySantAnna().fit(panel, **kwargs, **FIT_KW)
+    @pytest.mark.parametrize("kw", ["aggregate", "balance_e"])
+    def test_removed_keyword_is_a_type_error(self, panel, kw):
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            CallawaySantAnna().fit(panel, **{kw: None}, **FIT_KW)
+        value = "group" if kw == "aggregate" else 1
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            CallawaySantAnna().fit(panel, **{kw: value}, **FIT_KW)
 
-    def test_deprecated_path_still_populates_legacy_surface(self, fit_time):
-        """Downstream consumers (honest_did, pretrends,
-        build_event_study_surface) read these off the results object."""
-        assert fit_time.event_study_effects is not None
-        assert fit_time.group_effects is not None
+    def test_signature_has_no_fit_time_aggregation_parameters(self):
+        params = inspect.signature(CallawaySantAnna.fit).parameters
+        assert "aggregate" not in params and "balance_e" not in params
+        assert list(params) == [
+            "self",
+            "data",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            "covariates",
+            "survey_design",
+        ]
+
+    def test_seventh_positional_binds_to_survey_design(self):
+        """No vacated slot: a SurveyDesign in the 7th positional position (after
+        covariates) is the survey design, not a silently-ignored aggregate."""
+        from diff_diff import SurveyDesign
+
+        d = _survey_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna().fit(
+                d, "y", "unit", "time", "first_treat", None, _survey_design()
+            )
+            kw = CallawaySantAnna().fit(d, survey_design=_survey_design(), **FIT_KW)
+        assert res.survey_metadata is not None
+        assert res.survey_metadata.df_survey == kw.survey_metadata.df_survey
+        assert res.overall_att == kw.overall_att
+        assert isinstance(_survey_design(), SurveyDesign)
 
 
 def _rcs(seed=17, n_per_cell=6, n_periods=6):
@@ -1372,126 +1324,6 @@ class TestOracleParityAcrossDesigns:
         _assert_att_from_cells(post, post.aggregate("event_study"), name=str(ctor))
 
 
-class TestInertnessAcrossDesigns:
-    """The inertness gate on designs the balanced-panel fixture does not reach.
-
-    The refactor made the aggregators pure by threading bookkeeping that the
-    panel path and the repeated-cross-section path populate differently (RCS
-    makes several kit keys observation-length rather than unit-length), and
-    ``anticipation`` shifts which ``(g, t)`` cells are eligible - so both need
-    their own round-trip, not just the panel.
-    """
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
-    def test_repeated_cross_sections_match_fit_time(self, level):
-        data = _rcs()
-        post = CallawaySantAnna(panel=False).fit(data, **FIT_KW)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            native = CallawaySantAnna(panel=False).fit(data, aggregate="all", **FIT_KW)
-        _assert_level_matches(post, native, level)
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
-    def test_anticipation_matches_fit_time(self, panel, level):
-        post = CallawaySantAnna(anticipation=1).fit(panel, **FIT_KW)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            native = CallawaySantAnna(anticipation=1).fit(panel, aggregate="all", **FIT_KW)
-        _assert_level_matches(post, native, level)
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
-    def test_universal_base_period_matches_fit_time(self, panel, level):
-        """REGISTRY gives universal bases their own reference-cell and
-        VCV-index semantics (a zero reference cell per cohort), which the
-        default 'varying' fixture never exercises."""
-        kw = dict(base_period="universal")
-        post = CallawaySantAnna(**kw).fit(panel, **FIT_KW)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            native = CallawaySantAnna(**kw).fit(panel, aggregate="all", **FIT_KW)
-        _assert_level_matches(post, native, level)
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
-    def test_not_yet_treated_with_anticipation_matches_fit_time(self, panel, level):
-        """The not-yet-treated control group interacts with anticipation in
-        picking each (g, t) comparison set - a different code path from the
-        never-treated default."""
-        kw = dict(control_group="not_yet_treated", anticipation=1)
-        post = CallawaySantAnna(**kw).fit(panel, **FIT_KW)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            native = CallawaySantAnna(**kw).fit(panel, aggregate="all", **FIT_KW)
-        _assert_level_matches(post, native, level)
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
-    def test_unbalanced_panel_matches_fit_time(self, panel, level):
-        """allow_unbalanced_panel changes which units survive into the
-        influence vectors, so the retained bookkeeping must agree with what
-        the fit actually used."""
-        thinned = panel.drop(panel.index[::13]).reset_index(drop=True)
-        kw = dict(allow_unbalanced_panel=True)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            post = CallawaySantAnna(**kw).fit(thinned, **FIT_KW)
-            native = CallawaySantAnna(**kw).fit(thinned, aggregate="all", **FIT_KW)
-        _assert_level_matches(post, native, level)
-
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
-    def test_survey_numbers_match_fit_time(self, survey_fit, level):
-        """Survey parity on the ESTIMATES, not just the df metadata."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            native = CallawaySantAnna().fit(
-                _survey_panel(),
-                survey_design=_survey_design(),
-                aggregate="all",
-                **FIT_KW,
-            )
-        _assert_level_matches(survey_fit, native, level)
-
-
-def _assert_level_matches(post, native, level):
-    """Compare a post-fit aggregation against the fit-time surface at 1e-14."""
-    if level == "total":
-        # Identity form (total == n x overall on the SAME fit) AND the
-        # independent-mass form (n pinned against a frame-derived oracle from
-        # the OTHER fit's public cells) - the identity alone passes for ANY C.
-        got = post.aggregate("total")
-        antic = getattr(native, "anticipation", 0)
-        n_exp = sum(
-            d["n_treated"]
-            for (g, t), d in native.group_time_effects.items()
-            if t >= g - antic and np.isfinite(d["effect"])
-        )
-        assert got.n[0] == float(n_exp)
-        assert np.allclose(got.att[0], got.n[0] * native.overall_att, rtol=1e-12)
-        assert np.allclose(got.se[0], got.n[0] * native.overall_se, rtol=1e-12)
-        assert np.allclose(got.t_stat[0], native.overall_t_stat, rtol=1e-14, atol=0, equal_nan=True)
-        return
-    if level == "simple":
-        got = post.aggregate("simple")
-        assert np.allclose(got.att[0], native.overall_att, rtol=1e-14, atol=1e-14)
-        assert np.allclose(got.se[0], native.overall_se, rtol=1e-14, atol=1e-14)
-        return
-
-    frame = post.aggregate(level).to_dataframe()
-    if level == "group":
-        expected, key_col = native.group_effects, "label"
-    else:
-        expected, key_col = native.event_study_effects, "event_time"
-    compared = 0
-    for _, row in frame.iterrows():
-        if level == "event_study" and bool(row["is_reference"]):
-            continue
-        ref = expected[row[key_col]]
-        for col, key in (("att", "effect"), ("se", "se"), ("p_value", "p_value")):
-            assert np.allclose(
-                row[col], ref[key], rtol=1e-14, atol=1e-14, equal_nan=True
-            ), f"{level}[{row[key_col]}].{col} drifted"
-        compared += 1
-    assert compared > 0, f"no {level} rows compared"
-
-
 def _assert_level_matches_oracle(post, orow, level, name=""):
     """Compare a post-fit aggregation against the pre-removal oracle arm."""
     if level == "total":
@@ -1585,7 +1417,7 @@ class TestInferenceDfProvenance:
         the retained analytical df described inference that no longer exists.
         Leaving it finite would claim a t-reference governed percentile-bootstrap
         numbers - the same false provenance the event-study path already clears.
-        On a plain fit the CS surface is the REPLAY container (nothing is stored on
+        Since 4.0 the CS surface is the REPLAY container (nothing is stored on
         the results), so the pin reads the replayed df column.
         """
         from diff_diff import SurveyDesign
@@ -1851,7 +1683,7 @@ def test_staggered_triple_diff_overall_att_es_still_works():
 
 
 # --------------------------------------------------------------------------- #
-# dCDH (row M-026): fit(aggregate=) shim pin + the VIEW-based aggregate()
+# dCDH (row M-026): fit(aggregate=) removal pin + the VIEW-based aggregate()
 # --------------------------------------------------------------------------- #
 
 DCDH_KW = dict(outcome="outcome", unit="unit", time="period", treatment="treat")
@@ -1902,7 +1734,10 @@ def dcdh_fitted(dcdh_panel):
     return _fit_dcdh(dcdh_panel)
 
 
-class TestDcdhShim:
+class TestDcdhRemoval:
+    """M-026 removed: dCDH's fit-time ``aggregate=`` (which never computed
+    anything) is gone; the 6th positional slot is ``L_max``."""
+
     def test_plain_fit_does_not_warn(self, dcdh_panel):
         from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
 
@@ -1911,18 +1746,25 @@ class TestDcdhShim:
             ChaisemartinDHaultfoeuille().fit(dcdh_panel, **DCDH_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, dcdh_panel):
+    @pytest.mark.parametrize("value", [None, "event_study"])
+    def test_aggregate_keyword_is_a_type_error(self, dcdh_panel, value):
         from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
 
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            ChaisemartinDHaultfoeuille().fit(dcdh_panel, aggregate=None, **DCDH_KW)
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
+            ChaisemartinDHaultfoeuille().fit(dcdh_panel, aggregate=value, **DCDH_KW)
 
-    def test_non_none_value_warns_then_raises(self, dcdh_panel):
+    def test_signature_has_no_aggregate_and_sixth_positional_is_l_max(self, dcdh_panel):
         from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
 
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match=r"results\.aggregate"):
-                ChaisemartinDHaultfoeuille().fit(dcdh_panel, aggregate="event_study", **DCDH_KW)
+        params = list(inspect.signature(ChaisemartinDHaultfoeuille.fit).parameters)
+        assert "aggregate" not in params and "balance_e" not in params
+        assert params[6] == "L_max"
+        res = _fit_dcdh(dcdh_panel)  # noqa: F841 - plain fit still works
+        positional = ChaisemartinDHaultfoeuille().fit(
+            dcdh_panel, "outcome", "unit", "period", "treat", 2
+        )
+        assert list(positional.aggregate("simple").target) == ["delta"]
+        assert 2 in positional.aggregate("event_study").event_time.tolist()
 
 
 class TestDcdhAggregate:
@@ -2115,7 +1957,7 @@ class TestDcdhAggregate:
 
 
 # --------------------------------------------------------------------------- #
-# StackedDiD (row M-024): fit(aggregate=) shim pin + the VIEW-based aggregate()
+# StackedDiD (row M-024): fit(aggregate=) removal pin + the VIEW-based aggregate()
 # --------------------------------------------------------------------------- #
 
 STACKED_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
@@ -2150,7 +1992,10 @@ def stacked_fitted(stacked_panel):
     return _fit_stacked(stacked_panel)
 
 
-class TestStackedShim:
+class TestStackedRemoval:
+    """M-024 removed: the inert fit-time ``aggregate=`` is gone (the ES surface
+    is always materialized); the 6th positional slot is ``population``."""
+
     def test_plain_fit_does_not_warn(self, stacked_panel):
         from diff_diff import StackedDiD
 
@@ -2159,35 +2004,36 @@ class TestStackedShim:
             StackedDiD(kappa_pre=2, kappa_post=2).fit(stacked_panel, **STACKED_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, stacked_panel):
+    @pytest.mark.parametrize("value", [None, "event_study", "group"])
+    def test_aggregate_keyword_is_a_type_error(self, stacked_panel, value):
         from diff_diff import StackedDiD
 
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            StackedDiD(kappa_pre=2, kappa_post=2).fit(stacked_panel, aggregate=None, **STACKED_KW)
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
+            StackedDiD(kappa_pre=2, kappa_post=2).fit(stacked_panel, aggregate=value, **STACKED_KW)
 
-    def test_deprecated_value_warns_and_still_works(self, stacked_panel, stacked_fitted):
-        # CS-style warn-and-still-work (the param genuinely worked here,
-        # unlike dCDH's raise): the deprecated path returns an object whose
-        # surface equals a plain fit's - the surface is always computed.
+    def test_signature_has_no_aggregate_and_sixth_positional_is_population(
+        self, stacked_panel, stacked_fitted
+    ):
         from diff_diff import StackedDiD
 
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
-                stacked_panel, aggregate="event_study", **STACKED_KW
+        params = list(inspect.signature(StackedDiD.fit).parameters)
+        assert "aggregate" not in params
+        assert params[6] == "population"
+        panel = stacked_panel.copy()
+        panel["pop"] = 100.0 + (panel["unit"] % 7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            positional = StackedDiD(kappa_pre=2, kappa_post=2, weighting="population").fit(
+                panel, "outcome", "unit", "period", "first_treat", "pop"
             )
-        assert res.overall_att == stacked_fitted.overall_att
-        assert res.event_study_effects is not None
-        assert sorted(res.event_study_effects) == sorted(stacked_fitted.event_study_effects)
-        np.testing.assert_array_equal(res.event_study_vcov, stacked_fitted.event_study_vcov)
-
-    def test_group_warns_then_raises_educational_error(self, stacked_panel):
-        from diff_diff import StackedDiD
-
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            with pytest.raises(ValueError, match="not supported by StackedDiD"):
-                StackedDiD(kappa_pre=2, kappa_post=2).fit(
-                    stacked_panel, aggregate="group", **STACKED_KW
-                )
+            keyword = StackedDiD(kappa_pre=2, kappa_post=2, weighting="population").fit(
+                panel, population="pop", **STACKED_KW
+            )
+        assert positional.overall_att == keyword.overall_att
+        assert positional.overall_se == keyword.overall_se
+        # The surface is always computed - with or without a population column.
+        assert positional.event_study_effects is not None
+        assert stacked_fitted.event_study_effects is not None
 
 
 class TestStackedAggregate:
@@ -2434,7 +2280,7 @@ class TestStackedAggregate:
 
 
 # --------------------------------------------------------------------------- #
-# EfficientDiD (rows M-023/M-120): fit(aggregate=/balance_e=) shim pins + the
+# EfficientDiD (rows M-023/M-120): fit(aggregate=/balance_e=) removal pins + the
 # lazy-KIT recompute aggregate() (the CallawaySantAnna class)
 # --------------------------------------------------------------------------- #
 
@@ -2513,17 +2359,13 @@ def efficient_fitted(efficient_panel):
     return _fit_efficient(efficient_panel)
 
 
-@pytest.fixture(scope="module")
-def efficient_fit_time(efficient_panel):
-    """Deprecated fit-time aggregate="all" - the inertness reference."""
-    return _fit_efficient(efficient_panel, aggregate="all")
-
-
 def _ed_oracle(arm):
     return load_oracles()["analytic"]["EfficientDiD"][arm]
 
 
-class TestEfficientShim:
+class TestEfficientRemoval:
+    """M-023 / M-120 removed."""
+
     def test_plain_fit_does_not_warn(self, efficient_panel):
         from diff_diff import EfficientDiD
 
@@ -2532,49 +2374,38 @@ class TestEfficientShim:
             EfficientDiD().fit(efficient_panel, **EFFICIENT_KW)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_aggregate_kwarg_warns_even_at_none(self, efficient_panel):
+    @pytest.mark.parametrize("kw", ["aggregate", "balance_e"])
+    def test_removed_keyword_is_a_type_error(self, efficient_panel, kw):
         from diff_diff import EfficientDiD
 
-        with pytest.warns(FutureWarning, match=r"EfficientDiD\.fit\(aggregate=\)"):
-            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, aggregate=None)
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, **{kw: None})
+        value = "event_study" if kw == "aggregate" else 0
+        with pytest.raises(TypeError, match=_unexpected(kw)):
+            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, **{kw: value})
 
-    def test_balance_e_kwarg_warns_alone(self, efficient_panel):
+    def test_joint_supply_names_the_first_unexpected_keyword(self, efficient_panel):
         from diff_diff import EfficientDiD
 
-        with pytest.warns(FutureWarning, match=r"EfficientDiD\.fit\(balance_e=\)"):
-            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, balance_e=None)
-
-    def test_joint_supply_warns_once_naming_both(self, efficient_panel):
-        from diff_diff import EfficientDiD
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             EfficientDiD().fit(
                 efficient_panel, **EFFICIENT_KW, aggregate="event_study", balance_e=0
             )
-        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1
-        msg = str(fw[0].message)
-        assert "aggregate=" in msg and "balance_e=" in msg
 
-    def test_unknown_string_still_acts_like_none(self, efficient_panel):
-        # The legacy path performs NO value validation - an unknown string
-        # behaves exactly like a plain fit (documented unchanged behavior;
-        # the post-fit mixin is what fails closed on unknown types).
-        res = _fit_efficient(efficient_panel, aggregate="nonsense")
-        plain = _fit_efficient(efficient_panel)
-        assert res.event_study_effects is None and res.group_effects is None
-        assert res.overall_att == plain.overall_att
+    def test_signature_and_seventh_positional_is_survey_design(self):
+        from diff_diff import EfficientDiD
 
-    def test_warn_and_still_work(self, efficient_panel, efficient_fitted, efficient_fit_time):
-        # The deprecated path still populates the fit-time surfaces AND
-        # equals the plain fit's post-fit recompute.
-        assert efficient_fit_time.event_study_effects is not None
-        assert efficient_fit_time.group_effects is not None
-        es = efficient_fitted.aggregate("event_study")
-        for e, row in efficient_fit_time.event_study_effects.items():
-            i = list(es.event_time).index(e)
-            np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+        params = list(inspect.signature(EfficientDiD.fit).parameters)
+        assert "aggregate" not in params and "balance_e" not in params
+        assert params[7] == "survey_design"
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            positional = EfficientDiD().fit(d, "outcome", "unit", "period", "first_treat", None, sd)
+            keyword = EfficientDiD().fit(d, survey_design=sd, **EFFICIENT_KW)
+        assert positional.survey_metadata is not None
+        assert positional.overall_se == keyword.overall_se
 
 
 class TestEfficientAggregate:
@@ -2741,7 +2572,7 @@ class TestEfficientAggregate:
         _assert_att_from_cells(plain, es, bucket=True, name="edid/pt_post")
 
     def test_legacy_fields_none_after_every_fit(self, efficient_panel, efficient_fitted):
-        """A plain EfficientDiD fit stores no fit-time surface (analytic OR
+        """4.0 PR 3b: EfficientDiD never stores a fit-time surface (analytic OR
         bootstrapped) - the kit recompute / replay serves both."""
         assert efficient_fitted.event_study_effects is None
         assert efficient_fitted.group_effects is None
@@ -2970,16 +2801,6 @@ _EDID_NBOOT = 50
 def _efficient_boot_fit(data, **fit_kw):
     est_kw = fit_kw.pop("est_kw", {})
     return _fit_efficient(data, est_kw={"n_bootstrap": _EDID_NBOOT, "seed": 42, **est_kw}, **fit_kw)
-
-
-def _efficient_boot_fit_time(data, *, aggregate="all", **fit_kw):
-    est_kw = fit_kw.pop("est_kw", {})
-    return _fit_efficient(
-        data,
-        est_kw={"n_bootstrap": _EDID_NBOOT, "seed": 42, **est_kw},
-        aggregate=aggregate,
-        **fit_kw,
-    )
 
 
 def _ed_boot_oracle(arm):
@@ -5226,7 +5047,11 @@ def had_fitted_multi(had_panel_multi):
     return _fit_had(had_panel_multi, first_treat="ft")
 
 
-class TestHadShim:
+class TestHadRemoval:
+    """M-027 / M-139 removed: the mode selector is gone from fit() and the
+    workflow; panel-shape inference (``_infer_aggregate_mode``) is the only
+    rule. The ``HADPretestReport.aggregate`` FIELD survives."""
+
     def test_plain_fit_2p_infers_overall_without_warning(self, had_panel_2p):
         from diff_diff import HeterogeneousAdoptionDiD, HeterogeneousAdoptionDiDResults
 
@@ -5251,42 +5076,37 @@ class TestHadShim:
         assert isinstance(res, HeterogeneousAdoptionDiDEventStudyResults)
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    @pytest.mark.parametrize("mode", ["overall", "event_study"])
-    def test_supplied_mode_warns_and_still_works(self, had_panel_2p, had_panel_multi, mode):
+    @pytest.mark.parametrize("value", [None, "overall", "event_study", "bogus"])
+    def test_aggregate_keyword_is_a_type_error(self, had_panel_2p, had_panel_multi, value):
         from diff_diff import HeterogeneousAdoptionDiD
 
-        data = had_panel_2p if mode == "overall" else had_panel_multi
-        kw = {} if mode == "overall" else {"first_treat": "ft"}
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                HeterogeneousAdoptionDiD().fit(data, **HAD_KW, aggregate=mode, **kw)
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
+            HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW, aggregate=value)
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
+            HeterogeneousAdoptionDiD().fit(
+                had_panel_multi, **HAD_KW, first_treat="ft", aggregate=value
+            )
 
-    def test_aggregate_none_warns_then_raises(self, had_panel_2p):
-        # Unlike ContinuousDiD, None is NOT in HAD's _VALID_AGGREGATES: an
-        # explicit None is a supplied INVALID value - a third distinct
-        # behavior beside omitted (infers) and supplied-valid (legacy).
+    def test_signature_and_eighth_positional_is_a_type_error(self, had_panel_2p):
+        """fit() takes 7 positionals (data..first_treat); cband and the rest
+        are keyword-only, so no vacated slot can swallow a stray mode."""
         from diff_diff import HeterogeneousAdoptionDiD
 
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="Invalid aggregate=None"):
-                HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW, aggregate=None)
-
-    def test_invalid_value_warns_then_raises(self, had_panel_2p):
-        from diff_diff import HeterogeneousAdoptionDiD
-
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="Invalid aggregate='bogus'"):
-                HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW, aggregate="bogus")
-
-    def test_supplied_overall_on_multi_warns_then_shape_error(self, had_panel_multi):
-        from diff_diff import HeterogeneousAdoptionDiD
-
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="exactly two time periods"):
-                HeterogeneousAdoptionDiD().fit(
-                    had_panel_multi, **HAD_KW, aggregate="overall", first_treat="ft"
-                )
+        params = inspect.signature(HeterogeneousAdoptionDiD.fit).parameters
+        assert "aggregate" not in params
+        assert [n for n, p in params.items() if p.kind is p.POSITIONAL_OR_KEYWORD] == [
+            "self",
+            "data",
+            "outcome",
+            "dose",
+            "time",
+            "unit",
+            "first_treat",
+        ]
+        with pytest.raises(TypeError, match="positional argument"):
+            HeterogeneousAdoptionDiD().fit(
+                had_panel_2p, "outcome", "dose", "period", "unit", None, "overall"
+            )
 
     def test_sentinel_post_filter_shape_error_no_warning(self):
         # Sentinel-reachable shape error: T>2 raw panel infers event_study,
@@ -5312,59 +5132,30 @@ class TestHadShim:
                 had_panel_2p, outcome="outcome", dose="dose", time="missing", unit="unit"
             )
 
-    @pytest.mark.parametrize("shape", ["2p", "multi"])
-    def test_inference_equivalence_bit_identical(self, had_panel_2p, had_panel_multi, shape):
-        """Plain fit ≡ fit(aggregate=<mode>) field-for-field per shape."""
-        if shape == "2p":
-            plain = _fit_had(had_panel_2p)
-            legacy = _fit_had(had_panel_2p, aggregate="overall")
-        else:
-            plain = _fit_had(had_panel_multi, first_treat="ft")
-            legacy = _fit_had(had_panel_multi, first_treat="ft", aggregate="event_study")
-        import dataclasses
-
-        assert type(plain) is type(legacy)
-        for f in dataclasses.fields(plain):
-            a, b = getattr(plain, f.name), getattr(legacy, f.name)
-            if isinstance(a, np.ndarray):
-                np.testing.assert_array_equal(a, b)
-            elif isinstance(a, float):
-                assert (a == b) or (np.isnan(a) and np.isnan(b)), f.name
-            elif isinstance(a, (list, tuple)) and a and isinstance(a[0], float):
-                np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
-            elif f.name in (
-                "bandwidth_diagnostics",
-                "bias_corrected_fit",
-                "survey_metadata",
-                "filter_info",
-            ):
-                assert (a is None) == (b is None), f.name
-            else:
-                assert a == b, f.name
-
     def test_workflow_plain_call_infers_without_warning(self, had_panel_2p):
         from diff_diff import did_had_pretest_workflow
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             rep = did_had_pretest_workflow(had_panel_2p, **HAD_KW, n_bootstrap=99, seed=3)
-        assert rep.aggregate == "overall"
+        assert rep.aggregate == "overall"  # the REPORT field survives
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
 
-    def test_workflow_supplied_mode_warns(self, had_panel_2p):
+    @pytest.mark.parametrize("value", ["overall", "junk"])
+    def test_workflow_aggregate_keyword_is_a_type_error(self, had_panel_2p, value):
         from diff_diff import did_had_pretest_workflow
 
-        with pytest.warns(FutureWarning, match=r"workflow\(aggregate=\) is deprecated"):
+        with pytest.raises(TypeError, match=_unexpected("aggregate")):
             did_had_pretest_workflow(
-                had_panel_2p, **HAD_KW, n_bootstrap=99, seed=3, aggregate="overall"
+                had_panel_2p, **HAD_KW, n_bootstrap=99, seed=3, aggregate=value
             )
 
-    def test_workflow_invalid_value_warns_then_raises(self, had_panel_2p):
+    def test_workflow_signature_has_no_aggregate(self):
         from diff_diff import did_had_pretest_workflow
 
-        with pytest.warns(FutureWarning, match="aggregate"):
-            with pytest.raises(ValueError, match="aggregate must be one of"):
-                did_had_pretest_workflow(had_panel_2p, **HAD_KW, aggregate="junk")
+        params = inspect.signature(did_had_pretest_workflow).parameters
+        assert "aggregate" not in params
+        assert list(params)[:6] == ["data", "outcome", "dose", "time", "unit", "first_treat"]
 
 
 class TestHadAggregate:

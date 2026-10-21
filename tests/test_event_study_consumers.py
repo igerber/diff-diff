@@ -61,7 +61,7 @@ def _panel(seed=11, n_units=80, n_periods=8):
 
 
 def _fit_cs(data, **cs_kw):
-    # A plain CS fit stores no event-study surface. The route-parity tests
+    # 4.0: no CS fit stores an event-study surface. The route-parity tests
     # compare the consumers' NATIVE (raw-field, legacy-pickle) branch against
     # the container route on the same fit, so the native side is a stand-in
     # carrying the container's surface in the 3.x fields (dict + vcov +

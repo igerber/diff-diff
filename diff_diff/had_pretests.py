@@ -35,7 +35,8 @@ Joint / multi-period tests (Phase 3 follow-up):
 Composite workflow:
 
 :func:`did_had_pretest_workflow` has two dispatch modes, selected from
-the panel shape (the deprecated ``aggregate=`` override is row M-139):
+the panel shape (there is no mode keyword; the selected mode is recorded
+on the report's ``aggregate`` field):
 
 - The "overall" battery (two-period panel): runs steps 1 + 3
   via :func:`qug_test` + :func:`stute_test` + :func:`yatchew_hr_test`.
@@ -77,7 +78,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.bootstrap_utils import (
     apply_stratum_centering,
     generate_survey_multiplier_weights_batch,
@@ -707,7 +707,7 @@ class HADPretestReport(Diagnostic):
 
     def __repr__(self) -> str:
         # Preserve Phase 3 repr bit-exactly on the overall path. The
-        # aggregate kwarg is only surfaced on the event-study path so
+        # aggregate FIELD is only surfaced on the event-study path so
         # downstream consumers comparing repr strings on two-period
         # reports see identical output.
         if self.aggregate == "event_study":
@@ -1451,8 +1451,8 @@ def qug_test(
             "boundary tests; no off-the-shelf survey-aware QUG exists.\n"
             "\n"
             "For survey-aware HAD pretesting, use the joint Stute family "
-            "via did_had_pretest_workflow(..., survey_design=..., "
-            "aggregate=...) -- shipped in Phase 4.5 C. The workflow "
+            "via did_had_pretest_workflow(..., survey_design=...) on a "
+            "multi-period panel -- shipped in Phase 4.5 C. The workflow "
             "skips the QUG step under survey_design= with a UserWarning "
             "and runs the linearity family with a PSU-level Mammen "
             "multiplier bootstrap (Stute) + weighted OLS + pweight-"
@@ -3405,9 +3405,9 @@ def joint_pretrends_test(
     that the conditional mean depends on ``D``.
 
     Use this wrapper to close the paper's step-2 pre-trends gap that
-    :func:`did_had_pretest_workflow` otherwise flags. On a panel with
-    at least one earlier pre-period, the
-    ``aggregate="event_study"`` dispatch calls this wrapper internally.
+    :func:`did_had_pretest_workflow` otherwise flags. On a multi-period
+    panel with at least one earlier pre-period, the workflow's
+    event-study dispatch calls this wrapper internally.
 
     Parameters
     ----------
@@ -3797,8 +3797,8 @@ def joint_homogeneity_test(
     ``[1, D_g]``; the joint CvM tests whether the conditional mean is
     nonlinear in ``D`` in any horizon.
 
-    Used by :func:`did_had_pretest_workflow` with
-    ``aggregate="event_study"`` as the step-3 test (no joint Yatchew
+    Used by :func:`did_had_pretest_workflow` on a multi-period panel
+    (the event-study dispatch) as the step-3 test (no joint Yatchew
     variant exists - the paper does not derive one; users who need
     Yatchew-style adjacent-difference robustness can call
     :func:`yatchew_hr_test` on each (base, post) pair manually).
@@ -4097,8 +4097,6 @@ def joint_homogeneity_test(
     )
 
 
-_VALID_AGGREGATES = ("overall", "event_study")
-
 _QUG_DEFERRED_SUFFIX = (
     " (linearity-conditional verdict; QUG-under-survey deferred per Phase 4.5 C0)"
 )
@@ -4223,14 +4221,14 @@ def did_had_pretest_workflow(
     n_bootstrap: int = 999,
     seed: Optional[int] = None,
     *,
-    aggregate: Any = NOT_SUPPLIED,
     survey_design: Any = None,
     trends_lin: bool = False,
 ) -> HADPretestReport:
     """Run the HAD pre-test workflow (paper Section 4.2-4.3).
 
-    Two dispatch modes, selected from the panel shape (row M-139; the
-    deprecated ``aggregate=`` override warns and dies in 4.0):
+    Two dispatch modes, selected from the panel shape - the same rule
+    :meth:`HeterogeneousAdoptionDiD.fit` uses; there is no mode keyword.
+    The selected mode is recorded on the report's ``aggregate`` field:
 
     The overall battery (two-period panel): runs paper
     steps 1 (:func:`qug_test`) and 3 (:func:`stute_test` +
@@ -4262,22 +4260,22 @@ def did_had_pretest_workflow(
     ``base_period - 1`` is auto-dropped from step 2 and the workflow
     skips step 2 (``pretrends_joint=None``) if no earlier placebo
     survives. Mirrors R ``DIDHAD::did_had(..., trends_lin=TRUE)``.
-    Mutually exclusive with ``aggregate="overall"`` (raises
+    Mutually exclusive with the two-period (overall) battery (raises
     ``NotImplementedError``).
 
     Parameters
     ----------
     data : pd.DataFrame
-        HAD panel. For ``aggregate="overall"``: balanced two-period
-        panel with pre-period dose = 0 for every unit. For
-        ``aggregate="event_study"``: balanced multi-period panel with
+        HAD panel. Two-period (overall battery): balanced two-period
+        panel with pre-period dose = 0 for every unit. Multi-period
+        (event-study battery): balanced multi-period panel with
         >= 3 periods, an ordered time dtype (numeric, datetime, or
         ordered categorical), and the pre-period D=0 invariant across
         all pre-periods.
     outcome, dose, time, unit : str
     first_treat : str or None, default None
         Optional first-treatment-period column. Required on the
-        ``aggregate="event_study"`` path when the panel is staggered
+        multi-period (event-study) path when the panel is staggered
         (multi-cohort); the panel validator auto-filters to the last
         cohort and emits ``UserWarning``. The overall path uses this for
         cross-validation only.
@@ -4288,13 +4286,6 @@ def did_had_pretest_workflow(
     seed : int or None, default None
         Seed forwarded to the Stute bootstrap. QUG / Yatchew are
         deterministic.
-    aggregate : {"overall", "event_study"}, optional, keyword-only
-        DEPRECATED dispatch override (row M-139; ``FutureWarning``,
-        removed in 4.0). When omitted, the workflow selects the battery
-        from the panel shape - the same rule
-        :meth:`HeterogeneousAdoptionDiD.fit` uses. Supplying ANY value
-        warns and then runs the legacy routing unchanged; invalid
-        values still raise ``ValueError``.
     survey_design : SurveyDesign or None, keyword-only, default None
         Survey design for design-based pretest inference. Linearity-family
         pretests use PSU-level Mammen multiplier bootstrap (Stute family)
@@ -4327,16 +4318,16 @@ def did_had_pretest_workflow(
         ``pretrends_joint`` / ``homogeneity_joint`` are ``None``. On the
         event-study path: ``pretrends_joint`` (``None`` if no earlier
         pre-period) and ``homogeneity_joint`` populated, ``stute`` /
-        ``yatchew`` are ``None``. ``aggregate`` is recorded on the
-        report for serialization dispatch. On the survey_design= path,
-        ``qug`` is ``None`` (Phase 4.5 C0 deferral); other components
-        populated as on the unweighted path.
+        ``yatchew`` are ``None``. The selected mode is recorded on the
+        report's ``aggregate`` field for serialization dispatch. On the
+        survey_design= path, ``qug`` is ``None`` (Phase 4.5 C0 deferral);
+        other components populated as on the unweighted path.
 
     Raises
     ------
     ValueError
-        On invalid ``aggregate``; or any downstream front-door failure
-        (panel balance, dtype, dose invariant).
+        On any front-door failure (panel balance, dtype, dose
+        invariant).
     NotImplementedError
         If ``survey.replicate_weights is not None`` (replicate-weight
         pretests deferred to a parallel follow-up after Phase 4.5 C).
@@ -4357,7 +4348,7 @@ def did_had_pretest_workflow(
     family (``d_lower > 0``). Assumptions 5/6 are non-testable via
     pre-trends. The composite verdict string does NOT mention
     Assumptions 5 or 6 — it only flags the Assumption 7 step-2 gap on
-    the two-period ``aggregate="overall"`` path. The Assumption 5/6
+    the two-period (overall) path. The Assumption 5/6
     caveat is surfaced separately by (a) the
     ``HeterogeneousAdoptionDiD.fit()`` fit-time ``UserWarning`` (which
     fires whenever the resolved design is Design 1 family —
@@ -4380,17 +4371,17 @@ def did_had_pretest_workflow(
        survey deferred per Phase 4.5 C0"`` suffix to remind callers that
        admissibility is conditional on the linearity family alone.
     4. **`all_pass`** drops the QUG-conclusiveness gate (one less
-       precondition). The linearity-conditional rule splits by aggregate:
+       precondition). The linearity-conditional rule splits by mode:
 
-       - ``aggregate="overall"`` survey: ``True`` iff at least one of
+       - two-period (overall) survey: ``True`` iff at least one of
          Stute/Yatchew is conclusive AND no conclusive test rejects
          (paper Section 4 step-3 "Stute OR Yatchew" wording).
-       - ``aggregate="event_study"`` survey: ``True`` iff
+       - multi-period (event-study) survey: ``True`` iff
          ``pretrends_joint`` is non-None and conclusive,
          ``homogeneity_joint`` is conclusive, AND neither rejects.
          Both joint variants must be conclusive on the event-study
          path (same step-2 + step-3 closure as the unweighted
-         aggregate, just without the QUG step).
+         battery, just without the QUG step).
 
     Sister pretests are unchanged on the workflow path; direct callers
     can also pass ``survey_design=`` to :func:`stute_test`,
@@ -4405,22 +4396,6 @@ def did_had_pretest_workflow(
     de Chaisemartin et al. (2026), Section 4.2-4.3, Theorem 4, Appendix
     D, Theorem 7.
     """
-    # M-139 deprecation shim (the fit-side twin is row M-027): a plain
-    # workflow call never warns; supplying aggregate= with ANY value
-    # warns once, then the legacy routing runs unchanged. The SENTINEL
-    # resolves to the same panel-inferred mode fit() uses at the
-    # _VALID_AGGREGATES check site below.
-    if aggregate is not NOT_SUPPLIED:
-        warnings.warn(
-            "did_had_pretest_workflow(aggregate=) is deprecated and "
-            "will be removed in 4.0. The workflow now selects its "
-            "dispatch from the panel shape (two distinct periods -> "
-            "the two-period pretest battery; more -> the multi-period "
-            "event-study battery), the same rule "
-            "HeterogeneousAdoptionDiD.fit() uses.",
-            FutureWarning,
-            stacklevel=2,
-        )
     # Body-local ``*_col`` names feed the private helpers; the public
     # parameters are the bare names.
     outcome_col = outcome
@@ -4428,14 +4403,10 @@ def did_had_pretest_workflow(
     time_col = time
     unit_col = unit
     first_treat_col = first_treat
-    # Sentinel resolution (M-139, mirroring fit's M-027 shim): infer the
-    # mode from the panel shape when aggregate= was not supplied.
-    if aggregate is NOT_SUPPLIED:
-        aggregate = _infer_aggregate_mode(data, time_col)
-    elif aggregate not in _VALID_AGGREGATES:
-        raise ValueError(
-            f"aggregate must be one of {list(_VALID_AGGREGATES)!r}; " f"got {aggregate!r}."
-        )
+    # Mode selection: the panel shape is the only selector (two distinct
+    # periods -> the two-period battery; more -> the event-study battery),
+    # the same rule HeterogeneousAdoptionDiD.fit() uses.
+    mode = _infer_aggregate_mode(data, time_col)
 
     # ---- trends_lin scope gate (PR #392 R1 P1).
     # `trends_lin=True` is only meaningful on the event-study path because
@@ -4443,7 +4414,7 @@ def did_had_pretest_workflow(
     # overall path runs qug + stute + yatchew on a 2-period panel and has
     # no joint-pretest surface to receive the kwarg. Front-door reject
     # rather than silently ignore.
-    if trends_lin and aggregate != "event_study":
+    if trends_lin and mode != "event_study":
         raise NotImplementedError(
             "did_had_pretest_workflow(trends_lin=True) requires a "
             "multi-period panel (the trends_lin kwarg forwards into "
@@ -4454,11 +4425,11 @@ def did_had_pretest_workflow(
         )
 
     # R6 P1 fix: do NOT call _resolve_pretest_unit_weights on the FULL panel
-    # here -- under aggregate='event_study' the panel may be staggered and the
-    # cohort filter at _validate_multi_period_panel can drop units. If those
-    # dropped units have zero/invalid weights, eager full-panel resolution
+    # here -- on a multi-period (event-study) panel the panel may be staggered
+    # and the cohort filter at _validate_multi_period_panel can drop units. If
+    # those dropped units have zero/invalid weights, eager full-panel resolution
     # would abort an otherwise-valid event-study run. Defer resolution to the
-    # per-aggregate branches: overall path resolves on the original data (no
+    # per-mode branches: overall path resolves on the original data (no
     # filtering); event-study path lets the joint wrappers handle resolution
     # on data_filtered.
     # Internal variable naming: downstream code reads `survey` (Phase 4.5 C
@@ -4479,7 +4450,7 @@ def did_had_pretest_workflow(
             stacklevel=2,
         )
 
-    if aggregate == "event_study":
+    if mode == "event_study":
         F, t_pre_list, t_post_list, data_filtered, _filter_info = _validate_multi_period_panel(
             data,
             outcome_col=outcome_col,

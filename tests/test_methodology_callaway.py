@@ -261,7 +261,7 @@ class TestBasePeriodSelection:
             first_treat="first_treat",
         )
 
-        # A plain fit stores no event study; it is computed post-fit
+        # 4.0: the fit stores no event study; it is computed post-fit
         assert results.event_study_effects is None
         es = es_dict(results)
 
@@ -1503,7 +1503,7 @@ class TestSimultaneousConfidenceBands:
             time="period",
             first_treat="first_treat",
         )
-        # A plain fit stores no band; the post-fit event study carries it
+        # 4.0: the fit stores no band; the post-fit event study carries it
         assert results.cband_crit_value is None
         es = results.aggregate("event_study")
 

@@ -631,7 +631,11 @@ provenance beside percentile statistics; a RECOMPUTE level on a
 bootstrapped fit either REPLAYS the fit-time bootstrap from retained RNG
 state (CS [M-020], EfficientDiD [M-023], DMLDiD via the inherited CS kit
 channel [M-093 seventh amendment]) or RAISES - it never silently
-returns analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
+returns analytical inference. **Amendment (4.0 cut PR 3b, [M-020] [M-023]
+[M-117] [M-120]):** on CallawaySantAnna and EfficientDiD the fit-time
+`aggregate=`/`balance_e=` branches are deleted outright (the post-fit replay
+exists) and their legacy `event_study_effects`/`group_effects` fields are None
+after EVERY fit. **View-relay exception (Phase 2b PRs 1-2):**
 estimators whose `aggregate()` RELAYS stored fields without recomputation
 need no influence-function kit - there is nothing to re-weight. The
 retention requirement binds RECOMPUTING estimators (the CallawaySantAnna
@@ -1025,7 +1029,7 @@ tests-first PR that flips no rows).
      so 3b/3c fit the reviewer) (SHIPPED, PR 3a).
    - 3b - the mechanical removals on the estimators whose post-fit route
      already exists (CallawaySantAnna, EfficientDiD, StackedDiD, dCDH, HAD,
-     the HAD pretest workflow).
+     the HAD pretest workflow) (SHIPPED, PR 3b).
    - 3c - the ImputationDiD/TwoStageDiD/ContinuousDiD removals plus the
      bootstrapped-fit relay (section 6 amendment).
 4. The three merges: the MultiPeriodDiD class, `MultiPeriodDiDResults`,

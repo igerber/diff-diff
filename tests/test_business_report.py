@@ -96,7 +96,7 @@ def cs_fit():
     # base_period='universal' so DR's sensitivity check can run without
     # hitting the round-5 methodology-critical skip (Rambachan-Roth bounds
     # are not interpretable on consecutive-comparison pre-periods).
-    # Plain fit, no fit-time surface - the report layer derives the event study
+    # 4.0: no fit-time surface - the report layer derives the event study
     # via results.aggregate("event_study").
     cs = CallawaySantAnna(base_period="universal").fit(
         sdf,

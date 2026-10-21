@@ -17,10 +17,6 @@ from diff_diff.aggregation import (
     AggregationKit,
     BootstrapReplaySpec,
 )
-from diff_diff.bootstrap_utils import (
-    apply_bootstrap_event_study_overrides,
-    apply_bootstrap_group_overrides,
-)
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
     _detect_rank_deficiency,
@@ -36,7 +32,6 @@ from diff_diff.staggered_aggregation import (
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
     CSBootstrapResults,
-    apply_cband_conf_ints,
 )
 
 # Import from split modules
@@ -65,22 +60,6 @@ __all__ = [
 
 # Type alias for pre-computed structures
 PrecomputedData = Dict[str, Any]
-
-
-class _DeprecatedFitArg:
-    """Sentinel for `fit(aggregate=)` / `fit(balance_e=)` (rows M-020 / M-117).
-
-    A plain ``None`` default cannot distinguish "not passed" from "passed
-    None", so a bare ``None`` default would fire the FutureWarning on EVERY
-    fit. The warning must fire only when the caller actually supplies the
-    argument.
-    """
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return "<not supplied>"
-
-
-_DEPRECATED_FIT_ARG = _DeprecatedFitArg()
 
 
 def _linear_regression(
@@ -535,14 +514,11 @@ class CallawaySantAnna(
     >>> event_study.to_dataframe()  # doctest: +SKIP
 
     Plotting and the sensitivity analyses (``plot_event_study``,
-    ``compute_honest_did``, ``compute_pretrends_power``) still read the
-    fit-time surface, so they take a fit that requested aggregation:
+    ``compute_honest_did``, ``compute_pretrends_power``) take the post-fit
+    container:
 
     >>> from diff_diff import plot_event_study
-    >>> plotted = cs.fit(data, outcome='outcome', unit='unit',
-    ...                  time='time', first_treat='first_treat',
-    ...                  aggregate='event_study')  # doctest: +SKIP
-    >>> plot_event_study(plotted)  # doctest: +SKIP
+    >>> plot_event_study(results.aggregate('event_study'))  # doctest: +SKIP
 
     With covariate adjustment (conditional parallel trends):
 
@@ -1870,8 +1846,6 @@ class CallawaySantAnna(
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Any = _DEPRECATED_FIT_ARG,
-        balance_e: Any = _DEPRECATED_FIT_ARG,
         survey_design: Optional["SurveyDesign"] = None,
     ) -> CallawaySantAnnaResults:
         """
@@ -1894,36 +1868,6 @@ class CallawaySantAnna(
             Use 0 (or np.inf) for never-treated units.
         covariates : list, optional
             List of covariate column names for conditional parallel trends.
-        aggregate : str, optional
-            DEPRECATED since 3.9, removed in 4.0 (ledger row M-020). Passing
-            it emits a ``FutureWarning``. Aggregate as a post-fit step
-            instead - ``results.aggregate("simple" | "event_study" |
-            "group")`` - which needs no refit and returns a new object,
-            leaving ``results`` unchanged. Accepted values are unchanged:
-            - None: Only compute ATT(g,t) (default)
-            - "simple": Simple weighted average (overall ATT)
-            - "event_study": Aggregate by relative time (event study)
-            - "group": Aggregate by treatment cohort
-            - "all": Compute all aggregations
-
-            ``compute_honest_did``, ``compute_pretrends_power`` and
-            ``plot_event_study`` all accept the post-fit container from
-            ``results.aggregate('event_study')`` directly, so no consumer
-            requires the fit-time surface anymore. Bootstrapped fits
-            (``n_bootstrap > 0``) included: the post-fit RECOMPUTE levels
-            (``'event_study'``/``'group'``) REPLAY the fit-time multiplier
-            bootstrap from the kit-retained RNG state (percentile
-            inference matching a fit-time aggregation to floating-point
-            reassociation; ``aggregate('simple')``/``('total')`` still
-            relay the stored inference bit-exactly). This parameter
-            remains only as the deprecated compatibility path through
-            3.9.
-        balance_e : int, optional
-            DEPRECATED since 3.9, removed in 4.0 (ledger row M-117). Passing
-            it emits a ``FutureWarning``; it moves onto the post-fit call as
-            ``results.aggregate("event_study", balance_e=...)``. For event
-            study, balance the panel at relative time e. Ensures all groups
-            contribute to each relative period.
         survey_design : SurveyDesign, optional
             Survey design specification. Supports pweight with strata/PSU/FPC.
             Aggregated SEs (overall, event study, group) use design-based
@@ -1935,41 +1879,15 @@ class CallawaySantAnna(
         Returns
         -------
         CallawaySantAnnaResults
-            Object containing all estimation results.
+            Object containing all estimation results. Aggregations are a
+            post-fit step: ``results.aggregate("simple" | "event_study" |
+            "group" | "total", balance_e=...)``.
 
         Raises
         ------
         ValueError
             If required columns are missing or data validation fails.
         """
-        # ---- fit(aggregate=) / fit(balance_e=) shims (rows M-020 / M-117) ----
-        # Deprecated in 3.9, removed at 4.0: aggregation moves to the post-fit
-        # results.aggregate(type=...). The sentinel default means the warning
-        # fires ONLY when the caller supplies the argument, never on a plain
-        # fit(). Routing is otherwise untouched, so the deprecated path returns
-        # exactly the numbers it always did.
-        _deprecated_passed = [
-            name
-            for name, value in (("aggregate", aggregate), ("balance_e", balance_e))
-            if not isinstance(value, _DeprecatedFitArg)
-        ]
-        if _deprecated_passed:
-            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
-            warnings.warn(
-                f"CallawaySantAnna.fit({_args}) is deprecated and will be removed "
-                "in 4.0. Fit once, then aggregate as a post-fit step: "
-                "results = CallawaySantAnna().fit(...); "
-                "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() alongside "
-                "it: results.aggregate('event_study', balance_e=2).",
-                FutureWarning,
-                stacklevel=2,
-            )
-        if isinstance(aggregate, _DeprecatedFitArg):
-            aggregate = None
-        if isinstance(balance_e, _DeprecatedFitArg):
-            balance_e = None
-
         # Validate pscore_trim (may have been changed by direct mutation).
         # Return discarded: fit() must not mutate constructor config.
         validate_pscore_trim(self.pscore_trim)
@@ -2814,43 +2732,13 @@ class CallawaySantAnna(
             df=df_survey,
         )
 
-        # Compute additional aggregations if requested
+        # Since 4.0 fit() computes no event-study / group surface: both are
+        # post-fit steps (``results.aggregate('event_study' | 'group')``,
+        # which recomputes from the retained kit and, on bootstrapped fits,
+        # replays the multiplier bootstrap). The legacy fields are None on
+        # every fit.
         event_study_effects = None
         group_effects = None
-
-        # Aggregation outputs that used to arrive as ``self._event_study_*``
-        # side channels; the aggregator is now pure and returns them.
-        es_aggregation = None
-        if aggregate in ["event_study", "all"]:
-            es_aggregation = self._aggregate_event_study(
-                group_time_effects,
-                influence_func_info,
-                treatment_groups,
-                time_periods,
-                balance_e,
-                df,
-                unit,
-                precomputed,
-            )
-            event_study_effects = es_aggregation.effects
-            # The stored fit-time surface is THIS aggregation's (possibly
-            # balance_e-restricted): its common-reference provenance must
-            # describe the RETAINED cohorts, not the fit-wide set, or the
-            # native consumer route would disagree with the equivalent
-            # post-fit container (route parity). The fit-wide tuple
-            # computed above stands only when no event-study surface was
-            # produced.
-            reference_event_times = es_aggregation.reference_event_times
-
-        if aggregate in ["group", "all"]:
-            group_effects = self._aggregate_by_group(
-                group_time_effects,
-                influence_func_info,
-                treatment_groups,
-                precomputed=precomputed,
-                df=df,
-                unit=unit,
-            )
 
         # Reject replicate-weight designs for bootstrap — replicate variance
         # is an analytical alternative, not compatible with bootstrap
@@ -2872,8 +2760,8 @@ class CallawaySantAnna(
             bootstrap_results = self._run_multiplier_bootstrap(
                 group_time_effects=group_time_effects,
                 influence_func_info=influence_func_info,
-                aggregate=aggregate,
-                balance_e=balance_e,
+                aggregate=None,
+                balance_e=None,
                 treatment_groups=treatment_groups,
                 time_periods=time_periods,
                 df=df,
@@ -2906,23 +2794,11 @@ class CallawaySantAnna(
                     group_time_effects[gt]["p_value"] = bootstrap_results.group_time_p_values[gt]
                     group_time_effects[gt]["t_stat"] = float(gt_t_stats[idx])
 
-            # Update event study effects with bootstrap SEs (batched).
-            # Shared helper (verbatim extraction) so the post-fit aggregate()
-            # replay applies exactly the same overrides.
-            apply_bootstrap_event_study_overrides(
-                event_study_effects, bootstrap_results, self.alpha
-            )
-
-            # Update group effects with bootstrap SEs (batched) — same shared
-            # helper, including the df_used clearing rule.
-            apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
-
-        # Compute simultaneous confidence band CIs if cband is available
+        # No fit-time event-study surface -> the bootstrap never builds
+        # ``event_study_info`` and no simultaneous band is computed at fit;
+        # the post-fit replay (``results.aggregate('event_study')``) carries
+        # its own ``cband_crit_value``.
         cband_crit_value = None
-        if bootstrap_results is not None:
-            cband_crit_value = bootstrap_results.cband_crit_value
-
-        apply_cband_conf_ints(event_study_effects, cband_crit_value)
 
         # Consolidated _safe_inv rank-guard warning (sibling of PR #9
         # finding #17). Rank-deficient PS Hessian / OR bread matrices in the
@@ -2948,21 +2824,12 @@ class CallawaySantAnna(
             )
 
         # Store results
-        # Retrieve event-study VCV from aggregation mixin (Phase 7d).
-        # When bootstrap overwrites the event-study SEs, the VCV is the
-        # covariance of the same bootstrap draws (diagonal = bootstrap SE**2),
-        # so HonestDiD never mixes the analytical VCV with bootstrap SEs.
-        event_study_vcov = es_aggregation.vcov if es_aggregation is not None else None
-        event_study_vcov_index = es_aggregation.vcov_index if es_aggregation is not None else None
-        if bootstrap_results is not None:
-            event_study_vcov = bootstrap_results.event_study_vcov
-            event_study_vcov_index = bootstrap_results.event_study_vcov_index
-        # Same clearing rule for the ES df provenance: bootstrap replaces the
-        # stored ES se/p/CI with percentile values that never used the
-        # analytical df, so surfacing it would be false provenance.
-        event_study_df = es_aggregation.df_used if es_aggregation is not None else None
-        if bootstrap_results is not None:
-            event_study_df = None
+        # No fit-time event-study surface since 4.0, so there is no VCV /
+        # vcov index / df provenance to store; the post-fit container from
+        # ``results.aggregate('event_study')`` carries them.
+        event_study_vcov = None
+        event_study_vcov_index = None
+        event_study_df = None
 
         # Resolve canonical cluster_name + n_clusters for Results metadata.
         # Canonical PSU column wins when explicit: if survey_design has

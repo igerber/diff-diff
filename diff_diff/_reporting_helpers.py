@@ -56,11 +56,11 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
       disambiguate via the event-study or group aggregate if you need
       the horizon / group target.
     - ``CallawaySantAnna``: ``overall_att`` is cohort-size-weighted
-      across post-treatment ``ATT(g, t)`` cells regardless of the
-      fit-time ``aggregate`` kwarg. The event-study / group tables are
-      produced post-fit via ``results.aggregate('event_study'/'group')``
-      (the deprecated fit-time ``aggregate=`` kwarg populates the legacy
-      ``event_study_effects`` / ``group_effects`` fields until 4.0).
+      across post-treatment ``ATT(g, t)`` cells regardless of any
+      aggregation. The event-study / group tables are produced post-fit
+      via ``results.aggregate('event_study'/'group')``; the legacy
+      ``event_study_effects`` / ``group_effects`` fields are None on
+      every CallawaySantAnna fit since 4.0.
     - ``ContinuousDiD``: the regime (PT vs. SPT) is a user-level
       assumption, not a library setting. The ``definition`` names
       both regime readings (``ATT^loc`` under PT,
@@ -140,9 +140,9 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "``overall_att`` is the simple-aggregation headline regardless "
                 "of aggregation choices; event-study and group tables are "
                 "produced post-fit via "
-                "``results.aggregate('event_study'/'group')`` (the deprecated "
-                "fit-time ``aggregate=`` kwarg populates the legacy "
-                "``event_study_effects`` / ``group_effects`` fields until 4.0)."
+                "``results.aggregate('event_study'/'group')`` (the legacy "
+                "``event_study_effects`` / ``group_effects`` fields are None "
+                "on every CallawaySantAnna fit since 4.0)."
             ),
             "aggregation": "simple",
             "headline_attribute": "overall_att",

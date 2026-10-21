@@ -1,15 +1,23 @@
 """Capture the pre-removal aggregation oracles for tests/test_aggregate_contract.py.
 
-MUST run on a tree where the fit-time ``aggregate=`` / ``balance_e=`` keywords still
-exist (they are removed at the 4.0 cut, PRs 3b/3c), ONCE PER BACKEND::
+HISTORICAL since the 4.0 cut (PR 3b): this script drives the REMOVED fit-time
+``aggregate=`` / ``balance_e=`` route on CallawaySantAnna / EfficientDiD / StackedDiD
+/ dCDH / HAD (and imports the contract module's retired ``_boot_fit_time`` /
+``_efficient_boot_fit_time`` helpers), so it is runnable only at the recorded
+``provenance.captured_at_head`` of ``tests/fixtures/v4_aggregate_oracles.json``
+(``8724fecd``, whose ``diff_diff/`` is byte-identical to the capture tree) - the
+same convention as ``tests/_capture_v4_merge_ddd_oracles.py``. It is kept as the
+fixture's provenance record; re-capturing means checking out that commit, ONCE
+PER BACKEND::
 
     DIFF_DIFF_BACKEND=python python tests/_capture_v4_aggregate_oracles.py > numpy.json
     DIFF_DIFF_BACKEND=rust   python tests/_capture_v4_aggregate_oracles.py > rust.json
 
-and the two payloads are merged into ``tests/fixtures/v4_aggregate_oracles.json``
+and merging the two payloads into ``tests/fixtures/v4_aggregate_oracles.json``
 (``{"analytic": ..., "boot": {"numpy": ..., "rust": ...}, "provenance": ...}``).
 
-Why. The 4.0 cut (PRs 3b/3c) deletes the deprecated fit-time aggregation route that
+Why. The 4.0 cut (PR 3b; Imputation/TwoStage/ContinuousDiD in PR 3c) deletes the
+deprecated fit-time aggregation route that
 ``test_aggregate_contract.py`` used as its NUMERICAL REFERENCE (the ``*_fit_time``
 fixtures and ``_boot_fit_time`` helpers): post-fit ``aggregate()`` was asserted
 equal to ``fit(aggregate=...)``. Once that route is removed there is no independent
