@@ -77,6 +77,17 @@ CI_RTOL = 1e-9
 #: (a draw within a ULP of the point estimate can flip one count), hence the
 #: additional ``atol=2/n_bootstrap`` applied by the callers.
 BOOT_TOL = dict(rtol=1e-13, atol=1e-13)
+#: t-statistics are the RATIO att/se of two columns each bounded by ``rtol``,
+#: so their relative drift compounds to ``2 * rtol`` to first order (the
+#: Rust backend's OpenBLAS / pure-Rust paths on Linux and Windows sit at
+#: 1.6e-13 against the macOS capture on the TwoStage Prop-5 bootstrap arm
+#: while att and se each pass at 1e-13). ``_t_rtol`` applies that bound.
+T_STAT_RTOL_FACTOR = 2.0
+
+
+def _t_rtol(rtol):
+    """Tolerance for a t-statistic derived from ``rtol``-bounded att and se."""
+    return T_STAT_RTOL_FACTOR * rtol
 
 
 def _oracle_key(label):
@@ -150,7 +161,7 @@ def _assert_es_matches_oracle(es, orow, *, rtol, atol, p_atol=None, name=""):
         tag = f"{name}/es[{e}]"
         _close(es.att[i], r["effect"], rtol=rtol, atol=atol, what=f"{tag}.att")
         _close(es.se[i], r["se"], rtol=rtol, atol=atol, what=f"{tag}.se")
-        _close(es.t_stat[i], r["t_stat"], rtol=rtol, atol=atol, what=f"{tag}.t_stat")
+        _close(es.t_stat[i], r["t_stat"], rtol=_t_rtol(rtol), atol=atol, what=f"{tag}.t_stat")
         _close(es.p_value[i], r["p_value"], rtol=rtol, atol=p_atol, what=f"{tag}.p_value")
         _close(es.conf_int_lower[i], r["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_lo")
         _close(es.conf_int_upper[i], r["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_hi")
@@ -207,7 +218,7 @@ def _assert_group_matches_oracle(agg, orow, *, rtol, atol, p_atol=None, name="")
         tag = f"{name}/group[{g}]"
         _close(agg.att[i], r["effect"], rtol=rtol, atol=atol, what=f"{tag}.att")
         _close(agg.se[i], r["se"], rtol=rtol, atol=atol, what=f"{tag}.se")
-        _close(agg.t_stat[i], r["t_stat"], rtol=rtol, atol=atol, what=f"{tag}.t_stat")
+        _close(agg.t_stat[i], r["t_stat"], rtol=_t_rtol(rtol), atol=atol, what=f"{tag}.t_stat")
         _close(agg.p_value[i], r["p_value"], rtol=rtol, atol=p_atol, what=f"{tag}.p_value")
         _close(agg.conf_int_lower[i], r["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_lo")
         _close(agg.conf_int_upper[i], r["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{tag}.ci_hi")
@@ -231,7 +242,7 @@ def _assert_overall_matches_oracle(res, o, *, rtol, atol, p_atol=None, name=""):
     p_atol = atol if p_atol is None else p_atol
     _close(res.overall_att, o["att"], rtol=rtol, atol=atol, what=f"{name}.overall_att")
     _close(res.overall_se, o["se"], rtol=rtol, atol=atol, what=f"{name}.overall_se")
-    _close(res.overall_t_stat, o["t_stat"], rtol=rtol, atol=atol, what=f"{name}.overall_t")
+    _close(res.overall_t_stat, o["t_stat"], rtol=_t_rtol(rtol), atol=atol, what=f"{name}.overall_t")
     _close(res.overall_p_value, o["p_value"], rtol=rtol, atol=p_atol, what=f"{name}.overall_p")
     ci = res.overall_conf_int
     ci_rtol = max(rtol, CI_RTOL)
@@ -1340,7 +1351,13 @@ def _assert_level_matches_oracle(post, orow, level, name=""):
         o = orow["overall"]
         assert np.allclose(got.att[0], got.n[0] * oracle_value(o["att"]), rtol=1e-12)
         assert np.allclose(got.se[0], got.n[0] * oracle_value(o["se"]), rtol=1e-12)
-        _close(got.t_stat[0], o["t_stat"], **ANALYTIC_TOL, what=f"{name}/total.t")
+        _close(
+            got.t_stat[0],
+            o["t_stat"],
+            rtol=_t_rtol(ANALYTIC_TOL["rtol"]),
+            atol=ANALYTIC_TOL["atol"],
+            what=f"{name}/total.t",
+        )
         return
     if level == "simple":
         _assert_simple_relays_stored_overall(post)
@@ -4882,7 +4899,13 @@ def _assert_cont_overall_matches_oracle(res, orow, *, p_atol=_CO_P_ATOL):
     o = orow["overall"]
     _close(res.overall_att, o["att"], **BOOT_TOL, what="cont.overall_att")
     _close(res.overall_att_se, o["se"], **BOOT_TOL, what="cont.overall_att_se")
-    _close(res.overall_att_t_stat, o["t_stat"], **BOOT_TOL, what="cont.overall_att_t")
+    _close(
+        res.overall_att_t_stat,
+        o["t_stat"],
+        rtol=_t_rtol(BOOT_TOL["rtol"]),
+        atol=BOOT_TOL["atol"],
+        what="cont.overall_att_t",
+    )
     _close(res.overall_att_p_value, o["p_value"], rtol=1e-13, atol=p_atol, what="cont.overall_p")
     _close(res.overall_att_conf_int[0], o["ci_lo"], **BOOT_TOL, what="cont.ci_lo")
     _close(res.overall_att_conf_int[1], o["ci_hi"], **BOOT_TOL, what="cont.ci_hi")
