@@ -146,7 +146,7 @@ results.print_summary()
 # auto-cluster applies with the static carve-outs)
 es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
               event_study=True, time='period', post_periods=[4, 5, 6, 7])
-es.print_summary()
+print(es.summary())
 ```
 
 **Note:** TWFE can be biased with staggered treatment timing and heterogeneous effects. Consider CallawaySantAnna, SunAbraham, or ImputationDiD for staggered designs.

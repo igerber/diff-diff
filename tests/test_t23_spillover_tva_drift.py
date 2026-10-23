@@ -17,22 +17,28 @@ the methodology shift before merge.
 T23 is the first SpilloverDiD tutorial. It demonstrates the
 ``SpilloverDiD`` estimator on a TVA-style synthetic panel reproducing
 the Butts (2021) §4 Table 1 Panel A ~40% understatement direction
-(naive multi-period TWFE significantly understates the direct effect
+(a naive TWFE event study significantly understates the direct effect
 when near-controls absorb spillover). The DGP-builder constants below
 MUST stay in sync with the corresponding constants in the notebook §2
 code cell; the ``test_dgp_true_parameters_match_quoted`` test catches
-silent drift on those values.
+silent drift on those values. The ``naive_fit`` fixture mirrors the
+notebook's naive-headline cell: a ``TwoWayFixedEffects`` event-study fit
+(unit + period fixed effects, unit-clustered SEs) whose headline ATT is
+the equal-weight average of the post-period coefficients.
 """
 
 from __future__ import annotations
 
+import types
 import warnings
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import MultiPeriodDiD, SpilloverDiD
+from diff_diff import SpilloverDiD, TwoWayFixedEffects
+from diff_diff.results_base import EventStudyResults
 
 # Locked DGP parameters — must stay in sync with the notebook §2 cell.
 MAIN_SEED = 23
@@ -98,28 +104,42 @@ def panel() -> pd.DataFrame:
     return _build_t23_panel()
 
 
+NAIVE_FIT_KWARGS: Dict[str, Any] = dict(
+    outcome="y",
+    treatment="ever_treated",
+    unit="unit",
+    time="time",
+    event_study=True,
+    post_periods=[3, 4],
+    reference_period=2,  # last pre-period
+)
+
+
+def _naive_headline(surface):
+    """Verbatim copy of the notebook's naive-headline arithmetic: the
+    equal-weight average of the post-period coefficients, with its SE from
+    the matching block of the event-study vcov."""
+    post_rows = np.isin(surface.event_time, surface.post_periods)
+    post_cols = np.isin(surface.vcov_index, surface.post_periods)
+    att = float(surface.att[post_rows].mean())
+    se = float(np.sqrt(surface.vcov[np.ix_(post_cols, post_cols)].sum()) / post_cols.sum())
+    return att, se
+
+
 @pytest.fixture(scope="module")
 def naive_fit(panel):
-    est = MultiPeriodDiD()
+    """Mirror of the notebook's naive-headline cell (TWFE event study, unit +
+    period FE, unit-clustered SEs). The fit is run with warnings escalated to
+    errors: the former MultiPeriodDiD+absorb specification needed a
+    'Rank-deficient design matrix' filter, the event-study mode must not
+    (only the documented M4 matmul RuntimeWarning noise is tolerated)."""
     with warnings.catch_warnings():
-        # absorb=['unit'] makes the unit-invariant 'ever_treated' indicator
-        # perfectly collinear with the unit FE; MultiPeriodDiD drops it
-        # (with a UserWarning) and identifies the ATT through the
-        # ever_treated x post interaction columns. This is the expected
-        # TWFE specification; the rank-deficient drop is benign.
-        warnings.filterwarnings(
-            "ignore", category=UserWarning, message="Rank-deficient design matrix"
-        )
-        return est.fit(
-            panel,
-            outcome="y",
-            treatment="ever_treated",
-            time="time",
-            post_periods=[3, 4],
-            unit="unit",
-            absorb=["unit"],
-            reference_period=2,  # explicit pre-period; matches the current MPD default
-        )
+        warnings.simplefilter("error")
+        _silence_spillover_matmul_warnings()
+        surface = TwoWayFixedEffects().fit(panel, **NAIVE_FIT_KWARGS)
+    assert isinstance(surface, EventStudyResults)
+    att, se = _naive_headline(surface)
+    return types.SimpleNamespace(att=att, se=se, surface=surface)
 
 
 def _silence_spillover_matmul_warnings():
@@ -242,13 +262,48 @@ def test_naive_twfe_understates_tau_total(naive_fit):
 
 
 def test_naive_att_endpoint_matches_quoted(naive_fit):
-    """§3 quoted endpoint: 2-decimal pin matching the published `-4.29`
-    in the notebook, README, and CHANGELOG. The well-conditioned naive
-    MultiPeriodDiD fit is stable across BLAS paths to better than 0.005,
-    so 2-decimal pinning is safe (in contrast to the borderline-rank-
-    deficient `rings=[0,50]` sensitivity point, which we keep at
-    round-to-1)."""
+    """§3 quoted endpoint: 2-decimal pin matching the `-4.29` quoted in the
+    notebook prose. The well-conditioned naive TWFE event-study fit (unit +
+    period FE) is stable across BLAS paths to better than 0.005, so
+    2-decimal pinning is safe (in contrast to the borderline-rank-deficient
+    `rings=[0,50]` sensitivity point, which we keep at round-to-1)."""
     assert round(naive_fit.att, 2) == -4.29
+
+
+def test_naive_headline_averages_exactly_the_post_periods(naive_fit):
+    """The headline is the equal-weight mean over the POST rows only: the
+    reference period (2) and the pre-period coefficient (1) must be excluded,
+    and the surface must expose exactly the two post periods the notebook
+    names."""
+    surface = naive_fit.surface
+    assert tuple(surface.post_periods) == (3, 4)
+    assert surface.event_time.tolist() == [1, 2, 3, 4]
+    assert surface.vcov_index.tolist() == [1, 3, 4]
+    post_rows = np.isin(surface.event_time, surface.post_periods)
+    assert surface.event_time[post_rows].tolist() == [3, 4]
+    assert naive_fit.att == float(surface.att[post_rows].mean())
+    # the two post coefficients bracket the headline (neither is the headline)
+    lo, hi = sorted(surface.att[post_rows].tolist())
+    assert lo < naive_fit.att < hi
+
+
+def test_naive_headline_se_is_unit_clustered_post_block(naive_fit, panel):
+    """The headline SE comes from the unit-clustered event-study vcov (the
+    within spec auto-clusters at unit): an explicit cluster='unit' refit has
+    the same vcov, and the hand-computed 2x2 post block
+    sqrt(v33 + v44 + 2 v34) / 2 reproduces the fixture's SE. The 3-decimal
+    pin is BLAS-safe (the ATT pin is 2-decimal by precedent)."""
+    with warnings.catch_warnings():
+        _silence_spillover_matmul_warnings()
+        explicit = TwoWayFixedEffects(cluster="unit").fit(panel, **NAIVE_FIT_KWARGS)
+    assert isinstance(explicit, EventStudyResults)
+    assert explicit.vcov is not None and explicit.vcov_index is not None
+    np.testing.assert_allclose(explicit.vcov, naive_fit.surface.vcov, rtol=1e-12, atol=0)
+    idx = {int(t): i for i, t in enumerate(explicit.vcov_index)}
+    v = explicit.vcov
+    se_hand = np.sqrt(v[idx[3], idx[3]] + v[idx[4], idx[4]] + 2 * v[idx[3], idx[4]]) / 2
+    np.testing.assert_allclose(naive_fit.se, se_hand, rtol=1e-12, atol=0)
+    assert round(naive_fit.se, 3) == 0.194
 
 
 def test_spillover_did_recovers_tau_total(spillover_fit):
