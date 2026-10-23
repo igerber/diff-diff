@@ -406,8 +406,8 @@ positionally would otherwise bind `group="unit"`, `partition="period"`,
 `post="first_treat"` and land in 2x2x2 mode with a confusing downstream error
 instead of a mode error. `time=` keeps its dual role, resolved by dispatch
 ORDER rather than by value inspection: the staggered branch is taken before the
-M-031 rename shim runs, so `time=` is the calendar column there and emits no
-rename warning.
+2x2x2 `time=` check, so `time=` is the calendar column there (2x2x2 mode raises
+on it since 4.0 [M-085]; through 3.x the M-031 rename shim warned).
 
 **Routing semantics.** One class, two engines, both internally UNCHANGED in
 this program (R-parity preserved; engine unification is a possible 4.x
@@ -426,7 +426,7 @@ GMM weighting on the staggered engine). `cluster=` analytical SEs remain
 staggered-mode-unsupported (bootstrap required) - documented in the class
 docstring, tracked as post-4.0 backlog. **(Amended 2026-08-08, Phase 3(b) ship,
 user-approved.)** On the MERGED surface `cluster=` now RAISES a `ValueError`
-steering to `n_bootstrap > 0`, rather than the deprecated class's
+steering to `n_bootstrap > 0`, rather than the removed class's
 accepted-then-warned-then-ignored `UserWarning`, which is preserved unchanged on
 that class. Same reasoning 3(a) ratified for MPD's wild-bootstrap fallback: the
 raise is live from the mode's 3.9 BIRTH, because a new surface needs no
@@ -1074,13 +1074,23 @@ tests-first PR that flips no rows).
    `PeriodEffect` and `EventStudy`; the QDiD class and `QDiDResults`; the
    `StaggeredTripleDifference` CLASS and `SDDD` - but NOT
    `StaggeredTripleDiffResults` [M-014], which the surviving facade's
-   staggered mode still constructs and which dies in PR 6 (the DDD container unification). Rides along:
-   [M-007], the [M-016] property view on `EventStudyResults`, the [M-083] /
-   [M-085] raises, the `pyproject.toml` `filterwarnings` entries, the
-   tutorials built on MultiPeriodDiD (01/02/04/05/07/23, rebuilt on
-   `TWFE(event_study=True)` - user decision), the MultiPeriodDiD benchmark arm
-   (relabelled `spec="pooled"`), the power registry, and the
-   `doc-deps.yaml` STD group/key.
+   staggered mode still constructs and which dies in PR 6 (the DDD container
+   unification). Split three ways (2026-10-21, user decision) because CI
+   executes the tutorials and five of them construct MultiPeriodDiD:
+   - 4a - the `StaggeredTripleDifference` class + `SDDD` and the QDiD class +
+     `QDiDResults`, with the [M-085] raise, the two `pyproject.toml`
+     `filterwarnings` entries, the `doc-deps.yaml` STD group/key, and the
+     three StaggeredTripleDifference suites ported to the merged surface
+     (SHIPPED, PR 4a).
+   - 4b - the tutorials built on MultiPeriodDiD (02/04/05/07/23; 01 no longer
+     uses it) rebuilt on `TWFE(event_study=True)` - user decision - plus the
+     StaggeredTripleDifference markdown mentions in 08/16; lands BEFORE 4c
+     because CI executes the notebooks.
+   - 4c - the MultiPeriodDiD class, `MultiPeriodDiDResults`, `PeriodEffect`
+     and `EventStudy`, with [M-007], the [M-016] property view on
+     `EventStudyResults`, the [M-083] raise, the remaining `filterwarnings`
+     entry, the MultiPeriodDiD benchmark arm (relabelled `spec="pooled"`) and
+     the power registry.
 5. Storage flip [M-050]..[M-058] + pickle migration + the `.att` sweep over
    docs/notebooks/guides/benchmarks (incl. a disposition for the un-rowed
    `CSBootstrapResults.overall_att_se`).
@@ -1095,8 +1105,9 @@ tests-first PR that flips no rows).
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
     migration-guide retitle, due gate green.
 
-Ordering constraints: 4 before 5 and 6; 5 before 6 (the unified DDD
-container is born canonical); 7 and 8 independent; 9 after 4/6; 10 last.
+Ordering constraints: 4a before 4b before 4c; 4 before 5 and 6; 5 before 6
+(the unified DDD container is born canonical); 7 and 8 independent; 9 after
+4/6; 10 last.
 Waves 2 and 3 are independent of each other and of 4.
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`
@@ -1357,7 +1368,11 @@ only while the window is open).
 same diff, every other row whose locators or `code_refs` reference it (e.g.
 [M-016]'s locator moves to the successor container when [M-011] flips). The
 enforcement test's hard-fail on unresolvable module parts makes forgetting
-this loud, not silent.
+this loud, not silent. Alias clause (PR 4a, 2026-10-21): an alias row
+reaching `done` with `new_target: null` keeps its `old_target` as the
+historical record - the probe does not resolve `old_target` at `done`
+(`tests/test_v4_matrix.py`, alias branch), and there is no successor to
+migrate to; [M-061] and [M-064] follow this reading, [M-060] will.
 
 **`phase` semantics.** `phase` names the program phase whose PR performs the
 row's NEXT status transition; each flip updates it (terminal rows keep their

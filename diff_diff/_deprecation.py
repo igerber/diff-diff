@@ -120,8 +120,8 @@ def resolve_renamed_kwarg(
         Returned when neither name was supplied. Required parameters pass
         ``NOT_SUPPLIED`` here and re-validate with :func:`require_arg`.
     extra : str
-        Appended to the warning message (e.g. M-031's note that ``time=``
-        survives as the calendar column).
+        Appended to the warning message (e.g. M-082's note that ``time=``
+        survives as TwoWayFixedEffects' event-study calendar column).
 
     Returns
     -------

@@ -46,8 +46,6 @@ from diff_diff import (
     HeterogeneousAdoptionDiD,
     ImputationDiD,
     MultiPeriodDiD,
-    QDiD,
-    StaggeredTripleDifference,
     SunAbraham,
     SyntheticDiD,
     TripleDifference,
@@ -88,7 +86,8 @@ MPD_FALLBACK_MSG = (
     "Using analytical inference instead."
 )
 
-# The M-081 sweep roster (9 previously-unvalidated classes) plus CiC/QDiD,
+# The M-081 sweep roster (9 previously-unvalidated classes) plus ChangesInChanges
+# (both methods),
 # whose local validator was the promotion source and now routes through the
 # shared helper.
 VALIDATED_CLASSES = [
@@ -103,10 +102,8 @@ VALIDATED_CLASSES = [
     TwoStageDiD,
     WooldridgeDiD,
     ContinuousDiD,
-    StaggeredTripleDifference,
     TripleDifference,
     ChangesInChanges,
-    QDiD,
     # Bootstrap-only whole-individual resampling: 0 is legal (point
     # estimates, NaN inference), 1 is rejected by a local floor, >= 2 runs.
     DurationDiD,

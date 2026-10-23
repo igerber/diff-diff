@@ -1,5 +1,11 @@
 """Step 0: capture the pre-merge oracles for tests/test_v4_merge_ddd.py.
 
+HISTORICAL since the 4.0 cut (PR 4a): this script imports and drives the REMOVED
+``StaggeredTripleDifference`` class, so it is runnable only at the recorded
+provenance commit (``be694f49``, see the test module's ORACLE PROVENANCE). It is
+kept as the oracle literals' provenance record; re-capturing means checking out
+that commit.
+
 MUST run on the UNMODIFIED tree, under DIFF_DIFF_BACKEND=python.
 
 Two oracles:

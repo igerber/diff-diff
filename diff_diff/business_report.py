@@ -834,7 +834,8 @@ class BusinessReport:
         # ``n_control_units`` is a composite total that also includes
         # the eligibility-denied / larger-cohort cells. Regardless of
         # the ``control_group`` mode the valid fixed comparison is the
-        # never-enabled cohort (``staggered_triple_diff.py:384``,
+        # never-enabled cohort (the ``has_never_enabled`` / ``valid_gc = [0]``
+        # comparison selection in ``_staggered_triple_diff_engine.py``,
         # REGISTRY.md §StaggeredTripleDifference line 1730). Round-37
         # P1 CI review on PR #318: under ``control_group="never_treated"``
         # (i.e., ``_canonical_control == "nevertreated"``) the composite

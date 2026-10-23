@@ -33,7 +33,7 @@ class EventStudyAggregation:
     overall : dict or None
         Eq. (4.14) overall ATT (``att`` / ``se`` / ``effective_df``) - the
         unweighted mean of post-treatment ES(e). Consumed by
-        ``StaggeredTripleDifference`` as ``overall_att_es``; CallawaySantAnna
+        TripleDifference's staggered mode as ``overall_att_es``; CallawaySantAnna
         leaves it unread. ``None`` when no post-treatment horizon qualifies.
     df_used : float or None
         The ONE df every ES row's inference actually used, recorded iff it
@@ -221,7 +221,7 @@ class CallawaySantAnnaAggregationMixin:
         on the precomputed dict.
 
         The cache is validated by ARRAY IDENTITY, not dict residency:
-        StaggeredTripleDifference aggregates through a shallow copy of
+        TripleDifference's staggered mode aggregates through a shallow copy of
         precomputed with a replaced (eligibility-zeroed) ``unit_cohorts``,
         so a cache keyed to the dict could serve stale tables across the
         copy. ``cohorts_ref``/``sw_ref`` pin the exact arrays the tables
@@ -1186,7 +1186,7 @@ class CallawaySantAnnaAggregationMixin:
 
         # Eq. (4.14) overall ATT: the unweighted mean of the post-treatment
         # event-study effects ES(e). Stashed on self (mirroring _event_study_vcov)
-        # so the StaggeredTripleDifference estimator can expose it as overall_att_es;
+        # so TripleDifference's staggered mode can expose it as overall_att_es;
         # CallawaySantAnna leaves it unread. Post-treatment is the library predicate
         # e >= -anticipation (matching _aggregate_simple and the default overall_att),
         # NOT a hardcoded e >= 0.

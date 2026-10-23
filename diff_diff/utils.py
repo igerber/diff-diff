@@ -492,8 +492,7 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
     accepts numpy integers, rejects bool/None/float/negative). ``0`` means
     bootstrap off wherever a ``> 0`` gate exists — the zero-default
     estimators (CallawaySantAnna, SunAbraham, EfficientDiD, ImputationDiD,
-    TwoStageDiD, WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference,
-    TripleDifference, DMLDiD)
+    TwoStageDiD, WooldridgeDiD, ContinuousDiD, TripleDifference, DMLDiD)
     and every analytical lane. On the DiD/TWFE wild-bootstrap lane 0 never
     meant off (the routing consults only ``inference=``); their fit-level
     floor rejects ``n_bootstrap < 2`` under ``inference="wild_bootstrap"``.
@@ -518,8 +517,8 @@ def validate_pscore_trim(value: Any) -> float:
     1-element array. Accepted values must additionally satisfy
     ``1 - trim < 1`` in binary64: a sub-ulp positive trim would round the
     upper clip bound to exactly 1.0, disabling the guard like ``trim=0``.
-    StaggeredTripleDifference deliberately keeps its bare range check
-    (construction-permissive dying class, ledger M-013/M-144).
+    (The removed StaggeredTripleDifference class kept its bare range check
+    through 3.x - construction-permissive, ledger M-013/M-144.)
     """
     if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise ValueError(
@@ -622,8 +621,7 @@ def validate_anticipation(anticipation: Any) -> int:
     ``TripleDifference``, and RE-CHECKED on the fit path on all of them —
     the uniform direct-mutation defense: manual re-assignments on eight,
     EfficientDiD via its ``_validate_params`` re-run, SpilloverDiD via its
-    in-fit check, TripleDifference and the deprecated
-    ``StaggeredTripleDifference`` via the shared staggered engine.
+    in-fit check, TripleDifference (staggered mode) via the staggered engine.
     """
     if isinstance(anticipation, bool) or not isinstance(anticipation, (int, np.integer)):
         raise ValueError(

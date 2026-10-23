@@ -50,7 +50,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import ChangesInChanges, QDiD
+from diff_diff import ChangesInChanges
 from diff_diff.changes_in_changes import (
     _QR_TAU_GRID,
     _design_matrix,
@@ -97,8 +97,8 @@ def _scenario_df(scenario):
 
 
 def _fit(df, method, mode, probs, n_bootstrap=0, seed=None, covariates=None):
-    cls = ChangesInChanges if method == "cic" else QDiD
-    est = cls(
+    est = ChangesInChanges(
+        method=method,
         quantiles=probs,
         n_bootstrap=n_bootstrap,
         panel=(mode == "panel"),

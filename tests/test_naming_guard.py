@@ -870,14 +870,11 @@ def _live_family_code_refs(tok):
 # 3.9 class merges, v4-design section 4.1). Their effective __init__ is no
 # longer the base's function object, but calls under the shim's name still
 # read every base constructor param - so they stay in the base's
-# init-sharing group. Forward home for the remaining phase-3 sibling (QDiD).
-#
-# StaggeredTripleDifference was EVALUATED for this table in phase 3(b) and is
-# deliberately absent: it is not a forwarding shim. It keeps its own __init__
-# (R's compact control_group spellings, frozen until the 4.0 removal) and only
-# SHARES an engine mixin with TripleDifference, so identity grouping already
-# sees it correctly. Adding it would wrongly inject it into TripleDifference's
-# init-sharing group and widen that class's param-row consumer set.
+# init-sharing group. MultiPeriodDiD is the last such shim (removed in PR 4c);
+# the other two phase-3 siblings are gone: QDiD was a standalone class (never a
+# forwarding shim) and StaggeredTripleDifference kept its own __init__ and only
+# SHARED an engine mixin with TripleDifference - both removed at the 4.0 cut
+# (PR 4a).
 _FORWARDING_INIT_SHIMS = {
     "MultiPeriodDiD": "DifferenceInDifferences",
 }

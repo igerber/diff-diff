@@ -11,9 +11,9 @@ params, ``AttributeError`` for removed estimator/results attributes,
 canonical-only serialized keys. ``__setstate__`` pickle migrations are KEPT
 (spec section 5: 3.x pickles load under 4.0) and stay pinned.
 
-M-031 (``TripleDifference.fit(time=)``) stays shimmed: ``time`` keeps a
-calendar meaning there and its 4.0 enforcement is M-083 (PR 4), so the
-``test_ddd_*`` pins keep the 3.9 shape.
+M-031 (``TripleDifference.fit(time=)``) stays shimmed: ``time`` keeps its
+calendar meaning in staggered mode. Its 4.0 enforcement, M-085, landed in
+PR 4a, so the 2x2x2 ``time=`` pin below is a raise pin.
 """
 
 import pickle
@@ -104,8 +104,8 @@ def etwfe_result():
 
 
 # ---------------------------------------------------------------------------
-# M-030 (removed): DiD.fit time= -> post=; M-031 (still shimmed):
-# TripleDifference.fit time= -> post=
+# M-030 (removed): DiD.fit time= -> post=; M-031 (shimmed, name kept for the
+# staggered calendar column) + M-085 (done): TripleDifference.fit time= raises in 2x2x2
 # ---------------------------------------------------------------------------
 
 
@@ -130,16 +130,17 @@ class TestTimeToPost:
         with pytest.raises(TypeError, match=_unexpected("time")):
             DiD().fit(did_2x2, outcome="y", treatment="d", post="p", time="p")
 
-    def test_ddd_time_warns_with_calendar_note(self, ddd_2x2x2):
+    def test_ddd_time_raises_naming_post(self, ddd_2x2x2):
+        """M-085: in 2x2x2 mode ``time=`` is the staggered calendar column only."""
         from diff_diff import TripleDifference
 
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("error")
             r_new = TripleDifference().fit(ddd_2x2x2, "y", "g", "q", post="t")
             r_pos = TripleDifference().fit(ddd_2x2x2, "y", "g", "q", "t")
-        with pytest.warns(FutureWarning, match=r"calendar column only"):
-            r_old = TripleDifference().fit(ddd_2x2x2, "y", "g", "q", time="t")
-        assert r_old.att == r_new.att == r_pos.att
+        assert r_new.att == r_pos.att
+        with pytest.raises(ValueError, match=r"staggered calendar column only"):
+            TripleDifference().fit(ddd_2x2x2, "y", "g", "q", time="t")
 
     def test_ddd_missing_post_raises(self, ddd_2x2x2):
         from diff_diff import TripleDifference

@@ -380,7 +380,7 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
 
         # Shallow copy: shares every array (no data is duplicated) but gives the
         # aggregators a scratch dict to memoize `_agg_cache` into, so the kit
-        # itself is never written to. Mirrors what StaggeredTripleDifference
+        # itself is never written to. Mirrors what the staggered DDD engine
         # already does when it aggregates through a modified copy. Shared by
         # the bootstrap replay and the analytical aggregation below, exactly
         # as fit shares one `precomputed` between them.

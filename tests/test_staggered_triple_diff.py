@@ -1,12 +1,13 @@
-"""Tests for StaggeredTripleDifference estimator."""
+"""Tests for the staggered-DDD engine behind TripleDifference's staggered mode
+(``fit(..., first_treat=, partition=)``; formerly the ``StaggeredTripleDifference``
+class, removed at the 4.0 cut, PR 4a)."""
 
 import numpy as np
 import pytest
 
 from diff_diff import (
-    SDDD,
-    StaggeredTripleDifference,
     StaggeredTripleDiffResults,
+    TripleDifference,
     generate_staggered_ddd_data,
 )
 
@@ -54,7 +55,7 @@ def dynamic_data():
 
 class TestStaggeredTripleDiffInit:
     def test_default_params(self):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         params = est.get_params()
         assert params["estimation_method"] == "dr"
         assert params["alpha"] == 0.05
@@ -63,34 +64,31 @@ class TestStaggeredTripleDiffInit:
         assert params["n_bootstrap"] == 0
         assert params["pscore_trim"] == 0.01
 
-    def test_alias(self):
-        assert SDDD is StaggeredTripleDifference
-
     def test_set_params(self):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         est.set_params(estimation_method="ipw", alpha=0.10)
         assert est.estimation_method == "ipw"
         assert est.alpha == 0.10
 
     def test_set_params_updates_bootstrap_weights(self):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         est.set_params(bootstrap_weights="mammen")
         assert est.bootstrap_weights == "mammen"
 
     def test_invalid_estimation_method(self):
         with pytest.raises(ValueError, match="estimation_method"):
-            StaggeredTripleDifference(estimation_method="ols")
+            TripleDifference(estimation_method="ols")
 
     def test_invalid_pscore_trim(self):
         with pytest.raises(ValueError, match="pscore_trim"):
-            StaggeredTripleDifference(pscore_trim=0.6)
+            TripleDifference(pscore_trim=0.6)
 
     def test_invalid_base_period(self):
         with pytest.raises(ValueError, match="base_period"):
-            StaggeredTripleDifference(base_period="fixed")
+            TripleDifference(base_period="fixed")
 
     def test_set_params_unknown(self):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(nonexistent_param=42)
 
@@ -102,14 +100,28 @@ class TestStaggeredTripleDiffInit:
 
 class TestStaggeredTripleDiffBasic:
     def test_fit_returns_results(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert isinstance(res, StaggeredTripleDiffResults)
         assert est.is_fitted_
 
     def test_results_structure(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert isinstance(res.overall_att, float)
         assert isinstance(res.overall_se, float)
         assert res.overall_se > 0
@@ -124,8 +136,15 @@ class TestStaggeredTripleDiffBasic:
         assert res.n_ineligible > 0
 
     def test_group_time_effects_populated(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert len(res.group_time_effects) > 0
         for (g, t), eff in res.group_time_effects.items():
             assert "effect" in eff
@@ -137,8 +156,15 @@ class TestStaggeredTripleDiffBasic:
             assert "n_control" in eff
 
     def test_summary_runs(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         summary = res.summary()
         assert "Staggered Triple Difference" in summary
         assert "ATT" in summary
@@ -147,13 +173,13 @@ class TestStaggeredTripleDiffBasic:
         """Opt-in Eq. 4.14 overall (overall_att_es) is exposed on the result surface
         (attribute, summary(), to_dict()) under aggregate='event_study', and is None
         for the default (no event-study) fit."""
-        res = StaggeredTripleDifference().fit(
+        res = TripleDifference().fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         es_fields = (
@@ -171,8 +197,13 @@ class TestStaggeredTripleDiffBasic:
         for f in es_fields:
             assert f in d
         # Default fit (no event-study aggregation): fields are None and absent from to_dict.
-        res_default = StaggeredTripleDifference().fit(
-            simple_data, "outcome", "unit", "period", "first_treat", "eligibility"
+        res_default = TripleDifference().fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
         )
         assert res_default.overall_att_es is None
         assert "overall_att_es" not in res_default.to_dict()
@@ -185,16 +216,22 @@ class TestStaggeredTripleDiffBasic:
         overall_att_es: aggregate='all' additionally computes the per-cohort group
         aggregation, and must neither drop nor perturb the event-study-average overall.
         """
-        res_all = StaggeredTripleDifference().fit(
-            simple_data, "outcome", "unit", "period", "first_treat", "eligibility", aggregate="all"
-        )
-        res_es = StaggeredTripleDifference().fit(
+        res_all = TripleDifference().fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+            aggregate="all",
+        )
+        res_es = TripleDifference().fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         # Populated (not None / finite) on the 'all' surface.
@@ -212,22 +249,43 @@ class TestStaggeredTripleDiffBasic:
         assert ci_all[1] == pytest.approx(ci_es[1], abs=1e-10)
 
     def test_to_dataframe_group_time(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         df = res.to_dataframe("group_time")
         assert "group" in df.columns
         assert "effect" in df.columns
         assert len(df) == len(res.group_time_effects)
 
     def test_repr(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         r = repr(res)
         assert "StaggeredTripleDiffResults" in r
 
     def test_significance_properties(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert isinstance(res.is_significant, bool)
         assert isinstance(res.significance_stars, str)
 
@@ -240,26 +298,40 @@ class TestStaggeredTripleDiffBasic:
 class TestStaggeredTripleDiffRecovery:
     def test_att_recovery(self, simple_data):
         """ATT should be within 2 SE of true effect."""
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert abs(res.overall_att - 3.0) < 2 * res.overall_se
 
     def test_null_effect(self, null_effect_data):
         """ATT should not be significant when true effect is 0."""
-        est = StaggeredTripleDifference()
-        res = est.fit(null_effect_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            null_effect_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert abs(res.overall_att) < 2 * res.overall_se
 
     def test_att_with_covariates(self, data_with_covariates):
         """ATT recovery with covariates."""
-        est = StaggeredTripleDifference(estimation_method="dr")
+        est = TripleDifference(estimation_method="dr")
         res = est.fit(
             data_with_covariates,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             covariates=["x1", "x2"],
         )
         assert abs(res.overall_att - 3.0) < 2 * res.overall_se
@@ -273,8 +345,15 @@ class TestStaggeredTripleDiffRecovery:
 class TestStaggeredTripleDiffMethods:
     @pytest.mark.parametrize("method", ["dr", "ipw", "reg"])
     def test_method_produces_finite_results(self, simple_data, method):
-        est = StaggeredTripleDifference(estimation_method=method)
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference(estimation_method=method)
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
         assert res.overall_se > 0
@@ -287,14 +366,14 @@ class TestStaggeredTripleDiffMethods:
 
 class TestStaggeredTripleDiffEventStudy:
     def test_event_study_aggregation(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         assert res.event_study_effects is not None
@@ -302,14 +381,14 @@ class TestStaggeredTripleDiffEventStudy:
 
     def test_pretreatment_near_zero(self, simple_data):
         """Pre-treatment event study effects should be near zero."""
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         for e, eff in res.event_study_effects.items():
@@ -321,14 +400,14 @@ class TestStaggeredTripleDiffEventStudy:
 
     def test_posttreatment_positive(self, simple_data):
         """Post-treatment event study effects should be positive."""
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         for e, eff in res.event_study_effects.items():
@@ -336,14 +415,14 @@ class TestStaggeredTripleDiffEventStudy:
                 assert eff["effect"] > 0
 
     def test_event_study_dataframe(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         df = res.to_dataframe("event_study")
@@ -351,22 +430,28 @@ class TestStaggeredTripleDiffEventStudy:
         assert "effect" in df.columns
 
     def test_aggregate_all(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
-            simple_data, "outcome", "unit", "period", "first_treat", "eligibility", aggregate="all"
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+            aggregate="all",
         )
         assert res.event_study_effects is not None
         assert res.group_effects is not None
 
     def test_aggregate_group(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="group",
         )
         assert res.group_effects is not None
@@ -380,15 +465,29 @@ class TestStaggeredTripleDiffEventStudy:
 
 class TestStaggeredTripleDiffGMM:
     def test_gmm_weights_sum_to_one(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         for (g, t), weights in res.gmm_weights.items():
             w_sum = sum(weights.values())
             assert abs(w_sum - 1.0) < 1e-10, f"GMM weights for (g={g}, t={t}) sum to {w_sum}"
 
     def test_comparison_group_counts(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         for (g, t), k in res.comparison_group_counts.items():
             assert k >= 1
 
@@ -400,8 +499,15 @@ class TestStaggeredTripleDiffGMM:
             never_enabled_frac=0.3,
             seed=77,
         )
-        est = StaggeredTripleDifference()
-        res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         for (g, t), weights in res.gmm_weights.items():
             if len(weights) == 1:
                 w = list(weights.values())[0]
@@ -416,21 +522,28 @@ class TestStaggeredTripleDiffGMM:
 class TestStaggeredTripleDiffBootstrap:
     def test_bootstrap_runs(self, simple_data, ci_params):
         n_boot = ci_params.bootstrap(199)
-        est = StaggeredTripleDifference(n_bootstrap=n_boot, seed=42)
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference(n_bootstrap=n_boot, seed=42)
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert res.bootstrap_results is not None
         assert res.bootstrap_results.n_bootstrap == n_boot
 
     def test_bootstrap_with_event_study(self, simple_data, ci_params):
         n_boot = ci_params.bootstrap(199)
-        est = StaggeredTripleDifference(n_bootstrap=n_boot, seed=42)
+        est = TripleDifference(n_bootstrap=n_boot, seed=42)
         res = est.fit(
             simple_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="event_study",
         )
         assert res.bootstrap_results is not None
@@ -447,22 +560,43 @@ class TestStaggeredTripleDiffEdgeCases:
     def test_nonbinary_eligibility_raises(self, simple_data):
         bad_data = simple_data.copy()
         bad_data.loc[0, "eligibility"] = 2
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(ValueError, match="binary"):
-            est.fit(bad_data, "outcome", "unit", "period", "first_treat", "eligibility")
+            est.fit(
+                bad_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
 
     def test_varying_eligibility_raises(self):
         data = generate_staggered_ddd_data(n_units=50, seed=1)
         # Make eligibility vary within a unit
         data.loc[data["unit"] == 0, "eligibility"] = [0, 1, 0, 1, 0, 1, 0, 1]
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(ValueError, match="time-invariant"):
-            est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+            est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
 
     def test_missing_column_raises(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(ValueError, match="Missing columns"):
-            est.fit(simple_data, "outcome", "unit", "period", "nonexistent", "eligibility")
+            est.fit(
+                simple_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="nonexistent",
+                partition="eligibility",
+            )
 
     def test_inf_first_treat_works(self):
         """Never-enabled units encoded as inf should be recoded to 0, and the
@@ -473,50 +607,71 @@ class TestStaggeredTripleDiffEdgeCases:
         inf_mask = data["first_treat"] == 0
         n_inf_rows = int(inf_mask.sum())
         data.loc[inf_mask, "first_treat"] = np.inf
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
 
         with pytest.warns(
             UserWarning,
             match=rf"{n_inf_rows} row\(s\) have first_treat=inf; recoding to 0",
         ):
-            res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+            res = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
         assert np.isfinite(res.overall_att)
 
     def test_survey_design_invalid_type_raises(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(TypeError, match="SurveyDesign"):
             est.fit(
                 simple_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 survey_design="something",
             )
 
     def test_invalid_aggregate_raises(self, simple_data):
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         with pytest.raises(ValueError, match="aggregate"):
             est.fit(
                 simple_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 aggregate="invalid",
             )
 
     def test_base_period_universal(self, simple_data):
-        est = StaggeredTripleDifference(base_period="universal")
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference(base_period="universal")
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         assert np.isfinite(res.overall_att)
         assert abs(res.overall_att - 3.0) < 2 * res.overall_se
 
     def test_to_dict(self, simple_data):
-        est = StaggeredTripleDifference()
-        res = est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        est = TripleDifference()
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
         d = res.to_dict()
         assert "overall_att" in d
         assert "n_obs" in d
@@ -539,12 +694,19 @@ class TestStaggeredTripleDiffRegressions:
             cohort_periods=[2, 4],
             seed=77,
         )
-        est = StaggeredTripleDifference(anticipation=1)
+        est = TripleDifference(anticipation=1)
         import warnings as _w
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
-            res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+            res = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
         base_period_warnings = [w for w in caught if "outside the observed panel" in str(w.message)]
         assert len(base_period_warnings) > 0, "Expected warning about base period"
         assert np.isfinite(res.overall_att)
@@ -559,12 +721,19 @@ class TestStaggeredTripleDiffRegressions:
         # Remove all ineligible units from cohort 6 to make (S=6,Q=0) empty
         mask = ~((data["first_treat"] == 6) & (data["eligibility"] == 0))
         data = data[mask].reset_index(drop=True)
-        est = StaggeredTripleDifference()
+        est = TripleDifference()
         import warnings as _w
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
-            res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+            res = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
         subgroup_warnings = [w for w in caught if "Empty subgroup" in str(w.message)]
         assert len(subgroup_warnings) > 0, "Expected warning about empty subgroup"
         assert np.isfinite(res.overall_att)
@@ -579,7 +748,7 @@ class TestStaggeredTripleDiffRegressions:
         )
         # Add a perfectly collinear covariate (x3 = 2*x1)
         data["x3"] = 2.0 * data["x1"]
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="dr",
             rank_deficient_action="warn",
         )
@@ -589,11 +758,11 @@ class TestStaggeredTripleDiffRegressions:
             _w.simplefilter("always")
             res = est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 covariates=["x1", "x2", "x3"],
             )
         # All group-time effects should be finite despite collinearity
@@ -623,18 +792,18 @@ class TestStaggeredTripleDiffORSolveFallback:
         # x3 ≡ 2·x1 makes covX = [intercept, x1, x2, x3] rank-deficient
         # per pair, so XpX in _compute_did_panel() is near-singular.
         data["x3"] = 2.0 * data["x1"]
-        est = StaggeredTripleDifference(estimation_method="dr")  # default "warn"
+        est = TripleDifference(estimation_method="dr")  # default "warn"
         import warnings as _w
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
             res = est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 covariates=["x1", "x2", "x3"],
             )
         or_warnings = [
@@ -661,7 +830,7 @@ class TestStaggeredTripleDiffORSolveFallback:
             seed=55,
         )
         data["x3"] = 2.0 * data["x1"]
-        est = StaggeredTripleDifference(
+        est = TripleDifference(
             estimation_method="ipw",  # exercises PS path, skips OR projection
         )
         import warnings as _w
@@ -670,11 +839,11 @@ class TestStaggeredTripleDiffORSolveFallback:
             _w.simplefilter("always")
             est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 covariates=["x1", "x2", "x3"],
             )
         ps_warnings = [w for w in caught if "propensity-score Hessian" in str(w.message)]
@@ -698,18 +867,18 @@ class TestStaggeredTripleDiffORSolveFallback:
             add_covariates=True,
             seed=42,
         )
-        est = StaggeredTripleDifference(estimation_method="dr")
+        est = TripleDifference(estimation_method="dr")
         import warnings as _w
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
             est.fit(
                 data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                "eligibility",
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
                 covariates=["x1", "x2"],
             )
         lstsq_warnings = [w for w in caught if "Rank-deficient X'WX" in str(w.message)]
@@ -721,12 +890,19 @@ class TestStaggeredTripleDiffORSolveFallback:
     def test_no_covariates_no_warning(self, simple_data):
         """Without covariates both OR and PS paths are skipped, so no
         aggregate warning should be emitted."""
-        est = StaggeredTripleDifference(estimation_method="reg")
+        est = TripleDifference(estimation_method="reg")
         import warnings as _w
 
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
-            est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+            est.fit(
+                simple_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
         lstsq_warnings = [w for w in caught if "Rank-deficient X'WX" in str(w.message)]
         assert lstsq_warnings == []
 
@@ -734,8 +910,13 @@ class TestStaggeredTripleDiffORSolveFallback:
 @pytest.fixture(scope="module")
 def alpha_fitted():
     data = generate_staggered_ddd_data(n_units=300, treatment_effect=3.0, seed=42)
-    return StaggeredTripleDifference().fit(
-        data, "outcome", "unit", "period", "first_treat", "eligibility"
+    return TripleDifference().fit(
+        data,
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+        partition="eligibility",
     )
 
 

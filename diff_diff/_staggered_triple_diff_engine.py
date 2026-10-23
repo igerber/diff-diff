@@ -1,21 +1,20 @@
-"""Shared staggered-DDD engine (private).
+"""Staggered-DDD engine (private).
 
-Holds the estimation core both DDD surfaces run: `TripleDifference` in its
-staggered mode (ledger row M-013) and the deprecated `StaggeredTripleDifference`
-until its 4.0 removal. Relocated VERBATIM in phase 3(b) - the only changes are
-the three parameterization knobs described below, so the merge is an API merge
-and the numbers cannot move.
+Holds the estimation core behind `TripleDifference`'s staggered mode (ledger
+row M-013). Through 3.x it was shared with the `StaggeredTripleDifference`
+class, removed at the 4.0 cut; the body was relocated VERBATIM in phase 3(b)
+- the only changes were the three parameterization knobs described below, so
+the merge was an API merge and the numbers never moved.
 
-Knobs, all passed explicitly by the two callers:
+Knobs, passed explicitly by the caller:
 
-  estimator_name   interpolated into every message that names a class, so the
-                   merged surface never steers users at the deprecated one
-  partition_label  "partition" on the merged surface, "eligibility" on the
-                   dying one - the third-dimension vocabulary
-  _frame_offset    added to every user-attributed `stacklevel`, so warning
-                   attribution is identical through both call depths
-                   (user -> fit -> core on the dying class = 1;
-                    user -> fit -> _fit_staggered -> core on the merged one = 2)
+  estimator_name   interpolated into every message that names a class
+                   ("TripleDifference")
+  partition_label  "partition" - the third-dimension vocabulary (the removed
+                   class said "eligibility")
+  _frame_offset    added to every user-attributed `stacklevel`, so warnings
+                   land on the caller through the call depth
+                   user -> fit -> _fit_staggered -> core (= 2)
 
 The offset is ALSO mirrored onto `self._warn_frame_offset` for the duration of a
 fit, because four helper methods and the shared bootstrap mixin warn from depths
@@ -46,9 +45,10 @@ if TYPE_CHECKING:
 # Type alias for pre-computed structures
 PrecomputedData = Dict[str, Any]
 
-# The dying class accepts R's compact spellings; the merged class uses the
-# underscored library vocabulary from birth (M-013). The engine reads both so a
-# single core can serve both surfaces without a value shim on either.
+# The engine reads both spellings: the underscored library vocabulary
+# TripleDifference validates at construction (M-013), and R's compact spellings
+# the removed StaggeredTripleDifference class accepted through 3.x (kept so the
+# core stays byte-identical to the relocated body).
 _NEVER_TREATED = frozenset({"nevertreated", "never_treated"})
 
 
@@ -60,8 +60,9 @@ def _is_never_treated(control_group: str) -> bool:
 class _StaggeredTripleDiffEngineMixin:
     """Estimation core for staggered DDD. Not usable standalone.
 
-    Mixed into both `TripleDifference` and `StaggeredTripleDifference`, which
-    supply the constructor attributes and the CS aggregation/bootstrap mixins
+    Mixed into `TripleDifference` (and, through 3.x, the removed
+    `StaggeredTripleDifference` class), which supplies the constructor
+    attributes and the CS aggregation/bootstrap mixins
     this core calls. The annotations below exist because mypy type-checks this
     class independently of its hosts (`attr-defined` is not disabled) - they are
     declarations, never assignments — with ONE exception: `anticipation` is
@@ -168,7 +169,8 @@ class _StaggeredTripleDiffEngineMixin:
     ) -> StaggeredTripleDiffResults:
         """Fit the staggered triple-difference estimator.
 
-        The estimation body is the 3.x `StaggeredTripleDifference.fit` verbatim;
+        The estimation body is the 3.x `StaggeredTripleDifference.fit` verbatim
+        (that class was removed at 4.0; the body lives on here);
         see the module docstring for the three knobs.
         """
         # Body-local alias so the relocated body stays byte-identical (the
@@ -177,13 +179,12 @@ class _StaggeredTripleDiffEngineMixin:
         eligibility = partition
         self._warn_frame_offset = _frame_offset
         try:
-            # Identification-assumption guard, enforced in the ENGINE so BOTH
-            # public surfaces fail closed on the same input. The merged
-            # constructor validates this eagerly; this call additionally covers
-            # the deprecated StaggeredTripleDifference (whose 3.x API SHAPE is
-            # frozen through removal - that freeze was never a licence to emit
-            # silently-biased numbers) and direct attribute mutation on either
-            # class, which bypasses __init__ and set_params alike. The
+            # Identification-assumption guard, enforced in the ENGINE so the
+            # surface fails closed on the same input however it was reached.
+            # The constructor validates this eagerly; this call additionally
+            # covers direct attribute mutation, which bypasses __init__ and
+            # set_params alike (and, through 3.x, covered the removed
+            # construction-permissive StaggeredTripleDifference class). The
             # assignment form also normalizes a numpy scalar to a Python int
             # before any `g - 1 - anticipation` arithmetic can overflow.
             self.anticipation = validate_anticipation(self.anticipation)
@@ -227,15 +228,6 @@ class _StaggeredTripleDiffEngineMixin:
                 covariates,
                 partition_label=partition_label,
             )
-
-            if self.cluster is not None:
-                warnings.warn(
-                    "cluster parameter is accepted but cluster-robust analytical SEs "
-                    "are not yet implemented for staggered DDD. Use n_bootstrap > 0 "
-                    "for unit-level clustered inference via multiplier bootstrap.",
-                    UserWarning,
-                    stacklevel=2 + _frame_offset,
-                )
 
             if first_treat != "first_treat":
                 df["first_treat"] = df[first_treat]

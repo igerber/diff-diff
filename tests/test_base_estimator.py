@@ -94,7 +94,6 @@ BAD_VALUES = {
     "LPDiD": {"alpha": 5.0},
     "ChangesInChanges": {"alpha": 5.0},
     "DurationDiD": {"method": "not_a_method"},
-    "QDiD": {"alpha": 5.0},
     "HeterogeneousAdoptionDiD": {"design": "not_a_design"},
     "RegressionDiscontinuity": {"kernel": "not_a_kernel"},
     "RDDensityTest": {"kernel": "not_a_kernel"},
@@ -103,7 +102,6 @@ BAD_VALUES = {
     "PreTrendsPower": {"alpha": 5.0},
     "WooldridgeDiD": {"method": "not_a_method"},
     "SpilloverDiD": {"rank_deficient_action": "not_an_action"},
-    "StaggeredTripleDifference": {"estimation_method": "not_a_method"},
     "BaconDecomposition": {"weights": "not_a_weighting"},
 }
 
@@ -144,8 +142,8 @@ estimators = pytest.mark.parametrize("cls", MIXIN_CLASSES, ids=_params_id)
 
 
 def test_roster_discovered_nontrivially():
-    # 28 defining classes (DMLDiD included) + TwoWayFixedEffects/
-    # MultiPeriodDiD inheritors.
+    # 26 defining classes (DMLDiD included; StaggeredTripleDifference and QDiD
+    # removed at the 4.0 cut) + TwoWayFixedEffects/MultiPeriodDiD inheritors.
     assert len(MIXIN_CLASSES) >= 27
 
 
@@ -186,12 +184,11 @@ def test_init_signature_matches_get_params(cls):
 # (3.9 class merges, v4-design section 4.1). The round-trip test's
 # warnings-as-errors filter exists to catch UNEXPECTED warnings from a
 # re-init; these messages are expected by contract and are ignored inside
-# the error filter. Complete as of phase 3(c): all three merges have shipped,
-# so any future entry belongs to a NEW deprecation, not a pending sibling.
+# the error filter. Only MultiPeriodDiD remains (StaggeredTripleDifference and
+# QDiD were removed at the 4.0 cut, PR 4a; MultiPeriodDiD follows in PR 4c), so
+# any future entry belongs to a NEW deprecation, not a pending sibling.
 DEPRECATED_CLASS_WARNINGS = {
     "MultiPeriodDiD": r"MultiPeriodDiD is deprecated",
-    "StaggeredTripleDifference": r"StaggeredTripleDifference is deprecated",
-    "QDiD": r"QDiD is deprecated",
 }
 
 

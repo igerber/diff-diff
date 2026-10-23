@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import CallawaySantAnna, StaggeredTripleDifference, SurveyDesign
+from diff_diff import CallawaySantAnna, SurveyDesign, TripleDifference
 from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
 
 
@@ -408,18 +408,18 @@ class TestCombinedIFFrozenParity:
         assert rec.n_calls > 0
 
     def test_triple_diff_zeroed_cohorts(self, monkeypatch):
-        """StaggeredTripleDifference aggregates through a shallow copy of
+        """TripleDifference's staggered mode aggregates through a shallow copy of
         precomputed with an eligibility-zeroed unit_cohorts - the fourth
         consumer of the mixin."""
         rec = _ParityRecorder(monkeypatch)
-        std = StaggeredTripleDifference()
+        std = TripleDifference()
         std.fit(
             _make_ddd(),
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="all",
         )
         assert rec.n_calls > 0
@@ -470,7 +470,7 @@ class TestWifZeroContract:
 
 class TestAggCache:
     """The per-fit cohort-table cache is validated by array identity and
-    rebuilt into a fresh dict - the StaggeredTripleDifference shallow-copy
+    rebuilt into a fresh dict - the staggered-DDD shallow-copy
     pattern must never see stale tables."""
 
     def _precomputed(self, cohorts, sw=None):
@@ -491,7 +491,7 @@ class TestAggCache:
     def test_shallow_copy_with_swapped_cohorts_rebuilds(self):
         p = self._precomputed(np.array([0, 3, 3, 5]))
         c1 = CallawaySantAnnaAggregationMixin._get_agg_cache(p)
-        # StaggeredTripleDifference pattern: dict() copy + replaced cohorts
+        # staggered-DDD pattern: dict() copy + replaced cohorts
         p2 = dict(p)
         p2["unit_cohorts"] = np.array([0, 0, 3, 5])  # eligibility-zeroed
         c2 = CallawaySantAnnaAggregationMixin._get_agg_cache(p2)
@@ -637,18 +637,18 @@ class TestFastPathTaken:
         assert calls["fallback"] == 0
 
     def test_triple_diff_fast_path_taken(self, monkeypatch):
-        """StaggeredTripleDifference's shallow-copied precomputed (zeroed
+        """The staggered-DDD engine's shallow-copied precomputed (zeroed
         cohorts, no canonical_size key) must still resolve the fast path via
         the .get defaults."""
         calls = self._spy(monkeypatch)
-        std = StaggeredTripleDifference()
+        std = TripleDifference()
         std.fit(
             _make_ddd(),
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             aggregate="all",
         )
         assert calls["resolved"] > 0

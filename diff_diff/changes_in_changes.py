@@ -1,4 +1,5 @@
-"""Changes-in-Changes (CiC) and Quantile Difference-in-Differences (QDiD) estimators.
+"""Changes-in-Changes (CiC) and Quantile Difference-in-Differences (QDiD) estimators,
+both served by :class:`ChangesInChanges` (``method="cic"`` | ``"qdid"``).
 
 Implements the nonlinear difference-in-differences estimators of Athey & Imbens
 (2006), "Identification and Inference in Nonlinear Difference-in-Differences
@@ -9,8 +10,10 @@ two periods) with continuous outcomes:
   The counterfactual second-period outcome distribution of the treated group is
   ``F_{Y^N,11}(y) = F_10(F_00^{-1}(F_01(y)))`` (Theorem 3.1, eq. 9); the ATT is
   the plug-in eq. (36) and quantile treatment effects follow eqs. (17)-(18).
-- :class:`QDiD`: the quantile DiD comparison estimator (Section 3.3). The
-  authors recommend CiC over QDiD (p. 447): QDiD's justifying model is not
+- ``ChangesInChanges(method="qdid")``: the quantile DiD comparison estimator
+  (Section 3.3); the standalone ``QDiD`` class was removed at the 4.0 cut
+  (ledger row M-015). The authors recommend CiC over QDiD (p. 447): QDiD's
+  justifying model is not
   invariant to monotone rescaling of the outcome and places testable
   restrictions on the data.
 
@@ -98,19 +101,6 @@ _DEFAULT_QUANTILES = np.array(
 # carries an altered spelling. The value is the ``kind`` handed to _fit_distributional
 # and is echoed back on the results container as ``method``.
 _VALID_METHODS = ("cic", "qdid")
-
-# Row M-015: the QDiD CLASS is deprecated, the QDiD METHOD is not. Emitted once per
-# construction from QDiD.__init__ (set_params re-emits via BaseEstimator's transactional
-# probe re-init - the documented side effect MultiPeriodDiD's and SDDD's shims also have).
-# Pinned verbatim by tests/test_v4_merge_cic.py and the targeted pytest filter in
-# pyproject.toml. REMOVE WITH THE CLASS at 4.0.
-_QDID_DEPRECATION_MSG = (
-    "QDiD is deprecated and will be removed in 4.0; use "
-    "ChangesInChanges(method='qdid') instead - the same engine, so the numbers "
-    "are unchanged. Only the class spelling is deprecated: method='qdid' is a "
-    "fully supported comparison mode and emits no warning of its own. The "
-    "QDiDResults alias is deprecated with it."
-)
 
 # Covariate-path quantile-regression tau grid: qte hardcodes ``seq(0.01, 0.99, 0.01)``
 # inside compute.CiC/compute.QDiD (99 taus, not user-configurable). Pinned to R's EXACT
@@ -840,17 +830,15 @@ def _fit_distributional(
     unit: Optional[str],
     kind: str,
 ) -> ChangesInChangesResults:
-    """Shared fit pipeline for ChangesInChanges and QDiD (``kind`` in {"cic", "qdid"})."""
+    """Shared fit pipeline for ChangesInChanges (``kind`` = ``method`` in {"cic", "qdid"})."""
     # Re-validate hyperparameters (set_params may have mutated them since __init__).
     _validate_all_params(est.get_params())
     quantiles = np.sort(
         np.asarray(_DEFAULT_QUANTILES if est.quantiles is None else est.quantiles, dtype=float)
     )
-    # Derived from the INSTANCE, not from ``kind``: with method= on the merged class,
-    # a kind-based map would name "QDiD" in errors raised by a fit the user made
-    # through ChangesInChanges(method="qdid") - a class they never constructed. This
-    # is byte-identical to the old mapping on both 3.x surfaces (QDiD -> "QDiD",
-    # ChangesInChanges -> "ChangesInChanges").
+    # Derived from the INSTANCE, not from ``kind``: errors raised by a fit made
+    # through ChangesInChanges(method="qdid") must name the class the user
+    # constructed, never a kind-derived "QDiD" (the standalone class is gone).
     estimator_name = type(est).__name__
 
     # ---- column resolution -------------------------------------------------
@@ -1195,11 +1183,7 @@ def _validate_all_params(params: Dict[str, Any]) -> None:
     _validate_alpha(params["alpha"])
     _validate_panel(params["panel"])
     _validate_seed(params["seed"])
-    # ``.get``, not ``[...]``: QDiD keeps its frozen five-param __init__ (row
-    # M-015 deprecates the class, not the method), so its get_params() carries
-    # no "method" key and _fit_distributional re-validates through this same
-    # function on every QDiD fit. A bare params["method"] would KeyError there.
-    _validate_method(params.get("method", "cic"))
+    _validate_method(params["method"])
 
 
 class ChangesInChanges(BaseEstimator):
@@ -1296,10 +1280,10 @@ class ChangesInChanges(BaseEstimator):
         # Stored verbatim (sklearn-clone contract): quantiles=None resolves to the
         # default grid at fit time, the raw None round-trips get_params().
         #
-        # ``method`` is in this hand-built dict, not just in _validate_all_params'
-        # ``.get`` default: __init__ does NOT forward get_params(), so omitting it
-        # here would let ChangesInChanges(method="bogus") - and the set_params probe
-        # re-init that reconstructs through it - succeed silently.
+        # ``method`` is in this hand-built dict: __init__ does NOT forward
+        # get_params(), so omitting it here would let ChangesInChanges(method="bogus")
+        # - and the set_params probe re-init that reconstructs through it - succeed
+        # silently.
         _validate_all_params(
             {
                 "quantiles": quantiles,
@@ -1364,98 +1348,4 @@ class ChangesInChanges(BaseEstimator):
         """
         return _fit_distributional(
             self, data, outcome, treatment, time, formula, covariates, unit, self.method
-        )
-
-
-class QDiD(BaseEstimator):
-    """Quantile Difference-in-Differences comparison estimator (2x2 design).
-
-    .. deprecated:: 3.9
-       Use ``ChangesInChanges(method="qdid")`` instead; this class is removed
-       in 4.0 (ledger row M-015). The ESTIMATOR is not deprecated - only this
-       class spelling. The merged surface runs the same engine, so the numbers
-       are unchanged, and ``method="qdid"`` emits no warning of its own.
-
-    Applies DiD quantile-by-quantile: ``qte(tau) = Q(y11, tau) - [Q(y10, tau)
-    + Q(y01, tau) - Q(y00, tau)]`` with R type-7 (linear-interpolation)
-    quantiles, matching ``qte::QDiD()`` (v1.3.1) exactly - including its ATT
-    formula, which evaluates the control-group quantile functions at the
-    treated pre-period's own-sample ranks. This finite-sample form deviates
-    from the Athey-Imbens k^QDID transformation mean (they are
-    population-equivalent; see the labeled Note in the methodology registry).
-
-    Athey & Imbens recommend :class:`ChangesInChanges` over QDiD (2006,
-    p. 447): QDiD's justifying model is not invariant to monotone
-    transformations of the outcome, forces the unobservable distribution to be
-    identical across all four cells, and places testable restrictions on the
-    data (in unconditional fits, a warning fires when the implied
-    counterfactual quantile function is non-monotone; with covariates the
-    check is moot - the imputed counterfactual's quantile curve is monotone by
-    construction). QDiD's mean effect matches standard DiD's ATT in
-    population; the paper provides no asymptotic theory for QDiD, so inference
-    is a bootstrap convention shared with the qte package.
-
-    Covariates port qte's ``xformla`` branch exactly: quantile regressions in
-    THREE cells (both control cells plus treated-pre), conditional ranks from
-    the treated pre-period cell's own conditional distribution, and an
-    additive imputation. qte's covariate QDiD mixes quantile types - type-7
-    for the treated post-period quantiles, type-1 for the imputed
-    counterfactual - and that asymmetry is ported verbatim (REGISTRY Note).
-
-    Fit signature, bootstrap behavior, and the results container are identical
-    to :class:`ChangesInChanges` (no interior-range guard: eq. 17 has no QDiD
-    analogue). The constructor parameters are identical EXCEPT that the merged
-    class additionally carries ``method=``, which is what selects this
-    estimator there; this class deliberately keeps its frozen five-parameter
-    signature through removal, so ``QDiD(method=...)`` is not accepted.
-    """
-
-    def __init__(
-        self,
-        quantiles: Optional[Any] = None,
-        n_bootstrap: int = 200,
-        alpha: float = 0.05,
-        panel: bool = False,
-        seed: Optional[int] = None,
-    ):
-        # Row M-015. Per construction, so a caller sees it at the site that names the
-        # dying class. NOT added to _DEPRECATED_ALIASES in __init__.py - QDiD is a real
-        # class there, not an alias, and routing it through both would double-warn.
-        warnings.warn(_QDID_DEPRECATION_MSG, FutureWarning, stacklevel=2)
-        # Stored verbatim (sklearn-clone contract): quantiles=None resolves to the
-        # default grid at fit time, the raw None round-trips get_params().
-        # No "method" key: this class's five-param contract is frozen through removal,
-        # which is why _validate_all_params reads it with .get rather than [...].
-        _validate_all_params(
-            {
-                "quantiles": quantiles,
-                "n_bootstrap": n_bootstrap,
-                "alpha": alpha,
-                "panel": panel,
-                "seed": seed,
-            }
-        )
-        self.quantiles = quantiles
-        self.n_bootstrap = n_bootstrap
-        self.alpha = alpha
-        self.panel = panel
-        self.seed = seed
-        self.is_fitted_ = False
-        self.results_: Optional[ChangesInChangesResults] = None
-
-    # get_params/set_params come from BaseEstimator.
-
-    def fit(
-        self,
-        data: pd.DataFrame,
-        outcome: Optional[str] = None,
-        treatment: Optional[str] = None,
-        time: Optional[str] = None,
-        formula: Optional[str] = None,
-        covariates: Optional[List[str]] = None,
-        unit: Optional[str] = None,
-    ) -> ChangesInChangesResults:
-        """Fit the QDiD estimator on a 2x2 dataset (see ChangesInChanges.fit)."""
-        return _fit_distributional(
-            self, data, outcome, treatment, time, formula, covariates, unit, "qdid"
         )

@@ -256,7 +256,7 @@ The implementation passes sqrt(w_i)-transformed data to `solve_ols()` in
 ### Influence-function-based estimators
 
 For IF-based estimators (CallawaySantAnna, ImputationDiD, TwoStageDiD,
-EfficientDiD, TripleDifference, StaggeredTripleDifference), point estimates
+EfficientDiD, TripleDifference in both modes), point estimates
 are constructed from survey-weighted sample moments. For example,
 CallawaySantAnna with `estimation_method='reg'` computes:
 
@@ -334,7 +334,7 @@ estimators and their smoothness arguments:
 - **TripleDifference:** T(F) extends the two-group DiD sandwich to a triple
   contrast. The IF follows by the same arguments as DifferenceInDifferences.
 
-- **StaggeredTripleDifference:** Staggered DDD with IF-based aggregation
+- **TripleDifference (staggered mode):** Staggered DDD with IF-based aggregation
   across group-time-subgroup cells. Smooth by the same logic as
   CallawaySantAnna.
 
@@ -481,7 +481,7 @@ The total meat is sum_h V_h, computed by `_compute_stratified_psu_meat()` in
 ### IF-based TSL variance
 
 For scalar IF-based estimators (CallawaySantAnna, ImputationDiD, TwoStageDiD,
-TripleDifference, StaggeredTripleDifference, EfficientDiD, DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises)), the variance is
+TripleDifference (both modes), EfficientDiD, DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises)), the variance is
 computed directly from per-unit influence function values without the bread
 matrix:
 
@@ -592,7 +592,7 @@ would require R complete re-fits of the estimator, which is computationally
 expensive.
 
 diff-diff avoids this for most IF-based estimators (CallawaySantAnna,
-EfficientDiD, ContinuousDiD, TripleDifference, StaggeredTripleDifference,
+EfficientDiD, ContinuousDiD, TripleDifference (both modes),
 DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises)) using weight-ratio rescaling: the replicate estimate is computed by
 reweighting the per-unit IF values rather than re-running the estimator.
 The `SurveyDesign` parameter `combined_weights` controls the interpretation:
@@ -695,7 +695,7 @@ Each estimator uses one of three variance strategies under survey designs:
 | DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; replicate designs: IF-reweighting on augmented scores, per-cell + aggregate; library extension of Chang (2020) i.i.d. theory (bad-control lane: `cluster=` only; `survey_design` raises) |
 | SunAbraham | TSL sandwich | OLS-based, all weight types |
 | TripleDifference | TSL on IFs | pweight only |
-| StaggeredTripleDifference | TSL on IFs | pweight only |
+| TripleDifference (staggered mode) | TSL on IFs | pweight only |
 | ImputationDiD | TSL on IFs | pweight only |
 | TwoStageDiD | TSL on IFs | pweight only |
 | EfficientDiD | TSL on EIFs | all weight types |
@@ -731,7 +731,7 @@ Two bootstrap strategies interact with survey designs:
 
 - **Multiplier bootstrap at PSU level** (CallawaySantAnna, DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises),
   ImputationDiD, TwoStageDiD, ContinuousDiD, EfficientDiD,
-  StaggeredTripleDifference):
+  TripleDifference staggered mode):
   Generates multiplier weights at the PSU level within strata, with FPC
   scaling. Each bootstrap draw reweights the IF values.
 

@@ -66,7 +66,7 @@ The catalog grew incrementally over several quarters, so formats vary across the
 | Estimator | Module | R Reference | Status | Last Review |
 |-----------|--------|-------------|--------|-------------|
 | TripleDifference | `triple_diff.py` | `triplediff::ddd()` | **Complete** | 2026-02-18 |
-| StaggeredTripleDifference | `staggered_triple_diff.py` | `triplediff::ddd(panel=TRUE)` + `agg_ddd()` | **Complete** | 2026-05-30 |
+| TripleDifference (staggered mode; the former StaggeredTripleDifference class) | `_staggered_triple_diff_engine.py` | `triplediff::ddd(panel=TRUE)` + `agg_ddd()` | **Complete** | 2026-05-30 |
 
 ### Counterfactual / Synthetic Estimators
 
@@ -988,7 +988,7 @@ These three are feature deferrals (paper-supported extensions that the library h
 
 | Field | Value |
 |-------|-------|
-| Module | `_staggered_triple_diff_engine.py` (the shared engine), `staggered_triple_diff.py` (deprecated class surface), `staggered_triple_diff_results.py` |
+| Module | `_staggered_triple_diff_engine.py` (the engine behind `TripleDifference`'s staggered mode; the `staggered_triple_diff.py` class surface was removed at 4.0), `staggered_triple_diff_results.py` |
 | Primary Reference | Ortiz-Villavicencio & Sant'Anna (2025) — same paper as TripleDifference, staggered case |
 | R Reference | `triplediff::ddd(panel=TRUE)` + `agg_ddd()` (per `benchmarks/R/benchmark_staggered_triplediff.R`) |
 | Status | **Complete** |
@@ -1464,7 +1464,7 @@ Goldens at `benchmarks/data/r_conleyreg_conley_golden.json`; generator at `bench
 
 **Outstanding Concerns — cross-estimator survey coverage boundary** (intentional, fail-closed `NotImplementedError` deferrals, not bugs; line refs current as of this review — re-grep before relying on them):
 - **Conley + survey_design** (open methodological question — no canonical weighted spatial-HAC under probability sampling): `conley.py:298`, `linalg.py:1367` / `linalg.py:3501`, `spillover.py:3246`.
-- **Replicate-weight designs** (use TSL strata/PSU/FPC, or `n_bootstrap=0`): `synthetic_did.py:437`, `continuous_did.py:2181`, `staggered_triple_diff.py:701`, `spillover.py:2400`, `bacon.py:526`, `had.py:1751` (+ HAD pretests), `wooldridge.py:89`, `trop.py:444`, `staggered.py:2228` (CS bootstrap), `efficient_did.py:1175`, `chaisemartin_dhaultfoeuille.py:2810`.
+- **Replicate-weight designs** (use TSL strata/PSU/FPC, or `n_bootstrap=0`): `synthetic_did.py:437`, `continuous_did.py:2181`, `_staggered_triple_diff_engine.py` (replicate + bootstrap guard), `spillover.py:2400`, `bacon.py:526`, `had.py:1751` (+ HAD pretests), `wooldridge.py:89`, `trop.py:444`, `staggered.py:2228` (CS bootstrap), `efficient_did.py:1175`, `chaisemartin_dhaultfoeuille.py:2810`.
 - **Survey + non-HC1 vcov** — HC2 / HC2-BM / classical **explicitly raise `NotImplementedError`** under `survey_design=` (a fail-closed guard: the survey TSL / replicate-refit variance would otherwise silently discard the requested sandwich family): `stacked_did.py:428`, `sun_abraham.py:751`, `wooldridge.py:702`, `twfe.py:252`.
 - **Survey + user `cluster=`** — **explicitly raises** (a fail-closed guard, not a silent drop): the survey TSL / replicate-refit variance would otherwise ignore `cluster=`, so the combination is rejected at construction: `efficient_did.py:518`, `staggered.py:1719`, `imputation.py:314`, `two_stage.py:1439`, `triple_diff.py:674`.
 - **SyntheticControl** — no survey support yet (`synthetic_control.py:335`).

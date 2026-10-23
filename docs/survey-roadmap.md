@@ -81,8 +81,8 @@ Weighted `solve_logit()` in `linalg.py` — survey weights enter IRLS as
   to sensitivity analysis with t-distribution critical values
 - **7e.** Staggered DDD survey support (only implementation in R or Python
   with design-based DDD variance). Reached via `TripleDifference` with
-  `first_treat=` since 3.9; `StaggeredTripleDifference` is deprecated
-  (row M-013) but runs the same engine until its 4.0 removal.
+  `first_treat=` since 3.9 (the `StaggeredTripleDifference` class, row M-013,
+  was removed at 4.0; same engine).
 
 ### Phase 8: Survey Maturity (v2.8.3-v2.8.4)
 

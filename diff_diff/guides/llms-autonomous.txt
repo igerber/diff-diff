@@ -355,7 +355,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
 | `TripleDifference` | ✓ | ✗ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
-| `StaggeredTripleDifference` | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
+| `TripleDifference` (staggered mode, `first_treat=`) | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `ContinuousDiD` | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ |
 | `HeterogeneousAdoptionDiD` | ✗ | partial | partial | ✗ | ✗ | ✗ | ✗ | ✓ | warn |
 | `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `takeup=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
@@ -426,7 +426,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 exactly one observation per `(unit, time)` cell with every unit
 observed in every period: `ContinuousDiD`, `EfficientDiD`,
 `SyntheticDiD`, `HeterogeneousAdoptionDiD`,
-`StaggeredTripleDifference`. Gate these on BOTH
+TripleDifference staggered mode (`first_treat=`). Gate these on BOTH
 `PanelProfile.is_balanced == True` AND the absence of the
 `duplicate_unit_time_rows` alert (`is_balanced` is computed from the
 unique-key support and stays `True` when duplicates exist; the
@@ -635,10 +635,9 @@ When a second cross-cutting comparison axis exists (e.g., policy hits
 some states and some demographic subgroups within states):
 
 - `TripleDifference` - classic two-period DDD.
-- `StaggeredTripleDifference` - staggered DDD, robust to cohort-mixing.
-  DEPRECATED 3.9 (removed 4.0): use
-  `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)`,
-  the same engine. `control_group` takes `not_yet_treated`/`never_treated`.
+- `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)` -
+  staggered DDD, robust to cohort-mixing (the former `StaggeredTripleDifference`
+  class, removed at 4.0). `control_group` takes `not_yet_treated`/`never_treated`.
 
 Triple-difference is not automatically detected by `profile_panel`;
 it requires the caller to identify the third comparison axis. If a
@@ -818,10 +817,11 @@ Explicitly rejected for RCS (panel-only):
 - `SyntheticDiD` - requires balanced panel with per-unit donor matching.
 - `ContinuousDiD` - requires balanced panel with per-unit constant
   dose.
-- `StaggeredTripleDifference` - panel-only; `fit()` has no
-  `panel=False` mode and rejects duplicate / unbalanced
-  `(unit, time)` structure. For cross-sectional DDD data use
-  `TripleDifference` instead.
+- TripleDifference staggered mode (`fit(..., first_treat=)`) - panel-only;
+  it has no `panel=False` mode and rejects duplicate / unbalanced
+  `(unit, time)` structure (the former `StaggeredTripleDifference` class,
+  removed at 4.0). For cross-sectional DDD data use the two-period
+  `TripleDifference` design above.
 
 Treat other estimators in this guide as panel-only unless their own
 docs explicitly say otherwise. When routing, also:

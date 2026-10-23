@@ -25,7 +25,7 @@ from diff_diff import (
     CallawaySantAnna,
     ContinuousDiD,
     EfficientDiD,
-    StaggeredTripleDifference,
+    TripleDifference,
 )
 from diff_diff.survey import SurveyDesign
 
@@ -397,13 +397,13 @@ class TestStaggeredDDDRawScale:
 
     def _fit(self, df, design):
         return _fit_quiet(
-            StaggeredTripleDifference(),
+            TripleDifference(),
             df,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
             survey_design=design,
         )
 
@@ -419,20 +419,20 @@ class TestStaggeredDDDRawScale:
         assert md.weight_range == (1.0, 1.0)
         assert md.effective_n == n_units
 
-    def test_bare_cluster_never_reaches_metadata_recompute(self, sddd_df):
-        # Same unreachability pin as the CS variant, on the DDD engine.
+    def test_bare_cluster_is_rejected_in_staggered_mode(self, sddd_df):
+        # The CS variant pins that a bare cluster= never reaches the metadata
+        # recompute; on the DDD engine the merged surface rejects cluster= in
+        # staggered mode outright, so the recompute is unreachable by construction.
         df = sddd_df.assign(cluster_col=sddd_df["unit"] // 10)
-        res = _fit_quiet(
-            StaggeredTripleDifference(cluster="cluster_col"),
-            df,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "eligibility",
-        )
-        assert np.isfinite(res.overall_att)
-        assert res.survey_metadata is None
+        with pytest.raises(ValueError, match="cluster= is not supported in staggered DDD mode"):
+            TripleDifference(cluster="cluster_col").fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+            )
 
 
 # ---------------------------------------------------------------------------

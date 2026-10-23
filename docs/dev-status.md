@@ -47,7 +47,6 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `prep.py` | 1878 | Acceptable |
 | `efficient_did_covariates.py` | 1818 | Acceptable |
 | `_staggered_triple_diff_engine.py` | 1635 | Acceptable — the shared staggered DDD engine, relocated here in phase 3(b) (row M-013) |
-| `staggered_triple_diff.py` | 262 | Acceptable — shrank from 1680 when the engine moved out; now the deprecated class's frozen 3.x surface |
 | `trop_local.py` | 1662 | Acceptable |
 | `lpdid.py` | 1607 | Acceptable |
 | `stacked_did.py` | 1589 | Acceptable |

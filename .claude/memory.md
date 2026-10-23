@@ -98,9 +98,9 @@ Target contract: `docs/v4-design.md` section 5; per-surface lifecycle:
   were removed at 4.0)
 - `time` calendar period everywhere; DifferenceInDifferences /
   TripleDifference take the 0/1 post dummy as `post` (the 3.x `time=`
-  spelling on DiD was removed at 4.0, M-030; on TripleDifference it is
-  still a warning shim, M-031, because `time` persists as the merged
-  class's staggered calendar column - its 4.0 enforcement is M-085);
+  spelling on DiD was removed at 4.0, M-030; on TripleDifference the name
+  `time` persists as the staggered calendar column, M-031, and in 2x2x2
+  mode `time=` raises naming `post=` since 4.0 PR 4a, M-085);
   static TwoWayFixedEffects takes `post` and its `time` is the event-study
   calendar column (the static `time=` alias on TWFE is the same kind of
   surviving shim, M-082, enforced by M-083)

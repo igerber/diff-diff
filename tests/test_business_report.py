@@ -737,8 +737,8 @@ class TestWildBootstrapAlphaOverride:
 
 class TestAssumptionBlockSourceFaithful:
     """Regression for the round-4 P1 finding that ``_describe_assumption``
-    was producing generic DiD PT text for ContinuousDiD, TripleDifference,
-    and StaggeredTripleDifference — all of which have different identifying
+    was producing generic DiD PT text for ContinuousDiD and TripleDifference
+    (both modes) — all of which have different identifying
     logic per the Methodology Registry."""
 
     def _stub(self, class_name):
@@ -1572,7 +1572,8 @@ class TestStaggeredTripleDiffNeverTreatedFixedComparison:
     stores ``n_control_units`` as a composite total that also includes
     the eligibility-denied cohorts. The valid fixed comparison under
     ``control_group="never_treated"`` is the never-enabled cohort
-    (``staggered_triple_diff.py:384``, REGISTRY.md §StaggeredTripleDifference
+    (the ``has_never_enabled`` / ``valid_gc = [0]`` comparison selection in
+    ``_staggered_triple_diff_engine.py``, REGISTRY.md §StaggeredTripleDifference
     line 1730). BR was previously narrating the composite total as
     "control" on the ``nevertreated`` mode; the fix surfaces
     ``n_never_enabled`` as the fixed comparison count on that path
@@ -2194,9 +2195,9 @@ class TestContinuousDiDDynamicControlSample:
 
 
 class TestStaggeredTripleDiffDynamicControlSample:
-    """Round-18 P1 regression: StaggeredTripleDifference with
-    ``control_group="notyettreated"`` (no underscore per the estimator
-    contract) must also take the dynamic-control path. Its fixed
+    """Round-18 P1 regression: a staggered-DDD results stub carrying the 3.x
+    compact ``control_group="notyettreated"`` spelling (as a pre-4.0 pickle
+    would) must also take the dynamic-control path. Its fixed
     subset is ``n_never_enabled`` (separate field) rather than a
     never-treated count.
     """

@@ -16,8 +16,9 @@ inherits exactly in unconditional fits; the covariate branch's linear
 quantile regressions are not equivariant to nonlinear monotone transforms)
 and places no testable restrictions on continuous data.
 
-``QDiD`` is the quantile-by-quantile DiD comparison estimator the same paper
-formalizes: it adds the control group's over-time quantile change to the
+``QDiD`` (``ChangesInChanges(method="qdid")``) is the quantile-by-quantile DiD
+comparison estimator the same paper formalizes: it adds the control group's
+over-time quantile change to the
 treated pre-period quantile. Athey & Imbens recommend CiC over QDiD - QDiD's
 justifying model is not scale-invariant and imposes testable restrictions (in
 unconditional fits, a warning fires when they appear violated).
@@ -87,36 +88,12 @@ Main changes-in-changes estimator class.
       ~ChangesInChanges.get_params
       ~ChangesInChanges.set_params
 
-QDiD
-----
-
-Quantile difference-in-differences comparison estimator.
-
-*Deprecated in 3.9, removed in 4.0* - use ``ChangesInChanges(method="qdid")``
-instead. The same engine runs either way, so the numbers are unchanged; only
-the class spelling is deprecated, not the estimator.
-
-.. autoclass:: diff_diff.QDiD
-   :no-index:
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :inherited-members:
-
-   .. rubric:: Methods
-
-   .. autosummary::
-
-      ~QDiD.fit
-      ~QDiD.get_params
-      ~QDiD.set_params
-
 ChangesInChangesResults
 -----------------------
 
-Results container shared by both estimators (the ``method`` field records
-which produced it; the pre-3.9 name ``estimator`` was removed in 4.0;
-``QDiDResults`` is an alias of this class).
+Results container shared by both methods (the ``method`` field records which
+produced it; the pre-3.9 name ``estimator`` and the ``QDiDResults`` alias were
+removed in 4.0).
 
 .. autoclass:: diff_diff.changes_in_changes_results.ChangesInChangesResults
    :no-index:

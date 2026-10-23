@@ -1,4 +1,4 @@
-"""Results container for the ChangesInChanges (CiC) and QDiD estimators."""
+"""Results container for ChangesInChanges (the CiC and QDiD methods)."""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,8 +16,8 @@ _ESTIMATOR_TITLES = {
 
 @dataclass
 class ChangesInChangesResults(BaseResults):
-    """Results for :class:`~diff_diff.changes_in_changes.ChangesInChanges` and
-    :class:`~diff_diff.changes_in_changes.QDiD`.
+    """Results for :class:`~diff_diff.changes_in_changes.ChangesInChanges`
+    (both ``method`` values, ``"cic"`` and ``"qdid"``).
 
     The headline ``att``/``se``/``t_stat``/``p_value``/``conf_int`` fields carry
     the mean effect; ``quantile_effects`` is a DataFrame with one row per
@@ -251,7 +251,3 @@ class ChangesInChangesResults(BaseResults):
             f"n_quantiles={len(self.quantile_effects)}, "
             f"panel={self.panel}, n_bootstrap={self.n_bootstrap})"
         )
-
-
-# QDiD shares the container; the ``method`` field distinguishes the two.
-QDiDResults = ChangesInChangesResults

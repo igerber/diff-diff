@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import ChangesInChanges, DifferenceInDifferences, QDiD
+from diff_diff import ChangesInChanges, DifferenceInDifferences
 from diff_diff.changes_in_changes import (
     _cic_point,
     _ecdf,
@@ -28,6 +28,13 @@ from diff_diff.changes_in_changes import (
     _quantile_type1,
     _split_cells,
 )
+
+
+def QDiD(**kw):
+    """The qdid method on the merged surface (the standalone QDiD class was
+    removed at the 4.0 cut, PR 4a); keeps the two-arm parametrizations readable."""
+    kw.setdefault("method", "qdid")
+    return ChangesInChanges(**kw)
 
 
 def fit_quiet(est, df, **kwargs):

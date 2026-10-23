@@ -30,7 +30,6 @@ groups:
     - diff_diff/staggered_bootstrap.py
     - diff_diff/staggered_results.py
   staggered_triple_diff:
-    - diff_diff/staggered_triple_diff.py
     - diff_diff/staggered_triple_diff_results.py
     # The estimation engine relocated here in phase 3(b) (row M-013) and is
     # shared with TripleDifference's staggered mode. Private (leading
@@ -236,9 +235,10 @@ sources:
       - path: docs/migration-4.0.md
         type: user_guide
 
-  # ── StaggeredTripleDifference (staggered_triple_diff group) ─────────
+  # ── staggered DDD engine (staggered_triple_diff group; the
+  # StaggeredTripleDifference class was removed at the 4.0 cut) ─────
 
-  diff_diff/staggered_triple_diff.py:
+  diff_diff/staggered_triple_diff_results.py:
     drift_risk: low
     docs:
       - path: docs/methodology/REGISTRY.md
@@ -248,17 +248,11 @@ sources:
         type: api_reference
       - path: docs/tutorials/16_survey_did.ipynb
         type: tutorial
-        note: "StaggeredTripleDifference appears in survey-DiD examples"
-      - path: README.md
-        section: "Estimators (one-line catalog entry)"
-        type: user_guide
+        note: "staggered DDD (TripleDifference first_treat= mode) appears in survey-DiD examples"
       - path: docs/references.rst
         type: user_guide
       - path: diff_diff/guides/llms-full.txt
-        section: "StaggeredTripleDifference"
-        type: user_guide
-      - path: diff_diff/guides/llms.txt
-        section: "Estimators"
+        section: "TripleDifference"
         type: user_guide
       # Hand-edit-only surfaces before phase 3(b): neither was mapped, so
       # /docs-impact could not surface them when this estimator changed.
@@ -899,7 +893,7 @@ sources:
         section: "Module (DurationDiDResults rejected by type)"
         type: methodology
 
-  # ── ChangesInChanges + QDiD (changes_in_changes group) ────────────
+  # ── ChangesInChanges (method='cic'|'qdid'; changes_in_changes group) ──
 
   diff_diff/changes_in_changes.py:
     drift_risk: medium

@@ -1,11 +1,12 @@
-"""Phase 3(c): ChangesInChanges absorbs QDiD - rows M-015 / M-143.
+"""Merge gates: ChangesInChanges absorbed QDiD (phase 3(c), rows M-015 / M-143);
+the QDiD class and the ``QDiDResults`` alias (M-061) were removed at the 4.0 cut
+(PR 4a). ``ChangesInChanges(method="qdid")`` is the one surviving surface.
 
-TOLERANCE DOCTRINE. Every merge-parity gate is BIT-EXACT
-(``assert_array_equal``): both surfaces call the same untouched
-``_fit_distributional`` in the same process, so a needed tolerance IS the
-finding. The single exception is Gate B's committed oracle, captured in a
-different process (and possibly a different backend), asserted with
-``assert_allclose(rtol=1e-9, atol=1e-12)``.
+TOLERANCE DOCTRINE. Through 3.x the merge-parity gates compared the two
+surfaces BIT-EXACTLY (``assert_array_equal``) because both called the same
+``_fit_distributional`` in one process. With the class gone, the absolute pin
+is Gate B's committed oracle, captured in a different process (and possibly a
+different backend), asserted with ``assert_allclose(rtol=1e-9, atol=1e-12)``.
 
 ORACLE PROVENANCE (Gate B). Literals captured by
 ``tests/_capture_v4_merge_cic_oracles.py`` on the UNMODIFIED pre-merge tree:
@@ -13,17 +14,20 @@ ORACLE PROVENANCE (Gate B). Literals captured by
     commit  c2941caa2a7865c9458c6092359e75238fdbabb1  (origin/main, pre-3(c))
     command DIFF_DIFF_BACKEND=python python3 tests/_capture_v4_merge_cic_oracles.py
 
+That script drives the removed class and is HISTORICAL (runnable only at that
+commit); it is kept as the oracle's provenance record.
+
 The oracle covers the UNCONDITIONAL arm only, and omits ``quantile_effects``.
 Both are deliberate: the covariate quantile-regression path is
 tie-selection-bounded with BLAS-dependent tie flips (see
 ``tests/test_changes_in_changes_parity.py``: COV_ATT_ATOL = 0.04,
 COV_QTE_ATOL = 0.25) and CI runs ubuntu/macos/windows/arm, so tight committed
 covariate literals would be platform-fragile; and ``benchmarks/data/qte_golden.json``
-is git-tracked, so ``test_point_parity`` never skips and already pins
-``quantile_effects["qte"]`` against the R ``qte`` 1.3.1 golden at
-``atol=1e-10, rtol=0`` for cic/qdid x panel/rcs - a stronger absolute pin than
-anything this file would add. Covariate coverage here comes from Gate A's
-in-process bit-exact parity, which cannot be platform-dependent.
+is git-tracked, so ``tests/test_changes_in_changes_parity.py::test_point_parity``
+never skips and already pins ``quantile_effects["qte"]`` against the R ``qte``
+1.3.1 golden at ``atol=1e-10, rtol=0`` for cic/qdid x panel/rcs - a stronger
+absolute pin than anything this file would add. Covariate coverage lives in
+that parity suite's covariate lanes (platform-tolerant by design).
 """
 
 import pickle
@@ -31,34 +35,47 @@ import re
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 
 from diff_diff import (
     ChangesInChanges,
     ChangesInChangesResults,
-    QDiD,
-    QDiDResults,
     practitioner_next_steps,
 )
-from diff_diff.changes_in_changes import _validate_all_params
-
-from ._capture_v4_merge_cic_oracles import make_2x2
 
 # --------------------------------------------------------------------------
 # Pinned messages
 # --------------------------------------------------------------------------
-QDID_DEPRECATION_RE = re.escape("QDiD is deprecated and will be removed in 4.0")
 METHOD_VALUE_RE = re.escape("method must be 'cic' or 'qdid', got ")
 
 FIT_KW = dict(outcome="y", treatment="treated", time="post")
 
 
-def _qdid(**kw):
-    """Construct the dying class without its (expected) FutureWarning."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=QDID_DEPRECATION_RE, category=FutureWarning)
-        return QDiD(**kw)
+def make_2x2(n_treated=60, n_control=80, seed=0, effect=1.0):
+    """Full-overlap continuous 2x2 panel (long format, one row per unit-period).
+
+    The oracle DGP: a copy of the helper the HISTORICAL capture script
+    ``tests/_capture_v4_merge_cic_oracles.py`` carries (that script imports the
+    removed QDiD class and no longer runs on this tree). The ``id`` column
+    repeats across periods, so the same frame serves both ``panel=False``
+    (pooled row resample) and ``panel=True`` (unit-block resample, ``unit="id"``).
+    """
+    rng = np.random.default_rng(seed)
+    n = n_treated + n_control
+    treat = np.repeat([1, 0], [n_treated, n_control])
+    u = rng.normal(0, 1, n)
+    y_pre = u + rng.normal(0, 0.3, n)
+    y_post = u + 0.5 + rng.normal(0, 0.3, n) + treat * effect
+    return pd.DataFrame(
+        {
+            "id": np.tile(np.arange(n), 2),
+            "post": np.repeat([0, 1], n),
+            "treated": np.tile(treat, 2),
+            "y": np.concatenate([y_pre, y_post]),
+        }
+    )
 
 
 def _fit_quiet(est, df, **kw):
@@ -85,47 +102,8 @@ def cov_df():
 # ==========================================================================
 # Gate A - merged mode is bit-exact against the dying class
 # ==========================================================================
-class TestGateAParity:
-    _FIELDS = ("att", "se", "t_stat", "p_value", "q_lower", "q_upper", "sup_t_crit")
-
-    def _assert_same(self, merged, dying):
-        for f in self._FIELDS:
-            assert_array_equal(
-                np.asarray(getattr(merged, f), dtype=float),
-                np.asarray(getattr(dying, f), dtype=float),
-                err_msg=f"field {f!r} diverged between the merged and dying surfaces",
-            )
-        assert_array_equal(np.asarray(merged.conf_int, float), np.asarray(dying.conf_int, float))
-        assert_array_equal(
-            merged.quantile_effects.to_numpy(dtype=float),
-            dying.quantile_effects.to_numpy(dtype=float),
-        )
-        assert list(merged.quantile_effects.columns) == list(dying.quantile_effects.columns)
-        assert merged.cell_sizes == dying.cell_sizes
-        assert merged.n_obs == dying.n_obs
-        assert merged.n_bootstrap_valid == dying.n_bootstrap_valid
-        assert merged.method == dying.method == "qdid"
-        assert type(merged).__name__ == type(dying).__name__
-
-    @pytest.mark.parametrize("panel", [False, True], ids=["rcs", "panel"])
-    def test_point_parity(self, df, panel):
-        kw = {"unit": "id"} if panel else {}
-        merged = _fit_quiet(ChangesInChanges(n_bootstrap=0, panel=panel, method="qdid"), df, **kw)
-        dying = _fit_quiet(_qdid(n_bootstrap=0, panel=panel), df, **kw)
-        self._assert_same(merged, dying)
-
-    def test_seeded_bootstrap_parity(self, df):
-        merged = _fit_quiet(ChangesInChanges(n_bootstrap=49, seed=7, method="qdid"), df)
-        dying = _fit_quiet(_qdid(n_bootstrap=49, seed=7), df)
-        self._assert_same(merged, dying)
-
-    def test_covariate_parity(self, cov_df):
-        """The conditional QR path - in-process, so bit-exact is legitimate here."""
-        merged = _fit_quiet(
-            ChangesInChanges(n_bootstrap=0, method="qdid"), cov_df, covariates=["x1"]
-        )
-        dying = _fit_quiet(_qdid(n_bootstrap=0), cov_df, covariates=["x1"])
-        self._assert_same(merged, dying)
+class TestGateAMergedSurface:
+    """Merged-surface pins that the 3.x old-vs-new parity lanes carried."""
 
     def test_cic_default_unchanged(self, df):
         """method='cic' is the default, and must match a bare ChangesInChanges."""
@@ -135,29 +113,17 @@ class TestGateAParity:
         assert_array_equal(np.asarray(a.se), np.asarray(b.se))
         assert a.method == b.method == "cic"
 
-    def test_fit_time_userwarning_sets_match(self, df):
-        """Scoped to fit-time UserWarnings ONLY.
-
-        The whole warning sets differ BY CONSTRUCTION - Gate D requires QDiD()
-        to emit a FutureWarning the merged surface must not - so comparing them
-        wholesale would contradict this file's own deprecation gate.
+    def test_qdid_fit_emits_the_footnote_21_warning(self, df):
+        """The Athey-Imbens footnote-21 non-monotonicity UserWarning fires on this
+        DGP through the merged surface (through 3.x this was asserted as a
+        warning-set parity against the removed class; it is now a direct pin).
         """
-
-        def _user_warnings(make):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                make()
-            return sorted(str(x.message) for x in w if issubclass(x.category, UserWarning))
-
-        merged = _user_warnings(
-            lambda: ChangesInChanges(n_bootstrap=0, method="qdid").fit(df, **FIT_KW)
-        )
-        dying = _user_warnings(lambda: _qdid(n_bootstrap=0).fit(df, **FIT_KW))
-        assert merged == dying
-        assert any("non-monotone" in m for m in merged), (
-            "the DGP is expected to trip QDiD's footnote-21 non-monotonicity warning; "
-            "without it this parity assertion would be vacuous"
-        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            ChangesInChanges(n_bootstrap=0, method="qdid").fit(df, **FIT_KW)
+        msgs = [str(x.message) for x in w if issubclass(x.category, UserWarning)]
+        assert any("non-monotone" in m for m in msgs), msgs
+        assert not [x for x in w if issubclass(x.category, FutureWarning)]
 
 
 # ==========================================================================
@@ -295,8 +261,8 @@ class TestGateCValidation:
     @pytest.mark.parametrize("bad", ["bogus", None, "CiC", "QDiD", "", 1, 0.5])
     def test_rejects_at_construction(self, bad):
         """Construction-time, not just fit-time: the regression test for
-        ``method`` being in __init__'s hand-built validation dict. With only
-        _validate_all_params' ``.get`` default this would construct silently."""
+        ``method`` being in __init__'s hand-built validation dict (__init__ does
+        not forward get_params(), so a missing key would construct silently)."""
         with pytest.raises(ValueError, match=METHOD_VALUE_RE):
             ChangesInChanges(method=bad)
 
@@ -345,11 +311,9 @@ class TestGateCValidation:
             est.set_params(method="bogus")
         assert est.method == "cic"
 
-    def test_get_params_key_sets(self):
+    def test_get_params_key_set(self):
         merged = set(ChangesInChanges().get_params())
         assert merged == {"quantiles", "n_bootstrap", "alpha", "panel", "seed", "method"}
-        # The dying class's five-param contract is FROZEN through removal.
-        assert set(_qdid().get_params()) == merged - {"method"}
 
     @pytest.mark.parametrize("method", ["cic", "qdid"])
     def test_reinstantiation_round_trip(self, method):
@@ -359,55 +323,38 @@ class TestGateCValidation:
             clone = ChangesInChanges(**est.get_params())
         assert clone.get_params() == est.get_params()
 
-    def test_dying_class_round_trip_needs_targeted_ignore(self):
-        """QDiD construction MUST warn, so the error filter needs the per-class
-        ignore (the tests/test_base_estimator.py:188-193 idiom)."""
-        est = _qdid(n_bootstrap=3)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warnings.filterwarnings("ignore", message=QDID_DEPRECATION_RE, category=FutureWarning)
-            clone = QDiD(**est.get_params())
-        assert clone.get_params() == est.get_params()
-
 
 # ==========================================================================
-# Gate D - deprecation choreography
+# Gate D - removal pins (M-015 / M-061; 4.0 cut, PR 4a)
 # ==========================================================================
-class TestGateDDeprecation:
-    def test_construction_warns_once(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            QDiD(n_bootstrap=0)
-        fw = [x for x in w if issubclass(x.category, FutureWarning)]
-        assert len(fw) == 1
-        assert re.search(QDID_DEPRECATION_RE, str(fw[0].message))
-        assert "ChangesInChanges(method='qdid')" in str(fw[0].message)
+class TestGateDRemoval:
+    """The QDiD class and the QDiDResults alias are gone; the merged surface
+    constructs silently with either method."""
 
-    def test_warns_but_still_works(self, df):
-        res = _fit_quiet(_qdid(n_bootstrap=0), df)
-        assert np.isfinite(res.att)
+    @pytest.mark.parametrize("name", ["QDiD", "QDiDResults"])
+    def test_name_is_absent(self, name):
+        import diff_diff
 
-    def test_stacklevel_attributes_to_caller(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            QDiD(n_bootstrap=0)
-        assert w[0].filename == __file__, "stacklevel=2 must blame the user frame"
+        assert not hasattr(diff_diff, name)
+        assert name not in diff_diff.__all__
+        assert name not in dir(diff_diff)
+        with pytest.raises(ImportError):
+            exec(f"from diff_diff import {name}")
 
-    def test_merged_surface_is_silent(self):
-        """The METHOD is not deprecated - only the class spelling."""
+    def test_results_module_has_no_alias(self):
+        import diff_diff.changes_in_changes_results as mod
+
+        assert not hasattr(mod, "QDiDResults")
+        assert mod.ChangesInChangesResults is ChangesInChangesResults
+
+    @pytest.mark.parametrize("method", ["cic", "qdid"])
+    def test_merged_surface_is_silent(self, method):
+        """The METHOD was never deprecated - only the removed class spelling."""
         with warnings.catch_warnings():
             warnings.simplefilter("error", FutureWarning)
-            ChangesInChanges(n_bootstrap=0, method="qdid")
-            ChangesInChanges(n_bootstrap=0, method="cic")
-
-    def test_set_params_re_emits(self):
-        """Documented side effect of BaseEstimator's transactional probe re-init."""
-        est = _qdid(n_bootstrap=0)
-        with pytest.warns(FutureWarning, match=QDID_DEPRECATION_RE):
+            est = ChangesInChanges(n_bootstrap=0, method=method)
             est.set_params(n_bootstrap=5)
-
-    def test_results_alias_identity(self):
-        assert QDiDResults is ChangesInChangesResults
+        assert est.method == method
 
 
 # ==========================================================================
@@ -519,22 +466,6 @@ class TestGateEFieldShim:
 # Gate F - dispatch guards inside the shared engine
 # ==========================================================================
 class TestGateFEngineGuards:
-    def test_qdid_fit_survives_revalidation(self, df):
-        """QDiD's get_params() has no 'method' key and _fit_distributional
-        re-validates through _validate_all_params on every fit."""
-        assert np.isfinite(_fit_quiet(_qdid(n_bootstrap=0), df).att)
-
-    def test_validate_all_params_tolerates_missing_method(self):
-        """The behavioural pin for ``params.get("method", "cic")``.
-
-        A ``params["method"]`` read would KeyError here - which is exactly what
-        every QDiD fit would hit. Asserted directly rather than by mutating
-        source, so nothing dirties the worktree.
-        """
-        _validate_all_params(
-            {"quantiles": None, "n_bootstrap": 0, "alpha": 0.05, "panel": False, "seed": None}
-        )
-
     def test_direct_attribute_mutation_revalidated_at_fit(self, df):
         """The one route that bypasses BOTH __init__ and the set_params probe."""
         est = ChangesInChanges(n_bootstrap=0)
@@ -542,22 +473,16 @@ class TestGateFEngineGuards:
         with pytest.raises(ValueError, match=METHOD_VALUE_RE):
             est.fit(df, **FIT_KW)
 
-    @pytest.mark.parametrize(
-        "factory,expected",
-        [
-            (lambda: ChangesInChanges(n_bootstrap=0, method="qdid"), "ChangesInChanges"),
-            (lambda: _qdid(n_bootstrap=0), "QDiD"),
-        ],
-        ids=["merged", "dying"],
-    )
-    def test_errors_name_the_class_the_user_built(self, cov_df, factory, expected):
-        """Derived from type(est).__name__, so a method='qdid' fit never names
-        a class the caller never constructed."""
+    @pytest.mark.parametrize("method", ["cic", "qdid"])
+    def test_errors_name_the_class_the_user_built(self, cov_df, method):
+        """Derived from type(est).__name__, so a method='qdid' fit names
+        ChangesInChanges, never the removed QDiD class."""
         bad = cov_df.copy()
         bad["x_str"] = "a"
         with pytest.raises(ValueError) as exc:
-            factory().fit(bad, **FIT_KW, covariates=["x_str"])
-        assert expected in str(exc.value)
+            ChangesInChanges(n_bootstrap=0, method=method).fit(bad, **FIT_KW, covariates=["x_str"])
+        assert "ChangesInChanges" in str(exc.value)
+        assert "QDiD(" not in str(exc.value)
 
 
 # ==========================================================================
