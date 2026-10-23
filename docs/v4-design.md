@@ -1083,14 +1083,23 @@ tests-first PR that flips no rows).
      three StaggeredTripleDifference suites ported to the merged surface
      (SHIPPED, PR 4a).
    - 4b - the tutorials built on MultiPeriodDiD (02/04/05/07/23; 01 no longer
-     uses it) rebuilt on `TWFE(event_study=True)` - user decision - plus the
-     StaggeredTripleDifference markdown mentions in 08/16; lands BEFORE 4c
-     because CI executes the notebooks.
+     uses it) rebuilt on `TwoWayFixedEffects().fit(..., event_study=True)` -
+     user decision - plus the StaggeredTripleDifference markdown mentions in
+     08/16; lands BEFORE 4c because CI executes the notebooks. (SHIPPED, PR
+     4b, 2026-10-23: `spec="within"` + `unit=` - user decision; 23's headline
+     is the in-cell equal-weight post-period average with the vcov-block SE -
+     the ATT reproduces the former `avg_att` exactly, the SE is unit-clustered
+     where the 3.x cell was unclustered; the three static `fit(time=)` calls
+     (01/02/09 - the [M-082] alias, misused as the post dummy) migrated to
+     `post=` (01) and `TwoWayFixedEffects().decompose(...).twfe_estimate`
+     (02/09) so [M-083] touches no executed notebook; 02 cell 36 seeded.)
    - 4c - the MultiPeriodDiD class, `MultiPeriodDiDResults`, `PeriodEffect`
      and `EventStudy`, with [M-007], the [M-016] property view on
      `EventStudyResults`, the [M-083] raise, the remaining `filterwarnings`
-     entry, the MultiPeriodDiD benchmark arm (relabelled `spec="pooled"`) and
-     the power registry.
+     entry, the MultiPeriodDiD benchmark arm (relabelled `spec="pooled"`), the
+     power registry, and the two markdown-only MultiPeriodDiD mentions left in
+     the notebooks (06 cell 34's registry table - not executed in CI - and 16
+     cell 40's survey-support row, both true until the class goes).
 5. Storage flip [M-050]..[M-058] + pickle migration + the `.att` sweep over
    docs/notebooks/guides/benchmarks (incl. a disposition for the un-rowed
    `CSBootstrapResults.overall_att_se`).

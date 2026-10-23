@@ -186,6 +186,27 @@ sources:
         note: "TWFE block documents the full fit signature incl. event-study params; the Conley section's panel examples use post=/event_study (rows M-010/M-082)"
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/tutorials/01_basic_did.ipynb
+        type: tutorial
+        note: "Static TWFE example (post= dummy, row M-082)"
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+        note: "decompose() TWFE estimate + the TWFE event-study comparison section (event_study=True, spec within)"
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+        note: "Event-study parallel-trends check uses event_study=True"
+      - path: docs/tutorials/05_honest_did.ipynb
+        type: tutorial
+        note: "HonestDiD inputs come from TWFE event_study=True"
+      - path: docs/tutorials/07_pretrends_power.ipynb
+        type: tutorial
+        note: "PreTrendsPower inputs come from TWFE event_study=True"
+      - path: docs/tutorials/09_real_world_examples.ipynb
+        type: tutorial
+        note: "decompose() TWFE estimate in the castle-doctrine section"
+      - path: docs/tutorials/23_spillover_tva.ipynb
+        type: tutorial
+        note: "Naive headline = TWFE event_study=True post-period average"
 
   # ── CallawaySantAnna (staggered group) ─────��────────────────────────
 
