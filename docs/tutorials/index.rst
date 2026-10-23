@@ -260,6 +260,13 @@ Modern estimators for designs the basic toolkit cannot handle.
       Approach 1 via base-period covariates, the DMLDiD bad-control
       lane, and reading the ATT_X pre-test.
 
+   .. grid-item-card:: DiD OVB Sensitivity
+      :link: 34_did_ovb
+      :link-type: doc
+
+      Quantify how strong an omitted confounder must be to overturn a
+      canonical two-period DiD estimate.
+
 
 .. toctree::
    :maxdepth: 1
@@ -279,6 +286,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    LWDiD Rolling Transformations <31_lwdid>
    Double ML DiD (Chang 2020) <32_dml_did>
    Bad Controls (Caetano et al.) <33_bad_controls>
+   DiD OVB Sensitivity <34_did_ovb>
 
 Study Design
 ------------
