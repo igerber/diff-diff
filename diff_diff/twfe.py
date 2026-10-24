@@ -2,7 +2,6 @@
 Two-Way Fixed Effects estimator for panel Difference-in-Differences.
 """
 
-import dataclasses
 import warnings
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -17,7 +16,7 @@ from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kw
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
-from diff_diff.results_base import EventStudyResults, _from_mpd
+from diff_diff.results_base import EventStudyResults, _from_event_study_payload
 from diff_diff.utils import (
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
@@ -1157,7 +1156,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     )
         else:
             absorb_arg = None
-        results_internal, _, _ = self._fit_event_study_core(
+        payload = self._fit_event_study_core(
             data,
             outcome,
             treatment,
@@ -1177,20 +1176,16 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             _frame_offset=2,
         )
 
-        # Step 8: convert to the unified surface. The internal
-        # MultiPeriodDiDResults is a construction detail (the 4.0 removal
-        # PR decouples it - ledger row M-011); the surface carries the
-        # TWFE provenance: source, the authoritative calendar partition
-        # (threaded by _from_mpd), and the design spec. The legacy
-        # writer-only _coefficients/_vcov attrs are deliberately left
-        # untouched (static TWFE has never set them; nothing reads them).
-        # dataclasses.replace re-runs __post_init__, so the final provenance
-        # (source + estimation_spec) passes the container's own validation
-        # atomically instead of being patched on after construction.
-        surface = dataclasses.replace(
-            _from_mpd(results_internal),
-            source="TwoWayFixedEffects",
-            estimation_spec=spec,
+        # Step 8: build the unified surface directly from the core's payload
+        # (PR 4c-i decoupling, ledger rows M-010 / M-011: no MultiPeriodDiD
+        # container is constructed on this path). The surface carries the
+        # TWFE provenance - source, the authoritative calendar partition and
+        # the design spec - at construction, so it passes the container's
+        # own validation atomically. The legacy writer-only
+        # _coefficients/_vcov attrs are deliberately left untouched (static
+        # TWFE has never set them; nothing reads them).
+        surface = _from_event_study_payload(
+            payload, source="TwoWayFixedEffects", estimation_spec=spec
         )
         self.results_ = surface
         self.is_fitted_ = True

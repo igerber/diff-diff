@@ -373,7 +373,11 @@ settings and unconditionally in the no-unit repeated-cross-sections form.
 **Results.** 3.9's `TWFE(event_study=True)` returns the unified event-study
 surface (section 5) from day one - no intermediate container churn.
 `period_effects` becomes a FutureWarning property view over that surface at
-4.0, removed 5.0 [M-016]. The HonestDiD / PreTrendsPower integrations (which
+4.0, removed 5.0 [M-016] (the view's values are a private frozen record
+mirroring the former `PeriodEffect` fields - `period, effect, se, t_stat,
+p_value, conf_int, is_significant, significance_stars` - keyed by calendar
+period with the reference omitted; user decision 2026-10-24, lands in PR
+4c-ii). The HonestDiD / PreTrendsPower integrations (which
 read `interaction_indices` off MultiPeriodDiDResults) are ported to the
 unified surface in the same Phase 3 PR.
 
@@ -1093,13 +1097,33 @@ tests-first PR that flips no rows).
      (01/02/09 - the [M-082] alias, misused as the post dummy) migrated to
      `post=` (01) and `TwoWayFixedEffects().decompose(...).twfe_estimate`
      (02/09) so [M-083] touches no executed notebook; 02 cell 36 seeded.)
-   - 4c - the MultiPeriodDiD class, `MultiPeriodDiDResults`, `PeriodEffect`
+   - 4c-i - decouple the TWFE event-study mode from `MultiPeriodDiDResults` /
+     `_from_mpd` (`_fit_event_study_core` returns a private payload; the
+     MultiPeriodDiD wrapper and the TWFE surface are both built from it) and
+     migrate the MultiPeriodDiD-fixture test suites to
+     `TwoWayFixedEffects().fit(..., event_study=True)` while MultiPeriodDiD is
+     still the live oracle (the 3a -> 3b pattern; user decision 2026-10-24).
+     (SHIPPED, PR 4c-i, 2026-10-24: committed pre-refactor oracle
+     `tests/fixtures/v4_twfe_event_study_oracles.json` captured at 68e383bd;
+     MPD-only designs - multi-`absorb`, `fixed_effects=`, wild bootstrap,
+     container-field assertions, the MPD-branch consumer tests - stay on the
+     class until 4c-ii.)
+   - 4c-ii - the MultiPeriodDiD class, `MultiPeriodDiDResults`, `PeriodEffect`
      and `EventStudy`, with [M-007], the [M-016] property view on
-     `EventStudyResults`, the [M-083] raise, the remaining `filterwarnings`
-     entry, the MultiPeriodDiD benchmark arm (relabelled `spec="pooled"`), the
-     power registry, and the two markdown-only MultiPeriodDiD mentions left in
-     the notebooks (06 cell 34's registry table - not executed in CI - and 16
-     cell 40's survey-support row, both true until the class goes).
+     `EventStudyResults` (its values are a private frozen record - `period,
+     effect, se, t_stat, p_value, conf_int, is_significant,
+     significance_stars` - keyed by calendar period with the reference omitted;
+     user decision 2026-10-24), the [M-083] raise, the remaining
+     `filterwarnings` entry, the MultiPeriodDiD benchmark arm (relabelled
+     `spec="within"`: the arm fits the unit-FE design, `absorb=["unit"]` vs R
+     `feols(... | unit)`, so the pooled relabel the spec first named would
+     change what the arm measures - user decision 2026-10-24), the power
+     registry, the two markdown-only MultiPeriodDiD mentions left in the
+     notebooks (06 cell 34's registry table - not executed in CI - and 16 cell
+     40's survey-support row, both true until the class goes), and the
+     `build_event_study_surface` sniff reorder (an `isinstance(EventStudyResults)`
+     guard ahead of the `period_effects` duck check, so the [M-016] view's
+     FutureWarning cannot fire on a surface input).
 5. Storage flip [M-050]..[M-058] + pickle migration + the `.att` sweep over
    docs/notebooks/guides/benchmarks (incl. a disposition for the un-rowed
    `CSBootstrapResults.overall_att_se`).
@@ -1114,7 +1138,7 @@ tests-first PR that flips no rows).
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
     migration-guide retitle, due gate green.
 
-Ordering constraints: 4a before 4b before 4c; 4 before 5 and 6; 5 before 6
+Ordering constraints: 4a before 4b before 4c-i before 4c-ii; 4 before 5 and 6; 5 before 6
 (the unified DDD container is born canonical); 7 and 8 independent; 9 after
 4/6; 10 last.
 Waves 2 and 3 are independent of each other and of 4.

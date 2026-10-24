@@ -800,8 +800,9 @@ def _extract_plot_data(
                 derived_post = [p for p in periods if p >= _post_start]
             elif surface.post_periods is not None:
                 # Calendar labels with the AUTHORITATIVE partition
-                # provenance (row M-092 amendment #5, threaded by
-                # _from_mpd / the TWFE event-study producer): the declared
+                # provenance (row M-092 amendment #5, threaded by the
+                # calendar-surface builder behind the MultiPeriodDiD adapter
+                # and the TWFE event-study producer): the declared
                 # post set may be an arbitrary subset (non-suffix splits
                 # are legal on MultiPeriodDiD), so the positional
                 # fallback below would mislabel it - always prefer the

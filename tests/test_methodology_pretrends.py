@@ -1218,50 +1218,30 @@ class TestPretrendsParityR:
         ``test_mdv_gamma_p_matches_r_slope_for_power`` does not. Locks the
         PR-B Step 4 γ-unit fix at the public API boundary.
         """
-        from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
+        from event_study_surface_builders import calendar_surface
 
         goldens = self._load_r_golden()
         fixture = goldens["irregular_pre_periods"]
-        pre_periods, _, _ = self._extract_python_params(fixture)
         panel = fixture["panel"]
         Sigma_full = np.atleast_2d(np.array(panel["Sigma"], dtype=float))
         beta_hat = np.array(panel["beta_hat"], dtype=float)
-        all_periods = list(np.atleast_1d(np.array(panel["all_periods"], dtype=int)))
-        pre_period_ids = [int(p) for p in pre_periods]
+        all_periods = [int(p) for p in np.atleast_1d(np.array(panel["all_periods"], dtype=int))]
         post_period_ids = [
             int(p) for p in np.atleast_1d(np.array(panel["post_periods"], dtype=int))
         ]
 
-        # Build period_effects + interaction_indices over all_periods.
+        # The fixture's beta_hat + full Sigma as a hand-built TWFE event-study
+        # surface (4.0 cut, PR 4c-i): rows over all_periods, reference 0.
         ses_full = np.sqrt(np.diag(Sigma_full))
-        period_effects = {
-            int(p): PeriodEffect(
-                period=int(p),
-                effect=float(beta_hat[i]),
-                se=float(ses_full[i]),
-                t_stat=0.0,
-                p_value=0.5,
-                conf_int=(0.0, 0.0),
-            )
-            for i, p in enumerate(all_periods)
-        }
-        interaction_indices = {int(p): i for i, p in enumerate(all_periods)}
-
-        mpd_results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=0.0,
-            avg_se=0.2,
-            avg_t_stat=0.0,
-            avg_p_value=0.5,
-            avg_conf_int=(0.0, 0.0),
-            n_obs=1000,
-            n_treated=500,
-            n_control=500,
-            pre_periods=pre_period_ids,
+        mpd_results = calendar_surface(
+            {
+                int(p): (float(beta_hat[i]), float(ses_full[i]), 0.0, 0.5, (0.0, 0.0))
+                for i, p in enumerate(all_periods)
+            },
+            reference=0,
             post_periods=post_period_ids,
-            reference_period=0,
             vcov=Sigma_full,
-            interaction_indices=interaction_indices,
+            vcov_index=all_periods,
         )
 
         # Target power 0.8 (second entry in r_gamma_p).

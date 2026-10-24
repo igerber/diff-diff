@@ -1665,21 +1665,28 @@ class TestSubpopulationMaskValidation:
         )
         return data, sd
 
-    def test_multi_period_did_replicate_accepted(self):
-        """MultiPeriodDiD now supports replicate-weight designs."""
-        from diff_diff.estimators import MultiPeriodDiD
+    def test_twfe_event_study_replicate_accepted(self):
+        """The TWFE event-study mode supports replicate-weight designs."""
+        from event_study_average import post_period_average
+
+        from diff_diff import TwoWayFixedEffects
 
         data, sd = self._replicate_sd_and_data()
         data["treated"] = (data["first_treat"] > 0).astype(int)
         data["post"] = (data["time"] >= 3).astype(int)
-        result = MultiPeriodDiD().fit(
+        # time="post" has labels {0, 1}: the former midpoint default resolved to [1].
+        result = TwoWayFixedEffects().fit(
             data,
             outcome="outcome",
             treatment="treated",
             time="post",
+            event_study=True,
+            spec="pooled",
+            post_periods=[1],
             survey_design=sd,
         )
-        assert np.isfinite(result.avg_att)
+        att_bar, _ = post_period_average(result)
+        assert np.isfinite(att_bar)
 
     def test_imputation_did_replicate_accepted(self):
         """ImputationDiD now supports replicate-weight designs."""

@@ -21,6 +21,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_average import post_period_average
 
 from diff_diff import SunAbraham, SurveyDesign
 from diff_diff.estimators import DifferenceInDifferences, MultiPeriodDiD
@@ -58,8 +59,17 @@ class TestLeverageOneEstimatorInference:
         )
         kwargs = dict(outcome="y", treatment="treated")
         if event_study:
-            cls = MultiPeriodDiD
-            kwargs.update(time="time", unit="unit", post_periods=[2, 3], reference_period=1)
+            # TWFE event-study mode, pooled design (4.0 cut, PR 4c-i). No unit=:
+            # hc2_bm is not in the auto-cluster carve-out, so a unit= would
+            # cluster the fit; the former MultiPeriodDiD arm never clustered.
+            cls = TwoWayFixedEffects
+            kwargs.update(
+                time="time",
+                event_study=True,
+                spec="pooled",
+                post_periods=[2, 3],
+                reference_period=1,
+            )
         else:
             cls = DifferenceInDifferences
             kwargs.update(post="time")
@@ -70,24 +80,37 @@ class TestLeverageOneEstimatorInference:
             warnings.simplefilter("always")
             result = cls(vcov_type=vcov_type).fit(data, **kwargs)
         family = "HC2-BM" if vcov_type == "hc2_bm" else "HC2"
-        # MPD's additional contrast-DOF calculation must not warn a second time.
+        # The core's additional contrast-DOF calculation must not warn a second time.
         assert sum(f"{family} variance is undefined" in str(w.message) for w in caught) == 1
-        assert np.isnan(result.vcov).all() and np.isnan(result.se)
-        assert result.att == pytest.approx(baseline.att)
-        assert_nan_inference(
-            dict(
-                se=result.se, t_stat=result.t_stat, p_value=result.p_value, conf_int=result.conf_int
-            )
-        )
-        np.testing.assert_allclose(result.residuals, baseline.residuals, atol=1e-13)
-        np.testing.assert_allclose(result.fitted_values, baseline.fitted_values, atol=1e-13)
         if event_study:
-            for period, effect in result.period_effects.items():
-                if period == result.reference_period:
-                    continue
-                assert effect.effect == pytest.approx(baseline.period_effects[period].effect)
-                assert np.isnan(effect.se)
-                assert_nan_inference(vars(effect))
+            # Per-period surface: every non-reference row fails closed.
+            assert np.isnan(result.vcov).all()
+            rows = np.where(~result.is_reference)[0]
+            assert len(rows) > 0
+            np.testing.assert_allclose(result.att[rows], baseline.att[rows])
+            for i in rows:
+                assert np.isnan(result.se[i])
+                assert_nan_inference(
+                    dict(
+                        se=result.se[i],
+                        t_stat=result.t_stat[i],
+                        p_value=result.p_value[i],
+                        conf_int=(result.conf_int_lower[i], result.conf_int_upper[i]),
+                    )
+                )
+        else:
+            assert np.isnan(result.vcov).all() and np.isnan(result.se)
+            assert result.att == pytest.approx(baseline.att)
+            assert_nan_inference(
+                dict(
+                    se=result.se,
+                    t_stat=result.t_stat,
+                    p_value=result.p_value,
+                    conf_int=result.conf_int,
+                )
+            )
+            np.testing.assert_allclose(result.residuals, baseline.residuals, atol=1e-13)
+            np.testing.assert_allclose(result.fitted_values, baseline.fitted_values, atol=1e-13)
 
 
 # =============================================================================
@@ -367,8 +390,8 @@ class TestFitBehavior:
         summary = res.summary()
         assert "CR1 cluster-robust at unit" in summary
 
-    def test_multi_period_fit_honors_classical(self):
-        """MultiPeriodDiD.fit with vcov_type='classical' produces non-robust SEs.
+    def test_event_study_fit_honors_classical(self):
+        """The TWFE event-study fit with vcov_type='classical' produces non-robust SEs.
 
         Regression test for the CI review finding: `MultiPeriodDiD` inherits
         `vcov_type` from the base class via get_params but its `fit()` path
@@ -386,19 +409,34 @@ class TestFitBehavior:
                 rows.append({"unit": i, "time": t, "treated": treated, "y": y})
         data = pd.DataFrame(rows)
 
-        r_hc1 = MultiPeriodDiD(vcov_type="hc1").fit(
-            data, outcome="y", treatment="treated", time="time"
+        _periods = sorted(data["time"].unique())
+        _post = _periods[len(_periods) // 2 :]  # the former MultiPeriodDiD midpoint default
+        r_hc1 = TwoWayFixedEffects(vcov_type="hc1").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=_post,
         )
-        r_classical = MultiPeriodDiD(vcov_type="classical").fit(
-            data, outcome="y", treatment="treated", time="time"
+        r_classical = TwoWayFixedEffects(vcov_type="classical").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=_post,
         )
+        rows = ~r_hc1.is_reference
         # Point estimates identical.
-        assert r_hc1.avg_att == pytest.approx(r_classical.avg_att, abs=1e-10)
+        np.testing.assert_allclose(r_hc1.att[rows], r_classical.att[rows], atol=1e-10)
         # SEs must differ — vcov_type actually changed the variance family.
-        assert r_hc1.avg_se != pytest.approx(r_classical.avg_se, abs=1e-10)
+        assert not np.allclose(r_hc1.se[rows], r_classical.se[rows], atol=1e-10)
 
-    def test_multi_period_cluster_plus_hc2_bm_produces_finite_inference(self):
-        """MultiPeriodDiD(cluster=..., vcov_type='hc2_bm') is now supported.
+    def test_event_study_cluster_plus_hc2_bm_produces_finite_inference(self):
+        """The TWFE event-study mode with cluster=... + vcov_type='hc2_bm' is supported.
 
         The cluster-aware CR2 Bell-McCaffrey contrast DOF for the
         post-period-average ATT is implemented via the new
@@ -416,25 +454,30 @@ class TestFitBehavior:
                 rows.append({"unit": i, "time": t, "treated": treated, "y": y})
         data = pd.DataFrame(rows)
 
-        res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
-            data, outcome="y", treatment="treated", time="time"
+        _periods = sorted(data["time"].unique())
+        _post = _periods[len(_periods) // 2 :]  # the former MultiPeriodDiD midpoint default
+        res = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=_post,
         )
-        # Headline contract: finite avg_att inference under cluster+hc2_bm.
-        assert np.isfinite(res.avg_att)
-        assert np.isfinite(res.avg_se)
-        assert np.isfinite(res.avg_t_stat)
-        assert np.isfinite(res.avg_p_value)
-        assert np.isfinite(res.avg_conf_int[0])
-        assert np.isfinite(res.avg_conf_int[1])
-        # Per-period inference should also be finite for the post period.
-        post_pe = res.period_effects[2]
-        assert np.isfinite(post_pe.effect)
-        assert np.isfinite(post_pe.se)
-        assert np.isfinite(post_pe.p_value)
+        # Headline contract: finite post-period-average inference under cluster+hc2_bm.
+        att_bar, se_bar = post_period_average(res)
+        assert np.isfinite(att_bar) and np.isfinite(se_bar)
+        # Per-period inference is finite on every non-reference row (incl. the post period 2).
+        rows = ~res.is_reference
+        assert np.all(np.isfinite(res.att[rows]))
+        assert np.all(np.isfinite(res.se[rows]))
+        assert np.all(np.isfinite(res.p_value[rows]))
+        assert 2 in res.event_time[rows]
 
-    def test_multi_period_hc2_bm_nonfinite_bm_dof_fails_closed(self, monkeypatch):
+    def test_event_study_hc2_bm_nonfinite_bm_dof_fails_closed(self, monkeypatch):
         """A non-finite (guard-suppressed) Bell-McCaffrey DOF must fail closed to
-        NaN inference on user-facing MPD contrasts, not fall back to the shared
+        NaN inference on the user-facing event-study rows, not fall back to the shared
         residual df. The `_cr2_bm_dof_inner` guard can NaN a per-coefficient DOF
         (high-leverage / collinear column); reporting finite t/p/CI for such a
         coefficient via the residual df would violate the joint-NaN inference
@@ -460,23 +503,29 @@ class TestFitBehavior:
             vcov, dof = _orig(*args, **kwargs)
             return vcov, np.full(np.asarray(dof).shape, np.nan)
 
-        # MPD's hc2_bm+cluster path imports this from linalg inside fit(), so the
+        # The core's hc2_bm+cluster path imports this from linalg inside fit(), so the
         # local import binds to the patched attribute at call time.
         monkeypatch.setattr(_linalg, "_compute_cr2_bm_vcov_and_dof", _nan_dof)
 
-        res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
-            data, outcome="y", treatment="treated", time="time"
+        _periods = sorted(data["time"].unique())
+        _post = _periods[len(_periods) // 2 :]  # the former MultiPeriodDiD midpoint default
+        res = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=_post,
         )
-        for p, pe in res.period_effects.items():
-            assert np.isfinite(pe.se), f"period {p}: SE should remain finite"
-            assert np.isnan(pe.t_stat), f"period {p}: t_stat should be NaN"
-            assert np.isnan(pe.p_value), f"period {p}: p_value should be NaN"
-            assert np.isnan(pe.conf_int[0]) and np.isnan(pe.conf_int[1])
-        # The post-period-average contrast fails closed too.
-        assert np.isfinite(res.avg_se), "avg SE should remain finite"
-        assert np.isnan(res.avg_t_stat)
-        assert np.isnan(res.avg_p_value)
-        assert np.isnan(res.avg_conf_int[0]) and np.isnan(res.avg_conf_int[1])
+        for i in np.where(~res.is_reference)[0]:
+            p = res.event_time[i]
+            assert np.isfinite(res.se[i]), f"period {p}: SE should remain finite"
+            assert np.isnan(res.t_stat[i]), f"period {p}: t_stat should be NaN"
+            assert np.isnan(res.p_value[i]), f"period {p}: p_value should be NaN"
+            assert np.isnan(res.conf_int_lower[i]) and np.isnan(res.conf_int_upper[i])
+        # The per-period df carries the NaN BM DOF (no silent residual-df fallback).
+        assert np.all(np.isnan(res.df[~res.is_reference]))
 
     def test_multi_period_cluster_hc2_bm_avg_att_uses_clubsandwich_dof(self):
         """MPD(cluster=..., hc2_bm) `avg_att` inference uses the new
@@ -586,12 +635,12 @@ class TestFitBehavior:
             expected_ci = (pe.effect - t_crit * pe.se, pe.effect + t_crit * pe.se)
             np.testing.assert_allclose(pe.conf_int, expected_ci, atol=1e-8, rtol=0)
 
-    def test_multi_period_fit_honors_hc2_bm(self):
-        """MultiPeriodDiD.fit with vcov_type='hc2_bm' uses Bell-McCaffrey DOF.
+    def test_event_study_fit_honors_hc2_bm(self):
+        """The TWFE event-study fit with vcov_type='hc2_bm' uses Bell-McCaffrey DOF.
 
         Checks two things: (a) fit completes without error on the hc2_bm path
         for the period-effect loop, and (b) the BM Satterthwaite DOF produces
-        a CI for avg_att with a finite width (non-degenerate case).
+        per-period CIs with a finite width (non-degenerate case).
         """
         rng = np.random.default_rng(1919)
         n_units = 50
@@ -604,16 +653,24 @@ class TestFitBehavior:
                 rows.append({"unit": i, "time": t, "treated": treated, "y": y})
         data = pd.DataFrame(rows)
 
-        r_hc2bm = MultiPeriodDiD(vcov_type="hc2_bm").fit(
-            data, outcome="y", treatment="treated", time="time"
+        _periods = sorted(data["time"].unique())
+        _post = _periods[len(_periods) // 2 :]  # the former MultiPeriodDiD midpoint default
+        r_hc2bm = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=_post,
         )
-        assert np.isfinite(r_hc2bm.avg_att)
-        assert np.isfinite(r_hc2bm.avg_se)
-        assert np.isfinite(r_hc2bm.avg_conf_int[0])
-        assert np.isfinite(r_hc2bm.avg_conf_int[1])
-        # CI width is finite and positive.
-        ci_width = r_hc2bm.avg_conf_int[1] - r_hc2bm.avg_conf_int[0]
-        assert ci_width > 0
+        rows = ~r_hc2bm.is_reference
+        assert np.all(np.isfinite(r_hc2bm.att[rows]))
+        assert np.all(np.isfinite(r_hc2bm.se[rows]))
+        assert np.all(np.isfinite(r_hc2bm.conf_int_lower[rows]))
+        assert np.all(np.isfinite(r_hc2bm.conf_int_upper[rows]))
+        # CI widths are finite and positive.
+        assert np.all((r_hc2bm.conf_int_upper[rows] - r_hc2bm.conf_int_lower[rows]) > 0)
 
     def test_twfe_hc2_and_hc2_bm_produce_finite_inference(self):
         """TWFE with vcov_type in {hc2, hc2_bm} now produces finite inference
@@ -2317,8 +2374,8 @@ class TestTWFECovariateNameCollision:
         assert set(r.coefficients.keys()) == {"ATT"}
 
 
-class TestMPDClusterHC2BMSharedPrecompute:
-    """`MultiPeriodDiD(cluster=..., vcov_type='hc2_bm')` builds the CR2
+class TestEventStudyClusterHC2BMSharedPrecompute:
+    """The TWFE event-study mode with cluster=... + vcov_type='hc2_bm' builds the CR2
     Bell-McCaffrey precomputes ONCE, not twice.
 
     Mechanism guard for the perf dedup: vcov and the per-coefficient +
@@ -2378,8 +2435,16 @@ class TestMPDClusterHC2BMSharedPrecompute:
         monkeypatch.setattr(L, "_compute_cr2_bm_vcov_and_dof", _counting)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
-                data, outcome="y", treatment="treated", time="time", unit="unit"
+            _periods = sorted(data["time"].unique())
+            _post = _periods[len(_periods) // 2 :]  # the former MultiPeriodDiD midpoint default
+            res = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(
+                data,
+                outcome="y",
+                treatment="treated",
+                time="time",
+                event_study=True,
+                spec="pooled",
+                post_periods=_post,
             )
 
         # One build: the shared core entered exactly once (was twice when
@@ -2390,35 +2455,88 @@ class TestMPDClusterHC2BMSharedPrecompute:
             "built more than once."
         )
         # Inference is still finite (the dedup did not break the path).
-        assert np.isfinite(res.avg_att) and np.isfinite(res.avg_se)
-        assert np.isfinite(res.avg_p_value)
+        att_bar, se_bar = post_period_average(res)
+        assert np.isfinite(att_bar) and np.isfinite(se_bar)
+        assert np.all(np.isfinite(res.p_value[~res.is_reference]))
 
     def test_fit_is_reproducible(self):
         """Two independent fits (and a repeat fit of the same estimator) give
-        identical avg-ATT and per-period inference — determinism + the
+        identical per-period inference — determinism + the
         fit-does-not-mutate-config contract on the bypass path."""
         data = self._balanced_panel()
 
-        est = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit")
+        kw = dict(outcome="y", treatment="treated", time="time", event_study=True, spec="pooled")
+        kw["post_periods"] = sorted(data["time"].unique())[len(data["time"].unique()) // 2 :]
+        est = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r1 = est.fit(data, outcome="y", treatment="treated", time="time", unit="unit")
+            r1 = est.fit(data, **kw)
             # Repeat fit of the SAME object (config must be unmutated).
-            r2 = est.fit(data, outcome="y", treatment="treated", time="time", unit="unit")
+            r2 = est.fit(data, **kw)
             # Fresh object, same config.
-            r3 = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
-                data, outcome="y", treatment="treated", time="time", unit="unit"
-            )
+            r3 = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(data, **kw)
 
         for r in (r2, r3):
-            assert r.avg_att == r1.avg_att
-            assert r.avg_se == r1.avg_se
-            assert r.avg_t_stat == r1.avg_t_stat
-            assert r.avg_p_value == r1.avg_p_value
-            assert set(r.period_effects) == set(r1.period_effects)
-            for p in r1.period_effects:
-                assert r.period_effects[p].effect == r1.period_effects[p].effect
-                assert r.period_effects[p].se == r1.period_effects[p].se
+            np.testing.assert_array_equal(r.event_time, r1.event_time)
+            for field in ("att", "se", "t_stat", "p_value", "vcov"):
+                a, b_ = getattr(r, field), getattr(r1, field)
+                np.testing.assert_array_equal(np.isnan(a), np.isnan(b_))
+                np.testing.assert_array_equal(a[~np.isnan(a)], b_[~np.isnan(b_)])
+
+
+class TestTWFEEventStudyAbsorbedFERParity:
+    """R-parity for the TWFE event-study mode's within spec with the explicit
+    hc2 family (the classical/hc2/hc3 carve-out: no auto-cluster), against the
+    same ``mpd_absorbed_fe_did`` golden the MultiPeriodDiD absorb tests use
+    (4.0 cut, PR 4c-i). The one-way HC2-BM lane has no within twin (within +
+    hc2_bm auto-clusters at unit) and stays on the MultiPeriodDiD class until
+    PR 4c-ii; see TODO.md."""
+
+    def _load_golden(self):
+        import json
+        from pathlib import Path
+
+        golden_path = (
+            Path(__file__).parent.parent / "benchmarks" / "data" / "clubsandwich_cr2_golden.json"
+        )
+        if not golden_path.exists():
+            pytest.skip("Golden JSON not present; see benchmarks/R/generate_clubsandwich_golden.R")
+        with open(golden_path) as f:
+            golden = json.load(f)
+        if "mpd_absorbed_fe_did" not in golden:
+            pytest.skip("Golden JSON lacks the `mpd_absorbed_fe_did` scenario")
+        return golden["mpd_absorbed_fe_did"]
+
+    def test_within_hc2_matches_sandwich_vcovhc(self):
+        """spec='within' + hc2 matches `lm() + sandwich::vcovHC(type="HC2")`
+        at 1e-10 on the target per-period interaction."""
+        d = self._load_golden()
+        target_period = int(d["target_period"])
+        target_coef = f"treated_period_{target_period}"
+        idx = d["coef_names"].index(target_coef)
+        expected_vcov = np.asarray(d["vcov_hc2"]).reshape(d["vcov_hc2_shape"])
+        expected_se = float(np.sqrt(expected_vcov[idx, idx]))
+        expected_coef = float(d["coef"][idx])
+
+        data = pd.DataFrame(
+            {"unit": d["unit"], "period": d["period"], "treated": d["treated"], "y": d["y"]}
+        )
+        # The golden has no post_periods key: the MPD side used the midpoint
+        # default over periods 1..5 (reference 1), which resolves to [3, 4, 5].
+        res = TwoWayFixedEffects(vcov_type="hc2").fit(
+            data,
+            outcome="y",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            event_study=True,
+            spec="within",
+            post_periods=[3, 4, 5],
+            reference_period=int(d["reference_period"]),
+        )
+        (row,) = np.where(res.event_time == target_period)[0]
+        np.testing.assert_allclose(res.att[row], expected_coef, atol=1e-10)
+        np.testing.assert_allclose(res.se[row], expected_se, atol=1e-10)
 
 
 def _make_absorb_panel(seed: int = 11, n_units: int = 50, n_periods: int = 6) -> pd.DataFrame:
@@ -2639,6 +2757,47 @@ class TestAbsorbedFEFullKParity:
         )
         assert np.isnan(r.avg_se), "saturated full-K design must yield NaN SE (fail-closed)"
 
+    def test_within_event_study_saturated_full_k_df_le_zero_nan_inference(self):
+        """TWFE event-study twin (spec='within' + classical) of the saturated
+        full-K fail-closed contract: every non-reference row's SE and inference
+        are NaN while the point estimates are still computed."""
+        from tests.conftest import assert_nan_inference
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(2):
+            tr = int(u >= 1)
+            for t in range(5):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": tr,
+                        "y": float(rng.normal()) + 0.5 * tr * (t >= 1),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        r = TwoWayFixedEffects(vcov_type="classical").fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            event_study=True,
+            spec="within",
+            post_periods=[2, 3, 4],
+        )
+        for i in np.where(~r.is_reference)[0]:
+            assert np.isnan(r.se[i]), "saturated full-K design must yield NaN SE (fail-closed)"
+            assert_nan_inference(
+                dict(
+                    se=r.se[i],
+                    t_stat=r.t_stat[i],
+                    p_value=r.p_value[i],
+                    conf_int=(r.conf_int_lower[i], r.conf_int_upper[i]),
+                )
+            )
+
 
 class TestDfConvention:
     """`df_convention="cluster"` (opt-in Stata/fixest G-1 inference df on
@@ -2724,22 +2883,30 @@ class TestDfConvention:
         G = data["unit"].nunique()
         np.testing.assert_allclose(r1.p_value, 2 * stats.t.sf(abs(r1.t_stat), G - 1), rtol=1e-12)
 
-    def test_mpd_period_effects_follow_convention(self):
+    def test_event_study_period_effects_follow_convention(self):
         from scipy import stats
 
         data = self._clustered_panel()
         data["treated"] = data["group"]
-        kw = dict(outcome="y", treatment="treated", time="time", unit="unit")
-        m0 = MultiPeriodDiD(cluster="unit").fit(data, **kw)
-        m1 = MultiPeriodDiD(cluster="unit", df_convention="cluster").fit(data, **kw)
+        # Pooled event study with the explicit unit cluster (the former
+        # MultiPeriodDiD(cluster="unit") fit; periods 0-3 -> post [2, 3]).
+        kw = dict(
+            outcome="y",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=[2, 3],
+        )
+        m0 = TwoWayFixedEffects(cluster="unit").fit(data, **kw)
+        m1 = TwoWayFixedEffects(cluster="unit", df_convention="cluster").fit(data, **kw)
         G = data["unit"].nunique()
-        for period, pe1 in m1.period_effects.items():
-            pe0 = m0.period_effects[period]
-            assert pe0.se == pe1.se
-            if np.isfinite(pe1.p_value):
+        for i in np.where(~m1.is_reference)[0]:
+            assert m0.se[i] == m1.se[i]
+            if np.isfinite(m1.p_value[i]):
                 np.testing.assert_allclose(
-                    pe1.p_value,
-                    2 * stats.t.sf(abs(pe1.effect / pe1.se), G - 1),
+                    m1.p_value[i],
+                    2 * stats.t.sf(abs(m1.att[i] / m1.se[i]), G - 1),
                     rtol=1e-12,
                 )
 
@@ -2890,17 +3057,23 @@ class TestDfConvention:
         assert np.isfinite(inf.se)  # SE reported; only the reference-
         # distribution-dependent fields are NaN
 
-    def test_mpd_one_effective_cluster_fails_closed(self):
-        """MPD twin of the guard: a one-effective-cluster fit fails at the
+    def test_event_study_one_effective_cluster_fails_closed(self):
+        """Event-study twin of the guard: a one-effective-cluster fit fails at the
         CR1 vcov layer (the estimator surface has no raw weights= kwarg, so
         the weighted one-positive-cluster route is exercised at the linalg
-        level above; here a single cluster label locks the MPD route)."""
+        level above; here a single cluster label locks the event-study route)."""
         data = self._clustered_panel(n_units=4)
         data["treated"] = data["group"]
         data["one_cluster"] = 0
         with pytest.raises(ValueError, match="at least 2 clusters"):
-            MultiPeriodDiD(cluster="one_cluster", df_convention="cluster").fit(
-                data, outcome="y", treatment="treated", time="time", unit="unit"
+            TwoWayFixedEffects(cluster="one_cluster", df_convention="cluster").fit(
+                data,
+                outcome="y",
+                treatment="treated",
+                time="time",
+                event_study=True,
+                spec="pooled",
+                post_periods=[2, 3],
             )
 
     def test_nan_cluster_labels_rejected(self):
@@ -2933,7 +3106,7 @@ class TestDfConvention:
     def test_nan_cluster_labels_rejected_all_backends(self):
         """Round-6 P0: every clustered backend route shares the front-door
         rejection — solve_ols(return_vcov=True) (the Rust HC1/CR1 dispatch
-        when available), CR2-BM (hc2_bm + cluster), and the MPD estimator
+        when available), CR2-BM (hc2_bm + cluster), and the event-study estimator
         route (which calls solve_ols directly)."""
         from diff_diff.linalg import compute_robust_vcov, solve_ols
 
@@ -2954,8 +3127,14 @@ class TestDfConvention:
         data["treated"] = data["group"]
         data.loc[data["unit"] == 0, "unit"] = np.nan
         with pytest.raises(ValueError, match="missing values"):
-            MultiPeriodDiD(cluster="unit").fit(
-                data, outcome="y", treatment="treated", time="time", unit="unit"
+            TwoWayFixedEffects(cluster="unit").fit(
+                data,
+                outcome="y",
+                treatment="treated",
+                time="time",
+                event_study=True,
+                spec="pooled",
+                post_periods=[2, 3],
             )
 
     def test_validation_and_transactional_set_params(self):
@@ -3066,6 +3245,23 @@ class TestDfConventionNormal:
         )
         assert rm.inference_df is None
         assert rm.avg_p_value == pytest.approx(2 * stats.norm.sf(abs(rm.avg_t_stat)), rel=1e-13)
+        # TWFE event-study twin (pooled design): z-based p-values on every
+        # non-reference row and no finite df under the normal convention.
+        re_ = TwoWayFixedEffects(cluster="unit", df_convention="normal").fit(
+            data,
+            outcome="y",
+            treatment="group",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=[3, 4, 5],
+            reference_period=2,
+        )
+        rows = ~re_.is_reference
+        np.testing.assert_allclose(
+            re_.p_value[rows], 2 * stats.norm.sf(np.abs(re_.t_stat[rows])), rtol=1e-13
+        )
+        assert np.all(np.isnan(re_.df[rows]))
 
     def test_linear_regression_normal_and_precedence(self):
         from scipy import stats

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from event_study_surface_builders import calendar_surface
 
 go = pytest.importorskip("plotly.graph_objects")
 
@@ -65,20 +66,21 @@ def honest_results():
     results = MagicMock()
     results.alpha = 0.05
     results.M = 1.0
+    # Calendar labels 1-5: pre 1, 2; reference 3 (the last pre-period, as the
+    # calendar route requires); post 4, 5. The original results are a hand-built
+    # TWFE event-study surface (4.0 cut, PR 4c-i) whose STORED intervals the
+    # container branch plots as the original CIs.
     results.event_study_bounds = {
-        -2: {"ci_lb": -0.3, "ci_ub": 0.3},
-        -1: {"ci_lb": -0.2, "ci_ub": 0.2},
-        0: {"ci_lb": 0.1, "ci_ub": 0.9},
-        1: {"ci_lb": 0.2, "ci_ub": 1.0},
+        1: {"ci_lb": -0.3, "ci_ub": 0.3},
+        2: {"ci_lb": -0.2, "ci_ub": 0.2},
+        4: {"ci_lb": 0.1, "ci_ub": 0.9},
+        5: {"ci_lb": 0.2, "ci_ub": 1.0},
     }
-    original = MagicMock()
-    original.period_effects = {
-        -2: MagicMock(effect=0.05, se=0.1),
-        -1: MagicMock(effect=0.0, se=0.1),
-        0: MagicMock(effect=0.5, se=0.12),
-        1: MagicMock(effect=0.6, se=0.13),
-    }
-    results.original_results = original
+    results.original_results = calendar_surface(
+        {1: (0.05, 0.1), 2: (0.0, 0.1), 4: (0.5, 0.12), 5: (0.6, 0.13)},
+        reference=3,
+        post_periods=[4, 5],
+    )
     return results
 
 

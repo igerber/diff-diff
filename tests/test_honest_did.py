@@ -9,9 +9,10 @@ of parallel trends.
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_surface_builders import calendar_surface
 from legacy_surface import legacy_standin
 
-from diff_diff import MultiPeriodDiD
+from diff_diff import MultiPeriodDiD, TwoWayFixedEffects
 from diff_diff.honest_did import (
     DeltaRM,
     DeltaSD,
@@ -71,23 +72,8 @@ def simple_panel_data():
 
 
 @pytest.fixture
-def multiperiod_results(simple_panel_data):
-    """Fit MultiPeriodDiD and return results."""
-    mp_did = MultiPeriodDiD()
-    results = mp_did.fit(
-        simple_panel_data,
-        outcome="outcome",
-        treatment="treated",
-        time="period",
-        post_periods=[4, 5, 6, 7],
-        reference_period=3,
-    )
-    return results
-
-
-@pytest.fixture
-def mock_multiperiod_results():
-    """Create mock MultiPeriodDiDResults for unit testing.
+def legacy_mock_mpd_results():
+    """Create mock MultiPeriodDiDResults for the MPD-branch tests (4.0 cut: dies with the class).
 
     Simulates a full event-study with pre-period and post-period effects.
     Reference period is 3 (last pre-period), so period_effects has
@@ -148,6 +134,25 @@ def mock_multiperiod_results():
         reference_period=3,
         interaction_indices=interaction_indices,
     )
+
+
+@pytest.fixture
+def mock_event_study_results():
+    """The same event study as a hand-built calendar ``EventStudyResults`` - what
+    ``TwoWayFixedEffects().fit(..., event_study=True)`` emits (4.0 cut, PR 4c-i):
+    pre 0/1/2, reference 3, post 4-7; the event-study vcov is the 7x7 diagonal
+    sub-block (the MPD mock spreads it into a 20x20 full vcov)."""
+    rows = {
+        0: (0.05, 0.4, 0.125, 0.90, (-0.73, 0.83)),
+        1: (-0.02, 0.35, -0.057, 0.95, (-0.71, 0.67)),
+        2: (0.08, 0.3, 0.267, 0.79, (-0.51, 0.67)),
+        4: (5.0, 0.5, 10.0, 0.0001, (4.02, 5.98)),
+        5: (5.2, 0.5, 10.4, 0.0001, (4.22, 6.18)),
+        6: (4.8, 0.5, 9.6, 0.0001, (3.82, 5.78)),
+        7: (5.0, 0.5, 10.0, 0.0001, (4.02, 5.98)),
+    }
+    vcov_diag = [0.4**2, 0.35**2, 0.3**2, 0.5**2, 0.5**2, 0.5**2, 0.5**2]
+    return calendar_surface(rows, reference=3, post_periods=[4, 5, 6, 7], vcov=np.diag(vcov_diag))
 
 
 # =============================================================================
@@ -298,10 +303,10 @@ class TestCIMethods:
 class TestParameterExtraction:
     """Tests for extracting parameters from results objects."""
 
-    def test_extract_from_multiperiod(self, mock_multiperiod_results):
+    def test_extract_from_multiperiod(self, legacy_mock_mpd_results):
         """Test extraction from MultiPeriodDiDResults."""
         beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
-            _extract_event_study_params(mock_multiperiod_results)
+            _extract_event_study_params(legacy_mock_mpd_results)
         )
 
         # 7 estimated effects: 3 pre (0,1,2) + 4 post (4,5,6,7), ref=3 excluded
@@ -312,11 +317,11 @@ class TestParameterExtraction:
         assert post_periods == [4, 5, 6, 7]
 
         # Verify sub-VCV diagonal matches squared SEs
-        for i, period in enumerate(sorted(mock_multiperiod_results.period_effects.keys())):
-            pe = mock_multiperiod_results.period_effects[period]
+        for i, period in enumerate(sorted(legacy_mock_mpd_results.period_effects.keys())):
+            pe = legacy_mock_mpd_results.period_effects[period]
             assert sigma[i, i] == pytest.approx(pe.se**2, abs=1e-10)
 
-    def test_zero_se_period_dropped_from_multiperiod(self, mock_multiperiod_results):
+    def test_zero_se_period_dropped_from_multiperiod(self, legacy_mock_mpd_results):
         """se == 0 rows drop on the MPD branch (undefined inference).
 
         safe_inference treats se <= 0 as undefined inference; admitting
@@ -326,10 +331,10 @@ class TestParameterExtraction:
         """
         import dataclasses
 
-        pe0 = mock_multiperiod_results.period_effects[0]
-        mock_multiperiod_results.period_effects[0] = dataclasses.replace(pe0, se=0.0)
+        pe0 = legacy_mock_mpd_results.period_effects[0]
+        legacy_mock_mpd_results.period_effects[0] = dataclasses.replace(pe0, se=0.0)
         beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
-            _extract_event_study_params(mock_multiperiod_results)
+            _extract_event_study_params(legacy_mock_mpd_results)
         )
         assert num_pre == 2 and num_post == 4
         assert len(beta_hat) == 6
@@ -345,7 +350,7 @@ class TestParameterExtraction:
         assert post_periods == [4, 5, 6, 7]
         assert len(pre_periods) == num_pre and len(post_periods) == num_post
         # End to end: the metadata a user sees relays the same lists.
-        h = compute_honest_did(mock_multiperiod_results, M=0.5)
+        h = compute_honest_did(legacy_mock_mpd_results, M=0.5)
         assert h.pre_periods_used == [1, 2]
         assert h.post_periods_used == [4, 5, 6, 7]
 
@@ -354,9 +359,7 @@ class TestParameterExtraction:
         [1, 2, 4, 5],
         ids=["interior-pre", "ref-adjacent-pre", "first-post", "interior-post"],
     )
-    def test_zero_se_breaking_grid_geometry_fails_closed(
-        self, mock_multiperiod_results, bad_period
-    ):
+    def test_zero_se_breaking_grid_geometry_fails_closed(self, legacy_mock_mpd_results, bad_period):
         """Interior / reference-adjacent zero-SE drops fail closed.
 
         The RR constraint builders index retained coefficients
@@ -367,30 +370,30 @@ class TestParameterExtraction:
         """
         import dataclasses
 
-        pe = mock_multiperiod_results.period_effects[bad_period]
-        mock_multiperiod_results.period_effects[bad_period] = dataclasses.replace(pe, se=0.0)
+        pe = legacy_mock_mpd_results.period_effects[bad_period]
+        legacy_mock_mpd_results.period_effects[bad_period] = dataclasses.replace(pe, se=0.0)
         with pytest.raises(ValueError, match="consecutive estimated horizons"):
-            _extract_event_study_params(mock_multiperiod_results)
+            _extract_event_study_params(legacy_mock_mpd_results)
 
-    def test_all_pre_periods_zero_se_fails_closed(self, mock_multiperiod_results):
+    def test_all_pre_periods_zero_se_fails_closed(self, legacy_mock_mpd_results):
         """Pin: an all-invalid pre block is rejected with a clear message
         (never a zero-dimensional restriction build)."""
         import dataclasses
 
         for p in (0, 1, 2):
-            pe = mock_multiperiod_results.period_effects[p]
-            mock_multiperiod_results.period_effects[p] = dataclasses.replace(pe, se=0.0)
+            pe = legacy_mock_mpd_results.period_effects[p]
+            legacy_mock_mpd_results.period_effects[p] = dataclasses.replace(pe, se=0.0)
         with pytest.raises(ValueError, match="No pre-period effects"):
-            _extract_event_study_params(mock_multiperiod_results)
+            _extract_event_study_params(legacy_mock_mpd_results)
 
-    def test_zero_se_trailing_post_dropped_ok(self, mock_multiperiod_results):
+    def test_zero_se_trailing_post_dropped_ok(self, legacy_mock_mpd_results):
         """A trailing post-period drop keeps valid positional geometry."""
         import dataclasses
 
-        pe = mock_multiperiod_results.period_effects[7]
-        mock_multiperiod_results.period_effects[7] = dataclasses.replace(pe, se=0.0)
+        pe = legacy_mock_mpd_results.period_effects[7]
+        legacy_mock_mpd_results.period_effects[7] = dataclasses.replace(pe, se=0.0)
         beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
-            mock_multiperiod_results
+            legacy_mock_mpd_results
         )
         assert num_pre == 3 and num_post == 3
         assert pre_p == [0, 1, 2] and post_p == [4, 5, 6]
@@ -463,58 +466,58 @@ class TestHonestDiD:
         assert honest.M == 2.0
         assert honest.alpha == 0.1
 
-    def test_fit_returns_results(self, mock_multiperiod_results):
+    def test_fit_returns_results(self, mock_event_study_results):
         """Test that fit returns HonestDiDResults."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         assert isinstance(results, HonestDiDResults)
         assert results.M == 1.0
         assert results.method == "relative_magnitude"
 
-    def test_fit_negative_M_override_raises(self, mock_multiperiod_results):
+    def test_fit_negative_M_override_raises(self, mock_event_study_results):
         """A negative M passed to fit() (bypassing constructor validation) must
         raise, not be silently treated as +|M| by the FLCI cv abs()."""
         honest = HonestDiD(method="smoothness", M=0.0)
         with pytest.raises(ValueError, match="non-negative"):
-            honest.fit(mock_multiperiod_results, M=-0.1)
+            honest.fit(mock_event_study_results, M=-0.1)
 
-    def test_sensitivity_analysis_negative_M_grid_raises(self, mock_multiperiod_results):
+    def test_sensitivity_analysis_negative_M_grid_raises(self, mock_event_study_results):
         """A negative value in M_grid must raise (bypasses constructor validation)."""
         honest = HonestDiD(method="smoothness")
         with pytest.raises(ValueError, match="non-negative"):
-            honest.sensitivity_analysis(mock_multiperiod_results, M_grid=[0.0, -0.1])
+            honest.sensitivity_analysis(mock_event_study_results, M_grid=[0.0, -0.1])
 
-    def test_fit_smoothness(self, mock_multiperiod_results):
+    def test_fit_smoothness(self, mock_event_study_results):
         """Test fit with smoothness method."""
         honest = HonestDiD(method="smoothness", M=0.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         assert isinstance(results, HonestDiDResults)
         assert results.method == "smoothness"
         assert results.ci_method == "FLCI"
 
-    def test_fit_combined(self, mock_multiperiod_results):
+    def test_fit_combined(self, mock_event_study_results):
         """Test fit with combined method."""
         honest = HonestDiD(method="combined", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         assert isinstance(results, HonestDiDResults)
         assert results.method == "combined"
 
-    def test_fit_override_M(self, mock_multiperiod_results):
+    def test_fit_override_M(self, mock_event_study_results):
         """Test that M can be overridden in fit."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results, M=2.0)
+        results = honest.fit(mock_event_study_results, M=2.0)
 
         assert results.M == 2.0
 
-    def test_bounds_widen_with_M(self, mock_multiperiod_results):
+    def test_bounds_widen_with_M(self, mock_event_study_results):
         """Test that bounds widen as M increases."""
         honest = HonestDiD(method="relative_magnitude")
 
-        results_small = honest.fit(mock_multiperiod_results, M=0.5)
-        results_large = honest.fit(mock_multiperiod_results, M=2.0)
+        results_small = honest.fit(mock_event_study_results, M=0.5)
+        results_large = honest.fit(mock_event_study_results, M=2.0)
 
         # Larger M should give wider bounds
         assert (
@@ -525,26 +528,26 @@ class TestHonestDiD:
 class TestSensitivityAnalysis:
     """Tests for sensitivity analysis functionality."""
 
-    def test_sensitivity_analysis_returns_results(self, mock_multiperiod_results):
+    def test_sensitivity_analysis_returns_results(self, mock_event_study_results):
         """Test that sensitivity_analysis returns SensitivityResults."""
         honest = HonestDiD(method="relative_magnitude")
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results)
 
         assert isinstance(sensitivity, SensitivityResults)
 
-    def test_sensitivity_analysis_custom_grid(self, mock_multiperiod_results):
+    def test_sensitivity_analysis_custom_grid(self, mock_event_study_results):
         """Test sensitivity analysis with custom M grid."""
         honest = HonestDiD(method="relative_magnitude")
         M_grid = [0, 0.5, 1.0, 1.5]
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results, M_grid=M_grid)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results, M_grid=M_grid)
 
         assert len(sensitivity.M_values) == 4
         np.testing.assert_array_equal(sensitivity.M_values, M_grid)
 
-    def test_sensitivity_analysis_bounds_list(self, mock_multiperiod_results):
+    def test_sensitivity_analysis_bounds_list(self, mock_event_study_results):
         """Test that bounds list has correct length."""
         honest = HonestDiD(method="relative_magnitude")
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results)
 
         assert len(sensitivity.bounds) == len(sensitivity.M_values)
         assert len(sensitivity.robust_cis) == len(sensitivity.M_values)
@@ -553,27 +556,27 @@ class TestSensitivityAnalysis:
 class TestBreakdownValue:
     """Tests for breakdown value computation."""
 
-    def test_breakdown_value_type(self, mock_multiperiod_results):
+    def test_breakdown_value_type(self, mock_event_study_results):
         """Test that breakdown_value returns float or None."""
         honest = HonestDiD(method="relative_magnitude")
-        breakdown = honest.breakdown_value(mock_multiperiod_results)
+        breakdown = honest.breakdown_value(mock_event_study_results)
 
         assert breakdown is None or isinstance(breakdown, float)
 
-    def test_breakdown_value_monotonic(self, mock_multiperiod_results):
+    def test_breakdown_value_monotonic(self, mock_event_study_results):
         """Test breakdown value properties."""
         honest = HonestDiD(method="relative_magnitude")
-        breakdown = honest.breakdown_value(mock_multiperiod_results)
+        breakdown = honest.breakdown_value(mock_event_study_results)
 
         if breakdown is not None and breakdown > 0:
             # Before breakdown, should be significant
-            result_before = honest.fit(mock_multiperiod_results, M=breakdown * 0.9)
+            result_before = honest.fit(mock_event_study_results, M=breakdown * 0.9)
             assert result_before.is_significant
 
             # At/after breakdown, should not be significant
             # We call fit but don't assert on significance since
             # the binary search tolerance may not match exactly
-            honest.fit(mock_multiperiod_results, M=breakdown * 1.1)
+            honest.fit(mock_event_study_results, M=breakdown * 1.1)
 
 
 # =============================================================================
@@ -584,10 +587,10 @@ class TestBreakdownValue:
 class TestHonestDiDResults:
     """Tests for HonestDiDResults dataclass."""
 
-    def test_results_properties(self, mock_multiperiod_results):
+    def test_results_properties(self, mock_event_study_results):
         """Test HonestDiDResults properties."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         assert hasattr(results, "lb")
         assert hasattr(results, "ub")
@@ -597,37 +600,37 @@ class TestHonestDiDResults:
         assert hasattr(results, "identified_set_width")
         assert hasattr(results, "ci_width")
 
-    def test_results_is_significant(self, mock_multiperiod_results):
+    def test_results_is_significant(self, mock_event_study_results):
         """Test is_significant property."""
         honest = HonestDiD(method="relative_magnitude", M=0.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         # With M=0 (parallel trends), should be significant for our data
         # Check that property is a bool
         assert isinstance(results.is_significant, bool)
 
-    def test_results_width_properties(self, mock_multiperiod_results):
+    def test_results_width_properties(self, mock_event_study_results):
         """Test width properties are non-negative."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         assert results.identified_set_width >= 0
         assert results.ci_width >= 0
 
-    def test_results_summary(self, mock_multiperiod_results):
+    def test_results_summary(self, mock_event_study_results):
         """Test summary method produces string."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         summary = results.summary()
         assert isinstance(summary, str)
         assert "Honest DiD" in summary
         assert "Rambachan" in summary
 
-    def test_results_to_dict(self, mock_multiperiod_results):
+    def test_results_to_dict(self, mock_event_study_results):
         """Test to_dict method."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         d = results.to_dict()
         assert isinstance(d, dict)
@@ -636,10 +639,10 @@ class TestHonestDiDResults:
         assert "M" in d
         assert "method" in d
 
-    def test_results_to_dataframe(self, mock_multiperiod_results):
+    def test_results_to_dataframe(self, mock_event_study_results):
         """Test to_dataframe method."""
         honest = HonestDiD(method="relative_magnitude", M=1.0)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         df = results.to_dataframe()
         assert isinstance(df, pd.DataFrame)
@@ -649,10 +652,10 @@ class TestHonestDiDResults:
 class TestSensitivityResults:
     """Tests for SensitivityResults dataclass."""
 
-    def test_sensitivity_results_to_dataframe(self, mock_multiperiod_results):
+    def test_sensitivity_results_to_dataframe(self, mock_event_study_results):
         """Test to_dataframe method."""
         honest = HonestDiD(method="relative_magnitude")
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results)
 
         df = sensitivity.to_dataframe()
         assert isinstance(df, pd.DataFrame)
@@ -660,10 +663,10 @@ class TestSensitivityResults:
         assert "lb" in df.columns
         assert "ci_lb" in df.columns
 
-    def test_sensitivity_results_summary(self, mock_multiperiod_results):
+    def test_sensitivity_results_summary(self, mock_event_study_results):
         """Test summary method."""
         honest = HonestDiD(method="relative_magnitude")
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results)
 
         summary = sensitivity.summary()
         assert isinstance(summary, str)
@@ -677,9 +680,9 @@ class TestSensitivityResults:
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
-    def test_compute_honest_did(self, mock_multiperiod_results):
+    def test_compute_honest_did(self, mock_event_study_results):
         """Test compute_honest_did function."""
-        results = compute_honest_did(mock_multiperiod_results, method="relative_magnitude", M=1.0)
+        results = compute_honest_did(mock_event_study_results, method="relative_magnitude", M=1.0)
 
         assert isinstance(results, HonestDiDResults)
         assert results.M == 1.0
@@ -693,15 +696,16 @@ class TestConvenienceFunctions:
 class TestIntegration:
     """Integration tests with real estimators."""
 
-    def test_with_multiperiod_did(self, simple_panel_data):
-        """Test full pipeline with MultiPeriodDiD."""
-        # Fit event study
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
+    def test_with_twfe_event_study(self, simple_panel_data):
+        """Test full pipeline with the TWFE event-study surface."""
+        # Fit event study (TWFE event-study mode, pooled design = the former MPD fit)
+        event_results = TwoWayFixedEffects().fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
             time="period",
+            event_study=True,
+            spec="pooled",
             post_periods=[4, 5, 6, 7],
             reference_period=3,
         )
@@ -717,12 +721,13 @@ class TestIntegration:
 
     def test_sensitivity_analysis_integration(self, simple_panel_data):
         """Test sensitivity analysis with real data."""
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
+        event_results = TwoWayFixedEffects().fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
             time="period",
+            event_study=True,
+            spec="pooled",
             post_periods=[4, 5, 6, 7],
             reference_period=3,
         )
@@ -736,12 +741,13 @@ class TestIntegration:
 
     def test_smoothness_method_integration(self, simple_panel_data):
         """Test smoothness method with real data."""
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
+        event_results = TwoWayFixedEffects().fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
             time="period",
+            event_study=True,
+            spec="pooled",
             post_periods=[4, 5, 6, 7],
             reference_period=3,
         )
@@ -802,23 +808,10 @@ class TestEdgeCases:
         HonestDiD requires pre-period coefficients for sensitivity analysis.
         A results object with only post-period effects is not usable.
         """
-        period_effects = {
-            4: PeriodEffect(
-                period=4, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
-            ),
-        }
-
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=5.0,
-            avg_se=0.5,
-            avg_t_stat=10.0,
-            avg_p_value=0.0001,
-            avg_conf_int=(4.02, 5.98),
-            n_obs=200,
-            n_treated=100,
-            n_control=100,
-            pre_periods=[0, 1, 2, 3],
+        # Only the post period is estimated; the reference (3) is the last pre.
+        results = calendar_surface(
+            {4: (5.0, 0.5, 10.0, 0.0001, (4.02, 5.98))},
+            reference=3,
             post_periods=[4],
             vcov=np.array([[0.25]]),
         )
@@ -827,20 +820,20 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="No pre-period effects with finite"):
             honest.fit(results)
 
-    def test_m_zero_recovers_standard(self, mock_multiperiod_results):
+    def test_m_zero_recovers_standard(self, mock_event_study_results):
         """Test that M=0 gives tighter bounds."""
         honest = HonestDiD(method="relative_magnitude")
 
-        results_0 = honest.fit(mock_multiperiod_results, M=0)
-        results_1 = honest.fit(mock_multiperiod_results, M=1)
+        results_0 = honest.fit(mock_event_study_results, M=0)
+        results_1 = honest.fit(mock_event_study_results, M=1)
 
         # M=0 should give tighter or equal bounds
         assert results_0.ci_width <= results_1.ci_width + 0.01  # Small tolerance
 
-    def test_very_large_M(self, mock_multiperiod_results):
+    def test_very_large_M(self, mock_event_study_results):
         """Test with very large M value."""
         honest = HonestDiD(method="relative_magnitude", M=100)
-        results = honest.fit(mock_multiperiod_results)
+        results = honest.fit(mock_event_study_results)
 
         # Should still return valid results
         assert isinstance(results, HonestDiDResults)
@@ -1017,108 +1010,76 @@ class TestEdgeCases:
         assert np.isfinite(max_viol)
         assert max_viol == pytest.approx(0.1, abs=1e-10)  # only period 1's |effect|
 
+    def test_calendar_surface_filters_nan_pre_period_effects(self):
+        """The TWFE event-study surface twin of the MPD-branch test above: a NaN
+        pre-period row (rank-deficient design) is filtered by the calendar
+        route's `_extract_event_study_params`, not propagated.
+
+        Only the extraction half is twinned: `_estimate_max_pre_violation` has
+        no surface branch (it falls through to a constant), so that half stays
+        on the MPD original (4.0 cut, PR 4c-i).
+        """
+        nan_row = (np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan))
+        vcov_with_nan = np.full((4, 4), 0.0)
+        vcov_with_nan[0, :] = np.nan
+        vcov_with_nan[:, 0] = np.nan
+        vcov_with_nan[1, 1] = 0.09
+        vcov_with_nan[2, 2] = 0.16
+        vcov_with_nan[3, 3] = 0.16
+        surface = calendar_surface(
+            {
+                0: nan_row,
+                1: (0.1, 0.3, 0.33, 0.74, (-0.49, 0.69)),
+                3: (2.5, 0.4, 6.25, 0.0001, (1.72, 3.28)),
+                4: (2.8, 0.4, 7.0, 0.0001, (2.02, 3.58)),
+            },
+            reference=2,
+            post_periods=[3, 4],
+            vcov=vcov_with_nan,
+        )
+        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
+            surface
+        )
+        assert len(beta_hat) == 3  # periods 1, 3, 4 (period 0 filtered)
+        assert num_pre == 1
+        assert num_post == 2
+        assert np.all(np.isfinite(beta_hat))
+        assert np.all(np.isfinite(sigma))
+
     def test_honest_did_all_pre_nan_raises(self):
         """HonestDiD should raise ValueError when all pre-period effects are NaN."""
-        period_effects = {
-            0: PeriodEffect(
-                period=0,
-                effect=np.nan,
-                se=np.nan,
-                t_stat=np.nan,
-                p_value=np.nan,
-                conf_int=(np.nan, np.nan),
-            ),
-            # Reference period (1) omitted
-            2: PeriodEffect(
-                period=2,
-                effect=2.5,
-                se=0.4,
-                t_stat=6.25,
-                p_value=0.0001,
-                conf_int=(1.72, 3.28),
-            ),
-        }
-
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=2.5,
-            avg_se=0.4,
-            avg_t_stat=6.25,
-            avg_p_value=0.0001,
-            avg_conf_int=(1.72, 3.28),
-            n_obs=200,
-            n_treated=100,
-            n_control=100,
-            pre_periods=[0, 1],
+        nan_row = (np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan))
+        vcov = np.full((2, 2), np.nan)
+        vcov[1, 1] = 0.16
+        results = calendar_surface(
+            {0: nan_row, 2: (2.5, 0.4, 6.25, 0.0001, (1.72, 3.28))},
+            reference=1,
             post_periods=[2],
-            vcov=np.diag([0.16]),
-            reference_period=1,
-            interaction_indices={0: 0, 2: 1},
+            vcov=vcov,
         )
-
         with pytest.raises(ValueError, match="No pre-period effects with finite"):
             _extract_event_study_params(results)
 
     def test_honest_did_all_post_nan_raises(self):
         """HonestDiD should raise ValueError when all post-period effects are NaN.
 
-        When MultiPeriodDiD produces NaN for all post-period effects (e.g. from
-        severe rank deficiency), HonestDiD.fit() should raise rather than
+        When the event-study fit produces NaN for all post-period effects (e.g.
+        from severe rank deficiency), HonestDiD.fit() should raise rather than
         silently computing with an empty weight vector.
         """
-        period_effects = {
-            0: PeriodEffect(
-                period=0,
-                effect=0.1,
-                se=0.3,
-                t_stat=0.33,
-                p_value=0.74,
-                conf_int=(-0.49, 0.69),
-            ),
-            # Reference period (1) omitted
-            2: PeriodEffect(
-                period=2,
-                effect=np.nan,
-                se=np.nan,
-                t_stat=np.nan,
-                p_value=np.nan,
-                conf_int=(np.nan, np.nan),
-            ),
-            3: PeriodEffect(
-                period=3,
-                effect=np.nan,
-                se=np.nan,
-                t_stat=np.nan,
-                p_value=np.nan,
-                conf_int=(np.nan, np.nan),
-            ),
-        }
-
-        interaction_indices = {0: 0, 2: 1, 3: 2}
+        nan_row = (np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan))
         vcov = np.full((3, 3), 0.0)
         vcov[0, 0] = 0.09
         vcov[1, :] = np.nan
         vcov[:, 1] = np.nan
         vcov[2, :] = np.nan
         vcov[:, 2] = np.nan
-
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=np.nan,
-            avg_se=np.nan,
-            avg_t_stat=np.nan,
-            avg_p_value=np.nan,
-            avg_conf_int=(np.nan, np.nan),
-            n_obs=300,
-            n_treated=150,
-            n_control=150,
-            pre_periods=[0, 1],
+        results = calendar_surface(
+            {0: (0.1, 0.3, 0.33, 0.74, (-0.49, 0.69)), 2: nan_row, 3: nan_row},
+            reference=1,
             post_periods=[2, 3],
             vcov=vcov,
-            reference_period=1,
-            interaction_indices=interaction_indices,
         )
-
         honest = HonestDiD(method="relative_magnitude", M=1.0)
         with pytest.raises(ValueError, match="No post-period effects with finite"):
             honest.fit(results)
@@ -1560,10 +1521,10 @@ class TestSurveyVariance:
 class TestVisualizationNoMatplotlib:
     """Tests for visualization that don't require rendering."""
 
-    def test_sensitivity_results_has_plot_method(self, mock_multiperiod_results):
+    def test_sensitivity_results_has_plot_method(self, mock_event_study_results):
         """Test that SensitivityResults has plot method."""
         honest = HonestDiD(method="relative_magnitude")
-        sensitivity = honest.sensitivity_analysis(mock_multiperiod_results)
+        sensitivity = honest.sensitivity_analysis(mock_event_study_results)
 
         assert hasattr(sensitivity, "plot")
         assert callable(sensitivity.plot)
