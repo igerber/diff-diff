@@ -354,6 +354,52 @@ ROWS = [
         ),
     ),
     dict(
+        key="twfe_es_within_hc1_cluster_unit",
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="unit").fit(
+            df,
+            outcome="y",
+            treatment="grp",
+            unit="unit",
+            time="time",
+            event_study=True,
+            spec="within",
+            post_periods=[4, 5, 6],  # the former MultiPeriodDiD midpoint default
+            reference_period=1,
+        ),
+        # tail_df: one entry per safe_inference call the shared core makes -
+        # 5 periods + the post-period average (the average block dies with
+        # MultiPeriodDiD at the 4.0 cut; re-pin then).
+        cr1_k=(11,),
+        tail_df=(290.0,) * 6,
+        status="legitimate",
+        reason=(
+            "TWFE event-study, within spec (4.0 cut, PR 4c-i): the absorbed unit FE "
+            "plus the built-in period dummies give the same K_reference as the "
+            "mpd_absorb row - 6 visible + rank(time given unit) = 5"
+        ),
+    ),
+    dict(
+        key="twfe_es_pooled_hc1_cluster_time",
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="time").fit(
+            df,
+            outcome="y",
+            treatment="grp",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=[4, 5, 6],  # the former MultiPeriodDiD midpoint default
+            reference_period=1,
+        ),
+        cr1_k=(7,),
+        tail_df=(348.0,) * 6,
+        status="legitimate",
+        reason=(
+            "TWFE event-study, pooled spec (the MultiPeriodDiD design; 4.0 cut, PR "
+            "4c-i): the NESTED orientation of the built-in period dummies under a "
+            "time cluster - 12 visible minus their rank 5, as mpd_plain_hc1_cluster_time"
+        ),
+    ),
+    dict(
         key="lpdid_absorb_nested_cluster_grp",
         fit=lambda df: diff_diff.LPDiD(pre_window=2, post_window=2, cluster="grp").fit(
             df.assign(region=df["unit"] % 2),

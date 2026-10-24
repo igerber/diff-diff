@@ -5,12 +5,12 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_average import post_period_average
 from legacy_surface import es_dict, group_dict
 
 from diff_diff import (
     DifferenceInDifferences,
     ImputationDiD,
-    MultiPeriodDiD,
     StackedDiD,
     SunAbraham,
     TwoStageDiD,
@@ -196,40 +196,46 @@ class TestDiDAbsorbReplicate:
         assert np.isfinite(result.se) and result.se > 0
 
 
-class TestMultiPeriodDiDReplicate:
-    """MultiPeriodDiD with replicate weights."""
+class TestEventStudyReplicate:
+    """The TWFE event-study mode with replicate weights."""
 
-    def test_multiperiod_jk1(self):
+    def test_event_study_jk1(self):
         data = _make_simple_panel()
         rep_cols = _add_jk1_replicates(data, n_rep=10)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
-        result = MultiPeriodDiD().fit(
+        result = TwoWayFixedEffects().fit(
             data,
             "outcome",
             "treated",
-            "time",
+            time="time",
+            event_study=True,
+            spec="pooled",
             post_periods=[1],
             survey_design=sd,
         )
-        assert np.isfinite(result.avg_att)
-        assert np.isfinite(result.avg_se) and result.avg_se > 0
-        assert result.survey_metadata is not None
+        att_bar, se_bar = post_period_average(result)
+        assert np.isfinite(att_bar)
+        assert np.isfinite(se_bar) and se_bar > 0
+        assert result.df_survey is not None
         result.summary()
 
-    def test_multiperiod_brr(self):
+    def test_event_study_brr(self):
         data = _make_simple_panel()
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
-        result = MultiPeriodDiD().fit(
+        result = TwoWayFixedEffects().fit(
             data,
             "outcome",
             "treated",
-            "time",
+            time="time",
+            event_study=True,
+            spec="pooled",
             post_periods=[1],
             survey_design=sd,
         )
-        assert np.isfinite(result.avg_att)
-        assert np.isfinite(result.avg_se) and result.avg_se > 0
+        att_bar, se_bar = post_period_average(result)
+        assert np.isfinite(att_bar)
+        assert np.isfinite(se_bar) and se_bar > 0
 
 
 class TestTWFEReplicate:
@@ -703,32 +709,37 @@ class TestReplicateVcovTypeWarn:
             )
         assert np.isfinite(res.se) and res.se > 0
 
-    def test_multiperiod_explicit_hc2_warns_and_matches_hc1(self):
+    def test_event_study_explicit_hc2_warns_and_matches_hc1(self):
         data = _make_simple_panel()
         rep_cols = _add_brr_replicates(data, n_rep=8)
         with pytest.warns(UserWarning, match="has no effect with replicate-weight"):
-            res = MultiPeriodDiD(vcov_type="hc2").fit(
+            res = TwoWayFixedEffects(vcov_type="hc2").fit(
                 data,
                 "outcome",
                 "treated",
-                "time",
+                time="time",
+                event_study=True,
+                spec="pooled",
                 post_periods=[1],
                 survey_design=self._sd(rep_cols),
             )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            base = MultiPeriodDiD(vcov_type="hc1").fit(
+            base = TwoWayFixedEffects(vcov_type="hc1").fit(
                 data,
                 "outcome",
                 "treated",
-                "time",
+                time="time",
+                event_study=True,
+                spec="pooled",
                 post_periods=[1],
                 survey_design=self._sd(rep_cols),
             )
         # explicit hc1 must NOT trigger the replicate-override warning
         # (the fixture legitimately emits an unrelated pre-period warning).
         assert not any("has no effect with replicate-weight" in str(x.message) for x in w)
-        assert res.avg_att == base.avg_att and res.avg_se == base.avg_se
+        np.testing.assert_array_equal(res.att, base.att)
+        np.testing.assert_array_equal(res.se, base.se)
 
     def test_conley_keeps_own_survey_contract(self):
         """conley is excluded from the warn-and-remap: its survey-design
@@ -922,27 +933,33 @@ class TestTrueBRRHalfSample:
         assert np.isfinite(res.se) and res.se > 0
         self._assert_point_invariance(res.att, base.att)
 
-    def test_multiperiod_true_brr(self):
+    def test_event_study_true_brr(self):
         data = _make_simple_panel()
         rep_cols = _add_true_brr_replicates(data)
-        res = MultiPeriodDiD().fit(
+        res = TwoWayFixedEffects().fit(
             data,
             "outcome",
             "treated",
-            "time",
+            time="time",
+            event_study=True,
+            spec="pooled",
             post_periods=[1],
             survey_design=self._sd(rep_cols),
         )
-        base = MultiPeriodDiD().fit(
+        base = TwoWayFixedEffects().fit(
             data,
             "outcome",
             "treated",
-            "time",
+            time="time",
+            event_study=True,
+            spec="pooled",
             post_periods=[1],
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isfinite(res.avg_se) and res.avg_se > 0
-        self._assert_point_invariance(res.avg_att, base.avg_att)
+        res_att, res_se = post_period_average(res)
+        base_att, _ = post_period_average(base)
+        assert np.isfinite(res_se) and res_se > 0
+        self._assert_point_invariance(res_att, base_att)
 
     def test_twfe_true_brr(self):
         # The family's dedicated 2-period panel (the staggered fixture's

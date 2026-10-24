@@ -469,6 +469,34 @@ def surfaces():
         )
         out["MultiPeriodDiD"] = (mpd, build_event_study_surface(mpd))
 
+        # 11b/11c. TWFE event-study mode (4.0 cut, PR 4c-i): the fit result IS
+        # the surface, so the tuple carries it twice (native == surface).
+        from diff_diff import TwoWayFixedEffects
+
+        twfe_pooled = TwoWayFixedEffects().fit(
+            mpd_data,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            event_study=True,
+            spec="pooled",
+            post_periods=[3, 4, 5],
+            reference_period=2,
+        )
+        out["TwoWayFixedEffects_pooled"] = (twfe_pooled, twfe_pooled)
+        twfe_within = TwoWayFixedEffects().fit(
+            mpd_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            event_study=True,
+            spec="within",
+            post_periods=[3, 4, 5],
+            reference_period=2,
+        )
+        out["TwoWayFixedEffects_within"] = (twfe_within, twfe_within)
+
         # 12. LPDiD
         lp_data = _lpdid_panel()
         lp = LPDiD(pre_window=2, post_window=2).fit(
@@ -512,10 +540,19 @@ ALL_PRODUCERS = [
     "WooldridgeDiD",
     "TripleDifference_staggered",
     "MultiPeriodDiD",
+    "TwoWayFixedEffects_pooled",
+    "TwoWayFixedEffects_within",
     "LPDiD",
     "ChaisemartinDHaultfoeuille",
     "HeterogeneousAdoptionDiD",
 ]
+
+
+#: Producers whose native result IS the unified surface: no independent native
+#: representation exists to compare against (their quintets are pinned against
+#: the MultiPeriodDiD twin by tests/test_v4_merge_mpd.py and
+#: tests/test_twfe_event_study_decoupling.py).
+NATIVE_SURFACE_PRODUCERS = {"TwoWayFixedEffects_pooled", "TwoWayFixedEffects_within"}
 
 
 def _expected_reference_labels(label, native):
@@ -534,7 +571,7 @@ def _expected_reference_labels(label, native):
       row (CallawaySantAnna universal base on a gapped grid can materialize
       several); CS varying and EfficientDiD estimate e=-1, so none.
     """
-    if label in ("MultiPeriodDiD", "SpilloverDiD"):
+    if label in ("MultiPeriodDiD", "SpilloverDiD") or label in NATIVE_SURFACE_PRODUCERS:
         return [] if native.reference_period is None else [native.reference_period]
     if label == "ChaisemartinDHaultfoeuille":
         return [0]
@@ -599,6 +636,12 @@ def test_no_sentinel_in_schema(label, surfaces):
 def test_bit_exact_quintet_nonreference(label, surfaces):
     # Full canonical quintet (att/se/t_stat/p_value/both CI bounds) on every
     # native non-reference row, across all fourteen producers.
+    if label in NATIVE_SURFACE_PRODUCERS:
+        pytest.skip(
+            "native EventStudyResults producer: the quintet is pinned against the "
+            "MultiPeriodDiD twin by tests/test_v4_merge_mpd.py and "
+            "tests/test_twfe_event_study_decoupling.py"
+        )
     native, surface = surfaces[label]
     non_ref = ~surface.is_reference
     native_map = _native_event_map(label, native)
@@ -635,6 +678,16 @@ def test_mpd_vcov_subblock(surfaces):
     if native.vcov is not None and native.interaction_indices:
         assert surface.vcov is not None
         assert surface.vcov.shape[0] == surface.vcov_index.shape[0]
+
+
+@pytest.mark.parametrize("label", sorted(NATIVE_SURFACE_PRODUCERS))
+def test_twfe_event_study_vcov_subblock(label, surfaces):
+    """The TWFE event-study producer exposes the ordered event-study vcov
+    sub-block over its non-reference labels."""
+    _, surface = surfaces[label]
+    assert surface.vcov is not None and surface.vcov_index is not None
+    assert surface.vcov.shape == (surface.vcov_index.shape[0], surface.vcov_index.shape[0])
+    np.testing.assert_array_equal(surface.vcov_index, surface.event_time[~surface.is_reference])
 
 
 def test_dcdh_convention_and_placebo_merge(surfaces):
@@ -1666,6 +1719,42 @@ def test_mpd_hc2_bm_per_period_df():
     for et, df_val in zip(surface.event_time.tolist(), surface.df.tolist()):
         if et in res.event_study_df and np.isfinite(res.event_study_df[et]):
             assert df_val == res.event_study_df[et]
+
+
+def test_twfe_event_study_hc2_bm_per_period_df():
+    """TWFE event-study twin: the surface's per-period ``df`` carries the
+    per-coefficient Bell-McCaffrey DOF (they differ across periods on an
+    unbalanced panel), not a broadcast scalar."""
+    from diff_diff import TwoWayFixedEffects
+
+    rng = np.random.default_rng(5)
+    rows = []
+    for u in range(50):
+        tr = u % 2
+        t_max = 8 - (u % 4)
+        for t in range(1, t_max + 1):
+            y = 1 + 0.1 * t + 0.3 * tr + (0.8 if tr and t >= 5 else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "treated": tr})
+    data = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # Periods 1..8: the former MultiPeriodDiD midpoint default resolved to [5, 6, 7, 8].
+        res = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=[5, 6, 7, 8],
+        )
+    assert res.df is not None
+    finite = res.df[~res.is_reference]
+    finite = finite[np.isfinite(finite)]
+    assert finite.size > 0
+    assert (
+        len(set(np.round(finite, 6))) > 1
+    ), "per-period BM DOFs should differ on an unbalanced panel"
 
 
 def test_lpdid_per_horizon_df(surfaces):
