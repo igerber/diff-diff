@@ -39,6 +39,7 @@ from diff_diff import (
     MultiPeriodDiD,
     SyntheticControl,
     SyntheticDiD,
+    TwoWayFixedEffects,
     generate_did_data,
     generate_factor_data,
     generate_staggered_data,
@@ -77,7 +78,9 @@ def did_fit():
 
 
 @pytest.fixture(scope="module")
-def event_study_fit():
+def legacy_mpd_fit():
+    """Native MultiPeriodDiD fit for the MPD-only tests (event-study lanes, the
+    name-string dispatch pins): dies with the class at the 4.0 cut (PR 4c-ii)."""
     df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
     es = MultiPeriodDiD().fit(
         df,
@@ -88,6 +91,17 @@ def event_study_fit():
         reference_period=3,
     )
     return es, df
+
+
+@pytest.fixture(scope="module")
+def twfe_fit():
+    """Static TwoWayFixedEffects fit (a scalar DiDResults) on the same panel: the
+    successor fixture for the generic report tests (4.0 cut, PR 4c-i)."""
+    df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
+    fit = TwoWayFixedEffects().fit(
+        df, outcome="outcome", treatment="treated", unit="unit", post="post"
+    )
+    return fit, df
 
 
 @pytest.fixture(scope="module")
@@ -156,13 +170,13 @@ def edid_fit():
 # Schema contract
 # ---------------------------------------------------------------------------
 class TestSchemaContract:
-    def test_top_level_keys(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_top_level_keys(self, twfe_fit):
+        fit, _ = twfe_fit
         br = BusinessReport(fit, auto_diagnostics=False)
         assert set(br.to_dict().keys()) == _BR_TOP_LEVEL_KEYS
 
-    def test_schema_version(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_schema_version(self, twfe_fit):
+        fit, _ = twfe_fit
         assert (
             BusinessReport(fit, auto_diagnostics=False).to_dict()["schema_version"]
             == BUSINESS_REPORT_SCHEMA_VERSION
@@ -191,22 +205,22 @@ class TestSchemaContract:
 # BR ↔ DR integration
 # ---------------------------------------------------------------------------
 class TestDiagnosticsIntegration:
-    def test_auto_diagnostics_true_populates_diagnostics_block(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_auto_diagnostics_true_populates_diagnostics_block(self, twfe_fit):
+        fit, _ = twfe_fit
         br = BusinessReport(fit, auto_diagnostics=True)
         d = br.to_dict()
         assert d["diagnostics"]["status"] == "ran"
         assert "schema" in d["diagnostics"]
 
-    def test_auto_diagnostics_false_skips(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_auto_diagnostics_false_skips(self, twfe_fit):
+        fit, _ = twfe_fit
         br = BusinessReport(fit, auto_diagnostics=False)
         d = br.to_dict()
         assert d["diagnostics"]["status"] == "skipped"
         assert "auto_diagnostics=False" in d["diagnostics"]["reason"]
 
-    def test_explicit_diagnostics_results_takes_precedence(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_explicit_diagnostics_results_takes_precedence(self, twfe_fit):
+        fit, _ = twfe_fit
         dr = DiagnosticReport(fit)
         dr_results = dr.run_all()
         br = BusinessReport(fit, diagnostics=dr_results)
@@ -215,14 +229,14 @@ class TestDiagnosticsIntegration:
         # Same dict identity shows the supplied results were used verbatim.
         assert d["diagnostics"]["schema"] is dr_results.schema
 
-    def test_explicit_diagnostics_report_runs(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_explicit_diagnostics_report_runs(self, twfe_fit):
+        fit, _ = twfe_fit
         dr = DiagnosticReport(fit)
         br = BusinessReport(fit, diagnostics=dr)
         assert br.to_dict()["diagnostics"]["status"] == "ran"
 
-    def test_diagnostics_wrong_type_raises(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_diagnostics_wrong_type_raises(self, twfe_fit):
+        fit, _ = twfe_fit
         with pytest.raises(TypeError):
             BusinessReport(fit, diagnostics="not a DR")  # type: ignore[arg-type]
 
@@ -231,8 +245,8 @@ class TestDiagnosticsIntegration:
 # HonestDiD passthrough
 # ---------------------------------------------------------------------------
 class TestHonestDiDPassthrough:
-    def test_supplied_sensitivity_is_not_recomputed(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_supplied_sensitivity_is_not_recomputed(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
 
         class _FakeSens:
             M_values = np.array([0.5, 1.0])
@@ -336,8 +350,8 @@ class TestOutcomeDirection:
 class TestWarningsPassthrough:
     """Broad exception handling still records provenance in schema.warnings."""
 
-    def test_diagnostic_error_surfaces_as_top_level_warning(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_diagnostic_error_surfaces_as_top_level_warning(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
 
         def _raise(*args, **kwargs):
             raise RuntimeError("synthetic test failure")
@@ -361,30 +375,30 @@ class TestSignificancePhrasing:
         summary = br.summary()
         assert "strongly supported" in summary
 
-    def test_near_threshold_caveat(self, event_study_fit):
+    def test_near_threshold_caveat(self, twfe_fit):
         """Fabricate a p-value near 0.05 to exercise the significance-chasing guard."""
-        fit, _ = event_study_fit
+        fit, _ = twfe_fit
         # Monkey-patch the result to land p_value in (0.04, 0.051).
-        original = fit.avg_p_value
+        original = fit.p_value
         try:
-            fit.avg_p_value = 0.045
+            fit.p_value = 0.045
             br = BusinessReport(fit, auto_diagnostics=False)
             caveats = br.caveats()
             topics = {c.get("topic") for c in caveats}
             assert "near_significance" in topics
         finally:
-            fit.avg_p_value = original
+            fit.p_value = original
 
-    def test_far_from_threshold_no_near_caveat(self, event_study_fit):
-        fit, _ = event_study_fit
-        original = fit.avg_p_value
+    def test_far_from_threshold_no_near_caveat(self, twfe_fit):
+        fit, _ = twfe_fit
+        original = fit.p_value
         try:
-            fit.avg_p_value = 0.010
+            fit.p_value = 0.010
             br = BusinessReport(fit, auto_diagnostics=False)
             topics = {c.get("topic") for c in br.caveats()}
             assert "near_significance" not in topics
         finally:
-            fit.avg_p_value = original
+            fit.p_value = original
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +407,8 @@ class TestSignificancePhrasing:
 class TestPreTrendsVerdictPhrasing:
     """Verdict and tier should flow through into schema AND phrasing."""
 
-    def test_verdict_and_tier_surface_in_schema(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_verdict_and_tier_surface_in_schema(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         br = BusinessReport(fit, auto_diagnostics=True)
         pt = br.to_dict()["pre_trends"]
         # This fixture has a clear violation and an underpowered test — both set.
@@ -405,8 +419,8 @@ class TestPreTrendsVerdictPhrasing:
             "clear_violation",
         }
 
-    def test_clear_violation_phrased_tentatively(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_clear_violation_phrased_tentatively(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         br = BusinessReport(fit, auto_diagnostics=True)
         if br.to_dict()["pre_trends"].get("verdict") == "clear_violation":
             summary = br.summary()
@@ -445,8 +459,8 @@ class TestPreTrendsVerdictPhrasing:
 # NaN ATT
 # ---------------------------------------------------------------------------
 class TestNaNATT:
-    def test_nan_att_produces_caveat_and_does_not_crash(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_nan_att_produces_caveat_and_does_not_crash(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         original = fit.avg_att
         try:
             fit.avg_att = float("nan")
@@ -459,25 +473,40 @@ class TestNaNATT:
         finally:
             fit.avg_att = original
 
+    def test_nan_att_produces_caveat_and_does_not_crash_twfe(self, twfe_fit):
+        """Static-fit twin (4.0 cut, PR 4c-i): the headline field is `att`."""
+        fit, _ = twfe_fit
+        original = fit.att
+        try:
+            fit.att = float("nan")
+            br = BusinessReport(fit, auto_diagnostics=False)
+            summary = br.summary()
+            caveats = br.caveats()
+            assert isinstance(summary, str)
+            assert any(c.get("topic") == "estimation_failure" for c in caveats)
+            assert br.to_dict()["headline"]["sign"] == "undefined"
+        finally:
+            fit.att = original
+
 
 # ---------------------------------------------------------------------------
 # include_appendix toggle
 # ---------------------------------------------------------------------------
 class TestAppendix:
-    def test_include_appendix_true_embeds_summary(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_include_appendix_true_embeds_summary(self, twfe_fit):
+        fit, _ = twfe_fit
         br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
         md = br.full_report()
         assert "## Technical Appendix" in md
 
-    def test_include_appendix_false_omits(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_include_appendix_false_omits(self, twfe_fit):
+        fit, _ = twfe_fit
         br = BusinessReport(fit, auto_diagnostics=False, include_appendix=False)
         md = br.full_report()
         assert "## Technical Appendix" not in md
 
-    def test_appendix_summary_failure_is_visible(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_appendix_summary_failure_is_visible(self, twfe_fit):
+        fit, _ = twfe_fit
         with patch.object(fit, "summary", side_effect=RuntimeError("internal path /tmp/private")):
             br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
             md = br.full_report()
@@ -486,8 +515,8 @@ class TestAppendix:
         assert "Technical appendix unavailable" in md
         assert "RuntimeError" in md
 
-    def test_appendix_summary_failure_does_not_leak_exception_details(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_appendix_summary_failure_does_not_leak_exception_details(self, twfe_fit):
+        fit, _ = twfe_fit
         with patch.object(fit, "summary", side_effect=RuntimeError("secret-token-123")):
             br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
             md = br.full_report()
@@ -495,12 +524,12 @@ class TestAppendix:
         assert "secret-token-123" not in md
         assert "Traceback" not in md
 
-    def test_appendix_stringification_failure_is_visible(self, event_study_fit):
+    def test_appendix_stringification_failure_is_visible(self, twfe_fit):
         class _BadSummary:
             def __str__(self):
                 raise ValueError("sensitive-render-context")
 
-        fit, _ = event_study_fit
+        fit, _ = twfe_fit
         with patch.object(fit, "summary", return_value=_BadSummary()):
             br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
             md = br.full_report()
@@ -534,9 +563,9 @@ class TestSurveyPassthrough:
         d = br.to_dict()
         assert d["sample"]["survey"] is None
 
-    def test_survey_present_populates_block(self, event_study_fit):
+    def test_survey_present_populates_block(self, twfe_fit):
         """Synthetically attach a survey_metadata shim and verify BR surfaces it."""
-        fit, _ = event_study_fit
+        fit, _ = twfe_fit
 
         class _ShimMeta:
             weight_type = "pweight"
@@ -573,14 +602,14 @@ class TestSurveyPassthrough:
 # Single-knob alpha
 # ---------------------------------------------------------------------------
 class TestAlphaKnob:
-    def test_alpha_equal_to_result_alpha_drives_ci_level(self, event_study_fit):
+    def test_alpha_equal_to_result_alpha_drives_ci_level(self, twfe_fit):
         """When caller's alpha matches the fit's native alpha, ``ci_level``
         reflects that alpha (e.g., alpha=0.05 -> 95% CI)."""
-        fit, _ = event_study_fit
+        fit, _ = twfe_fit
         br = BusinessReport(fit, alpha=0.05, auto_diagnostics=False)
         assert br.to_dict()["headline"]["ci_level"] == 95
 
-    def test_alpha_mismatch_preserves_fitted_ci_at_native_level(self, event_study_fit):
+    def test_alpha_mismatch_preserves_fitted_ci_at_native_level(self, twfe_fit):
         """Round-7 regression: a caller alpha that differs from the fit's
         native alpha must NOT recompute a z-based CI (the fit used t-based
         inference with a finite ``df`` that BR cannot reproduce from
@@ -590,7 +619,7 @@ class TestAlphaKnob:
         """
         import math
 
-        fit, _ = event_study_fit
+        fit, _ = twfe_fit
         br95 = BusinessReport(fit, alpha=0.05, auto_diagnostics=False)
         br90 = BusinessReport(fit, alpha=0.10, auto_diagnostics=False)
         h95 = br95.to_dict()["headline"]
@@ -3806,8 +3835,8 @@ class TestFullReportSingleM:
             alpha=0.05,
         )
 
-    def test_full_report_does_not_claim_full_grid_for_single_m(self, event_study_fit):
-        fit, _ = event_study_fit
+    def test_full_report_does_not_claim_full_grid_for_single_m(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         br = BusinessReport(fit, honest_did_results=self._fake_single_m())
         md = br.full_report()
         assert "robust across full grid" not in md
@@ -3818,8 +3847,8 @@ class TestFullReportSingleM:
 # Summary + full_report work across estimators
 # ---------------------------------------------------------------------------
 class TestAcrossEstimators:
-    def test_summary_nonempty_for_all(self, did_fit, event_study_fit, cs_fit, sdid_fit):
-        for fit, _ in (did_fit, event_study_fit, cs_fit, sdid_fit):
+    def test_summary_nonempty_for_all(self, did_fit, legacy_mpd_fit, cs_fit, sdid_fit):
+        for fit, _ in (did_fit, legacy_mpd_fit, cs_fit, sdid_fit):
             br = BusinessReport(fit, auto_diagnostics=False)
             s = br.summary()
             assert isinstance(s, str)

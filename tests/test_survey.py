@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_average import post_period_average
 
 from diff_diff import (
     DifferenceInDifferences,
@@ -920,30 +921,33 @@ class TestIntegration:
         assert result.survey_metadata is not None
         assert result.survey_metadata.weight_type == "pweight"
 
-    def test_multiperiod_with_survey_design(self, multiperiod_data):
-        """MultiPeriodDiD accepts and uses survey_design."""
-        mpd = MultiPeriodDiD()
+    def test_twfe_event_study_with_survey_design(self, multiperiod_data):
+        """The TWFE event-study mode accepts and uses survey_design."""
+        es = TwoWayFixedEffects()
         sd = SurveyDesign(
             weights="weight",
             strata="stratum",
             psu="psu",
             weight_type="pweight",
         )
-        result = mpd.fit(
+        result = es.fit(
             multiperiod_data,
             outcome="outcome",
             treatment="treated",
             time="period",
+            event_study=True,
+            spec="pooled",
             post_periods=[3, 4, 5],
             survey_design=sd,
         )
+        att_bar, se_bar = post_period_average(result)
 
-        assert np.isfinite(result.avg_att)
-        assert np.isfinite(result.avg_se)
-        assert result.avg_se > 0
+        assert np.isfinite(att_bar)
+        assert np.isfinite(se_bar)
+        assert se_bar > 0
 
         # Average ATT should be close to 2.5
-        assert abs(result.avg_att - 2.5) < 1.5
+        assert abs(att_bar - 2.5) < 1.5
 
     def test_fweight_error_for_fractional(self):
         """Fractional fweights raise ValueError."""
@@ -2594,8 +2598,8 @@ class TestRound9Fixes:
         assert np.all(vcov == 0.0)
         assert not np.any(np.isnan(vcov))
 
-    def test_multiperiod_fweight_df_rounding(self):
-        """MultiPeriodDiD uses rounded (not truncated) fweight df."""
+    def test_twfe_event_study_fweight_df_rounding(self):
+        """The event-study core uses rounded (not truncated) fweight df."""
         np.random.seed(907)
         n_units = 10
         periods = [1, 2, 3]
@@ -2615,22 +2619,25 @@ class TestRound9Fixes:
         df = pd.DataFrame(rows)
 
         sd = SurveyDesign(weights="fw", weight_type="fweight")
-        mpd = MultiPeriodDiD()
+        es = TwoWayFixedEffects()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            result = mpd.fit(
+            result = es.fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
                 time="time",
+                event_study=True,
+                spec="pooled",
                 post_periods=[3],
                 survey_design=sd,
             )
+        att_bar, se_bar = post_period_average(result)
 
         # Should produce valid results (not crash on df truncation)
-        assert np.isfinite(result.avg_att)
-        assert np.isfinite(result.avg_se)
-        assert result.avg_se > 0
+        assert np.isfinite(att_bar)
+        assert np.isfinite(se_bar)
+        assert se_bar > 0
 
 
 class TestRound10Fixes:
@@ -2925,8 +2932,8 @@ class TestRound11Fixes:
         # Should succeed without error
         assert np.isfinite(result.att)
 
-    def test_multiperiod_nonpositive_df_fallback(self):
-        """MultiPeriodDiD with df=0 falls back to normal distribution."""
+    def test_twfe_event_study_nonpositive_df_fallback(self):
+        """The TWFE event-study mode with df=0 falls back to the normal distribution."""
         np.random.seed(42)
         n = 40
         # 4 strata, 1 PSU per stratum → n_PSU=4, n_strata=4, df_survey=0
@@ -2949,23 +2956,26 @@ class TestRound11Fixes:
             psu="cluster",
             lonely_psu="adjust",
         )
-        mpd = MultiPeriodDiD()
+        es = TwoWayFixedEffects()
         with pytest.warns(UserWarning, match="non-positive"):
-            result = mpd.fit(
+            result = es.fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
                 time="time",
+                event_study=True,
+                spec="pooled",
                 post_periods=[2, 3],
                 survey_design=sd,
             )
         # Period effects with finite SE > 0 should have finite p-values
         # (normal distribution fallback, not NaN from t(df=0))
-        for period, pe in result.period_effects.items():
-            if np.isfinite(pe.se) and pe.se > 0:
+        for row in np.where(~result.is_reference)[0]:
+            se, p_value, period = result.se[row], result.p_value[row], result.event_time[row]
+            if np.isfinite(se) and se > 0:
                 assert np.isfinite(
-                    pe.p_value
-                ), f"Period {period}: finite SE={pe.se} but p_value={pe.p_value}"
+                    p_value
+                ), f"Period {period}: finite SE={se} but p_value={p_value}"
 
 
 class TestRound13Fixes:

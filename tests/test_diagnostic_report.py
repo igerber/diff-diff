@@ -34,6 +34,7 @@ from diff_diff import (
     MultiPeriodDiD,
     SyntheticControl,
     SyntheticDiD,
+    TwoWayFixedEffects,
     generate_did_data,
     generate_factor_data,
     generate_staggered_data,
@@ -86,7 +87,9 @@ def did_fit():
 
 
 @pytest.fixture(scope="module")
-def multi_period_fit():
+def legacy_mpd_fit():
+    """Native MultiPeriodDiD fit for the MPD-only tests (event-study lanes, the
+    name-string dispatch pins): dies with the class at the 4.0 cut (PR 4c-ii)."""
     warnings.filterwarnings("ignore")
     df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
     es = MultiPeriodDiD().fit(
@@ -98,6 +101,18 @@ def multi_period_fit():
         reference_period=3,
     )
     return es, df
+
+
+@pytest.fixture(scope="module")
+def twfe_fit():
+    """Static TwoWayFixedEffects fit (a scalar DiDResults) on the same panel: the
+    successor fixture for the generic report tests (4.0 cut, PR 4c-i)."""
+    warnings.filterwarnings("ignore")
+    df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
+    fit = TwoWayFixedEffects().fit(
+        df, outcome="outcome", treatment="treated", unit="unit", post="post"
+    )
+    return fit, df
 
 
 @pytest.fixture(scope="module")
@@ -198,8 +213,8 @@ class TestSchemaContract:
         schema = dr.to_dict()
         assert set(schema.keys()) == _TOP_LEVEL_KEYS
 
-    def test_every_top_level_key_present_multiperiod(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_every_top_level_key_present_multiperiod(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         schema = DiagnosticReport(fit).to_dict()
         assert set(schema.keys()) == _TOP_LEVEL_KEYS
 
@@ -220,8 +235,8 @@ class TestSchemaContract:
         schema = DiagnosticReport(fit).to_dict()
         assert set(schema.keys()) == _TOP_LEVEL_KEYS
 
-    def test_schema_version_constant(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_schema_version_constant(self, twfe_fit):
+        fit, _ = twfe_fit
         schema = DiagnosticReport(fit).to_dict()
         assert schema["schema_version"] == DIAGNOSTIC_REPORT_SCHEMA_VERSION
         assert DIAGNOSTIC_REPORT_SCHEMA_VERSION == "2.0"
@@ -253,8 +268,8 @@ class TestSchemaContract:
                 section.get("status") in _STATUS_ENUM
             ), f"{key}.status = {section.get('status')!r} not in {_STATUS_ENUM}"
 
-    def test_json_round_trip_multiperiod(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_json_round_trip_twfe(self, twfe_fit):
+        fit, _ = twfe_fit
         dr = DiagnosticReport(fit)
         dumped = json.dumps(dr.to_dict())
         assert len(dumped) > 0
@@ -312,8 +327,8 @@ class TestApplicabilityMatrix:
         reason = dr.skipped_checks["bacon"]
         assert "outcome" in reason or "time" in reason or "unit" in reason
 
-    def test_multiperiod_runs_pt_and_power_and_sensitivity(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_multiperiod_runs_pt_and_power_and_sensitivity(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         dr = DiagnosticReport(fit)
         applicable = set(dr.applicable_checks)
         assert "parallel_trends" in applicable
@@ -340,8 +355,8 @@ class TestApplicabilityMatrix:
         dr = DiagnosticReport(fit)
         assert "estimator_native" in dr.applicable_checks
 
-    def test_run_opt_outs_move_checks_to_skipped(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_run_opt_outs_move_checks_to_skipped(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         dr = DiagnosticReport(fit, run_sensitivity=False)
         assert "sensitivity" not in dr.applicable_checks
         assert dr.skipped_checks["sensitivity"].startswith("run_sensitivity=False")
@@ -366,8 +381,8 @@ class TestApplicabilityMatrix:
 # Precomputed passthrough
 # ---------------------------------------------------------------------------
 class TestPrecomputed:
-    def test_precomputed_sensitivity_is_used_verbatim(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_precomputed_sensitivity_is_used_verbatim(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
 
         # Construct a minimal SensitivityResults-shaped object the formatter recognizes.
         class _FakeSens:
@@ -1177,8 +1192,8 @@ class TestNarrowedApplicabilityAndPlaceboSchema:
             f"got {placebo['status']!r}"
         )
 
-    def test_placebo_skipped_for_multiperiod_fit(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_placebo_skipped_for_multiperiod_fit(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         placebo = DiagnosticReport(fit).to_dict()["placebo"]
         assert placebo["status"] == "skipped"
 
@@ -1731,18 +1746,18 @@ class TestPrecomputedValidation:
     """Regression for the P1 finding that ``precomputed=`` silently accepted
     keys that were never implemented. Unsupported keys now raise."""
 
-    def test_unsupported_precomputed_key_raises(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_unsupported_precomputed_key_raises(self, twfe_fit):
+        fit, _ = twfe_fit
         with pytest.raises(ValueError, match="not implemented"):
             DiagnosticReport(fit, precomputed={"design_effect": object()})
 
-    def test_supported_precomputed_keys_accepted(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_supported_precomputed_keys_accepted(self, twfe_fit):
+        fit, _ = twfe_fit
         # The four implemented keys should not raise at construction.
         DiagnosticReport(fit, precomputed={"parallel_trends": {"p_value": 0.5}})
 
-    def test_mixed_supported_and_unsupported_raises(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_mixed_supported_and_unsupported_raises(self, twfe_fit):
+        fit, _ = twfe_fit
         with pytest.raises(ValueError, match="epv"):
             DiagnosticReport(fit, precomputed={"sensitivity": None, "epv": object()})
 
@@ -1768,8 +1783,8 @@ class TestSingleMSensitivityPrecomputed:
             alpha=0.05,
         )
 
-    def test_dr_schema_preserves_single_m_marker(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_dr_schema_preserves_single_m_marker(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         dr = DiagnosticReport(fit, precomputed={"sensitivity": self._fake_single_m()})
         sens = dr.to_dict()["sensitivity"]
         assert sens["status"] == "ran"
@@ -1777,8 +1792,8 @@ class TestSingleMSensitivityPrecomputed:
         assert sens["breakdown_M"] is None
         assert len(sens["grid"]) == 1
 
-    def test_dr_summary_does_not_claim_full_grid_robustness(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_dr_summary_does_not_claim_full_grid_robustness(self, legacy_mpd_fit):
+        fit, _ = legacy_mpd_fit
         dr = DiagnosticReport(fit, precomputed={"sensitivity": self._fake_single_m()})
         summary = dr.summary()
         assert "across the entire HonestDiD grid" not in summary
@@ -1787,11 +1802,11 @@ class TestSingleMSensitivityPrecomputed:
         assert "single point checked" in summary
         assert "not a breakdown" in summary or "not a grid" in summary
 
-    def test_br_summary_does_not_claim_full_grid_robustness(self, multi_period_fit):
+    def test_br_summary_does_not_claim_full_grid_robustness(self, legacy_mpd_fit):
         """BR via honest_did_results= passthrough must not oversell a point check."""
         from diff_diff import BusinessReport
 
-        fit, _ = multi_period_fit
+        fit, _ = legacy_mpd_fit
         br = BusinessReport(fit, honest_did_results=self._fake_single_m())
         summary = br.summary()
         assert "full grid" not in summary
@@ -2307,9 +2322,9 @@ class TestSCMNative:
 # Error handling
 # ---------------------------------------------------------------------------
 class TestErrorHandling:
-    def test_sensitivity_error_does_not_break_report(self, multi_period_fit):
+    def test_sensitivity_error_does_not_break_report(self, legacy_mpd_fit):
         """A failing diagnostic records its error in the section; the report still renders."""
-        fit, _ = multi_period_fit
+        fit, _ = legacy_mpd_fit
 
         def _raise(*args, **kwargs):
             raise RuntimeError("synthetic test failure")
@@ -2478,16 +2493,16 @@ class TestDRFragilePhrasingIsGridAware:
 # Public result class
 # ---------------------------------------------------------------------------
 class TestDiagnosticReportResults:
-    def test_run_all_returns_dataclass(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_run_all_returns_dataclass(self, twfe_fit):
+        fit, _ = twfe_fit
         dr = DiagnosticReport(fit)
         results = dr.run_all()
         assert isinstance(results, DiagnosticReportResults)
         assert isinstance(results.applicable_checks, tuple)
         assert isinstance(results.schema, dict)
 
-    def test_run_all_is_idempotent(self, multi_period_fit):
-        fit, _ = multi_period_fit
+    def test_run_all_is_idempotent(self, twfe_fit):
+        fit, _ = twfe_fit
         dr = DiagnosticReport(fit)
         a = dr.run_all()
         b = dr.run_all()

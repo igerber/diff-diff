@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_average import post_period_average
 
 from diff_diff import (
     DiDResults,
@@ -1126,43 +1127,48 @@ class TestClusterRobustSE:
         assert results_cluster.se != results_no_cluster.se
 
 
+def _multi_period_panel() -> pd.DataFrame:
+    """Panel data with multiple time periods and known ATT (6 periods, 3 pre / 3 post,
+    effect 3.0 from period 3). Module-level so the MultiPeriodDiD tests and their TWFE
+    event-study twins share it (4.0 cut, PR 4c-i)."""
+    np.random.seed(42)
+    n_units = 100
+    n_periods = 6
+    data = []
+    for unit in range(n_units):
+        is_treated = unit < n_units // 2
+        unit_effect = np.random.normal(0, 1)
+        for period in range(n_periods):
+            y = 10.0 + unit_effect + period * 0.5
+            if is_treated and period >= 3:
+                y += 3.0
+            y += np.random.normal(0, 0.5)
+            data.append({"unit": unit, "period": period, "treated": int(is_treated), "outcome": y})
+    return pd.DataFrame(data)
+
+
+def _event_study_panel() -> pd.DataFrame:
+    """Panel data with 6 periods, treatment at period 3 (no unit effects)."""
+    np.random.seed(42)
+    data = []
+    for unit in range(100):
+        is_treated = unit < 50
+        for period in range(6):
+            y = 10.0 + period * 0.5
+            if is_treated and period >= 3:
+                y += 3.0
+            y += np.random.normal(0, 0.5)
+            data.append({"unit": unit, "period": period, "treated": int(is_treated), "outcome": y})
+    return pd.DataFrame(data)
+
+
 class TestMultiPeriodDiD:
     """Tests for MultiPeriodDiD estimator."""
 
     @pytest.fixture
     def multi_period_data(self):
         """Create panel data with multiple time periods and known ATT."""
-        np.random.seed(42)
-        n_units = 100
-        n_periods = 6  # 3 pre-treatment, 3 post-treatment
-
-        data = []
-        for unit in range(n_units):
-            is_treated = unit < n_units // 2
-            unit_effect = np.random.normal(0, 1)
-
-            for period in range(n_periods):
-                # Common time trend
-                time_effect = period * 0.5
-
-                y = 10.0 + unit_effect + time_effect
-
-                # Treatment effect: 3.0 in post-periods (periods 3, 4, 5)
-                if is_treated and period >= 3:
-                    y += 3.0
-
-                y += np.random.normal(0, 0.5)
-
-                data.append(
-                    {
-                        "unit": unit,
-                        "period": period,
-                        "treated": int(is_treated),
-                        "outcome": y,
-                    }
-                )
-
-        return pd.DataFrame(data)
+        return _multi_period_panel()
 
     @pytest.fixture
     def heterogeneous_effects_data(self):
@@ -1922,30 +1928,202 @@ class TestMultiPeriodDiD:
         ), "Collinear covariate coefficient should be NaN"
 
 
+class TestTwoWayFixedEffectsEventStudy:
+    """TWFE event-study twins of the MultiPeriodDiD core-behaviour pins that had no
+    TWFE coverage (4.0 cut, PR 4c-i). The unit-driven validation twins keep
+    `unit=` (the warnings run only inside the core's `if unit is not None:`
+    block) and assert the warning or its absence, never SE values - the pooled
+    spec auto-clusters at unit when `unit=` is supplied."""
+
+    @pytest.fixture
+    def multi_period_panel(self):
+        return _multi_period_panel()
+
+    @pytest.fixture
+    def event_study_panel(self):
+        return _event_study_panel()
+
+    def _fit(self, data, **kw):
+        base = dict(outcome="outcome", treatment="treated", time="period", event_study=True)
+        base.update(kw)
+        return TwoWayFixedEffects().fit(data, **base)
+
+    def test_reference_period_in_post_raises(self, event_study_panel):
+        with pytest.raises(ValueError, match="post-treatment period"):
+            self._fit(event_study_panel, spec="pooled", post_periods=[3, 4, 5], reference_period=4)
+
+    def test_staggered_treatment_warning(self):
+        np.random.seed(42)
+        data = []
+        for unit in range(40):
+            if unit < 10:
+                treat_start = 3
+            elif unit < 20:
+                treat_start = 5
+            else:
+                treat_start = None
+            for period in range(8):
+                is_treated = treat_start is not None and period >= treat_start
+                y = 10.0 + period * 0.5 + (2.0 if is_treated else 0) + np.random.normal(0, 0.3)
+                data.append(
+                    {"unit": unit, "period": period, "treated": int(is_treated), "outcome": y}
+                )
+        df = pd.DataFrame(data)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            self._fit(
+                df, spec="pooled", post_periods=[3, 4, 5, 6, 7], reference_period=2, unit="unit"
+            )
+        assert any("staggered" in str(x.message).lower() for x in w)
+
+    def test_single_pre_period_warns(self):
+        np.random.seed(42)
+        data = []
+        for unit_id in range(40):
+            is_treated = unit_id < 20
+            for period in range(3):
+                y = 10.0 + period * 0.5 + (2.0 if is_treated and period >= 1 else 0)
+                y += np.random.normal(0, 0.3)
+                data.append(
+                    {"unit": unit_id, "period": period, "treated": int(is_treated), "outcome": y}
+                )
+        df = pd.DataFrame(data)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = self._fit(df, spec="pooled", post_periods=[1, 2], reference_period=0)
+        assert any("Only one pre-treatment period" in str(x.message) for x in w)
+        att_bar, _ = post_period_average(results)
+        assert np.isfinite(att_bar)
+
+    def test_treatment_reversal_warns(self):
+        np.random.seed(42)
+        data = []
+        for unit_id in range(40):
+            for period in range(6):
+                is_treated = unit_id < 20
+                if unit_id == 0:
+                    d = 1 if 2 <= period <= 3 else 0
+                elif is_treated:
+                    d = 1 if period >= 3 else 0
+                else:
+                    d = 0
+                y = 10.0 + period * 0.5 + (2.0 if d else 0) + np.random.normal(0, 0.3)
+                data.append({"unit": unit_id, "period": period, "treated": d, "outcome": y})
+        df = pd.DataFrame(data)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            self._fit(df, spec="pooled", post_periods=[3, 4, 5], reference_period=2, unit="unit")
+        assert any("Treatment reversal" in str(x.message) for x in w)
+
+    def test_time_varying_treatment_warning(self):
+        np.random.seed(42)
+        data = []
+        for unit_id in range(40):
+            is_treated = unit_id < 20
+            for period in range(6):
+                d = 1 if is_treated and period >= 3 else 0
+                y = 10.0 + period * 0.5 + (2.0 if d else 0) + np.random.normal(0, 0.3)
+                data.append({"unit": unit_id, "period": period, "treated": d, "outcome": y})
+        df = pd.DataFrame(data)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = self._fit(
+                df, spec="pooled", post_periods=[3, 4, 5], reference_period=2, unit="unit"
+            )
+        dit_warnings = [x for x in w if "time-varying" in str(x.message).lower()]
+        assert dit_warnings, "Expected warning about time-varying treatment"
+        assert "ever_treated" in str(dit_warnings[0].message)
+        assert results is not None
+        assert np.sum(~results.is_reference) > 0
+
+    def test_staggered_no_false_positive_unbalanced(self):
+        np.random.seed(42)
+        data = []
+        for unit_id in range(40):
+            is_treated = unit_id < 20
+            start_period = 4 if (is_treated and unit_id < 5) else 0
+            for period in range(start_period, 8):
+                d = 1 if is_treated and period >= 3 else 0
+                y = 10.0 + period * 0.5 + (2.0 if d else 0) + np.random.normal(0, 0.3)
+                data.append({"unit": unit_id, "period": period, "treated": d, "outcome": y})
+        df = pd.DataFrame(data)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            self._fit(
+                df, spec="pooled", post_periods=[3, 4, 5, 6, 7], reference_period=2, unit="unit"
+            )
+        assert not any("staggered" in str(x.message).lower() for x in w)
+
+    def _collinear(self, panel):
+        panel = panel.copy()
+        panel["collinear_cov"] = panel["treated"].copy()
+        return panel
+
+    def test_rank_deficient_design_warns_and_keeps_period_rows_finite(self, multi_period_panel):
+        """A collinear covariate warns; the per-period quintet stays finite (the
+        dropped column is the covariate, not a period interaction)."""
+        df = self._collinear(multi_period_panel)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = self._fit(
+                df,
+                spec="pooled",
+                post_periods=[3, 4, 5],
+                reference_period=2,
+                covariates=["collinear_cov"],
+            )
+        assert any(
+            "Rank-deficient" in str(x.message) or "collinear" in str(x.message).lower() for x in w
+        )
+        rows = ~results.is_reference
+        for field in ("att", "se", "t_stat", "p_value"):
+            assert np.all(np.isfinite(getattr(results, field)[rows])), field
+
+    def test_rank_deficient_action_error_raises(self, multi_period_panel):
+        df = self._collinear(multi_period_panel)
+        with pytest.raises(ValueError, match="rank-deficient"):
+            TwoWayFixedEffects(rank_deficient_action="error").fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                event_study=True,
+                spec="pooled",
+                post_periods=[3, 4, 5],
+                reference_period=2,
+                covariates=["collinear_cov"],
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, multi_period_panel):
+        df = self._collinear(multi_period_panel)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = TwoWayFixedEffects(rank_deficient_action="silent").fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                event_study=True,
+                spec="pooled",
+                post_periods=[3, 4, 5],
+                reference_period=2,
+                covariates=["collinear_cov"],
+            )
+        assert not any(
+            "Rank-deficient" in str(x.message) or "rank-deficient" in str(x.message).lower()
+            for x in w
+        ), [str(x.message) for x in w]
+        rows = ~results.is_reference
+        assert np.all(np.isfinite(results.att[rows]))
+
+
 class TestMultiPeriodDiDEventStudy:
     """Tests for MultiPeriodDiD full event-study specification (pre + post periods)."""
 
     @pytest.fixture
     def panel_data(self):
         """Panel data with 6 periods, treatment at period 3."""
-        np.random.seed(42)
-        data = []
-        for unit in range(100):
-            is_treated = unit < 50
-            for period in range(6):
-                y = 10.0 + period * 0.5
-                if is_treated and period >= 3:
-                    y += 3.0
-                y += np.random.normal(0, 0.5)
-                data.append(
-                    {
-                        "unit": unit,
-                        "period": period,
-                        "treated": int(is_treated),
-                        "outcome": y,
-                    }
-                )
-        return pd.DataFrame(data)
+        return _event_study_panel()
 
     def test_default_reference_period_is_last_pre(self, panel_data):
         """Verify reference_period defaults to the last pre-period."""
@@ -3302,8 +3480,8 @@ class TestUnbalancedPanels:
                     df, outcome="outcome", treatment="post", unit="unit", post="period"
                 )
 
-    def test_multiperiod_with_sparse_data(self):
-        """Test MultiPeriodDiD with sparse data across periods."""
+    def test_event_study_with_sparse_data(self):
+        """Test the TWFE event-study mode with sparse data across periods."""
         np.random.seed(42)
         data = []
 
@@ -3333,14 +3511,23 @@ class TestUnbalancedPanels:
 
         df = pd.DataFrame(data)
 
-        mp_did = MultiPeriodDiD()
-        results = mp_did.fit(
-            df, outcome="outcome", treatment="treated", time="period", reference_period=1
+        # Pooled event study (the former MultiPeriodDiD fit); the midpoint default
+        # over the observed periods 0-4 resolved to post [2, 3, 4].
+        results = TwoWayFixedEffects().fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            event_study=True,
+            spec="pooled",
+            post_periods=[2, 3, 4],
+            reference_period=1,
         )
 
         # Should produce valid results
-        assert np.isfinite(results.avg_att)
-        assert len(results.period_effects) > 0
+        att_bar, _ = post_period_average(results)
+        assert np.isfinite(att_bar)
+        assert np.sum(~results.is_reference) > 0
 
 
 class TestSingleTreatedUnit:
