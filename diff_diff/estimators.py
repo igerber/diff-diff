@@ -28,6 +28,7 @@ from diff_diff.linalg import (
     solve_ols,
 )
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
+from diff_diff.results_base import _EventStudyCorePayload
 from diff_diff.utils import (
     WildBootstrapResults,
     absorbed_fe_cr1_k_increment,
@@ -1336,8 +1337,15 @@ class DifferenceInDifferences(BaseEstimator):
         cluster_override: Any = _USE_SELF_CLUSTER,
         estimator_name: str = "MultiPeriodDiD",
         _frame_offset: int = 0,
-    ) -> Tuple[MultiPeriodDiDResults, np.ndarray, np.ndarray]:
+    ) -> _EventStudyCorePayload:
         """Shared event-study estimation core (row M-010).
+
+        Returns a private :class:`~diff_diff.results_base._EventStudyCorePayload`
+        (PR 4c-i decoupling): ``MultiPeriodDiD.fit`` wraps it into the legacy
+        ``MultiPeriodDiDResults`` container via ``_mpd_results_from_payload``;
+        the TWFE event-study mode builds the unified ``EventStudyResults``
+        surface from it directly, so no MultiPeriodDiD container is
+        constructed on that path.
 
         The relocated body of ``MultiPeriodDiD.fit`` (verbatim through the
         3.9 merge; docs/v4-design.md section 4.1): validation, the
@@ -2251,7 +2259,15 @@ class DifferenceInDifferences(BaseEstimator):
                     _bm_dof_avg = float(_dof_all[-1])
 
         # Extract period-specific treatment effects for ALL non-reference periods
-        period_effects = {}
+        # (index-aligned lists over non_ref_periods; the MultiPeriodDiD
+        # wrapper zips them into PeriodEffect records, the TWFE surface
+        # builder reads them as arrays).
+        pe_att: List[float] = []
+        pe_se: List[float] = []
+        pe_t: List[float] = []
+        pe_p: List[float] = []
+        pe_lo: List[float] = []
+        pe_hi: List[float] = []
         post_effect_values = []
         post_effect_indices = []
         # Per-period df PROVENANCE for the unified event-study surface
@@ -2284,14 +2300,12 @@ class DifferenceInDifferences(BaseEstimator):
                 else float("nan")
             )
 
-            period_effects[period] = PeriodEffect(
-                period=period,
-                effect=effect,
-                se=se,
-                t_stat=t_stat,
-                p_value=p_value,
-                conf_int=conf_int,
-            )
+            pe_att.append(effect)
+            pe_se.append(se)
+            pe_t.append(t_stat)
+            pe_p.append(p_value)
+            pe_lo.append(conf_int[0])
+            pe_hi.append(conf_int[1])
 
             if period in post_periods:
                 post_effect_values.append(effect)
@@ -2338,32 +2352,41 @@ class DifferenceInDifferences(BaseEstimator):
         n_treated = n_treated_raw
         n_control = n_control_raw
 
-        # Create coefficient dictionary (var_names uniqueness already enforced
-        # before the fit above).
-        coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}
-
-        # Store results
-        _core_results = MultiPeriodDiDResults(
-            period_effects=period_effects,
+        # Hand off to the builders (PR 4c-i): MultiPeriodDiD wraps this into
+        # its container; the TWFE event-study mode builds the surface from it.
+        return _EventStudyCorePayload(
+            periods=list(non_ref_periods),
+            att=np.asarray(pe_att, dtype=float),
+            se=np.asarray(pe_se, dtype=float),
+            t_stat=np.asarray(pe_t, dtype=float),
+            p_value=np.asarray(pe_p, dtype=float),
+            ci_lower=np.asarray(pe_lo, dtype=float),
+            ci_upper=np.asarray(pe_hi, dtype=float),
+            df_by_period=es_df_used,
+            reference_period=reference_period,
+            pre_periods=pre_periods,
+            post_periods=post_periods,
+            alpha=self.alpha,
+            coefficients=coefficients,
+            coef_names=list(var_names),
+            vcov=vcov,
+            interaction_indices=interaction_indices,
+            residuals=residuals,
+            fitted_values=fitted,
+            r_squared=r_squared,
             avg_att=avg_att,
             avg_se=avg_se,
             avg_t_stat=avg_t_stat,
             avg_p_value=avg_p_value,
             avg_conf_int=avg_conf_int,
+            inference_df=(
+                float(_avg_df)
+                if _avg_df is not None and np.isfinite(_avg_df) and _avg_df > 0
+                else None
+            ),
             n_obs=len(y),
             n_treated=n_treated,
             n_control=n_control,
-            pre_periods=pre_periods,
-            post_periods=post_periods,
-            alpha=self.alpha,
-            coefficients=coef_dict,
-            vcov=vcov,
-            residuals=residuals,
-            fitted_values=fitted,
-            r_squared=r_squared,
-            reference_period=reference_period,
-            interaction_indices=interaction_indices,
-            survey_metadata=survey_metadata,
             # Report the family that actually produced the SE; may be the
             # remapped hc1 under a replicate-weight survey design.
             vcov_type=_fit_vcov_type,
@@ -2373,15 +2396,59 @@ class DifferenceInDifferences(BaseEstimator):
             ),
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
             df_convention=self.df_convention,
-            inference_df=(
-                float(_avg_df)
-                if _avg_df is not None and np.isfinite(_avg_df) and _avg_df > 0
-                else None
-            ),
-            event_study_df=es_df_used,
+            survey_metadata=survey_metadata,
         )
 
-        return _core_results, coefficients, vcov
+
+def _mpd_results_from_payload(p: _EventStudyCorePayload) -> MultiPeriodDiDResults:
+    """Wrap the event-study core's payload into the legacy MultiPeriodDiD
+    container (deleted with the class at the 4.0 cut, PR 4c-ii).
+
+    ``period_effects`` is built in ``p.periods`` order (the core's sorted
+    non-reference order, the same insertion order the core used before the
+    PR 4c-i decoupling); per-period scalars round-trip through float64
+    arrays (value-identical; ``np.float64`` is a ``float`` subclass).
+    """
+    period_effects = {
+        per: PeriodEffect(
+            period=per,
+            effect=p.att[i],
+            se=p.se[i],
+            t_stat=p.t_stat[i],
+            p_value=p.p_value[i],
+            conf_int=(p.ci_lower[i], p.ci_upper[i]),
+        )
+        for i, per in enumerate(p.periods)
+    }
+    return MultiPeriodDiDResults(
+        period_effects=period_effects,
+        avg_att=p.avg_att,
+        avg_se=p.avg_se,
+        avg_t_stat=p.avg_t_stat,
+        avg_p_value=p.avg_p_value,
+        avg_conf_int=p.avg_conf_int,
+        n_obs=p.n_obs,
+        n_treated=p.n_treated,
+        n_control=p.n_control,
+        pre_periods=p.pre_periods,
+        post_periods=p.post_periods,
+        alpha=p.alpha,
+        coefficients=dict(zip(p.coef_names, p.coefficients)),
+        vcov=p.vcov,
+        residuals=p.residuals,
+        fitted_values=p.fitted_values,
+        r_squared=p.r_squared,
+        reference_period=p.reference_period,
+        interaction_indices=p.interaction_indices,
+        survey_metadata=p.survey_metadata,
+        vcov_type=p.vcov_type,
+        cluster_name=p.cluster_name,
+        n_clusters=p.n_clusters,
+        conley_lag_cutoff=p.conley_lag_cutoff,
+        df_convention=p.df_convention,
+        inference_df=p.inference_df,
+        event_study_df=p.df_by_period,
+    )
 
 
 class MultiPeriodDiD(DifferenceInDifferences):
@@ -2624,7 +2691,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             )
             effective_inference = "analytical"
 
-        results, coefficients, vcov = self._fit_event_study_core(
+        payload = self._fit_event_study_core(
             data,
             outcome,
             treatment,
@@ -2639,9 +2706,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
             effective_inference,
             _frame_offset=1,
         )
-        self.results_ = results
-        self._coefficients = coefficients
-        self._vcov = vcov
+        self.results_ = _mpd_results_from_payload(payload)
+        self._coefficients = payload.coefficients
+        self._vcov = payload.vcov
         self.is_fitted_ = True
         return self.results_
 

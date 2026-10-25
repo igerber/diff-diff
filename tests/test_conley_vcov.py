@@ -1128,13 +1128,13 @@ class TestConleyEstimatorIntegration:
                 unit="unit",
             )
 
-    def test_mpd_conley_unknown_cluster_column_raises(self):
-        """MPD + Conley + cluster=<missing column> raises a clear estimator-
+    def test_twfe_es_conley_unknown_cluster_column_raises(self):
+        """TWFE event-study + Conley + cluster=<missing column> raises a clear estimator-
         level ValueError before `data[self.cluster]` access (combined-kernel
         path; codex CI R7 P1)."""
         import pandas as _pd
 
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=83)
         rows = []
@@ -1154,7 +1154,7 @@ class TestConleyEstimatorIntegration:
                 )
         df = _pd.DataFrame(rows)
         with pytest.raises(ValueError, match="Cluster column 'missing_region' not found"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 cluster="missing_region",
                 conley_coords=("lat", "lon"),
@@ -1163,6 +1163,8 @@ class TestConleyEstimatorIntegration:
             ).fit(
                 df,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 unit="unit",
@@ -1312,11 +1314,11 @@ class TestConleyEstimatorIntegration:
                 unit="unit",
             )
 
-    def test_did_conley_matches_mpd_post_periods_1(self, two_period_panel):
-        """DiD + Conley on a 2-period panel matches MultiPeriodDiD with
+    def test_did_conley_matches_twfe_event_study_post_periods_1(self, two_period_panel):
+        """DiD + Conley on a 2-period panel matches the TWFE event-study mode with
         post_periods=[1], reference_period=0 on the same data (locks the
-        DiD wire-up correctness against the already-shipped MPD path)."""
-        from diff_diff import DifferenceInDifferences, MultiPeriodDiD
+        DiD wire-up correctness against the event-study core)."""
+        from diff_diff import DifferenceInDifferences, TwoWayFixedEffects
 
         df = two_period_panel.copy()
         kwargs = dict(
@@ -1328,18 +1330,22 @@ class TestConleyEstimatorIntegration:
         res_did = DifferenceInDifferences(**kwargs).fit(
             df, outcome="y", treatment="treated", post="time", unit="unit"
         )
-        res_mpd = MultiPeriodDiD(**kwargs).fit(
+        res_es = TwoWayFixedEffects(**kwargs).fit(
             df,
             outcome="y",
+            event_study=True,
+            spec="pooled",
             treatment="treated",
             time="time",
             unit="unit",
             post_periods=[1],
             reference_period=0,
         )
-        # MPD reports ATT for the single post period (1)
-        np.testing.assert_allclose(res_did.att, res_mpd.att, atol=1e-10)
-        np.testing.assert_allclose(res_did.se, res_mpd.se, atol=1e-10)
+        # The event study has exactly one non-reference row: post period 1.
+        (row,) = np.where(~res_es.is_reference)[0]
+        assert res_es.event_time[row] == 1
+        np.testing.assert_allclose(res_did.att, res_es.att[row], atol=1e-10)
+        np.testing.assert_allclose(res_did.se, res_es.se[row], atol=1e-10)
 
     def test_did_conley_with_absorb_uses_raw_time_labels(self, two_period_panel, monkeypatch):
         """DiD + Conley + absorb=[<unit>] must feed the Conley helper the
@@ -1389,8 +1395,8 @@ class TestConleyEstimatorIntegration:
         )
         assert set(uniques.tolist()) == {0, 1}, f"Expected raw integer labels 0/1, got {uniques}"
 
-    def test_mpd_conley_with_absorb_uses_raw_coords_and_time(self, monkeypatch):
-        """MultiPeriodDiD + Conley + absorb=[<col>] must feed the Conley
+    def test_twfe_es_within_conley_uses_raw_coords_and_time(self, monkeypatch):
+        """TWFE event-study (within spec) + Conley must feed the Conley
         helper the ORIGINAL coords/time/unit columns from `data`, not the
         absorb-demeaned `working_data`. If a user lists the `time` column
         (or coord columns) in `absorb`, working_data has those demeaned and
@@ -1401,7 +1407,7 @@ class TestConleyEstimatorIntegration:
         import pandas as _pd
 
         import diff_diff.linalg as linalg_module
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=71)
         n_units = 10
@@ -1438,7 +1444,7 @@ class TestConleyEstimatorIntegration:
             return orig(*args, **kwargs)
 
         monkeypatch.setattr(linalg_module, "_compute_conley_vcov", _spy)
-        MultiPeriodDiD(
+        TwoWayFixedEffects(
             vcov_type="conley",
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
@@ -1446,12 +1452,13 @@ class TestConleyEstimatorIntegration:
         ).fit(
             df,
             outcome="y",
+            event_study=True,
+            spec="within",
             treatment="treated",
             time="time",
             unit="unit",
             post_periods=[2, 3],
             reference_period=0,
-            absorb=["unit"],
         )
         # Raw time labels span exactly 0..T-1 = 4 distinct values; demeaned
         # absorb would collapse to per-unit means → ~n_units distinct values.
@@ -1475,11 +1482,11 @@ class TestConleyEstimatorIntegration:
             "absorb=['unit'] is leaking demeaned coords into the Conley helper."
         )
 
-    def test_multi_period_did_with_conley_panel(self):
-        """Phase 2 MultiPeriodDiD + vcov_type='conley' uses the block-decomposed
+    def test_twfe_event_study_with_conley_panel(self):
+        """TWFE event-study mode + vcov_type='conley' uses the block-decomposed
         sandwich (matches R conleyreg). Verifies that finite SEs are produced
         when conley_lag_cutoff and unit are both supplied."""
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=13)
         n_units = 30
@@ -1496,7 +1503,7 @@ class TestConleyEstimatorIntegration:
         import pandas as pd
 
         df_mp = pd.DataFrame(rows)
-        res = MultiPeriodDiD(
+        res = TwoWayFixedEffects(
             vcov_type="conley",
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
@@ -1504,17 +1511,19 @@ class TestConleyEstimatorIntegration:
         ).fit(
             df_mp,
             outcome="y",
+            event_study=True,
+            spec="pooled",
             treatment="treated",
             time="time",
             post_periods=[2, 3],
             unit="unit",
             reference_period=1,
         )
-        assert np.all(np.isfinite(res.vcov)), "MPD+Conley vcov must be finite"
+        assert np.all(np.isfinite(res.vcov)), "event-study + Conley vcov must be finite"
 
-    def test_multi_period_did_conley_missing_unit_raises(self):
-        """MPD + vcov_type='conley' without unit= at fit-time raises ValueError."""
-        from diff_diff import MultiPeriodDiD
+    def test_twfe_event_study_conley_missing_unit_raises(self):
+        """TWFE event-study + vcov_type='conley' without unit= at fit-time raises ValueError."""
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=13)
         n_units = 20
@@ -1538,7 +1547,7 @@ class TestConleyEstimatorIntegration:
 
         df_mp = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="unit="):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
@@ -1546,16 +1555,18 @@ class TestConleyEstimatorIntegration:
             ).fit(
                 df_mp,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 post_periods=[2],
                 reference_period=1,
             )
 
-    def test_multi_period_did_conley_missing_lag_cutoff_raises(self):
+    def test_twfe_event_study_conley_missing_lag_cutoff_raises(self):
         """MPD + vcov_type='conley' without conley_lag_cutoff raises ValueError
         (no defensible default per Conley 1999 Section 5)."""
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=13)
         n_units = 20
@@ -1579,13 +1590,15 @@ class TestConleyEstimatorIntegration:
 
         df_mp = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="conley_lag_cutoff"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
             ).fit(
                 df_mp,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 post_periods=[2],
@@ -1593,7 +1606,7 @@ class TestConleyEstimatorIntegration:
                 reference_period=1,
             )
 
-    def test_multi_period_did_conley_with_survey_design_raises(self):
+    def test_twfe_event_study_conley_with_survey_design_raises(self):
         """MPD + vcov_type='conley' + survey_design raises NotImplementedError.
 
         Closes Codex P0: previously, MPD passed return_vcov=False to solve_ols
@@ -1603,7 +1616,7 @@ class TestConleyEstimatorIntegration:
         """
         import pandas as pd
 
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
         from diff_diff.survey import SurveyDesign
 
         rng = np.random.default_rng(seed=29)
@@ -1631,7 +1644,7 @@ class TestConleyEstimatorIntegration:
         # path; the guard must fire before solve_ols.
         sd_tsl = SurveyDesign(weights="weight", weight_type="pweight")
         with pytest.raises(NotImplementedError, match="survey_design"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
@@ -1639,6 +1652,8 @@ class TestConleyEstimatorIntegration:
             ).fit(
                 df_mp,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 post_periods=[2],
@@ -1656,7 +1671,7 @@ class TestConleyEstimatorIntegration:
             nest=True,
         )
         with pytest.raises(NotImplementedError, match="survey_design"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
@@ -1664,6 +1679,8 @@ class TestConleyEstimatorIntegration:
             ).fit(
                 df_mp,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 post_periods=[2],
@@ -1672,7 +1689,7 @@ class TestConleyEstimatorIntegration:
                 survey_design=sd_psu,
             )
 
-    def test_multi_period_did_conley_with_datetime64_time(self):
+    def test_twfe_event_study_conley_with_datetime64_time(self):
         """End-to-end MPD + vcov_type='conley' with datetime64 time labels.
         Closes Codex re-review P1: the wrapper must NOT coerce time to float64
         before passing to _compute_conley_vcov; the helper normalizes to
@@ -1681,7 +1698,7 @@ class TestConleyEstimatorIntegration:
         """
         import pandas as pd
 
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=37)
         n_units = 12
@@ -1711,18 +1728,22 @@ class TestConleyEstimatorIntegration:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         )
-        res_int = MultiPeriodDiD(**kwargs).fit(
+        res_int = TwoWayFixedEffects(**kwargs).fit(
             df_mp,
             outcome="y",
+            event_study=True,
+            spec="pooled",
             treatment="treated",
             time="time_int",
             post_periods=[1, 2],
             unit="unit",
             reference_period=0,
         )
-        res_dt = MultiPeriodDiD(**kwargs).fit(
+        res_dt = TwoWayFixedEffects(**kwargs).fit(
             df_mp,
             outcome="y",
+            event_study=True,
+            spec="pooled",
             treatment="treated",
             time="time_dt",
             post_periods=[date_labels[1], date_labels[2]],
@@ -1782,14 +1803,14 @@ class TestConleyEstimatorIntegration:
         assert d["vcov_type"] == "conley"
         assert d["conley_lag_cutoff"] == 2
 
-    def test_multi_period_did_conley_missing_coords_raises(self):
+    def test_twfe_event_study_conley_missing_coords_raises(self):
         """MPD + vcov_type='conley' without conley_coords raises a clean
         ValueError instead of a raw TypeError on `self.conley_coords[0]`.
         Closes Codex P2 #1.
         """
         import pandas as pd
 
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         rng = np.random.default_rng(seed=31)
         n_units = 10
@@ -1806,12 +1827,14 @@ class TestConleyEstimatorIntegration:
                 )
         df_mp = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="conley_coords.*conley_cutoff_km"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 conley_lag_cutoff=1,
             ).fit(
                 df_mp,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 post_periods=[1],
@@ -3106,17 +3129,17 @@ class TestConleyCluster:
         d = res.to_dict()
         assert d.get("cluster_name") == "region"
 
-    def test_mpd_combined_kernel_time_varying_cluster_raises(self):
+    def test_twfe_es_combined_kernel_time_varying_cluster_raises(self):
         """MultiPeriodDiD + Conley + cluster=<col> with a cluster that
         varies across periods within a unit raises ValueError (same time-
         invariance contract as the linalg validator). Codex CI R1 P1 #2."""
-        from diff_diff import MultiPeriodDiD
+        from diff_diff import TwoWayFixedEffects
 
         df = self._multi_period_panel_with_region(n_units=10, T=3, seed=59)
         mask_violator = (df["unit"] == 2) & (df["time"] == 2)
         df.loc[mask_violator, "region"] = 77
         with pytest.raises(ValueError, match="constant within each unit"):
-            MultiPeriodDiD(
+            TwoWayFixedEffects(
                 vcov_type="conley",
                 cluster="region",
                 conley_coords=("lat", "lon"),
@@ -3125,6 +3148,8 @@ class TestConleyCluster:
             ).fit(
                 df,
                 outcome="y",
+                event_study=True,
+                spec="pooled",
                 treatment="treated",
                 time="time",
                 unit="unit",

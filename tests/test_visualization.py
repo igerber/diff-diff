@@ -10,6 +10,7 @@ from legacy_surface import es_dict_from_container, legacy_standin
 from diff_diff import (
     CallawaySantAnna,
     MultiPeriodDiD,
+    TwoWayFixedEffects,
     plot_event_study,
 )
 
@@ -80,12 +81,31 @@ def generate_staggered_data(
     )
 
 
+@pytest.fixture
+def twfe_es_results():
+    """TWFE event-study surface (pooled design) on the multi-period panel - the
+    successor of the MultiPeriodDiD fixture for the plot-option tests."""
+    data = generate_multi_period_data()
+    return TwoWayFixedEffects().fit(
+        data,
+        outcome="outcome",
+        treatment="treated",
+        time="period",
+        event_study=True,
+        spec="pooled",
+        post_periods=[2, 3],
+        reference_period=1,
+    )
+
+
 class TestPlotEventStudy:
     """Tests for plot_event_study function."""
 
     @pytest.fixture
-    def multi_period_results(self):
-        """Fixture for MultiPeriodDiD results."""
+    def legacy_mpd_results(self):
+        """Fixture for native MultiPeriodDiD results - the only remaining pin of
+        plot_event_study's ``period_effects`` branch (4.0 cut, PR 4c-i; dies with
+        the class in PR 4c-ii)."""
         data = generate_multi_period_data()
         did = MultiPeriodDiD()
         return did.fit(
@@ -115,11 +135,18 @@ class TestPlotEventStudy:
         """The post-fit event-study container - what plot_event_study consumes."""
         return cs_fit.aggregate("event_study")
 
-    def test_plot_from_multi_period_results(self, multi_period_results):
-        """Test plotting from MultiPeriodDiD results."""
+    def test_plot_from_multi_period_results(self, legacy_mpd_results):
+        """Test plotting from native MultiPeriodDiD results (the period_effects branch)."""
         pytest.importorskip("matplotlib")
 
-        ax = plot_event_study(multi_period_results, show=False)
+        ax = plot_event_study(legacy_mpd_results, show=False)
+        assert ax is not None
+
+    def test_plot_from_twfe_event_study_results(self, twfe_es_results):
+        """Test plotting from the TWFE event-study surface."""
+        pytest.importorskip("matplotlib")
+
+        ax = plot_event_study(twfe_es_results, show=False)
         assert ax is not None
 
     def test_plot_from_cs_results(self, cs_results):
@@ -260,12 +287,12 @@ class TestPlotEventStudy:
         ax = plot_event_study(effects=effects, se=se, reference_period=0, show=False)
         assert ax is not None
 
-    def test_plot_customization(self, multi_period_results):
+    def test_plot_customization(self, twfe_es_results):
         """Test plot customization options."""
         pytest.importorskip("matplotlib")
 
         ax = plot_event_study(
-            multi_period_results,
+            twfe_es_results,
             title="Custom Title",
             xlabel="Custom X",
             ylabel="Custom Y",
@@ -279,20 +306,20 @@ class TestPlotEventStudy:
         assert ax.get_xlabel() == "Custom X"
         assert ax.get_ylabel() == "Custom Y"
 
-    def test_plot_no_zero_line(self, multi_period_results):
+    def test_plot_no_zero_line(self, twfe_es_results):
         """Test disabling zero line."""
         pytest.importorskip("matplotlib")
 
-        ax = plot_event_study(multi_period_results, show_zero_line=False, show=False)
+        ax = plot_event_study(twfe_es_results, show_zero_line=False, show=False)
         assert ax is not None
 
-    def test_plot_with_existing_axes(self, multi_period_results):
+    def test_plot_with_existing_axes(self, twfe_es_results):
         """Test plotting on existing axes."""
         matplotlib = pytest.importorskip("matplotlib")
         plt = matplotlib.pyplot
 
         fig, ax = plt.subplots()
-        returned_ax = plot_event_study(multi_period_results, ax=ax, show=False)
+        returned_ax = plot_event_study(twfe_es_results, ax=ax, show=False)
         assert returned_ax is ax
         plt.close()
 
@@ -760,8 +787,8 @@ class TestPlotEventStudyCband:
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""
 
-    def test_full_workflow_multi_period(self):
-        """Test full workflow with MultiPeriodDiD."""
+    def test_full_workflow_twfe_event_study(self):
+        """Test full workflow with the TWFE event-study mode."""
         matplotlib = pytest.importorskip("matplotlib")
         plt = matplotlib.pyplot
 
@@ -769,12 +796,13 @@ class TestPlotEventStudyIntegration:
         data = generate_multi_period_data()
 
         # Fit model
-        did = MultiPeriodDiD()
-        results = did.fit(
+        results = TwoWayFixedEffects().fit(
             data,
             outcome="outcome",
             treatment="treated",
             time="period",
+            event_study=True,
+            spec="pooled",
             post_periods=[2, 3],
             reference_period=1,
         )

@@ -65,3 +65,38 @@ against it, so a surface that mis-marks an estimated horizon as reference
 fails instead of having that row skipped. Re-capturing
 on a post-removal tree is NOT a substitute: the fit-time route is gone, so
 nothing independent remains to disagree with.
+
+## `v4_twfe_event_study_oracles.json` - TWFE event-study decoupling oracles (4.0 PR 4c-i)
+
+Numeric reference for `tests/test_twfe_event_study_decoupling.py`, captured by
+`tests/_capture_v4_merge_mpd_oracles.py` on the UNMODIFIED tree at the commit
+named in `provenance.captured_at_head` (`68e383bd`, origin/main at the PR 4c-i
+branch cut) - i.e. while `TwoWayFixedEffects.fit(..., event_study=True)` still
+built its surface through an internal `MultiPeriodDiDResults` and
+`results_base._from_mpd`, and while `MultiPeriodDiD` still existed as the
+independent twin of every lane. Layout:
+
+- `provenance` - capture SHA, `diff_diff.__version__`, weight backend,
+  numpy/scipy/pandas/python versions.
+- `lanes.<name>` - one entry per lane of
+  `tests/helpers/twfe_es_oracle_lanes.py::LANES` (pooled default / explicit
+  cluster / hc2_bm; within + explicit cluster / hc2 carve-out / Conley /
+  survey TSL / survey JK1 replicates; string period labels; a non-suffix
+  partition; a rank-deficient NaN post period). Each carries `echo` (the
+  lane's panel name, constructor and fit kwargs and survey label - the test
+  asserts it equals the live lane, so an edited lane fails as lane drift, not
+  as a numeric regression), `twfe` (every `dataclasses.fields(EventStudyResults)`
+  value of the TWFE event-study surface) and `mpd_twin` (the same for
+  `_from_mpd(MultiPeriodDiD(...).fit(...))`).
+
+Arrays are stored as `{"dtype": <numpy dtype string>, "values": [...]}` (the
+real dtype, e.g. `"<i8"`, `"<f8"`, `"<U2"`, `"|b1"`; 2-D arrays as nested
+lists) with NaN serialized as `null`; tuples as lists; scalars verbatim. The
+NumPy and Rust captures agreed to rtol 1e-12 / atol 1e-13 (CI bounds 1e-9),
+so one copy is stored. The consumer checks `t_stat` against the bound those
+tolerances imply for a ratio, `atol (1 + |t|) / se + 2 rtol |t|`, not a flat
+atol: Linux OpenBLAS and Windows drift 1.6e-13 / 2.4e-13 from the macOS
+Accelerate capture on the rank-deficient lane's near-zero effect (`se` 0.29),
+where `att` and `se` each pass at atol 1e-13. Re-capturing on a post-4c-ii tree is NOT a substitute:
+`MultiPeriodDiD` is gone there, so the `mpd_twin` half has no independent
+producer left.

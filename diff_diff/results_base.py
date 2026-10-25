@@ -401,8 +401,9 @@ class EventStudyResults(BaseResults):
     #: need pre/post classification on a calendar surface (HonestDiD,
     #: PreTrendsPower, the plotter) read THIS field; pre-periods derive as
     #: the complement: non-reference rows whose ``event_time`` is not in
-    #: ``post_periods``. Threaded by ``_from_mpd`` (and the TWFE
-    #: event-study producer); None from every other builder.
+    #: ``post_periods``. Threaded by the calendar-surface builder (the
+    #: MultiPeriodDiD adapter and the TWFE event-study producer); None
+    #: from every other builder.
     post_periods: Optional[Tuple[Any, ...]] = None
     #: TWFE event-study design provenance (M-092 amendment #5, with row
     #: M-010): ``"within"`` (unit + time FE) or ``"pooled"`` (the
@@ -886,16 +887,31 @@ def _resolve_scalar_df_survey(results: Any) -> Optional[float]:
     together is tracked in TODO.md (df-resolution / adapter-naming
     consolidation row).
     """
-    sm = getattr(results, "survey_metadata", None)
-    if sm is not None:
-        df_survey = getattr(sm, "df_survey", None)
-        if df_survey is not None:
-            return float(df_survey)
-        if getattr(sm, "replicate_method", None) is not None:
-            return 0.0
+    from_metadata = _scalar_df_survey_from_metadata(getattr(results, "survey_metadata", None))
+    if from_metadata is not None:
+        return from_metadata
     df_inference = getattr(results, "df_inference", None)
     if df_inference is not None:
         return float(df_inference)
+    return None
+
+
+def _scalar_df_survey_from_metadata(sm: Any) -> Optional[float]:
+    """The survey-metadata half of :func:`_resolve_scalar_df_survey`.
+
+    ``survey_metadata.df_survey`` where present; a replicate design whose df
+    is undefined maps to the ``0.0`` sentinel; otherwise None (the caller
+    may then consult a bare-``cluster=`` ``df_inference`` carrier). Shared
+    by the duck-typed adapters and the TWFE event-study payload builder,
+    whose payload carries the metadata object but no results container.
+    """
+    if sm is None:
+        return None
+    df_survey = getattr(sm, "df_survey", None)
+    if df_survey is not None:
+        return float(df_survey)
+    if getattr(sm, "replicate_method", None) is not None:
+        return 0.0
     return None
 
 
@@ -1119,30 +1135,121 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     )
 
 
-def _from_mpd(results: Any) -> EventStudyResults:
-    """Adapter for MultiPeriodDiD's calendar-keyed ``period_effects``.
+@dataclass(frozen=True, eq=False)
+class _EventStudyCorePayload:
+    """Producer-neutral output of ``DifferenceInDifferences._fit_event_study_core``.
 
-    The reference period is omitted from the native dict and recorded on
-    ``results.reference_period``; the marked row is synthesized here
-    (``att=0.0``, NaN inference). The event-study vcov is the sub-block of
-    ``results.vcov`` selected by ``results.interaction_indices`` - pure
-    indexing of stored entries, no recomputation.
+    Private hand-off between the shared event-study core and its two
+    builders: ``MultiPeriodDiD.fit`` wraps it into the legacy
+    ``MultiPeriodDiDResults`` container, and the TWFE event-study mode
+    builds the unified :class:`EventStudyResults` surface from it directly
+    (:func:`_from_event_study_payload`) - so the TWFE path no longer
+    constructs a MultiPeriodDiD container (ledger rows M-010 / M-011).
+
+    Per-period arrays are index-aligned to ``periods``, the core's SORTED
+    non-reference iteration order. The ``avg_*`` block, ``inference_df`` and
+    the count / label fields exist only for the MultiPeriodDiD container and
+    are deleted with it at the 4.0 cut (PR 4c-ii). ``eq=False``: the
+    generated ``__eq__``/``__hash__`` would raise on the ndarray fields.
     """
-    period_effects = getattr(results, "period_effects", None)
-    if not period_effects:
-        raise _absent(results)
 
-    ref = getattr(results, "reference_period", None)
-    periods = sorted(period_effects.keys())
+    # Per-period inference (one entry per non-reference period, sorted).
+    periods: List[Any]
+    att: np.ndarray
+    se: np.ndarray
+    t_stat: np.ndarray
+    p_value: np.ndarray
+    ci_lower: np.ndarray
+    ci_upper: np.ndarray
+    df_by_period: Dict[Any, float]
+    # Partition / normalisation.
+    reference_period: Any
+    pre_periods: List[Any]
+    post_periods: List[Any]
+    alpha: float
+    # Full-design inference (the MultiPeriodDiD container + the surface's
+    # event-study vcov sub-block).
+    coefficients: np.ndarray
+    coef_names: List[str]
+    vcov: np.ndarray
+    interaction_indices: Dict[Any, int]
+    residuals: np.ndarray
+    fitted_values: np.ndarray
+    r_squared: float
+    # MultiPeriodDiD-only: the post-period average and its contrast df
+    # (die with the class at 4c-ii).
+    avg_att: float
+    avg_se: float
+    avg_t_stat: float
+    avg_p_value: float
+    avg_conf_int: Tuple[float, float]
+    inference_df: Optional[float]
+    # MultiPeriodDiD-only counts and labels.
+    n_obs: int
+    n_treated: int
+    n_control: int
+    vcov_type: Optional[str]
+    cluster_name: Optional[str]
+    n_clusters: Optional[int]
+    conley_lag_cutoff: Optional[int]
+    df_convention: Optional[str]
+    # Shared provenance (the survey df is resolved from it).
+    survey_metadata: Optional[Any]
+
+
+def _calendar_surface_from_arrays(
+    *,
+    periods: Any,
+    ref: Any,
+    att: Any,
+    se: Any,
+    t_stat: Any,
+    p_value: Any,
+    ci_lo: Any,
+    ci_hi: Any,
+    full_vcov: Any,
+    interaction_indices: Any,
+    df_map: Any,
+    post_periods: Any,
+    alpha: float,
+    source: Optional[str],
+    df_survey: Optional[float],
+    estimation_spec: Optional[str] = None,
+    base_period: Any = None,
+    anticipation: Any = None,
+    reference_event_times: Any = None,
+) -> EventStudyResults:
+    """Build the calendar-keyed surface from index-aligned per-period arrays.
+
+    The one builder behind both :func:`_from_mpd` (which extracts the arrays
+    from a ``MultiPeriodDiDResults``) and :func:`_from_event_study_payload`
+    (which reads them off the core's payload), so the two paths cannot
+    drift. ``periods`` must already be SORTED (the caller supplies the
+    non-reference labels in sorted order and the arrays aligned to them);
+    an explicit raise guards that contract - a silent re-sort of the labels
+    alone would pair labels with the wrong values. The reference row is
+    inserted (``is_reference``, NaN inference); the event-study vcov is the
+    sub-block of ``full_vcov`` selected by ``interaction_indices`` - pure
+    indexing of stored entries, no recomputation; per-period ``df`` comes
+    STRICTLY from ``df_map`` (the per-period df actually handed to
+    ``safe_inference``), never from the post-average contrast df.
+    """
+    periods = list(periods)
+    if periods != sorted(periods):
+        raise ValueError(
+            "_calendar_surface_from_arrays requires `periods` in sorted order "
+            f"(got {periods!r}); the per-period arrays are index-aligned to it."
+        )
     all_periods = sorted(periods + [ref]) if ref is not None else periods
+    pos = {p: i for i, p in enumerate(periods)}
 
     n_rows = len(all_periods)
-    att = np.full(n_rows, np.nan)
-    se = np.full(n_rows, np.nan)
-    t_stat = np.full(n_rows, np.nan)
-    p_value = np.full(n_rows, np.nan)
-    ci_lo = np.full(n_rows, np.nan)
-    ci_hi = np.full(n_rows, np.nan)
+    att_out = np.full(n_rows, np.nan)
+    se_out = np.full(n_rows, np.nan)
+    t_out = np.full(n_rows, np.nan)
+    p_out = np.full(n_rows, np.nan)
+    lo_out = np.full(n_rows, np.nan)
+    hi_out = np.full(n_rows, np.nan)
     n = np.full(n_rows, np.nan)
     is_ref = np.zeros(n_rows, dtype=bool)
 
@@ -1150,17 +1257,15 @@ def _from_mpd(results: Any) -> EventStudyResults:
         if ref is not None and p == ref:
             is_ref[i] = True
             continue
-        pe = period_effects[p]
-        att[i] = pe.effect
-        se[i] = pe.se
-        t_stat[i] = pe.t_stat
-        p_value[i] = pe.p_value
-        ci_lo[i], ci_hi[i] = float(pe.conf_int[0]), float(pe.conf_int[1])
+        j = pos[p]
+        att_out[i] = att[j]
+        se_out[i] = se[j]
+        t_out[i] = t_stat[j]
+        p_out[i] = p_value[j]
+        lo_out[i], hi_out[i] = float(ci_lo[j]), float(ci_hi[j])
 
     vcov_sub: Optional[np.ndarray] = None
     vcov_index_arr: Optional[np.ndarray] = None
-    full_vcov = getattr(results, "vcov", None)
-    interaction_indices = getattr(results, "interaction_indices", None)
     if full_vcov is not None and interaction_indices:
         covered = [p for p in periods if p in interaction_indices]
         if covered:
@@ -1168,31 +1273,20 @@ def _from_mpd(results: Any) -> EventStudyResults:
             vcov_sub = np.asarray(full_vcov, dtype=float)[np.ix_(idx, idx)]
             vcov_index_arr = np.asarray(covered)
 
-    # Per-period df: STRICTLY the `event_study_df` channel ({period: df}
-    # actually passed to safe_inference - per-period BM DOF under hc2_bm).
-    # `inference_df` is deliberately NOT a fallback here: it stores the
-    # POST-AVERAGE contrast df, which is the wrong provenance for the
-    # per-period rows under hc2_bm.
-    df_map = getattr(results, "event_study_df", None)
     df_arg: Optional[np.ndarray] = None
     if isinstance(df_map, dict):
         df_arg = np.array([float(df_map[p]) if p in df_map else np.nan for p in all_periods])
 
-    # Calendar-partition provenance (M-092 amendment #5): the producer's
-    # AUTHORITATIVE post_periods list - an arbitrary subset is legal on
-    # MultiPeriodDiD, so consumers must never re-derive the partition
-    # positionally from the reference row.
-    _mpd_post = getattr(results, "post_periods", None)
-    post_periods_arg: Optional[Tuple[Any, ...]] = tuple(_mpd_post) if _mpd_post else None
+    post_periods_arg: Optional[Tuple[Any, ...]] = tuple(post_periods) if post_periods else None
 
     return EventStudyResults(
         event_time=np.asarray(all_periods),
-        att=att,
-        se=se,
-        t_stat=t_stat,
-        p_value=p_value,
-        conf_int_lower=ci_lo,
-        conf_int_upper=ci_hi,
+        att=att_out,
+        se=se_out,
+        t_stat=t_out,
+        p_value=p_out,
+        conf_int_lower=lo_out,
+        conf_int_upper=hi_out,
         is_reference=is_ref,
         n=n,
         n_kind=None,
@@ -1201,11 +1295,88 @@ def _from_mpd(results: Any) -> EventStudyResults:
         event_time_convention=None,
         vcov=vcov_sub,
         vcov_index=vcov_index_arr,
-        alpha=getattr(results, "alpha", 0.05),
-        source=type(results).__name__,
+        alpha=alpha,
+        source=source,
         df=df_arg,
         post_periods=post_periods_arg,
-        **_provenance_kwargs(results),
+        estimation_spec=estimation_spec,
+        base_period=base_period,
+        anticipation=anticipation,
+        df_survey=df_survey,
+        reference_event_times=(
+            tuple(reference_event_times) if reference_event_times is not None else None
+        ),
+    )
+
+
+def _from_mpd(results: Any) -> EventStudyResults:
+    """Adapter for MultiPeriodDiD's calendar-keyed ``period_effects``.
+
+    The reference period is omitted from the native dict and recorded on
+    ``results.reference_period``; the marked row is synthesized by the
+    shared builder (``att=0.0``, NaN inference). The dict's insertion order
+    is irrelevant: the labels are sorted here and the value lists built in
+    that order before the hand-off.
+    """
+    period_effects = getattr(results, "period_effects", None)
+    if not period_effects:
+        raise _absent(results)
+
+    periods = sorted(period_effects.keys())
+    pes = [period_effects[p] for p in periods]
+    provenance = _provenance_kwargs(results)
+    return _calendar_surface_from_arrays(
+        periods=periods,
+        ref=getattr(results, "reference_period", None),
+        att=[pe.effect for pe in pes],
+        se=[pe.se for pe in pes],
+        t_stat=[pe.t_stat for pe in pes],
+        p_value=[pe.p_value for pe in pes],
+        ci_lo=[pe.conf_int[0] for pe in pes],
+        ci_hi=[pe.conf_int[1] for pe in pes],
+        full_vcov=getattr(results, "vcov", None),
+        interaction_indices=getattr(results, "interaction_indices", None),
+        df_map=getattr(results, "event_study_df", None),
+        post_periods=getattr(results, "post_periods", None),
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+        df_survey=provenance["df_survey"],
+        base_period=provenance["base_period"],
+        anticipation=provenance["anticipation"],
+        reference_event_times=provenance["reference_event_times"],
+    )
+
+
+def _from_event_study_payload(
+    payload: _EventStudyCorePayload,
+    *,
+    source: str,
+    estimation_spec: Optional[str] = None,
+) -> EventStudyResults:
+    """Build the unified surface directly from the event-study core's payload.
+
+    The TWFE event-study producer's path: no MultiPeriodDiD container is
+    constructed. Field for field this is what ``_from_mpd`` yields for the
+    MultiPeriodDiD twin of the same fit (pinned by
+    ``tests/test_twfe_event_study_decoupling.py``).
+    """
+    return _calendar_surface_from_arrays(
+        periods=payload.periods,
+        ref=payload.reference_period,
+        att=payload.att,
+        se=payload.se,
+        t_stat=payload.t_stat,
+        p_value=payload.p_value,
+        ci_lo=payload.ci_lower,
+        ci_hi=payload.ci_upper,
+        full_vcov=payload.vcov,
+        interaction_indices=payload.interaction_indices,
+        df_map=payload.df_by_period,
+        post_periods=payload.post_periods,
+        alpha=payload.alpha,
+        source=source,
+        estimation_spec=estimation_spec,
+        df_survey=_scalar_df_survey_from_metadata(payload.survey_metadata),
     )
 
 
@@ -1415,7 +1586,9 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
     """
     # Order matters: dCDH carries both event_study_effects and the split
     # placebo dict; HAD's columnar container and MPD's period_effects have
-    # unique attributes; LPDiD's surface is a DataFrame field.
+    # unique attributes; LPDiD's surface is a DataFrame field. (The TWFE
+    # event-study producer never arrives here: it builds the surface
+    # natively from the core's payload via _from_event_study_payload.)
     if hasattr(results, "placebo_event_study") and hasattr(results, "event_study_effects"):
         return _from_dcdh(results)
     if hasattr(results, "event_times") and hasattr(results, "n_obs_per_horizon"):

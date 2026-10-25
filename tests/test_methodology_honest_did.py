@@ -419,37 +419,21 @@ class TestOptimalFLCI:
         returns the FLCI in exactly this case, and so do we (previously the fit
         NaN-propagated the whole result, silently yielding no inference).
         """
-        from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
+        from event_study_surface_builders import calendar_surface
 
-        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.0)
-        period_effects = {
-            1: PeriodEffect(
-                period=1, effect=1.0, se=0.1, t_stat=10.0, p_value=0.0, conf_int=(0.8, 1.2)
-            ),
-            2: PeriodEffect(
-                period=2, effect=0.0, se=0.1, t_stat=0.0, p_value=1.0, conf_int=(-0.2, 0.2)
-            ),
-            3: PeriodEffect(
-                period=3, effect=1.0, se=0.1, t_stat=10.0, p_value=0.0, conf_int=(0.8, 1.2)
-            ),
-            5: PeriodEffect(
-                period=5, effect=2.0, se=0.1, t_stat=20.0, p_value=0.0, conf_int=(1.8, 2.2)
-            ),
-        }
-        results = MultiPeriodDiDResults(
-            avg_att=2.0,
-            avg_se=0.1,
-            avg_t_stat=20.0,
-            avg_p_value=0.0,
-            avg_conf_int=(1.8, 2.2),
-            n_obs=500,
-            n_treated=250,
-            n_control=250,
-            period_effects=period_effects,
-            pre_periods=[1, 2, 3],
+        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.0). Pre 1-3 are
+        # estimated, the reference is the (absent) label 4 - inserted so no
+        # estimated coefficient is demoted - and 5 is the post period.
+        results = calendar_surface(
+            {
+                1: (1.0, 0.1, 10.0, 0.0, (0.8, 1.2)),
+                2: (0.0, 0.1, 0.0, 1.0, (-0.2, 0.2)),
+                3: (1.0, 0.1, 10.0, 0.0, (0.8, 1.2)),
+                5: (2.0, 0.1, 20.0, 0.0, (1.8, 2.2)),
+            },
+            reference=4,
             post_periods=[5],
             vcov=np.eye(4) * 0.01,
-            interaction_indices={1: 0, 2: 1, 3: 2, 5: 3},
         )
 
         honest = HonestDiD(method="smoothness", M=0.0)
@@ -688,34 +672,19 @@ class TestBreakdownValueMethodology:
 
     def test_breakdown_monotonicity(self):
         """If significant at M=k, should be significant at all M < k."""
-        from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
+        from event_study_surface_builders import calendar_surface
 
-        # Use a weak effect so breakdown is reachable at moderate M
-        period_effects = {
-            1: PeriodEffect(
-                period=1, effect=0.1, se=0.05, t_stat=2.0, p_value=0.05, conf_int=(0.0, 0.2)
-            ),
-            2: PeriodEffect(
-                period=2, effect=0.05, se=0.05, t_stat=1.0, p_value=0.32, conf_int=(-0.05, 0.15)
-            ),
-            4: PeriodEffect(
-                period=4, effect=0.15, se=0.05, t_stat=3.0, p_value=0.003, conf_int=(0.05, 0.25)
-            ),
-        }
-        results = MultiPeriodDiDResults(
-            avg_att=0.15,
-            avg_se=0.05,
-            avg_t_stat=3.0,
-            avg_p_value=0.003,
-            avg_conf_int=(0.05, 0.25),
-            n_obs=500,
-            n_treated=250,
-            n_control=250,
-            period_effects=period_effects,
-            pre_periods=[1, 2],
+        # Use a weak effect so breakdown is reachable at moderate M. Pre 1-2,
+        # reference 3 (inserted), post 4.
+        results = calendar_surface(
+            {
+                1: (0.1, 0.05, 2.0, 0.05, (0.0, 0.2)),
+                2: (0.05, 0.05, 1.0, 0.32, (-0.05, 0.15)),
+                4: (0.15, 0.05, 3.0, 0.003, (0.05, 0.25)),
+            },
+            reference=3,
             post_periods=[4],
             vcov=np.eye(3) * 0.0025,
-            interaction_indices={1: 0, 2: 1, 4: 2},
         )
 
         honest = HonestDiD(method="smoothness")
