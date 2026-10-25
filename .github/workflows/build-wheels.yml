@@ -26,7 +26,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             container: quay.io/pypa/manylinux_2_28_x86_64
             artifact: wheels-linux-x86_64
           - arch: aarch64
@@ -143,7 +143,7 @@ jobs:
   build-sdist:
     name: Build source distribution
     if: ${{ !inputs.linux_only }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
