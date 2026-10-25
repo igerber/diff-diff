@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     # Run if:
     # - PR opened (same-repo only — fork PRs are skipped here at the workflow

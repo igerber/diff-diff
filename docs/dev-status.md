@@ -156,6 +156,24 @@ Linux.
 - **Long-term:** revert to the `@` operator when numpy ≥ 2.3 becomes the minimum supported
   version.
 
+## GitHub-hosted runners pinned to `ubuntu-24.04`
+
+Every workflow's Linux job uses `runs-on: ubuntu-24.04`, not `ubuntu-latest` (pinned
+2026-10-25). GitHub is migrating `ubuntu-latest` to Ubuntu 26.04 gradually (2026-10-19 to
+2026-11-19); this repository's runs flipped on 2026-10-24 (#867's review ran on 24.04 on
+10-23, #868's on 26.04 on 10-24) and two things broke on the new image:
+
+- `openai/codex-action`'s `drop-sudo` safety strategy fails before codex starts (`runner is
+  not a member of the sudo group` / `Could not restrict access to
+  /run/dbus/system_bus_socket`; upstream
+  [codex-action#188](https://github.com/openai/codex-action/issues/188)), so the AI PR
+  review job died in under a second and posted nothing.
+- `actions/python-versions` ships Python 3.9 builds for Ubuntu 22.04 and 24.04 only, so the
+  3.9 floor leg of the test matrix (and the 3.9 wheel-test leg) cannot set up on 26.04.
+
+Un-pin only after both are fixed upstream and verified on a throwaway branch. The ARM
+matrix entries already used the GitHub-hosted `ubuntu-24.04-arm` label and are unchanged.
+
 ## MMM tutorial environments (notebooks 29 / 30)
 
 The two executed MMM calibration tutorials need frameworks that CANNOT share one
