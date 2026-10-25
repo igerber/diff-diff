@@ -74,7 +74,9 @@ named in `provenance.captured_at_head` (`68e383bd`, origin/main at the PR 4c-i
 branch cut) - i.e. while `TwoWayFixedEffects.fit(..., event_study=True)` still
 built its surface through an internal `MultiPeriodDiDResults` and
 `results_base._from_mpd`, and while `MultiPeriodDiD` still existed as the
-independent twin of every lane. Layout:
+independent twin of every lane. Per-lane capture SHAs: 11 lanes at `68e383bd`
+(top-level `provenance`), the two cluster + hc2_bm lanes at `d45d5316`
+(`provenance.lane_additions`). Layout:
 
 - `provenance` - capture SHA, `diff_diff.__version__`, weight backend,
   numpy/scipy/pandas/python versions, plus `lane_additions.<lane>` with the
@@ -82,7 +84,7 @@ independent twin of every lane. Layout:
   cluster + hc2_bm lanes (`pooled_cluster_hc2_bm`, `within_cluster_hc2_bm`)
   were captured at `d45d5316` by PR 4c-ii, still on a tree with the live
   MultiPeriodDiD twin, to pin the clustered CR2 Bell-McCaffrey bypass before
-  that PR pruned the core's post-average block.
+  that PR pruned the core's post-average block and deleted MultiPeriodDiD.
 - `lanes.<name>` - one entry per lane of
   `tests/helpers/twfe_es_oracle_lanes.py::LANES` (pooled default / explicit
   cluster / hc2_bm / cluster + hc2_bm; within + explicit cluster / hc2
@@ -91,9 +93,11 @@ independent twin of every lane. Layout:
   period). Each carries `echo` (the
   lane's panel name, constructor and fit kwargs and survey label - the test
   asserts it equals the live lane, so an edited lane fails as lane drift, not
-  as a numeric regression), `twfe` (every `dataclasses.fields(EventStudyResults)`
-  value of the TWFE event-study surface) and `mpd_twin` (the same for
-  `_from_mpd(MultiPeriodDiD(...).fit(...))`).
+  as a numeric regression) and `twfe` (every `dataclasses.fields(EventStudyResults)`
+  value of the TWFE event-study surface). The `mpd_twin` half that the
+  68e383bd / d45d5316 captures also recorded was pruned in PR 4c-ii along with
+  `MultiPeriodDiD` itself; the `twfe` records are byte-identical to the
+  originals.
 
 Arrays are stored as `{"dtype": <numpy dtype string>, "values": [...]}` (the
 real dtype, e.g. `"<i8"`, `"<f8"`, `"<U2"`, `"|b1"`; 2-D arrays as nested
@@ -103,6 +107,8 @@ so one copy is stored. The consumer checks `t_stat` against the bound those
 tolerances imply for a ratio, `atol (1 + |t|) / se + 2 rtol |t|`, not a flat
 atol: Linux OpenBLAS and Windows drift 1.6e-13 / 2.4e-13 from the macOS
 Accelerate capture on the rank-deficient lane's near-zero effect (`se` 0.29),
-where `att` and `se` each pass at atol 1e-13. Re-capturing on a post-4c-ii tree is NOT a substitute:
-`MultiPeriodDiD` is gone there, so the `mpd_twin` half has no independent
-producer left.
+where `att` and `se` each pass at atol 1e-13. Re-running the capture script on
+a post-4c-ii tree is a RE-BASELINE of the current code, not an oracle:
+`MultiPeriodDiD`, the independent twin, is gone, so nothing independent
+remains to disagree with. Re-capture only to deliberately re-baseline after an
+intended numeric change, and say so in the commit.

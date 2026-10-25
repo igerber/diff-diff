@@ -123,9 +123,12 @@ output$absorbed_fe_did <- list(
   dof_cr2 = as.numeric(ct_did_cr2$df_Satt)
 )
 
-# --- Absorbed-FE MultiPeriodDiD event-study scenario (gate lift PR) ----------
+# --- Absorbed-FE event-study scenario (gate lift PR) -------------------------
+# (Originally the 3.x MultiPeriodDiD absorb= design, removed in the 4.0 cut; the
+# `mpd_*` golden keys are kept verbatim - tests/test_linalg_hc2_bm.py consumes
+# them as linalg-helper parity inputs.)
 # Mirrors MPD(fixed_effects=["unit"]) destination of the absorb auto-route on
-# MultiPeriodDiD. MPD parameterization: const + treated + period_f (non-ref)
+# the former MultiPeriodDiD. MPD parameterization: const + treated + period_f (non-ref)
 # + treated:period_X (non-ref) + factor(unit). Build the interaction columns
 # explicitly so the R fit's coefficient names match MPD's `treated:period_X`.
 
@@ -175,7 +178,7 @@ output$mpd_absorbed_fe_did <- list(
 
 # --- MPD clustered avg_att DOF scenario (Gate 6 lift PR) ---------------------
 # Pins clubSandwich's compound-contrast Satterthwaite DOF for the post-period-
-# average ATT under cluster-robust CR2. Mirrors MultiPeriodDiD(cluster=unit,
+# average ATT under cluster-robust CR2. Mirrors the former MultiPeriodDiD(cluster=unit,
 # vcov_type='hc2_bm', fixed_effects=['unit']) parameterization. Per-coefficient
 # DOFs use coef_test()$df_Satt (the canonical Satterthwaite per-coef API);
 # the compound contrast DOF uses Wald_test(constraints=matrix(c_avg, 1),
@@ -642,7 +645,7 @@ output$weighted_did_absorbed_fe <- list(
 # "HTZ")$df_denom` against `_compute_cr2_bm_contrast_dof(weights=)` on an
 # MPD-shaped design. NOTE: like `weighted_did_absorbed_fe`, this fixture
 # targets the analytical surface only — estimator-level
-# `MultiPeriodDiD(survey_design=...)` paths use TSL.
+# the former `MultiPeriodDiD(survey_design=...)` paths used TSL.
 set.seed(50600)
 d_mpd_w <- make_mpd_panel(n_total = 15, units_per_cohort = 5, n_periods = 4,
                           seed = 50601)

@@ -37,7 +37,7 @@ The catalog grew incrementally over several quarters, so formats vary across the
 | Estimator | Module | R / Stata Reference | Status | Last Review |
 |-----------|--------|---------------------|--------|-------------|
 | DifferenceInDifferences | `estimators.py` | `fixest::feols()` | **Complete** | 2026-01-24 |
-| MultiPeriodDiD | `estimators.py` | `fixest::feols()` | **Complete** | 2026-02-02 |
+| TwoWayFixedEffects (event-study mode; the former MultiPeriodDiD class, removed at 4.0) | `estimators.py` (`_fit_event_study_core`) + `twfe.py` | `fixest::feols()` | **Complete** | 2026-02-02 |
 | TwoWayFixedEffects | `twfe.py` | `fixest::feols()` | **Complete** | 2026-02-08 |
 
 ### Staggered Treatment Estimators
@@ -155,11 +155,11 @@ documented tolerances; cluster-robust and absorbed-FE behavior verified.)
 
 ---
 
-#### MultiPeriodDiD
+#### TwoWayFixedEffects event-study mode (the former MultiPeriodDiD class)
 
 | Field | Value |
 |-------|-------|
-| Module | `estimators.py` |
+| Module | `estimators.py` (`DifferenceInDifferences._fit_event_study_core`, the shared core) + `twfe.py` (the `event_study=True` surface; the `MultiPeriodDiD` class, `MultiPeriodDiDResults`, `PeriodEffect` and the `EventStudy` alias were removed at 4.0, PR 4c-ii) |
 | Primary Reference | Freyaldenhoven et al. (2021), Wooldridge (2010), Angrist & Pischke (2009) |
 | R Reference | `fixest::feols()` |
 | Status | **Complete** |
@@ -170,23 +170,22 @@ documented tolerances; cluster-robust and absorbed-FE behavior verified.)
 - [x] Reference period coefficient is zero (normalized by omission from design matrix)
 - [x] Default reference period is last pre-period (e=-1 convention, matches fixest/did)
 - [x] Pre-period coefficients available for parallel trends assessment
-- [x] Average ATT computed from post-treatment effects only, with covariance-aware SE
-- [x] Returns PeriodEffect objects with confidence intervals for all periods
+- [x] Average ATT computed from post-treatment effects only, with covariance-aware SE (removed class only; the surviving surface has no post-period-average scalar - `tests/helpers/event_study_average.py` reproduces the arithmetic)
+- [x] Per-period rows with confidence intervals for all non-reference periods on `EventStudyResults` (the removed `PeriodEffect` records survive only as the M-016 FutureWarning view, removed 5.0)
 - [x] Supports balanced and unbalanced panels
 - [x] NaN inference: t_stat/p_value/CI use NaN when SE is non-finite or zero
-- [x] R-style NA propagation: avg_att is NaN if any post-period effect is unidentified
+- [x] R-style NA propagation (removed class): `avg_att` was NaN if any post-period effect was unidentified
 - [x] Rank-deficient design matrix: warns and sets NaN for dropped coefficients (R-style)
 - [x] Staggered adoption detection warning (via `unit` parameter)
 - [x] Treatment reversal detection warning
 - [x] Time-varying D_it detection warning (advises creating ever-treated indicator)
 - [x] Single pre-period warning (ATT valid but pre-trends assessment unavailable)
-- [x] Post-period reference_period raises ValueError (would bias avg_att)
+- [x] Post-period reference_period raises ValueError (would exclude a post-period from estimation; biased the removed `avg_att`)
 - [x] HonestDiD/PreTrendsPower integration uses interaction sub-VCV (not full regression VCV)
 - [x] All REGISTRY.md edge cases tested
 
 **Test Coverage:**
-- 50 tests across `TestMultiPeriodDiD` and `TestMultiPeriodDiDEventStudy` in `tests/test_estimators.py`
-- 18 new event-study specification tests added in PR #125
+- The `TestMultiPeriodDiD` / `TestMultiPeriodDiDEventStudy` suites (50 tests) and PR #125's 18 event-study specification tests were deleted with the class at 4.0 (PR 4c-ii); the surviving surface is pinned field for field against the committed pre-refactor oracle `tests/fixtures/v4_twfe_event_study_oracles.json` by `tests/test_twfe_event_study_decoupling.py`, exercised by `TestTwoWayFixedEffectsEventStudy` in `tests/test_estimators.py`, and the removed names' absence is pinned by `tests/test_v4_merge_mpd.py`
 
 **Corrections Made:**
 - **PR #125 (2026-02-02)**: Transformed from post-period-only estimator into full event-study
@@ -1274,7 +1273,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 - [x] Non-bootstrap CS adapter consumes full `event_study_vcov` sub-block (not diag)
 - [x] Non-bootstrap SA adapter consumes full `event_study_vcov` sub-block (W-matrix construction `event_study_vcov = W @ vcov_cohort @ W.T` added to `SunAbrahamResults`)
 - [x] Bootstrap CS/SA and replicate-weight survey paths fall through to `diag(ses^2)` (analytical VCV cleared to prevent mixing with bootstrap/replicate SE overrides)
-- [x] `_get_violation_weights('linear')` honors actual pre-period relative-time labels via `fit()` threading → reported MDV is in Roth's γ units on irregular and anticipation-shifted grids. For `MultiPeriodDiDResults`, supported label types are numeric (`int` / `float` / `np.int64`) and `pandas.Period` / `pandas.Timestamp` / `np.datetime64`; **genuinely non-numeric labels** (string period IDs, unranked categoricals) emit an explicit `UserWarning` and fall through to the legacy count-based normalized direction (MDV is NOT in γ units in that case — re-fit with numeric labels)
+- [x] `_get_violation_weights('linear')` honors actual pre-period relative-time labels via `fit()` threading → reported MDV is in Roth's γ units on irregular and anticipation-shifted grids. On the TWFE event-study calendar container route (the removed `MultiPeriodDiDResults`'s successor), supported label types are numeric (`int` / `float` / `np.int64`) and `pandas.Period` / `pandas.Timestamp` / `np.datetime64`; **genuinely non-numeric labels** (string period IDs, unranked categoricals) emit an explicit `UserWarning` and fall through to the legacy count-based normalized direction (MDV is NOT in γ units in that case — re-fit with numeric labels)
 - [x] `PreTrendsPowerResults` persists fitted `violation_weights` + `pretest_form` + `nis_box_probability`; `power_at(M)` works for all four violation types on fresh fits
 - [x] Helper API (`compute_pretrends_power`, `compute_mdv`) accepts `violation_weights` and `pretest_form`; closes the PR-A R18 helper/class API gap
 - [x] Summary, `to_dict`, `to_dataframe` dispatch on `pretest_form` (NIS prints box probability; Wald prints noncentrality)
@@ -1410,7 +1409,7 @@ Goldens at `benchmarks/data/r_conleyreg_conley_golden.json`; generator at `bench
 
 **Outstanding Concerns:**
 - **Spillover-conley dependency: resolved.** SpilloverDiD ships Conley + survey via Wave E.1/E.2/E.3 (PR #468 / #474 / #482, stratified-Conley sandwich on PSU totals with within-PSU serial Bartlett HAC for `lag_cutoff > 0`); TwoStageDiD ships Wave E.3 parity (PR #485, `fdf2cebc`).
-- **Generic LinearRegression / DiD / MPD / TWFE + Conley + survey_design: deferred.** Two fail-closed contracts assert the unsupported combination: the estimator-level gate (DiD / MPD / TWFE) lives in `diff_diff/conley.py::_validate_conley_estimator_inputs` (`TestConleyDeferrals::test_did_mpd_twfe_survey_design_not_implemented`); the generic LinearRegression gate lives in `diff_diff/linalg.py::LinearRegression.fit` (`TestConleyDeferrals::test_linear_regression_survey_design_not_implemented`). The `survey_design=` surface is `LinearRegression` only; `compute_robust_vcov` does not accept `survey_design=`.
+- **Generic LinearRegression / DiD / TWFE (both modes) + Conley + survey_design: deferred.** Two fail-closed contracts assert the unsupported combination: the estimator-level gate (DiD / TWFE, both modes) lives in `diff_diff/conley.py::_validate_conley_estimator_inputs` (`TestConleyDeferrals::test_did_mpd_twfe_survey_design_not_implemented`); the generic LinearRegression gate lives in `diff_diff/linalg.py::LinearRegression.fit` (`TestConleyDeferrals::test_linear_regression_survey_design_not_implemented`). The `survey_design=` surface is `LinearRegression` only; `compute_robust_vcov` does not accept `survey_design=`.
 - **Generic LinearRegression / compute_robust_vcov + Conley + `weights=`: deferred for any `weight_type` (`pweight` / `aweight` / `fweight`).** Weighted Conley is not implemented on the generic linalg surface. The `pweight` / `survey_design` subset additionally reflects an **open methodological question** — no canonical extension of Conley (1999) exists for weighted spatial-HAC under probability sampling. `TestConleyDeferrals::test_conley_plus_weights_not_implemented`.
 - **SyntheticDiD + Conley**: raises `TypeError`. SyntheticDiD uses bootstrap / jackknife / placebo variance, not the analytical sandwich. `TestConleyDeferrals::test_synthetic_did_conley_typeerror`.
 - **Wild bootstrap + Conley**: `NotImplementedError`. Wild bootstrap is a separate inference path that does not consume the analytical Conley sandwich (REGISTRY L3547). `TestConleyDeferrals::test_wild_bootstrap_conley_not_implemented`.

@@ -22,8 +22,8 @@ use faer::Side;
 /// - Computes solution: β = V * S^{-1}_truncated * U^T * y
 ///
 /// This matches scipy's 'gelsd' driver behavior for handling rank-deficient
-/// design matrices that can occur in DiD estimation (e.g., MultiPeriodDiD
-/// with redundant period dummies + treatment interactions).
+/// design matrices that can occur in DiD estimation (e.g., the TWFE
+/// event-study design with redundant period dummies + treatment interactions).
 ///
 /// For rank-deficient matrices (rank < k), the vcov matrix is filled with NaN
 /// since the sandwich estimator requires inverting the singular X'X matrix.

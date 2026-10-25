@@ -16,7 +16,7 @@ companion.
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
 - Weighted OLS, sandwich estimator, demeaning, survey degrees of freedom
 - `SurveyMetadata` on results (effective n, DEFF, weight_range)
-- Base estimators: DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD
+- Base estimators: DifferenceInDifferences, TwoWayFixedEffects (static and event-study mode; the MultiPeriodDiD class was removed at the 4.0 cut)
 
 ### Phase 3: OLS-Based Standalone Estimators
 
@@ -284,9 +284,6 @@ the limitation and suggested alternative.
 | WooldridgeDiD | Unidentified-cohort exclusion + `survey_design` | Same reason (ledger `M-123`). Drop the cohort from the frame yourself, or supply a panel where every cohort has a pre-treatment period. |
 | All bootstrap estimators | Bootstrap + replicate weights | These are alternative variance methods; pick one |
 | CS, DMLDiD, EfficientDiD, ImputationDiD, TwoStageDiD | `aggregate('total')` on fits declaring a `survey_design` | The estimator-owned total (3.10) is panel non-survey only: the realized-mass relay omits the survey mass-uncertainty (att*dC) variance term and design-aware population-scale totals are not implemented (retained weight scale differs by design family). Pass a caller-derived numeric `scale=` to the MMM exporters instead, or use `cluster=` (without `survey_design`) for an unweighted clustered fit. Tracked in DEFERRED.md (Paper-gated). |
-
-**Warning/fallback (no error):** MultiPeriodDiD with `wild_bootstrap` +
-`survey_design` warns and falls back to analytical inference.
 
 **Resolved (2026-07):** CallawaySantAnna `reg`+covariates (survey and
 unweighted) now carries the full `DRDID::reg_did_panel` estimation-effect
