@@ -1,21 +1,22 @@
-"""Shared lane definitions for the TWFE event-study decoupling oracle (4.0 PR 4c-i).
+"""Shared lane definitions for the TWFE event-study decoupling oracle (4.0 PR 4c-i/4c-ii).
 
 Single owner of the oracle PANELS and LANES used by BOTH
-``tests/_capture_v4_merge_mpd_oracles.py`` (which writes
-``tests/fixtures/v4_twfe_event_study_oracles.json`` on the unmodified tree) and
-``tests/test_twfe_event_study_decoupling.py`` (which refits the lanes after the
-refactor and compares). Keeping panel construction and lane kwargs here means
-the tests rebuild exactly what the capture fitted; the fixture carries each
-lane's ``echo()`` so an edited lane fails as "lane drift", not as a numeric
-regression.
+``tests/_capture_v4_merge_mpd_oracles.py`` (which wrote
+``tests/fixtures/v4_twfe_event_study_oracles.json`` on the pre-refactor tree)
+and ``tests/test_twfe_event_study_decoupling.py`` (which refits the lanes on
+the current tree and compares). Keeping panel construction and lane kwargs
+here means the tests rebuild exactly what the capture fitted; the fixture
+carries each lane's ``echo()`` so an edited lane fails as "lane drift", not as
+a numeric regression.
 
-Why these lanes: ``TwoWayFixedEffects.fit(..., event_study=True)`` and the
-deprecated ``MultiPeriodDiD`` share ``_fit_event_study_core``; each lane pairs
-a TWFE event-study fit with the MPD design that is its bit-exact (pooled) or
-1e-12 (within) twin, covering every variance lane the core offers (HC1
-default, explicit cluster, hc2 carve-out, hc2_bm per-period BM df, Conley,
-survey TSL, survey replicate, string labels, a non-suffix partition and a
-rank-deficient NaN post period).
+Why these lanes: each is a ``TwoWayFixedEffects.fit(..., event_study=True)``
+design, pooled or within, covering every variance lane
+``_fit_event_study_core`` offers (HC1 default, explicit cluster, hc2
+carve-out, hc2_bm per-period BM df, cluster + hc2_bm CR2, Conley, survey TSL,
+survey replicate, string labels, a non-suffix partition and a rank-deficient
+NaN post period). The committed records were captured while the core still
+had an independent twin (``MultiPeriodDiD``, removed in PR 4c-ii), so they
+pin the TWFE surface against the pre-refactor numbers.
 """
 
 from __future__ import annotations
@@ -68,7 +69,7 @@ def build_panel() -> pd.DataFrame:
 
 
 def build_nan_post_panel() -> pd.DataFrame:
-    """The ``test_avg_att_nan_when_period_effect_nan`` design: 100 units x 6
+    """The rank-deficient NaN post-period design: 100 units x 6
     periods (treated = first half, effect 3.0 from period 3), then EVERY treated
     row in post period 3 dropped so the ``treated:period_3`` interaction is a
     zero column and that period's effect is NaN."""
@@ -108,7 +109,7 @@ def build_survey(label: Optional[str]) -> Optional[SurveyDesign]:
 
 @dataclass(frozen=True)
 class Lane:
-    """One oracle lane: the TWFE event-study fit and its MultiPeriodDiD twin.
+    """One oracle lane: a TWFE event-study fit (ctor kwargs + fit kwargs).
 
     Fit kwargs never contain objects; the survey design is built from
     ``survey_label`` at fit time. ``panel`` names a ``PANELS`` entry.
@@ -117,8 +118,6 @@ class Lane:
     panel: str
     twfe_ctor: Dict[str, Any]
     twfe_fit: Dict[str, Any]
-    mpd_ctor: Dict[str, Any]
-    mpd_fit: Dict[str, Any]
     survey_label: Optional[str] = None
     notes: str = field(default="", compare=False)
 
@@ -128,8 +127,6 @@ class Lane:
             "panel": self.panel,
             "twfe_ctor": dict(self.twfe_ctor),
             "twfe_fit": dict(self.twfe_fit),
-            "mpd_ctor": dict(self.mpd_ctor),
-            "mpd_fit": dict(self.mpd_fit),
             "survey_label": self.survey_label,
         }
 
@@ -152,18 +149,14 @@ def _pooled(ctor: Dict[str, Any], **fit_extra: Any) -> Lane:
         panel="main",
         twfe_ctor=dict(ctor),
         twfe_fit={**_COMMON, **_PART, "spec": "pooled", **fit_extra},
-        mpd_ctor=dict(ctor),
-        mpd_fit={**_COMMON, **_PART, **fit_extra},
     )
 
 
-def _within(ctor: Dict[str, Any], survey_label: Optional[str] = None, **mpd_extra: Any) -> Lane:
+def _within(ctor: Dict[str, Any], survey_label: Optional[str] = None) -> Lane:
     return Lane(
         panel="main",
         twfe_ctor=dict(ctor),
         twfe_fit={**_COMMON, **_PART, "spec": "within", "unit": "unit"},
-        mpd_ctor=dict(ctor),
-        mpd_fit={**_COMMON, **_PART, "absorb": ["unit"], **mpd_extra},
         survey_label=survey_label,
     )
 
@@ -174,12 +167,12 @@ LANES: Dict[str, Lane] = {
     "pooled_hc2_bm": _pooled({"vcov_type": "hc2_bm"}),
     "within_cluster_unit": _within({"cluster": "unit"}),
     "within_hc2": _within({"vcov_type": "hc2"}),
-    # Cluster + hc2_bm: the CR2 Bell-McCaffrey bypass (`_is_mpd_cr2_path`) that
-    # no other lane reaches; captured at d45d5316 (PR 4c-ii, before the core's
-    # post-average block was removed) - see provenance.lane_additions.
+    # Cluster + hc2_bm: the CR2 Bell-McCaffrey bypass that no other lane
+    # reaches; captured at d45d5316 (PR 4c-ii, before the core's post-average
+    # block was removed) - see provenance.lane_additions.
     "pooled_cluster_hc2_bm": _pooled({"vcov_type": "hc2_bm", "cluster": "unit"}),
     "within_cluster_hc2_bm": _within({"vcov_type": "hc2_bm", "cluster": "unit"}),
-    "within_conley": _within(_CONLEY_CTOR, unit="unit"),
+    "within_conley": _within(_CONLEY_CTOR),
     "within_survey_tsl": _within({}, survey_label="tsl:w/stratum/psu"),
     "within_replicate_jk1": _within({}, survey_label="jk1:w"),
     "pooled_string_labels": Lane(
@@ -193,28 +186,16 @@ LANES: Dict[str, Lane] = {
             "post_periods": ["p4", "p5", "p6", "p7"],
             "reference_period": "p3",
         },
-        mpd_ctor={},
-        mpd_fit={
-            "outcome": "outcome",
-            "treatment": "treated",
-            "time": "period_s",
-            "post_periods": ["p4", "p5", "p6", "p7"],
-            "reference_period": "p3",
-        },
     ),
     "pooled_non_suffix": Lane(
         panel="main",
         twfe_ctor={},
         twfe_fit={**_COMMON, "spec": "pooled", "post_periods": [2, 5], "reference_period": 4},
-        mpd_ctor={},
-        mpd_fit={**_COMMON, "post_periods": [2, 5], "reference_period": 4},
     ),
     "pooled_nan_post_period": Lane(
         panel="nan_post",
         twfe_ctor={},
         twfe_fit={**_COMMON, "spec": "pooled", "post_periods": [3, 4, 5], "reference_period": 2},
-        mpd_ctor={},
-        mpd_fit={**_COMMON, "post_periods": [3, 4, 5], "reference_period": 2},
     ),
 }
 

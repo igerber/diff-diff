@@ -63,15 +63,16 @@ def main():
             self.vcov = sigma
             self.n_pre_periods = num_pre
             self.n_post_periods = num_post
-            # Create period effects for compatibility
+            # Plain per-period records for compatibility (not an estimator
+            # container; HonestDiD reads beta/vcov above).
             self.period_effects = []
             for i, b in enumerate(beta):
                 event_time = i - num_pre + 1 if i < num_pre else i - num_pre + 1
-                self.period_effects.append(type('PeriodEffect', (), {
+                self.period_effects.append({
                     'period': event_time,
                     'coefficient': b,
-                    'se': np.sqrt(sigma[i, i]) if i < len(sigma) else 0.1
-                })())
+                    'se': np.sqrt(sigma[i, i]) if i < len(sigma) else 0.1,
+                })
 
     mock_results = MockEventStudyResults(beta, sigma, args.num_pre, args.num_post)
 

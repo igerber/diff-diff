@@ -201,10 +201,9 @@ A new parameter is only complete when it is:
 - applied in the **bootstrap/inference** paths, not just the analytical one
 - reflected on the result object, so `to_dict()`/`summary()` do not misreport it
 - propagated to the estimators that inherit it: `TwoWayFixedEffects` defines
-  no `__init__` of its own, and `MultiPeriodDiD`'s 3.9 deprecation shim
-  forwards via `super().__init__(*args, **kwargs)` with an import-time
-  `__signature__` mirror - so both inherit a new
-  `DifferenceInDifferences` constructor parameter automatically;
+  no `__init__` of its own, so it inherits a new `DifferenceInDifferences`
+  constructor parameter automatically (the `MultiPeriodDiD` 3.9 shim that
+  mirrored the signature was removed at the 4.0 cut);
   `SyntheticDiD` defines its OWN signature (it forwards only `alpha` to
   `super().__init__`, pinning `cluster=None`), so a new parent
   parameter must be explicitly mirrored — or explicitly rejected, like its

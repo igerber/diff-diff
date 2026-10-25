@@ -236,8 +236,8 @@ probability to theta.
 
 ### Regression-based estimators
 
-For regression-based estimators (DifferenceInDifferences, TwoWayFixedEffects,
-MultiPeriodDiD, SunAbraham, StackedDiD, ContinuousDiD), the point estimates
+For regression-based estimators (DifferenceInDifferences, TwoWayFixedEffects in
+both modes, SunAbraham, StackedDiD, ContinuousDiD), the point estimates
 solve weighted estimating equations. The WLS formulation minimizes:
 
 ```
@@ -690,7 +690,7 @@ Each estimator uses one of three variance strategies under survey designs:
 |-----------|--------------|-------|
 | DifferenceInDifferences | TSL sandwich | OLS-based, all weight types |
 | TwoWayFixedEffects | TSL sandwich | OLS-based, all weight types |
-| MultiPeriodDiD | TSL sandwich | OLS-based, all weight types |
+| TwoWayFixedEffects event-study mode (the removed MultiPeriodDiD) | TSL sandwich | OLS-based, all weight types |
 | CallawaySantAnna | TSL on IFs | pweight only |
 | DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; replicate designs: IF-reweighting on augmented scores, per-cell + aggregate; library extension of Chang (2020) i.i.d. theory (bad-control lane: `cluster=` only; `survey_design` raises) |
 | SunAbraham | TSL sandwich | OLS-based, all weight types |
