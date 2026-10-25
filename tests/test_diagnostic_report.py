@@ -31,7 +31,6 @@ from diff_diff import (
     DiagnosticReportResults,
     DifferenceInDifferences,
     EfficientDiD,
-    MultiPeriodDiD,
     SyntheticControl,
     SyntheticDiD,
     TwoWayFixedEffects,
@@ -84,23 +83,6 @@ def did_fit():
     df = generate_did_data(n_units=80, n_periods=4, treatment_effect=1.5, seed=7)
     did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", post="post")
     return did, df
-
-
-@pytest.fixture(scope="module")
-def legacy_mpd_fit():
-    """Native MultiPeriodDiD fit for the MPD-only tests (event-study lanes, the
-    name-string dispatch pins): dies with the class at the 4.0 cut (PR 4c-ii)."""
-    warnings.filterwarnings("ignore")
-    df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-    es = MultiPeriodDiD().fit(
-        df,
-        outcome="outcome",
-        treatment="treated",
-        time="period",
-        unit="unit",
-        reference_period=3,
-    )
-    return es, df
 
 
 @pytest.fixture(scope="module")
@@ -213,11 +195,6 @@ class TestSchemaContract:
         schema = dr.to_dict()
         assert set(schema.keys()) == _TOP_LEVEL_KEYS
 
-    def test_every_top_level_key_present_multiperiod(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
-        schema = DiagnosticReport(fit).to_dict()
-        assert set(schema.keys()) == _TOP_LEVEL_KEYS
-
     def test_every_top_level_key_present_cs(self, cs_fit):
         fit, sdf = cs_fit
         schema = DiagnosticReport(
@@ -327,8 +304,8 @@ class TestApplicabilityMatrix:
         reason = dr.skipped_checks["bacon"]
         assert "outcome" in reason or "time" in reason or "unit" in reason
 
-    def test_multiperiod_runs_pt_and_power_and_sensitivity(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_cs_runs_pt_and_power_and_sensitivity(self, cs_fit):
+        fit, _ = cs_fit
         dr = DiagnosticReport(fit)
         applicable = set(dr.applicable_checks)
         assert "parallel_trends" in applicable
@@ -355,8 +332,8 @@ class TestApplicabilityMatrix:
         dr = DiagnosticReport(fit)
         assert "estimator_native" in dr.applicable_checks
 
-    def test_run_opt_outs_move_checks_to_skipped(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_run_opt_outs_move_checks_to_skipped(self, cs_fit):
+        fit, _ = cs_fit
         dr = DiagnosticReport(fit, run_sensitivity=False)
         assert "sensitivity" not in dr.applicable_checks
         assert dr.skipped_checks["sensitivity"].startswith("run_sensitivity=False")
@@ -381,8 +358,8 @@ class TestApplicabilityMatrix:
 # Precomputed passthrough
 # ---------------------------------------------------------------------------
 class TestPrecomputed:
-    def test_precomputed_sensitivity_is_used_verbatim(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_precomputed_sensitivity_is_used_verbatim(self, cs_fit):
+        fit, _ = cs_fit
 
         # Construct a minimal SensitivityResults-shaped object the formatter recognizes.
         class _FakeSens:
@@ -547,60 +524,6 @@ class TestPrecomputed:
         # Legacy-ambiguous → conservative sentinel + downgrade applies.
         assert block["covariance_source"] == "diag_fallback_available_full_vcov_unused"
         assert block["tier"] == "moderately_powered"
-
-    def test_precomputed_pretrends_power_legacy_mpd_without_interaction_indices_reports_diag(
-        self,
-    ):
-        """PR-B R5 regression: ``MultiPeriodDiDResults`` legacy fits without
-        ``interaction_indices`` truly take the ``np.diag(ses**2)`` fallback
-        inside ``pretrends.py:_extract_pre_period_params`` MPD branch. The
-        report-layer's ``_infer_cov_source`` fallback must surface that
-        accurately as ``"diag_fallback"`` rather than overclaiming
-        ``"full_pre_period_vcov"`` (MPD is not in the event-study type set,
-        so the previous non-event-study branch unconditionally returned
-        ``"full_pre_period_vcov"`` — wrong for MPD without interaction
-        indices).
-        """
-
-        class _LegacyMPDStub:
-            avg_att = 1.0
-            avg_se = 0.25
-            avg_t_stat = 4.0
-            avg_p_value = 0.001
-            avg_conf_int = (0.5, 1.5)
-            alpha = 0.05
-            n_obs = 400
-            n_treated = 80
-            n_control = 320
-            survey_metadata = None
-            # No interaction_indices, no full vcov — pretrends.py MPD
-            # branch falls through to diag(ses**2).
-            vcov = None
-            interaction_indices = None
-
-        stub = _LegacyMPDStub()
-        stub.__class__.__name__ = "MultiPeriodDiDResults"
-
-        class _LegacyPPStub:
-            mdv = 0.1
-            violation_type = "linear"
-            alpha = 0.05
-            target_power = 0.80
-            violation_magnitude = 0.1
-            power = 0.80
-            n_pre_periods = 2
-            original_results = stub
-            # Legacy — no covariance_source field set.
-
-        dr = DiagnosticReport(stub, precomputed={"pretrends_power": _LegacyPPStub()})
-        block = dr.to_dict()["pretrends_power"]
-        assert block["status"] == "ran"
-        # Legacy MPD without interaction_indices reports diag_fallback —
-        # the conservative downgrade does NOT fire (this isn't an
-        # "available but unused" case, just a normal fallback).
-        assert block["covariance_source"] == "diag_fallback"
-        # No downgrade applies on "diag_fallback" (vs the sentinel label).
-        assert block["tier"] == "well_powered"
 
     def test_precomputed_pretrends_power_consumes_persisted_cov_source(self):
         """PR-B R3 regression: the precomputed adapter must prefer the
@@ -945,37 +868,45 @@ class TestJointWaldAlignment:
 
     These tests address the correctness-sensitive codepath in
     ``_pt_event_study`` where pre-period coefficient keys must align with
-    ``interaction_indices`` before the joint Wald statistic can be indexed
+    ``event_study_vcov_index`` before the joint Wald statistic can be indexed
     into the right vcov rows/columns. When alignment fails, the code must
     fall back to Bonferroni rather than compute a Wald statistic on the
     wrong rows.
     """
 
     @staticmethod
-    def _stub_result(pre_effects, interaction_indices, vcov, **extra):
-        """Build a minimal MultiPeriodDiDResults-shaped stub for PT tests.
+    def _stub_result(pre_effects, es_vcov_index, vcov, **extra):
+        """Build a minimal CallawaySantAnnaResults-shaped stub for PT tests.
 
         ``pre_effects`` is an iterable of ``(period_key, effect, se, p_value)``
-        tuples. Returns an object whose class name is ``MultiPeriodDiDResults``
-        so DR's name-keyed dispatch routes it to the event-study PT path.
+        tuples; ``es_vcov_index`` is the ordered ``event_study_vcov_index``
+        label list (or ``None``) that positions ``vcov`` rows. Returns an
+        object whose class name is ``CallawaySantAnnaResults`` so DR's
+        name-keyed dispatch routes it to the event-study PT path through the
+        raw ``event_study_effects`` field (4.0: the calendar-keyed
+        ``pre_period_effects`` + ``interaction_indices`` route died with the
+        class it belonged to).
         """
-        from types import SimpleNamespace
-
-        pre_map = {
-            k: SimpleNamespace(effect=eff, se=se, p_value=p) for (k, eff, se, p) in pre_effects
+        es_map = {
+            k: {"effect": eff, "se": se, "p_value": p, "n_groups": 5}
+            for (k, eff, se, p) in pre_effects
         }
+        # One post-period row so the surface is not pre-only.
+        es_map[0] = {"effect": 1.0, "se": 0.1, "p_value": 0.001, "n_groups": 5}
 
-        class MultiPeriodDiDResults:  # noqa: D401 — test stub that mimics the real class name
+        class CallawaySantAnnaResults:  # noqa: D401 — test stub that mimics the real class name
             pass
 
-        obj = MultiPeriodDiDResults()
-        obj.pre_period_effects = pre_map
-        obj.interaction_indices = interaction_indices
-        obj.vcov = np.asarray(vcov, dtype=float) if vcov is not None else None
-        obj.avg_att = 1.0
-        obj.avg_se = 0.1
-        obj.avg_p_value = 0.001
-        obj.avg_conf_int = (0.8, 1.2)
+        obj = CallawaySantAnnaResults()
+        obj.event_study_effects = es_map
+        obj.event_study_vcov_index = list(es_vcov_index) if es_vcov_index is not None else None
+        obj.event_study_vcov = np.asarray(vcov, dtype=float) if vcov is not None else None
+        obj.vcov = None
+        obj.interaction_indices = None
+        obj.overall_att = 1.0
+        obj.overall_se = 0.1
+        obj.overall_p_value = 0.001
+        obj.overall_conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -986,18 +917,18 @@ class TestJointWaldAlignment:
         return obj
 
     def test_joint_wald_runs_when_keys_align(self):
-        """With aligned pre_effects + interaction_indices + vcov, Wald runs
+        """With aligned pre_effects + event_study_vcov_index + vcov, Wald runs
         and the computed chi-squared statistic matches the closed form."""
         pre = [(-3, 0.0, 0.5, 0.99), (-2, 0.0, 0.5, 0.99), (-1, 0.0, 0.5, 0.99)]
-        interaction_indices = {-3: 0, -2: 1, -1: 2, 0: 3}  # maps period -> vcov row
+        es_vcov_index = [-3, -2, -1, 0]  # ordered period labels -> vcov rows
         vcov = np.diag([0.25, 0.25, 0.25, 0.25])  # SE = 0.5 for each pre-period
-        stub = self._stub_result(pre, interaction_indices, vcov)
+        stub = self._stub_result(pre, es_vcov_index, vcov)
         dr = DiagnosticReport(stub, run_sensitivity=False, run_bacon=False)
         pt = dr.to_dict()["parallel_trends"]
         assert pt["status"] == "ran"
         assert (
-            pt["method"] == "joint_wald"
-        ), f"Expected joint_wald with aligned keys; got {pt.get('method')}"
+            pt["method"] == "joint_wald_event_study"
+        ), f"Expected joint_wald_event_study with aligned keys; got {pt.get('method')}"
         # beta=0 across all periods -> test_statistic = 0 -> p = 1.0
         assert pt["test_statistic"] == pytest.approx(0.0)
         assert pt["joint_p_value"] == pytest.approx(1.0)
@@ -1009,45 +940,45 @@ class TestJointWaldAlignment:
         # -> test_statistic = 1.0^2/0.25 + 0.5^2/0.25 + 0.2^2/0.16
         #                   = 4.0 + 1.0 + 0.25 = 5.25
         pre = [(-3, 1.0, 0.5, 0.04), (-2, -0.5, 0.5, 0.30), (-1, 0.2, 0.4, 0.61)]
-        interaction_indices = {-3: 0, -2: 1, -1: 2}
+        es_vcov_index = [-3, -2, -1]
         vcov = np.diag([0.25, 0.25, 0.16])
-        stub = self._stub_result(pre, interaction_indices, vcov)
+        stub = self._stub_result(pre, es_vcov_index, vcov)
         dr = DiagnosticReport(stub, run_sensitivity=False, run_bacon=False)
         pt = dr.to_dict()["parallel_trends"]
-        assert pt["method"] == "joint_wald"
+        assert pt["method"] == "joint_wald_event_study"
         assert pt["test_statistic"] == pytest.approx(5.25, rel=1e-6)
 
-    def test_falls_back_to_bonferroni_without_interaction_indices(self):
+    def test_falls_back_to_bonferroni_without_event_study_vcov_index(self):
         pre = [(-2, 1.0, 0.5, 0.04), (-1, 0.2, 0.5, 0.69)]
-        stub = self._stub_result(pre, interaction_indices=None, vcov=np.diag([0.25, 0.25]))
+        stub = self._stub_result(pre, es_vcov_index=None, vcov=np.diag([0.25, 0.25]))
         dr = DiagnosticReport(stub, run_sensitivity=False, run_bacon=False)
         pt = dr.to_dict()["parallel_trends"]
         assert pt["status"] == "ran"
         assert pt["method"] == "bonferroni", (
-            "Missing interaction_indices must force Bonferroni fallback, "
+            "Missing event_study_vcov_index must force Bonferroni fallback, "
             "never attempt a Wald statistic on misaligned rows."
         )
         # Bonferroni: min(per-period p) * n = 0.04 * 2 = 0.08 (< 1)
         assert pt["joint_p_value"] == pytest.approx(0.08, rel=1e-6)
 
     def test_falls_back_to_bonferroni_when_keys_misaligned(self):
-        """pre_effects has keys [-2, -1] but interaction_indices uses [2019, 2020]."""
+        """pre_effects has keys [-2, -1] but event_study_vcov_index uses [2019, 2020]."""
         pre = [(-2, 1.0, 0.5, 0.04), (-1, 0.2, 0.5, 0.69)]
-        interaction_indices = {2019: 0, 2020: 1}  # deliberately different namespace
+        es_vcov_index = [2019, 2020]  # deliberately different namespace
         vcov = np.diag([0.25, 0.25])
-        stub = self._stub_result(pre, interaction_indices, vcov)
+        stub = self._stub_result(pre, es_vcov_index, vcov)
         dr = DiagnosticReport(stub, run_sensitivity=False, run_bacon=False)
         pt = dr.to_dict()["parallel_trends"]
         assert pt["status"] == "ran"
         assert pt["method"] == "bonferroni", (
-            "Misaligned interaction_indices must force Bonferroni fallback — "
+            "Misaligned event_study_vcov_index must force Bonferroni fallback — "
             "the len(keys_in_vcov) == df guard should prevent the Wald path."
         )
 
     def test_falls_back_to_bonferroni_when_vcov_missing(self):
         pre = [(-2, 1.0, 0.5, 0.04), (-1, 0.2, 0.5, 0.69)]
-        interaction_indices = {-2: 0, -1: 1}
-        stub = self._stub_result(pre, interaction_indices, vcov=None)
+        es_vcov_index = [-2, -1]
+        stub = self._stub_result(pre, es_vcov_index, vcov=None)
         dr = DiagnosticReport(stub, run_sensitivity=False, run_bacon=False)
         pt = dr.to_dict()["parallel_trends"]
         assert pt["method"] == "bonferroni"
@@ -1068,11 +999,11 @@ class TestJointWaldAlignment:
         # Same fixture as ``test_joint_wald_runs_when_keys_align`` but with
         # a survey_metadata carrying a finite df_survey.
         pre = [(-3, 1.0, 1.0, 0.32), (-2, 1.0, 1.0, 0.32), (-1, 1.0, 1.0, 0.32)]
-        interaction_indices = {-3: 0, -2: 1, -1: 2, 0: 3}
+        es_vcov_index = [-3, -2, -1, 0]
         vcov = np.eye(4)
         stub = self._stub_result(
             pre,
-            interaction_indices,
+            es_vcov_index,
             vcov,
             survey_metadata=SimpleNamespace(df_survey=20.0),
         )
@@ -1157,11 +1088,11 @@ class TestJointWaldAlignment:
         from types import SimpleNamespace
 
         pre = [(-3, 1.0, 1.0, 0.32), (-2, 1.0, 1.0, 0.32), (-1, 1.0, 1.0, 0.32)]
-        interaction_indices = {-3: 0, -2: 1, -1: 2, 0: 3}
+        es_vcov_index = [-3, -2, -1, 0]
         vcov = np.eye(4)
         stub = self._stub_result(
             pre,
-            interaction_indices,
+            es_vcov_index,
             vcov,
             survey_metadata=SimpleNamespace(df_survey=float("nan")),
         )
@@ -1191,11 +1122,6 @@ class TestNarrowedApplicabilityAndPlaceboSchema:
             f"placebo must always be status='skipped' per REPORTING.md; "
             f"got {placebo['status']!r}"
         )
-
-    def test_placebo_skipped_for_multiperiod_fit(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
-        placebo = DiagnosticReport(fit).to_dict()["placebo"]
-        assert placebo["status"] == "skipped"
 
     def test_placebo_skipped_for_sdid_fit(self, sdid_fit):
         fit, _ = sdid_fit
@@ -1362,30 +1288,27 @@ class TestReferenceMarkerAndNaNFiltering:
         "parallel trends hold" verdict from a partially-undefined
         pre-period surface.
         """
-        from types import SimpleNamespace
-
         import numpy as np
 
-        class MultiPeriodDiDResults:
+        class CallawaySantAnnaResults:
             pass
 
-        obj = MultiPeriodDiDResults()
-        # One valid row + one row whose p-value is NaN (the ``se`` here
-        # is finite / positive; the NaN p models an exotic fit where
-        # the inference pipeline could not produce a p-value even with
-        # a valid SE).
-        obj.pre_period_effects = {
-            -2: SimpleNamespace(effect=1.0, se=0.5, p_value=0.04),
-            -1: SimpleNamespace(effect=0.5, se=0.0, p_value=np.nan),
+        obj = CallawaySantAnnaResults()
+        # One valid row + one row with undefined inference (``se == 0``
+        # and a NaN p-value) on a raw ``event_study_effects`` surface.
+        obj.event_study_effects = {
+            -2: {"effect": 1.0, "se": 0.5, "p_value": 0.04, "n_groups": 5},
+            -1: {"effect": 0.5, "se": 0.0, "p_value": np.nan, "n_groups": 5},
+            0: {"effect": 1.0, "se": 0.1, "p_value": 0.001, "n_groups": 5},
         }
         obj.vcov = None
         obj.interaction_indices = None
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
-        obj.avg_att = 1.0
-        obj.avg_se = 0.1
-        obj.avg_p_value = 0.001
-        obj.avg_conf_int = (0.8, 1.2)
+        obj.overall_att = 1.0
+        obj.overall_se = 0.1
+        obj.overall_p_value = 0.001
+        obj.overall_conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -1596,24 +1519,24 @@ class TestReferenceMarkerAndNaNFiltering:
         zero/negative is undefined inference per the ``safe_inference``
         contract and must push the event-study PT to inconclusive.
         """
-        from types import SimpleNamespace
 
-        class MultiPeriodDiDResults:
+        class CallawaySantAnnaResults:
             pass
 
-        obj = MultiPeriodDiDResults()
-        obj.pre_period_effects = {
-            -2: SimpleNamespace(effect=1.0, se=0.5, p_value=0.04),
-            -1: SimpleNamespace(effect=0.5, se=0.0, p_value=0.99),
+        obj = CallawaySantAnnaResults()
+        obj.event_study_effects = {
+            -2: {"effect": 1.0, "se": 0.5, "p_value": 0.04, "n_groups": 5},
+            -1: {"effect": 0.5, "se": 0.0, "p_value": 0.99, "n_groups": 5},
+            0: {"effect": 1.0, "se": 0.1, "p_value": 0.001, "n_groups": 5},
         }
         obj.vcov = None
         obj.interaction_indices = None
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
-        obj.avg_att = 1.0
-        obj.avg_se = 0.1
-        obj.avg_p_value = 0.001
-        obj.avg_conf_int = (0.8, 1.2)
+        obj.overall_att = 1.0
+        obj.overall_se = 0.1
+        obj.overall_p_value = 0.001
+        obj.overall_conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -1783,8 +1706,8 @@ class TestSingleMSensitivityPrecomputed:
             alpha=0.05,
         )
 
-    def test_dr_schema_preserves_single_m_marker(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_dr_schema_preserves_single_m_marker(self, cs_fit):
+        fit, _ = cs_fit
         dr = DiagnosticReport(fit, precomputed={"sensitivity": self._fake_single_m()})
         sens = dr.to_dict()["sensitivity"]
         assert sens["status"] == "ran"
@@ -1792,8 +1715,8 @@ class TestSingleMSensitivityPrecomputed:
         assert sens["breakdown_M"] is None
         assert len(sens["grid"]) == 1
 
-    def test_dr_summary_does_not_claim_full_grid_robustness(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_dr_summary_does_not_claim_full_grid_robustness(self, cs_fit):
+        fit, _ = cs_fit
         dr = DiagnosticReport(fit, precomputed={"sensitivity": self._fake_single_m()})
         summary = dr.summary()
         assert "across the entire HonestDiD grid" not in summary
@@ -1802,11 +1725,11 @@ class TestSingleMSensitivityPrecomputed:
         assert "single point checked" in summary
         assert "not a breakdown" in summary or "not a grid" in summary
 
-    def test_br_summary_does_not_claim_full_grid_robustness(self, legacy_mpd_fit):
+    def test_br_summary_does_not_claim_full_grid_robustness(self, cs_fit):
         """BR via honest_did_results= passthrough must not oversell a point check."""
         from diff_diff import BusinessReport
 
-        fit, _ = legacy_mpd_fit
+        fit, _ = cs_fit
         br = BusinessReport(fit, honest_did_results=self._fake_single_m())
         summary = br.summary()
         assert "full grid" not in summary
@@ -1913,7 +1836,7 @@ class TestCSEventStudyVCovSupport:
 
 
 class TestCSJointWaldViaEventStudyVCov:
-    """CS PT should use joint_wald via event_study_vcov when interaction_indices is absent.
+    """CS PT should use joint_wald_event_study via event_study_vcov + event_study_vcov_index.
 
     Regression for the P1 CI-review finding that CS always fell back to Bonferroni
     even though ``event_study_vcov`` + ``event_study_vcov_index`` were available.
@@ -2322,9 +2245,9 @@ class TestSCMNative:
 # Error handling
 # ---------------------------------------------------------------------------
 class TestErrorHandling:
-    def test_sensitivity_error_does_not_break_report(self, legacy_mpd_fit):
+    def test_sensitivity_error_does_not_break_report(self, cs_fit):
         """A failing diagnostic records its error in the section; the report still renders."""
-        fit, _ = legacy_mpd_fit
+        fit, _ = cs_fit
 
         def _raise(*args, **kwargs):
             raise RuntimeError("synthetic test failure")
@@ -2589,46 +2512,6 @@ class TestHeterogeneityPostTreatmentOnly:
     was mixing pre- and post-treatment coefficients into the CV / range /
     sign-consistency summary.
     """
-
-    def test_collector_prefers_post_period_effects_over_period_effects(self):
-        """On a MultiPeriod-shaped stub, ``_collect_effect_scalars`` must read
-        ``post_period_effects`` (post-treatment only), not ``period_effects``
-        (which mixes pre- and post-treatment coefficients). If the pre-period
-        value leaked in, sign_consistency would flip and the range would span
-        a much larger interval."""
-        from diff_diff.diagnostic_report import DiagnosticReport
-
-        class MultiPeriodDiDResults:
-            pass
-
-        stub = MultiPeriodDiDResults()
-        pe_pre = type("PeriodEffect", (), {"effect": -1.0, "se": 0.2})()
-        pe_post_1 = type("PeriodEffect", (), {"effect": 1.0, "se": 0.2})()
-        pe_post_2 = type("PeriodEffect", (), {"effect": 3.0, "se": 0.2})()
-        stub.period_effects = {-1: pe_pre, 0: pe_post_1, 1: pe_post_2}
-        stub.post_period_effects = {0: pe_post_1, 1: pe_post_2}
-        stub.pre_period_effects = {-1: pe_pre}
-        stub.avg_att = 2.0
-        stub.avg_se = 0.1
-        stub.avg_p_value = 0.001
-        stub.avg_conf_int = (1.8, 2.2)
-        stub.alpha = 0.05
-        stub.n_obs = 100
-        stub.n_treated = 40
-        stub.n_control = 60
-        stub.survey_metadata = None
-
-        # Bypass the applicability-matrix gate by constructing the report
-        # object and calling the extractor directly: the fix is in the
-        # extractor, and MultiPeriod's applicability matrix may or may
-        # not include heterogeneity at any given release.
-        dr = DiagnosticReport(stub)
-        effects = sorted(dr._collect_effect_scalars())
-        assert effects == [1.0, 3.0], (
-            f"Extractor must return only post-treatment effects "
-            f"(no pre-period -1.0); got {effects}"
-        )
-        assert dr._heterogeneity_source() == "post_period_effects"
 
     def test_event_study_filters_pre_period_and_reference_markers(self):
         class CallawaySantAnnaResults:
@@ -3798,32 +3681,6 @@ class TestDerivedEventStudySurface:
         pt = results.to_dict()["parallel_trends"]
         assert pt["status"] == "skipped"
         assert pt["pre_period_source"] == "aggregate_event_study"
-
-    def test_mpd_one_pre_period_gets_reference_message(self):
-        rng = np.random.default_rng(5)
-        rows = []
-        for u in range(60):
-            for t in (1, 2):
-                rows.append(
-                    {
-                        "unit": u,
-                        "period": t,
-                        "treated": int(u < 30),
-                        "outcome": rng.normal() + (1.0 if (u < 30 and t == 2) else 0.0),
-                    }
-                )
-        mdf = pd.DataFrame(rows)
-        m = MultiPeriodDiD().fit(
-            mdf,
-            outcome="outcome",
-            treatment="treated",
-            time="period",
-            unit="unit",
-            post_periods=[2],
-        )
-        skipped = DiagnosticReport(m).run_all().skipped_checks
-        assert "every pre-treatment period is the omitted reference" in skipped["parallel_trends"]
-        assert "does not support post-fit" not in skipped["parallel_trends"]
 
     def test_adapter_zero_count_row_excluded(self):
         # Mirror of the raw-route pin: an n == 0, NaN-effect NON-reference

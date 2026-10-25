@@ -118,11 +118,11 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     snippet: "default reference_period has changed"
     code_refs: [diff_diff/estimators.py]
-    notes: "MPD e=-1 transition FutureWarning; dies with the MPD code path at 4.0. Merged TWFE event-study has no legacy default to warn about."
+    notes: "RETIRED at the 4.0 cut (PR 4c-ii, 2026-10-25): the legacy-default FutureWarning left _fit_event_study_core with the MultiPeriodDiD class - the core now defaults reference_period to the last pre-period silently (e=-1) and the warn_legacy_reference_default knob is gone; tests/test_v4_merge_mpd.py pins that no event-study fit emits the snippet. Original: MPD e=-1 transition FutureWarning; dies with the MPD code path at 4.0. Merged TWFE event-study has no legacy default to warn about."
   - id: M-008
     kind: env-default
     group: obligation-fastpath
@@ -148,12 +148,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/estimators.py, diff_diff/twfe.py, diff_diff/__init__.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/visualization/_event_study.py]
-    notes: "Unit-FE event study default; spec='within'|'pooled' opt-in (pooled = old MPD model, repeated cross-sections). Wild bootstrap in event-study mode = explicit error. SHIPPED 3.9 (Phase 3(a)): TWFE.fit(event_study=True, spec=, reference_period=, post_periods=) returns the unified EventStudyResults surface natively (source='TwoWayFixedEffects', estimation_spec + post_periods provenance); the shared core is DifferenceInDifferences._fit_event_study_core (the relocated MPD fit body, parameterized - MPD numerics/messages/warning-attribution bit-identical); ES calls pass time=/unit= as KEYWORDS (slot 4 stays post= through the M-082 window; section 4.1's snippet amended to keyword form). post_periods= is REQUIRED (non-empty) in ES mode (Phase 3(a) review R4, section 4.1 second amendment): the boundary is unobservable from time-invariant D_i, so MPD's midpoint default is a silent guess and is not carried over - MPD itself keeps it through 3.9. Day-one unit auto-cluster (user decision 2026-08-07) with static TWFE's carve-outs mirrored lane-for-lane: dropped on Conley (no implicit spatial x unit product kernel), never injected as a survey PSU (implicit-per-observation-PSU rule), dropped for explicit one-way analytical families; explicit cluster= passes through and matches MPD's explicit-cluster behavior (PSU injection included; a survey design carrying its own PSU keeps PSU precedence on every class). The wild ValueError and the no-legacy-reference-warning contract are live from the mode's 3.9 birth (the section 4.1 'at 4.0' clause describes when MPD's fallback dies with the class). MultiPeriodDiD.__init__ is the warning shim (forwarding *args/**kwargs + an import-time __signature__ mirror of DiD's constructor; set_params re-emits via its probe re-init; the static-type-checking loss for the deprecated class is the DEFERRED.md decision-record waiver). Consumer ports: HonestDiD + PreTrendsPower calendar container routes reconstruct the native-branch inputs from the post_periods provenance (HonestDiD geometry-scoped to chronological partitions - REGISTRY Note + DEFERRED row for the pre-existing native non-suffix geometry; PreTrendsPower plumbs reference_period through the gamma-unit helper incl. the string-label degradation); plot_event_study derives calendar splits from the provenance and shades per contiguous pre-run on both renderers; DiagnosticReport/BusinessReport explicitly reject the surface (TODO row for admission). DECOUPLED in PR 4c-i (2026-10-24): the TWFE event-study surface is built directly from _fit_event_study_core's private payload (results_base._from_event_study_payload); MultiPeriodDiDResults/_from_mpd are now reached only through MultiPeriodDiD.fit and the duck-typed build_event_study_surface branch, which PR 4c-ii deletes with the class."
+    notes: "REMOVED at the 4.0 cut (PR 4c-ii, 2026-10-25). The class, its __signature__ mirror, _MPD_DEPRECATION_MSG, _mpd_results_from_payload, results_base._from_mpd and the pyproject filterwarnings entry are gone; TwoWayFixedEffects().fit(..., event_study=True, spec=, post_periods=, reference_period=) is the estimator, pinned field for field against the committed pre-refactor oracle by tests/test_twfe_event_study_decoupling.py; absence pinned by tests/test_v4_merge_mpd.py. _fit_event_study_core is TWFE-only (post_periods required by the core, include_treatment_main/cluster_override keyword-required, estimator_name defaults to 'TwoWayFixedEffects'; the hc2_bm contrast batch KEEPS the former post-average column as the batch-relative noise-floor guard's anchor - user decision 2026-10-25). The consumer MPD branches in honest_did/pretrends/visualization/diagnostic_report/business_report/_reporting_helpers/practitioner/power are deleted (DiagnosticReport/BusinessReport name-keyed branches: user decision 2026-10-25). Shimmed in 3.9: Unit-FE event study default; spec='within'|'pooled' opt-in (pooled = old MPD model, repeated cross-sections). Wild bootstrap in event-study mode = explicit error. SHIPPED 3.9 (Phase 3(a)): TWFE.fit(event_study=True, spec=, reference_period=, post_periods=) returns the unified EventStudyResults surface natively (source='TwoWayFixedEffects', estimation_spec + post_periods provenance); the shared core is DifferenceInDifferences._fit_event_study_core (the relocated MPD fit body, parameterized - MPD numerics/messages/warning-attribution bit-identical); ES calls pass time=/unit= as KEYWORDS (slot 4 stays post= through the M-082 window; section 4.1's snippet amended to keyword form). post_periods= is REQUIRED (non-empty) in ES mode (Phase 3(a) review R4, section 4.1 second amendment): the boundary is unobservable from time-invariant D_i, so MPD's midpoint default is a silent guess and is not carried over - MPD itself keeps it through 3.9. Day-one unit auto-cluster (user decision 2026-08-07) with static TWFE's carve-outs mirrored lane-for-lane: dropped on Conley (no implicit spatial x unit product kernel), never injected as a survey PSU (implicit-per-observation-PSU rule), dropped for explicit one-way analytical families; explicit cluster= passes through and matches MPD's explicit-cluster behavior (PSU injection included; a survey design carrying its own PSU keeps PSU precedence on every class). The wild ValueError and the no-legacy-reference-warning contract are live from the mode's 3.9 birth (the section 4.1 'at 4.0' clause describes when MPD's fallback dies with the class). MultiPeriodDiD.__init__ is the warning shim (forwarding *args/**kwargs + an import-time __signature__ mirror of DiD's constructor; set_params re-emits via its probe re-init; the static-type-checking loss for the deprecated class is the DEFERRED.md decision-record waiver). Consumer ports: HonestDiD + PreTrendsPower calendar container routes reconstruct the native-branch inputs from the post_periods provenance (HonestDiD geometry-scoped to chronological partitions - REGISTRY Note + DEFERRED row for the pre-existing native non-suffix geometry; PreTrendsPower plumbs reference_period through the gamma-unit helper incl. the string-label degradation); plot_event_study derives calendar splits from the provenance and shades per contiguous pre-run on both renderers; DiagnosticReport/BusinessReport explicitly reject the surface (TODO row for admission). DECOUPLED in PR 4c-i (2026-10-24): the TWFE event-study surface is built directly from _fit_event_study_core's private payload (results_base._from_event_study_payload); MultiPeriodDiDResults/_from_mpd are now reached only through MultiPeriodDiD.fit and the duck-typed build_event_study_surface branch, which PR 4c-ii deletes with the class."
   - id: M-011
     kind: class
     group: merge-mpd
@@ -161,10 +161,11 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: removed
     phase: 5
+    test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/results.py, diff_diff/__init__.py]
-    notes: "Deprecation rides parent [M-010] (returned only by MPD). Successor = unified event-study surface on the merged TWFE results. DECOUPLED in PR 4c-i (2026-10-24): twfe.py:_fit_event_study no longer constructs this container - the core returns a private payload and the surface is built from it (results_base._from_event_study_payload; bit-identity pinned by tests/test_twfe_event_study_decoupling.py against the pre-refactor capture tests/fixtures/v4_twfe_event_study_oracles.json). The container is now constructed only by MultiPeriodDiD.fit (estimators._mpd_results_from_payload); PR 4c-ii deletes both."
+    notes: "REMOVED at the 4.0 cut (PR 4c-ii, 2026-10-25): container deleted from diff_diff/results.py; _EventStudyCorePayload pruned to the fields the surface builder reads (the avg_* block, inference_df and the count/label fields went with it). Through 3.x: Deprecation rides parent [M-010] (returned only by MPD). Successor = unified event-study surface on the merged TWFE results. DECOUPLED in PR 4c-i (2026-10-24): twfe.py:_fit_event_study no longer constructs this container - the core returns a private payload and the surface is built from it (results_base._from_event_study_payload; bit-identity pinned by tests/test_twfe_event_study_decoupling.py against the pre-refactor capture tests/fixtures/v4_twfe_event_study_oracles.json). The container is now constructed only by MultiPeriodDiD.fit (estimators._mpd_results_from_payload); PR 4c-ii deletes both."
   - id: M-012
     kind: class
     group: merge-mpd
@@ -172,10 +173,11 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: removed
     phase: 5
+    test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/results.py, diff_diff/__init__.py]
-    notes: "Per-period container superseded by the unified event-study representation (spec section 5)."
+    notes: "REMOVED at the 4.0 cut (PR 4c-ii, 2026-10-25); the [M-016] view's values are the PRIVATE frozen record results_base._PeriodEffectView (same fields plus is_significant/significance_stars), not exported. Through 3.x: Per-period container superseded by the unified event-study representation (spec section 5)."
   - id: M-013
     kind: class
     group: merge-ddd
@@ -218,15 +220,16 @@ rows:
   - id: M-016
     kind: field
     group: merge-mpd
-    old: "diff_diff:MultiPeriodDiDResults.period_effects"
+    old: "diff_diff:EventStudyResults.period_effects"
     new: null
     deprecated_in: "4.0"
     removed_in: "5.0"
-    status: planned
+    status: shimmed
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/results.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/visualization/_event_study.py, diff_diff/results_base.py, diff_diff/diagnostic_report.py, diff_diff/estimators.py, diff_diff/guides/llms-full.txt]
-    notes: "Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11). Reader inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
+    test_ref: tests/test_v4_merge_mpd.py
+    code_refs: [diff_diff/results_base.py, diff_diff/guides/llms-full.txt]
+    notes: "SHIMMED at the 4.0 cut (PR 4c-ii, 2026-10-25): locator migrated from MultiPeriodDiDResults.period_effects with [M-011]'s flip (cross-row rule, spec section 11). @property on EventStudyResults (results_base.py; a plain descriptor, never a dataclass field) emitting FutureWarning(stacklevel=2) naming 5.0 and to_dataframe(); returns {calendar label: results_base._PeriodEffectView} over the non-reference rows (reference omitted like the old dict; duplicate labels raise); is_significant = p_value < alpha (NaN -> False; the removed record hard-coded 0.05 - user decision 2026-10-25); stars via a leaf-local helper (results_base imports no diff_diff module, so the view is a leaf-local computed property, not a deprecated_field_property rename-forwarder). GATED to time_scale='calendar' surfaces: on a relative-time surface the property raises AttributeError before warning, so hasattr is False and nothing warns. build_event_study_surface opens with an isinstance(EventStudyResults) passthrough so no duck sniff reaches the property. Reader inventory after the deletions: results_base.py (the view) and guides/llms-full.txt (its documentation). Original: Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11). Reader inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
 
   # ---- fit(aggregate=) -> results.aggregate(type=) -------------------------
   - id: M-020
@@ -640,7 +643,7 @@ rows:
     warning: FutureWarning
     test_ref: null
     code_refs: [diff_diff/staggered_results.py, diff_diff/staggered.py, diff_diff/staggered_aggregation.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py, diff_diff/diagnostic_report.py, diff_diff/prep_dgp.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/staggered_triple_diff_results.py, diff_diff/dml_did.py, diff_diff/dml_did_results.py, diff_diff/_deprecation.py, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, docs/methodology/REPORTING.md]
-    notes: "diff_diff/_deprecation.py is 5.0-WINDOW INFRASTRUCTURE (added 2026-10-18): this row's FutureWarning properties and [M-016]'s ride its deprecated_field_property helper through the 4.0 -> 5.0 window, so the 4.0 removal PRs delete the shims that USE it but never the module. Pickle migration via __setstate__ per spec section 5. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
+    notes: "diff_diff/_deprecation.py is 5.0-WINDOW INFRASTRUCTURE (added 2026-10-18): this row's FutureWarning properties ride its deprecated_field_property helper through the 4.0 -> 5.0 window ([M-016]'s view is a leaf-local computed property in results_base.py instead - the leaf module cannot import the helper and the helper is a rename-forwarder, not a computed view), so the 4.0 removal PRs delete the shims that USE it but never the module. Pickle migration via __setstate__ per spec section 5. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
   - id: M-051
     kind: field
     group: field-flip
@@ -756,10 +759,11 @@ rows:
     new_target: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: done
     phase: 5
+    test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/__init__.py]
-    notes: "DROPPED, not retargeted: 'event study' is a design produced by CS/SA/BJS/LPDiD too, and retargeting to a class whose default is the static ATT would carry altered meaning. Deprecation warning rides parent [M-010] - the alias IS the same class object, so instantiating via EventStudy hits MPD's shim warning; no separate alias warning is enforceable. 3.9 FutureWarning live via the parent [M-010] shim since Phase 3(a) (pinned by tests/test_v4_merge_mpd.py: EventStudy() emits MPD's message and identity holds); next transition = the 4.0 removal."
+    notes: "RETIRED at the 4.0 cut (PR 4c-ii, 2026-10-25): the name is absent from diff_diff and __all__; tests/test_v4_merge_mpd.py pins the absence. old_target kept as the historical record (spec section 11 cross-row rule, alias clause). Through 3.9: DROPPED, not retargeted: 'event study' is a design produced by CS/SA/BJS/LPDiD too, and retargeting to a class whose default is the static ATT would carry altered meaning. Deprecation warning rides parent [M-010] - the alias IS the same class object, so instantiating via EventStudy hits MPD's shim warning; no separate alias warning is enforceable. 3.9 FutureWarning live via the parent [M-010] shim since Phase 3(a) (pinned by tests/test_v4_merge_mpd.py: EventStudy() emits MPD's message and identity holds); next transition = the 4.0 removal."
   - id: M-061
     kind: alias
     group: alias-table
@@ -1078,10 +1082,10 @@ rows:
     removed_in: null
     status: shimmed
     phase: 3
-    warning: FutureWarning
+    warning: null
     test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/twfe.py, diff_diff/power.py]
-    notes: "Static TWFE's 'time' is a 0/1 post dummy today; static mode migrates to 'post'. The NAME 'time' persists (it becomes the event-study calendar column), so removed_in is null - the 4.0 semantic enforcement is [M-083]. SHIPPED 3.9 (Phase 3(a), the M-031 template): post takes the old time slot (positional static callers silently canonical), the deprecated time= tail kwarg resolves via resolve_renamed_kwarg with the calendar-column extra ('From 4.0, time= means the event-study calendar column only.'), require_arg restores the missing-argument TypeErrors (post AND unit, which gained the NOT_SUPPLIED sentinel so the unit-less pooled event-study spec is expressible); in event-study mode time= is the calendar KEYWORD with no warning and post= is rejected. Call-site migration: a receiver-resolving AST census found 103 keyword sites; 101 migrated across 11 test files + 4 benchmark scripts + power.py's two runtime TWFE fit-kwargs builders (simulate_power(TWFE) verified warning-free); the guide/rst example sites migrated with per-site VALUE judgment (docs surfaces list which column is the true 0/1 dummy). Deliberate time= usage survives only in the shim's own test pins."
+    notes: "AT 4.0 (PR 4c-ii, 2026-10-25): the static-mode FutureWarning path is gone - [M-083] now raises, so warning is null; 'time' survives only as the event-study calendar column (both names still bind on TwoWayFixedEffects.fit, which is what 'shimmed' asserts here; the M-031 reading). Through 3.x: Static TWFE's 'time' is a 0/1 post dummy today; static mode migrates to 'post'. The NAME 'time' persists (it becomes the event-study calendar column), so removed_in is null - the 4.0 semantic enforcement is [M-083]. SHIPPED 3.9 (Phase 3(a), the M-031 template): post takes the old time slot (positional static callers silently canonical), the deprecated time= tail kwarg resolves via resolve_renamed_kwarg with the calendar-column extra ('From 4.0, time= means the event-study calendar column only.'), require_arg restores the missing-argument TypeErrors (post AND unit, which gained the NOT_SUPPLIED sentinel so the unit-less pooled event-study spec is expressible); in event-study mode time= is the calendar KEYWORD with no warning and post= is rejected. Call-site migration: a receiver-resolving AST census found 103 keyword sites; 101 migrated across 11 test files + 4 benchmark scripts + power.py's two runtime TWFE fit-kwargs builders (simulate_power(TWFE) verified warning-free); the guide/rst example sites migrated with per-site VALUE judgment (docs surfaces list which column is the true 0/1 dummy). Deliberate time= usage survives only in the shim's own test pins."
   - id: M-083
     kind: behavior
     group: merge-mpd
@@ -1089,10 +1093,11 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     code_refs: [diff_diff/twfe.py]
-    notes: "At 4.0, 'time' means calendar ONLY: static mode (event_study=False) passing time= raises a ValueError pointing at post= - never silently reinterpreted as a post dummy. Companion to [M-082]."
+    test_ref: tests/test_v4_merge_mpd.py
+    notes: "DONE at the 4.0 cut (PR 4c-ii, 2026-10-25): static-mode time= raises ValueError naming post= (both-supplied keeps its own 'pass only post=' error); the M-082 FutureWarning path and twfe.py's resolve_renamed_kwarg call are gone. Spec: At 4.0, 'time' means calendar ONLY: static mode (event_study=False) passing time= raises a ValueError pointing at post= - never silently reinterpreted as a post dummy. Companion to [M-082]."
   - id: M-085
     kind: behavior
     group: merge-ddd

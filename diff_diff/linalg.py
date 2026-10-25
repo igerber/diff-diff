@@ -1326,7 +1326,7 @@ def solve_ols(
     # Front-door Conley-specific validation. Runs BEFORE the routing/backend
     # branching so `return_vcov=False` cannot bypass the conley+weights /
     # conley+cluster_ids guards. Conley needs this because survey-replicate
-    # paths in MultiPeriodDiD pass `return_vcov=False` + `weights=survey_w`
+    # paths in the event-study core pass `return_vcov=False` + `weights=survey_w`
     # and would otherwise silently return survey SEs under a Conley request.
     # The full `_validate_vcov_args` is NOT called here because other vcov
     # types (e.g. `hc2_bm` + replicate weights) intentionally fall through
@@ -2492,7 +2492,7 @@ def _compute_cr2_bm_vcov_and_dof(
     eigendecompositions on the weighted path) are defined in exactly one
     place.
     Consolidating the two formerly-duplicated precompute blocks lets a caller
-    that needs both vcov and contrast DOF (e.g. :class:`MultiPeriodDiD` under
+    that needs both vcov and contrast DOF (e.g. the TWFE event-study mode under
     ``cluster + hc2_bm``) build them once instead of twice.
 
     Parameters
@@ -3064,7 +3064,7 @@ def _cr2_bm_dof_inner_weighted(
     # by enough to materially shift Satterthwaite DOF on high-leverage
     # coefficients). Fall back to a symmetric-eigendecomposition pseudo-
     # square-root only on rank-deficient designs (where chol raises), so the
-    # MultiPeriodDiD-style full-dummy designs that exposed the original
+    # event-study full-dummy designs that exposed the original
     # singular-bread case still proceed.
     _TOL = 1e-10
 
@@ -3160,7 +3160,7 @@ def _cr2_bm_dof_inner_weighted(
     #   2. Absolute (single-contrast safe): max(|P|) < eps_floor based on the
     #      bread matrix scale. Necessary because batch-relative reduces to
     #      max|P| < 1e-10 × max|P| (i.e. False) for a single contrast, leaving
-    #      direct `_compute_cr2_bm_contrast_dof(...)` callers (e.g., MPD avg_att)
+    #      direct `_compute_cr2_bm_contrast_dof(...)` callers (single contrasts)
     #      unprotected. Threshold: `(EPS × n × k × bread_inv_scale)²` covers the
     #      worst-case dgemm accumulation roundoff floor for `H1/H2/H3 @ contrast`
     #      products. CI codex flagged this as P2 (R8 round); regression test in
@@ -3208,8 +3208,8 @@ def _compute_cr2_bm_contrast_dof(
 
     Generalizes the per-coefficient DOF from :func:`_compute_cr2_bm` to
     arbitrary linear combinations ``c = sum_j a_j * beta_j``. Used by
-    :class:`MultiPeriodDiD` to compute the Satterthwaite DOF for the
-    post-period-average ATT contrast under cluster-robust CR2 inference.
+    the event-study core to compute Satterthwaite DOF for its contrast
+    batch under cluster-robust CR2 inference.
 
     Parameters
     ----------
@@ -3331,7 +3331,7 @@ def _compute_bm_dof_from_contrasts(
 
     if np.any(h_diag >= _HC_LEVERAGE_THRESHOLD):
         # Covariance already warns on this design. Remain silent for callers
-        # computing additional contrasts, e.g. MultiPeriodDiD's average ATT.
+        # computing additional contrasts, e.g. the event-study contrast batch.
         return np.full(contrasts.shape[1], np.nan)
 
     # Unweighted: keep the simple (tr B)² / tr(B²) formula — algebraically
@@ -3442,7 +3442,7 @@ def _compute_robust_vcov_numpy(
 
     # Bread: (X'WX) or (X'X) depending on whether weights present.
     # Suppress spurious BLAS-level subnormal warnings on macOS Accelerate
-    # for sparse-X designs (e.g., MultiPeriodDiD's event-study dummies).
+    # for sparse-X designs (e.g., the event-study period dummies).
     # Non-finite bread is caught at the downstream np.linalg.solve.
     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
         if weights is not None:
@@ -4393,9 +4393,9 @@ class LinearRegression:
         (``pweight`` / ``survey_design``) the deferral additionally
         reflects an open methodological question, with no canonical
         extension of Conley (1999) for weighted spatial-HAC under
-        probability sampling. The DiD / MPD / TWFE
-        estimators all support panel Conley by passing ``unit`` at fit-time
-        (DiD as a fit-time kwarg; MPD/TWFE via the existing ``unit``
+        probability sampling. The DiD / TWFE
+        estimators both support panel Conley by passing ``unit`` at fit-time
+        (DiD as a fit-time kwarg; TWFE via the existing ``unit``
         argument), threading ``conley_time`` / ``conley_unit`` into the
         block-decomposed sandwich.
     conley_coords : ndarray of shape (n, 2), optional
@@ -5257,7 +5257,7 @@ class LinearRegression:
             # every fit (clustered, unclustered, and conley alike). Survey df
             # and per-coefficient Bell-McCaffrey DOF above still win — this
             # branch replaces only the residual fallback. Keep textually
-            # parallel with MultiPeriodDiD's inline ladder (estimators.py,
+            # parallel with the event-study core's inline ladder (estimators.py,
             # "normal" branch).
             effective_df = None
         else:

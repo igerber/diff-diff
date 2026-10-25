@@ -125,18 +125,6 @@ markers = [
     "slow: marks tests as slow (run `pytest -m 'not slow'` to exclude, or `pytest -m slow` to run only slow tests)",
     "realdata: marks tests that validate against real survey datasets (API, NHANES, RECS)",
 ]
-# The ~140 MPD behavior-suite constructions stay noise-free through the
-# deprecation window (row M-010; the suite pins the class's 3.x behavior until
-# its 4.0 removal in PR 4c - REMOVE the filter with the class; the
-# StaggeredTripleDifference and QDiD filters went with their classes in PR 4a).
-# pytest.warns overrides it, so the dedicated deprecation pins in
-# tests/test_v4_merge_mpd.py still fire; note a test-local
-# `warnings.simplefilter(...)` RESETS the filter list, so record-based tests
-# must select warnings by message, never index.
-filterwarnings = [
-    "ignore:MultiPeriodDiD is deprecated:FutureWarning",
-]
-
 [tool.black]
 line-length = 100
 target-version = ["py39"]

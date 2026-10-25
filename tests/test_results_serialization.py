@@ -31,7 +31,6 @@ NEW_TO_DICT = [
 ESTIMATOR_RESULTS = [
     "DiDResults",
     "SpilloverDiDResults",
-    "MultiPeriodDiDResults",
     "SyntheticDiDResults",
     "CallawaySantAnnaResults",
     "DMLDiDResults",

@@ -1394,12 +1394,12 @@ class TestValidateDesignTermNames:
         # e.g. a fixed-effect dummy "period_2" colliding with a structural key.
         with pytest.raises(ValueError, match="collide"):
             validate_design_term_names(
-                ["const", "treated", "period_2", "period_2"], estimator="MultiPeriodDiD"
+                ["const", "treated", "period_2", "period_2"], estimator="TwoWayFixedEffects"
             )
 
     def test_message_names_duplicate_and_estimator(self):
-        with pytest.raises(ValueError, match="MultiPeriodDiD") as exc:
-            validate_design_term_names(["a", "a"], estimator="MultiPeriodDiD")
+        with pytest.raises(ValueError, match="TwoWayFixedEffects") as exc:
+            validate_design_term_names(["a", "a"], estimator="TwoWayFixedEffects")
         assert "a" in str(exc.value)
 
     def test_empty_passes(self):
@@ -2104,7 +2104,7 @@ class TestIterativeFeSolve:
 
 
 class TestBuildFeDummyBlocks:
-    """Shared FE-dummy design build (DiD/MPD fixed_effects= + TWFE full-dummy
+    """Shared FE-dummy design build (DiD fixed_effects= + TWFE full-dummy
     path): names must match fe_dummy_names (the reserved-name collision
     guard) and values must match pd.get_dummies exactly."""
 

@@ -86,11 +86,10 @@ pytest tests/test_rust_backend.py -v
    BaseEstimator (diff_diff/_base.py — shared get_params/set_params mixin)
    ├── DifferenceInDifferences
    │   ├── TwoWayFixedEffects
-   │   ├── MultiPeriodDiD
    │   └── SyntheticDiD
    └── every other estimator class (CallawaySantAnna, SunAbraham,
        ImputationDiD, TwoStageDiD, TripleDifference, TROP, StackedDiD,
-       BaconDecomposition, ... — 25 classes total)
+       BaconDecomposition, ... — 28 classes total)
    ```
    `get_params` introspects the `__init__` signature and `set_params` is
    TRANSACTIONAL via probe re-init (`type(self)(**merged)` validates before

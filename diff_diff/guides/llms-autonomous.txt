@@ -339,7 +339,6 @@ supported / out of scope; `warn` supported but with documented caveats;
 | Estimator | binary absorbing | staggered | continuous | triple-diff | never-treated required | covariate adjustment | few-treated (synthetic) | heterogeneous adoption | clustered SE |
 |---|---|---|---|---|---|---|---|---|---|
 | `DifferenceInDifferences` | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
-| `MultiPeriodDiD` (deprecated 3.9 → `TwoWayFixedEffects` `event_study=True`) | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `TwoWayFixedEffects` | ✓ | warn | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `CallawaySantAnna` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SunAbraham` | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ |
@@ -474,7 +473,7 @@ case; the choice between them is mostly about output shape:
 When `is_staggered == False` and `n_periods > 2`, event-study dynamics
 can be estimated but cohort-mixing bias is moot:
 
-- `TwoWayFixedEffects(...).fit(..., event_study=True)` - per-period effects, standard event-study plot (`MultiPeriodDiD` is its deprecated predecessor; `spec='pooled'` reproduces it).
+- `TwoWayFixedEffects(...).fit(..., event_study=True)` - per-period effects, standard event-study plot (`spec='pooled'` runs the design of the `MultiPeriodDiD` class removed at the 4.0 cut).
 - `TwoWayFixedEffects` with event-time dummies - similar output, no
   forbidden comparisons because there is only one cohort.
 
@@ -572,7 +571,7 @@ When `has_never_treated == False`:
   not-yet-treated units as the control pool.
 - `ChaisemartinDHaultfoeuille` - constructs switchers vs. non-switchers
   directly; no never-treated requirement.
-- TWFE / `MultiPeriodDiD` / `ImputationDiD` / `TwoStageDiD` /
+- TWFE (static or `event_study=True`) / `ImputationDiD` / `TwoStageDiD` /
   `StackedDiD` - use the last-treated or untreated-
   until-late units as implicit controls; estimators do not error, but
   consider whether the implicit control structure is what you want.
@@ -1131,8 +1130,9 @@ section is the API-reference index.
 - `equivalence_test_trends(df, ...)` - Bilinski-Hatfield-style
   equivalence test (alternative framing of the PT test).
 - `compute_pretrends_power(results, ...)` - standalone power analysis
-  for the PT test; takes a fitted `MultiPeriodDiDResults` (or
-  compatible event-study results object), not raw DataFrame. Useful
+  for the PT test; takes a fitted event-study results object (CS / SA
+  results or an `EventStudyResults` container, e.g. the TWFE
+  `event_study=True` surface), not raw DataFrame. Useful
   when `min_pre_periods` is small.
 
 ### Sensitivity / robustness

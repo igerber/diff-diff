@@ -17,11 +17,9 @@ exactly ``("analytical", "wild_bootstrap")`` (string-typed) at
 (``n_bootstrap ∈ {0, 1}`` previously ran WCR with too few draws and
 returned a wild-labeled all-NaN inference tuple). The survey and Conley
 front doors keep precedence (their ``NotImplementedError`` rejections fire
-before the coherence checks). TWFE's unit auto-cluster stays;
-MultiPeriodDiD's warn-and-analytical-fallback stays (n_bootstrap-
-independent). The roster guard pins ``inference`` exposure in
-``get_params()`` to exactly {DifferenceInDifferences, MultiPeriodDiD,
-TwoWayFixedEffects}.
+before the coherence checks). TWFE's unit auto-cluster stays. The roster
+guard pins ``inference`` exposure in ``get_params()`` to exactly
+{DifferenceInDifferences, TwoWayFixedEffects}.
 
 Message pins match the FULL text via ``re.escape`` (repo convention).
 """
@@ -45,7 +43,6 @@ from diff_diff import (
     EfficientDiD,
     HeterogeneousAdoptionDiD,
     ImputationDiD,
-    MultiPeriodDiD,
     SunAbraham,
     SyntheticDiD,
     TripleDifference,
@@ -81,18 +78,12 @@ def _floor_msg(n: int) -> str:
     )
 
 
-MPD_FALLBACK_MSG = (
-    "Wild bootstrap inference is not yet supported for MultiPeriodDiD. "
-    "Using analytical inference instead."
-)
-
-# The M-081 sweep roster (9 previously-unvalidated classes) plus ChangesInChanges
+# The M-081 sweep roster (the previously-unvalidated classes) plus ChangesInChanges
 # (both methods),
 # whose local validator was the promotion source and now routes through the
 # shared helper.
 VALIDATED_CLASSES = [
     DifferenceInDifferences,
-    MultiPeriodDiD,
     TwoWayFixedEffects,
     CallawaySantAnna,
     DMLDiD,
@@ -112,7 +103,7 @@ VALIDATED_CLASSES = [
     ChaisemartinDHaultfoeuille,
 ]
 
-SELECTOR_CLASSES = [DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects]
+SELECTOR_CLASSES = [DifferenceInDifferences, TwoWayFixedEffects]
 
 
 # ---------------------------------------------------------------------------
@@ -144,21 +135,6 @@ def conley_panel(clustered_panel):
     rng = np.random.default_rng(1)
     df["lat"] = rng.uniform(-30, 30, len(df))
     df["lon"] = rng.uniform(-100, 100, len(df))
-    return df
-
-
-@pytest.fixture(scope="module")
-def multi_period_panel():
-    rng = np.random.default_rng(2)
-    n_units, periods = 30, 4
-    df = pd.DataFrame(
-        {
-            "unit": np.repeat(np.arange(n_units), periods),
-            "time": np.tile(np.arange(periods), n_units),
-        }
-    )
-    df["treated"] = (df["unit"] < 15).astype(int)
-    df["y"] = 1.0 + 0.3 * df["treated"] * (df["time"] >= 2) + rng.normal(0, 1, len(df))
     return df
 
 
@@ -364,21 +340,6 @@ class TestInferenceSelector:
         with pytest.raises(NotImplementedError, match=r"(?i)wild.bootstrap|conley"):
             _fit_twfe(twfe, conley_panel)
 
-    # -- MPD carve-out: warn + analytical fallback, n_bootstrap-independent -
-
-    @pytest.mark.parametrize("n", [0, 1, 999])
-    def test_mpd_wild_falls_back_never_raises(self, multi_period_panel, n):
-        mpd = MultiPeriodDiD(inference="wild_bootstrap", n_bootstrap=n)
-        with pytest.warns(UserWarning, match=re.escape(MPD_FALLBACK_MSG)):
-            results = mpd.fit(
-                multi_period_panel,
-                outcome="y",
-                treatment="treated",
-                time="time",
-                post_periods=[2, 3],
-            )
-        assert np.isfinite(results.avg_att)
-
     # -- per-fit bootstrap-state reset (refit transitions) ------------------
 
     def test_did_refit_transition_clears_bootstrap_metadata(self, clustered_panel, ci_params):
@@ -440,7 +401,7 @@ class TestInferenceRoster:
             if issubclass(obj, BaseEstimator):
                 discovered.append(obj)
         exposing = {cls for cls in discovered if "inference" in _make(cls).get_params()}
-        assert exposing == {DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects}, (
+        assert exposing == {DifferenceInDifferences, TwoWayFixedEffects}, (
             "The `inference` selector roster changed. A future estimator "
             "gaining wild cluster bootstrap must adopt the fail-closed "
             "selector contract (M-096) or land its own ledger row; one whose "

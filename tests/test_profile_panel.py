@@ -521,7 +521,6 @@ def test_guide_api_strings_resolve_against_public_api():
 
     for name in (
         "DifferenceInDifferences",
-        "MultiPeriodDiD",
         "TwoWayFixedEffects",
         "CallawaySantAnna",
         "SunAbraham",

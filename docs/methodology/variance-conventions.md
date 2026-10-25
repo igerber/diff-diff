@@ -30,11 +30,8 @@ produced wrong figures three separate times while this inventory was drafted).
 | `sun_abraham_hc1` | 21 | 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280 | **legitimate** | CR1 k = K_reference (D2 fixed: 15 cells + 6, no intercept col; fixest sunab parity ~5e-15); D4 fixed in 3.9 (M-127): cells AND aggregates share the saturated fit's residual df under the df_convention knob (aggregates previously dropped to normal theory inside the same fit) |
 | `stacked_did_hc1` | 6 | 309, 309, 309 | **legitimate** | L1: k_total is clubSandwich CR1S by construction (stacked_did.py pins vcovCR(type='CR1S') at atol=1e-10); tail df converged in 3.9 (M-127): t(pooled residual df n_eff - k_kept) via the df_convention knob (was silent normal theory; stacked rows make the residual df large, so z -> t is a convention alignment) |
 | `lpdid_pre2_post2` | 4, 4, 5, 5, 5, 6 | 59, 59, 59, 59, 59, 59 | **legitimate** | L2: G-1 tail df (Stata/fixest convention) — since 3.9 the df_convention='cluster' DEFAULT on LPDiD (bit-identical; the one surface already at the v4 target) |
-| `mpd_absorb_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290, 290 | **legitimate** | K_reference: 6 visible + rank(time given unit) = 5; equals the fixed_effects form's 70 - 59 (MPD absorb/fixed_effects equivalence) |
-| `mpd_fixed_effects_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290, 290 | **legitimate** | K_reference: 70 visible (incl. built-in period dummies, MPD's time-FE block) minus the 59 cluster-nested unit dummies = 11 — identical to the absorb form |
-| `mpd_plain_hc1_cluster_time` | 7 | 348, 348, 348, 348, 348, 348 | **legitimate** | the NESTED orientation of the built-in period dummies: 12 visible minus their rank 5 under a time cluster (under-subtraction is caught here; the unit-cluster rows catch over-) |
-| `twfe_es_within_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290, 290 | **legitimate** | TWFE event-study, within spec (4.0 cut, PR 4c-i): the absorbed unit FE plus the built-in period dummies give the same K_reference as the mpd_absorb row - 6 visible + rank(time given unit) = 5 |
-| `twfe_es_pooled_hc1_cluster_time` | 7 | 348, 348, 348, 348, 348, 348 | **legitimate** | TWFE event-study, pooled spec (the MultiPeriodDiD design; 4.0 cut, PR 4c-i): the NESTED orientation of the built-in period dummies under a time cluster - 12 visible minus their rank 5, as mpd_plain_hc1_cluster_time |
+| `twfe_es_within_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290 | **legitimate** | TWFE event-study, within spec (4.0 cut, PR 4c-i): K_reference = 6 visible (intercept + 5 interactions) + rank(time given the absorbed, cluster-nested unit FE) = 5, i.e. 11; the full-dummy form would read 70 visible minus the 59 cluster-nested unit dummies = 11 |
+| `twfe_es_pooled_hc1_cluster_time` | 7 | 348, 348, 348, 348, 348 | **legitimate** | TWFE event-study, pooled spec (4.0 cut, PR 4c-i): the NESTED orientation of the built-in period dummies under a time cluster - 12 visible minus their rank 5 = 7 (under-subtraction is caught here; the unit-cluster within row catches over-) |
 | `lpdid_absorb_nested_cluster_grp` | 4, 4, 5, 5, 5, 6 | 1, 1, 1, 1, 1, 1 | **legitimate** | LPDiD absorb dummies nested in the cluster subtract their rank (adj -1 per horizon: region == grp here); _event_time stays counted (unit-level cluster does not nest time); G-1 tail df (L2) |
 | `imputation_default` | — | None | **legitimate** | L3: BJS imputation variance, not the shared CR1 sandwich |
 | `imputation_pretrends_event_study` | unpinned | 157, 157, 157, None, None, None, None, None | **legitimate** | pretrends lead regression: CR1 k = K_reference (D2 fixed); tail df converged in 3.9 (M-127): leads use t(residual df) via the df_convention knob (was silent normal theory); the None calls are the knob-independent BJS aggregates (L3) |
@@ -165,7 +162,7 @@ output).
 
 ONE three-value knob (`df_convention ∈ {"residual", "cluster", "normal"}`)
 now governs the analytical fallback df on every shared-CR1 surface:
-DiD/MPD/TWFE/LinearRegression + SunAbraham/WooldridgeDiD-OLS/StackedDiD/
+DiD/TWFE/LinearRegression + SunAbraham/WooldridgeDiD-OLS/StackedDiD/
 ImputationDiD-pretrends (default "residual") and LPDiD (default "cluster",
 its Stata-anchored t(G−1)). Survey/replicate df and hc2_bm Bell-McCaffrey
 DOF keep precedence under every value; "cluster" fails closed warn+NaN at

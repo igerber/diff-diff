@@ -956,7 +956,7 @@ def generate_event_study_data(
     Generate synthetic data for event study analysis.
 
     Creates panel data with simultaneous treatment at period n_pre.
-    Useful for testing MultiPeriodDiD, pre-trends power analysis,
+    Useful for testing the TwoWayFixedEffects event-study mode, pre-trends power analysis,
     and HonestDiD sensitivity analysis.
 
     Parameters

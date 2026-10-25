@@ -376,8 +376,9 @@ surface (section 5) from day one - no intermediate container churn.
 4.0, removed 5.0 [M-016] (the view's values are a private frozen record
 mirroring the former `PeriodEffect` fields - `period, effect, se, t_stat,
 p_value, conf_int, is_significant, significance_stars` - keyed by calendar
-period with the reference omitted; user decision 2026-10-24, lands in PR
-4c-ii). The HonestDiD / PreTrendsPower integrations (which
+period with the reference omitted; user decision 2026-10-24; shipped PR 4c-ii
+2026-10-25, gated to calendar surfaces, `is_significant` at the surface's
+alpha). The HonestDiD / PreTrendsPower integrations (which
 read `interaction_indices` off MultiPeriodDiDResults) are ported to the
 unified surface in the same Phase 3 PR.
 
@@ -387,7 +388,8 @@ unified surface in the same Phase 3 PR.
 removed [M-010] [M-011] [M-012] [M-060]. (Shipped 3.9, Phase 3(a): the mode,
 the shim, the alias warning riding it, the `time=`->`post=` rename [M-082],
 and the consumer ports - see the [M-010] ledger notes for the shipped
-mechanics and the test triple in tests/test_v4_merge_mpd.py.)
+mechanics and the test triple in tests/test_v4_merge_mpd.py. Shipped 4.0, PR
+4c-ii: the removal, [M-083]'s raise and [M-007]'s retirement.)
 
 ### 4.2 TripleDifference absorbs StaggeredTripleDifference [M-013]
 
@@ -1124,6 +1126,30 @@ tests-first PR that flips no rows).
      `build_event_study_surface` sniff reorder (an `isinstance(EventStudyResults)`
      guard ahead of the `period_effects` duck check, so the [M-016] view's
      FutureWarning cannot fire on a surface input).
+     (SHIPPED, PR 4c-ii, 2026-10-25: the four names are gone (`ImportError`);
+     `_fit_event_study_core` is TWFE-only (`post_periods` required by the
+     core, `include_treatment_main`/`cluster_override` keyword-required); the
+     [M-016] view is a leaf-local property on `EventStudyResults` GATED to
+     `time_scale="calendar"` (relative-time `aggregate("event_study")`
+     surfaces raise `AttributeError`, so `hasattr` is False and nothing warns
+     there), `is_significant` at the surface's `alpha` (user decision
+     2026-10-25), duplicate labels rejected; `build_event_study_surface` opens
+     with an `isinstance` passthrough (the `period_effects` duck check left
+     with `_from_mpd`). Deviations recorded here: (a) the clustered `hc2_bm`
+     contrast batch KEEPS the former post-period-average column as the
+     batch-relative DOF guard's anchor - dropping it would flip near-collinear
+     per-period DOFs from NaN to finite (user decision 2026-10-25; REGISTRY
+     Note + TODO row); (b) the benchmark arm is relabelled as a NEW live
+     script `benchmarks/python/benchmark_twfe_event_study.py` (`spec="within"`,
+     `cluster="unit"`; lands in PR 4c-ii-b, the docs/benchmarks half of the
+     removal, split off because the single diff exceeded the local reviewer's
+     input cap) while `benchmark_multiperiod.py` and the `refresh_2026_07`
+     harness stay frozen, because that harness runs the script inside pinned
+     3.5.3/3.7.0 venvs that predate `event_study=True`;
+     (c) the DiagnosticReport/BusinessReport branches keyed on the removed
+     container's class name were deleted rather than kept dormant (user
+     decision 2026-10-25; the `EventStudyResults` admission TODO row records
+     where the logic lived).)
 5. Storage flip [M-050]..[M-058] + pickle migration + the `.att` sweep over
    docs/notebooks/guides/benchmarks (incl. a disposition for the un-rowed
    `CSBootstrapResults.overall_att_se`).

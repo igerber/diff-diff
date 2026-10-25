@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
     from diff_diff.survey import SurveyDesign
 
-from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
@@ -82,10 +82,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     time=<calendar column>)`` estimates per-period treatment effects and
     returns the unified
     :class:`~diff_diff.results_base.EventStudyResults` surface instead of
-    the single static ATT (absorbing the deprecated ``MultiPeriodDiD``).
+    the single static ATT (absorbing the class removed at the 4.0 cut, row M-010).
     ``spec="within"`` (default) estimates the unit-FE event study
     ``α_i + γ_t + Σ_e δ_e (D_i × 1[t=e])``; ``spec="pooled"`` reproduces
-    the MultiPeriodDiD design exactly (treatment-group dummy + period
+    the pre-4.0 pooled event-study design exactly (treatment-group dummy + period
     dummies, no unit FE - the only spec valid for repeated
     cross-sections). Point estimates coincide across the two specs only
     on balanced no-covariate simultaneous-adoption panels; standard
@@ -98,7 +98,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     assumption cannot be verified by the estimator - it is asserted by
     the user. For the same reason the calendar partition is explicit:
     ``post_periods=`` is REQUIRED in event-study mode (the deprecated
-    MultiPeriodDiD midpoint default is not carried over). For staggered
+    pre-4.0 midpoint default is not carried over). For staggered
     designs use ``CallawaySantAnna`` or
     ``SunAbraham``. The mode carries TWFE's inference stack
     from day one: unit auto-cluster (with the same carve-outs as the
@@ -188,8 +188,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             Name of treatment indicator column.
         post : str
             Static mode: name of the 0/1 post-treatment indicator column
-            (renamed from ``time``, row M-082 - see Notes). Not accepted in
-            event-study mode (which takes the calendar ``time=`` instead).
+            (the static-mode name since 3.9, row M-082; since 4.0 passing
+            ``time=`` in static mode raises, row M-083 - see Notes). Not
+            accepted in event-study mode (which takes the calendar ``time=``
+            instead).
         unit : str
             Name of unit identifier column. Required in static mode and for
             ``spec="within"``; optional for ``spec="pooled"`` (the only
@@ -208,12 +210,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             applies sampling weights to the regression.
         event_study : bool, default False
             Estimate a per-period event study instead of the single static
-            ATT (row M-010, absorbing MultiPeriodDiD). Returns the unified
+            ATT (row M-010, the merged event-study mode). Returns the unified
             :class:`~diff_diff.results_base.EventStudyResults` surface.
         spec : {"within", "pooled"}, default "within"
             Event-study design. ``"within"`` estimates the unit-FE event
             study (unit + time fixed effects + per-period treatment
-            interactions). ``"pooled"`` reproduces the MultiPeriodDiD
+            interactions). ``"pooled"`` reproduces the pre-4.0 pooled
             design exactly (treatment-group dummy + period dummies, no
             unit FE; the only spec valid for repeated cross-sections).
             Point estimates coincide only in the restricted equivalence
@@ -227,14 +229,15 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             (non-empty) when ``event_study=True``: the treatment boundary
             is not observable from a time-invariant ever-treated
             indicator, so it cannot be inferred - the deprecated
-            MultiPeriodDiD midpoint default (last half of the calendar)
+            pre-4.0 midpoint default (last half of the calendar)
             is deliberately not carried into the merged mode.
         time : str
             Event-study mode: the calendar time column (keyword-only in
             practice - positional slot 4 belongs to ``post``). In static
-            mode, ``time=`` is a DEPRECATED alias for ``post`` (row
-            M-082); it warns with ``FutureWarning``. From 4.0, ``time=``
-            means the event-study calendar column only.
+            mode ``time=`` is not accepted: since 4.0 it means the calendar
+            column only, and passing it raises ``ValueError`` naming
+            ``post=`` (row M-083; through 3.x it was the deprecated alias
+            for ``post``, row M-082).
 
         Returns
         -------
@@ -247,7 +250,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         ValueError
             If a covariate name collides with a reserved structural term name
             or duplicates another covariate; if event-study-only parameters
-            are passed with ``event_study=False``; if ``post=`` is passed in
+            are passed with ``event_study=False``; if ``time=`` is passed in
+            static mode (row M-083); if ``post=`` is passed in
             event-study mode; if ``spec="within"`` lacks ``unit=``; or if
             ``inference="wild_bootstrap"`` is combined with event-study mode
             (the wild cluster bootstrap covers the static ATT only).
@@ -265,8 +269,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         if event_study:
             # The event-study branch owns its own post/time/unit resolution
             # (the raw sentinels are passed through; running the static
-            # rename shim first would fold the calendar time= into post
-            # with a spurious M-082 warning).
+            # time=/post= contract first would reject the calendar time=).
             return self._fit_event_study(
                 data,
                 outcome,
@@ -298,16 +301,22 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 f"post= dummy."
             )
 
-        # --- Static mode: time= -> post= rename shim (row M-082) ---
-        post = resolve_renamed_kwarg(
-            "TwoWayFixedEffects.fit",
-            "time",
-            time,
-            "post",
-            post,
-            default=NOT_SUPPLIED,
-            extra="From 4.0, time= means the event-study calendar column only.",
-        )
+        # --- Static mode: the time=/post= contract (row M-083) ---
+        # Since 4.0 `time` means the event-study calendar column ONLY (through
+        # 3.x it was the deprecated alias for `post`, row M-082): both supplied
+        # keeps the both-supplied error; time= alone raises rather than being
+        # reinterpreted as the post dummy (the TripleDifference M-085 pattern).
+        if post is not NOT_SUPPLIED and time is not NOT_SUPPLIED:
+            raise ValueError(
+                "TwoWayFixedEffects.fit: got both post= and time=; in static mode "
+                "pass only post= (time= is the event-study calendar column, row M-083)."
+            )
+        if time is not NOT_SUPPLIED:
+            raise ValueError(
+                "TwoWayFixedEffects.fit: in static mode (event_study=False) time= is "
+                "the event-study calendar column only (4.0, row M-083); pass the 0/1 "
+                "post-treatment indicator as post=."
+            )
         require_arg("TwoWayFixedEffects.fit", "post", post)
         require_arg("TwoWayFixedEffects.fit", "unit", unit)
         # Body-local name; the public static parameter is post (M-082).
@@ -401,7 +410,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # HC2/HC2-BM auto-route, which does not compose with the
         # per-replicate re-demeaning. Previously hc2/hc2_bm raised
         # NotImplementedError here; the warn-and-proceed contract matches
-        # DifferenceInDifferences/MultiPeriodDiD (shared helper).
+        # DifferenceInDifferences (shared helper).
         _replicate_vcov_remap_twfe = _uses_replicate_twfe and self._warn_replicate_vcov_ignored()
         if _replicate_vcov_remap_twfe:
             use_full_dummy = False
@@ -508,7 +517,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             y = data[outcome].values.astype(np.float64)
             cov_arrs = [data[c].values.astype(np.float64) for c in (covariates or [])]
             # Shared drop-first dummy build (single implementation with the
-            # DiD/MPD fixed_effects= paths; names match fe_dummy_names).
+            # DiD / event-study fixed_effects= paths; names match fe_dummy_names).
             _fe_blocks, _fe_dummy_names = build_fe_dummy_blocks(
                 data, [unit, time], prefixes=[f"_fe_{unit}", f"_fe_{time}"]
             )
@@ -522,7 +531,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             df_adjustment = 0
             # var_names parallels the X columns so the downstream
             # `coefficients` dict can mirror the full-dummy vcov shape
-            # (matching the MPD invariant
+            # (matching the event-study core invariant
             # ``len(result.coefficients) == result.vcov.shape[0]``).
             _twfe_var_names: Optional[List[str]] = (
                 ["const", "ATT"] + list(covariates or []) + _fe_dummy_names
@@ -943,7 +952,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # preserved as the ATT key on both paths, so existing
         # `result.coefficients["ATT"]` consumers continue to work. The
         # invariant ``len(coefficients) == vcov.shape[0]`` is now upheld on the
-        # full-dummy path (matches the MPD absorb auto-route invariant
+        # full-dummy path (matches the event-study absorb auto-route invariant
         # checked at tests/test_estimators_vcov_type.py:1611).
         coef_array = np.asarray(reg.coefficients_)
         _coefficients_dict: dict = (
@@ -1002,7 +1011,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         Runs the shared event-study core
         (:meth:`DifferenceInDifferences._fit_event_study_core`) under one of
-        two designs - ``spec="pooled"`` is the MultiPeriodDiD design
+        two designs - ``spec="pooled"`` is the pre-4.0 pooled design
         verbatim; ``spec="within"`` absorbs the unit fixed effects and
         omits the (absorbed) treatment main effect - and returns the
         unified :class:`~diff_diff.results_base.EventStudyResults` surface.
@@ -1014,9 +1023,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         between-unit pair), never injected as a survey PSU (the documented
         implicit-per-observation-PSU rule), and dropped for explicit
         one-way analytical families. Explicit ``cluster=`` always passes
-        through and behaves exactly like MultiPeriodDiD's own explicit
+        through and behaves exactly like an explicit
         cluster on every lane. Wild bootstrap raises: the WCR
-        implementation covers the static ATT only, and MultiPeriodDiD's
+        implementation covers the static ATT only, and the removed class's
         silent analytical fallback is deliberately not carried into the
         merged mode (no-silent-failures).
         """
@@ -1027,7 +1036,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         # Step 3: wild raise, first in the branch - a mode-capability error
         # precedes every lane front door (survey/Conley resolution happens
-        # inside the core, and MPD's warn-and-fallback is not inherited).
+        # inside the core; the removed class's warn-and-fallback is gone).
         if self.inference == "wild_bootstrap":
             raise ValueError(
                 "inference='wild_bootstrap' is not supported in event-study "
@@ -1059,7 +1068,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # boundary is not observable from the documented time-invariant
         # ever-treated D_i indicator (the REGISTRY staggered-detection-limit
         # Note), so it cannot be inferred from the data; the deprecated
-        # MultiPeriodDiD midpoint default (last half of the calendar) is a
+        # pre-4.0 midpoint default (last half of the calendar) is a
         # silent guess and is deliberately not carried into the merged
         # mode (mirrors the day-one wild raise: no legacy defaults on the
         # new surface).
@@ -1072,9 +1081,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 "event-study mode requires an explicit post_periods= (the "
                 "post-treatment calendar periods): the treatment boundary "
                 "is not observable from a time-invariant ever-treated "
-                "treatment indicator, and the deprecated MultiPeriodDiD "
-                "midpoint default (last half of the calendar) is "
-                "deliberately not carried into the merged mode."
+                "treatment indicator, and the pre-4.0 midpoint default "
+                "(last half of the calendar) is deliberately not carried "
+                "into the merged mode."
             )
         if len(set(post_periods)) != len(post_periods):
             # R10: fail at the front door - the container's own
@@ -1112,7 +1121,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             cluster_override = unit_resolved  # None when no unit was passed
 
         # Step 7: run the shared core. spec="pooled" is the 3.x
-        # MultiPeriodDiD design verbatim; spec="within" absorbs the unit FE
+        # pre-4.0 pooled design verbatim; spec="within" absorbs the unit FE
         # and omits the (absorbed) treatment main-effect column. The core
         # has no wild path, so effective_inference is always analytical
         # here. _frame_offset=2: user -> fit -> _fit_event_study -> core.
@@ -1170,14 +1179,13 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             survey_design,
             "analytical",
             include_treatment_main=(spec == "pooled"),
-            warn_legacy_reference_default=False,
             cluster_override=cluster_override,
             estimator_name="TwoWayFixedEffects",
             _frame_offset=2,
         )
 
         # Step 8: build the unified surface directly from the core's payload
-        # (PR 4c-i decoupling, ledger rows M-010 / M-011: no MultiPeriodDiD
+        # (PR 4c-i decoupling, ledger rows M-010 / M-011: no legacy
         # container is constructed on this path). The surface carries the
         # TWFE provenance - source, the authoritative calendar partition and
         # the design spec - at construction, so it passes the container's

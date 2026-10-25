@@ -27,14 +27,13 @@ diff_diff.honest_did - Sensitivity analysis for parallel trends violations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy import optimize, stats
 
 from diff_diff._base import BaseEstimator
-from diff_diff.results import MultiPeriodDiDResults
 from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
 
 
@@ -846,7 +845,7 @@ class PreTrendsPower(BaseEstimator):
 
     Examples
     --------
-    Basic usage with MultiPeriodDiD results:
+    Basic usage with TwoWayFixedEffects event-study results:
 
     >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import PreTrendsPower
@@ -1041,7 +1040,7 @@ class PreTrendsPower(BaseEstimator):
 
     def _extract_pre_period_params(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         pre_periods: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
         """
@@ -1049,7 +1048,7 @@ class PreTrendsPower(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
+        results : CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results object from event study estimation, or the unified
             event-study container from
             ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -1078,15 +1077,15 @@ class PreTrendsPower(BaseEstimator):
             extraction actually took:
 
             - ``"full_pre_period_vcov"`` when a full pre-period
-              covariance sub-block was used (MPD with
-              ``interaction_indices``, CS/SA with populated
-              ``event_study_vcov``, or an admitted CS-/Stacked-sourced
-              container carrying ``vcov`` - StackedDiD persists its
+              covariance sub-block was used (CS/SA with populated
+              ``event_study_vcov``, or an admitted container carrying
+              ``vcov`` - the TWFE event-study surface always does;
+              StackedDiD persists its
               event-study VCV in every inference mode, so Stacked
               containers always take this tier).
             - ``"diag_fallback"`` when only the per-period standard
               errors were available (bootstrap / replicate-weight CS or
-              SA fits, MPD without ``interaction_indices``).
+              SA fits).
 
             ``DiagnosticReport`` consumes this label downstream to
             decide whether the power-tier should be conservatively
@@ -1099,78 +1098,6 @@ class PreTrendsPower(BaseEstimator):
 
         if isinstance(results, EventStudyResults):
             return self._extract_container_pre_period_params(results, pre_periods)
-
-        if isinstance(results, MultiPeriodDiDResults):
-            # Get pre-period information - use explicit pre_periods if provided
-            if pre_periods is not None:
-                all_pre_periods = list(pre_periods)
-            else:
-                all_pre_periods = results.pre_periods
-
-            if len(all_pre_periods) == 0:
-                raise ValueError(
-                    "No pre-treatment periods found in results. "
-                    "Pre-trends power analysis requires pre-period coefficients. "
-                    "If you estimated all periods as post_periods, use the pre_periods "
-                    "parameter to specify which are actually pre-treatment."
-                )
-
-            # Pre-period effects are in period_effects (excluding reference period)
-            estimated_pre_periods = [
-                p
-                for p in all_pre_periods
-                if p in results.period_effects and results.period_effects[p].se > 0
-            ]
-
-            if len(estimated_pre_periods) == 0:
-                raise ValueError(
-                    "No estimated pre-period coefficients found. "
-                    "The pre-trends test requires at least one estimated "
-                    "pre-period coefficient (excluding the reference period)."
-                )
-
-            n_pre = len(estimated_pre_periods)
-            effects = np.array([results.period_effects[p].effect for p in estimated_pre_periods])
-            ses = np.array([results.period_effects[p].se for p in estimated_pre_periods])
-
-            # Extract vcov using stored interaction indices for robust extraction
-            if (
-                results.vcov is not None
-                and hasattr(results, "interaction_indices")
-                and results.interaction_indices is not None
-            ):
-                indices = [results.interaction_indices[p] for p in estimated_pre_periods]
-                vcov = results.vcov[np.ix_(indices, indices)]
-                covariance_source = "full_pre_period_vcov"
-            else:
-                vcov = np.diag(ses**2)
-                covariance_source = "diag_fallback"
-
-            # For MultiPeriodDiDResults, period identifiers are generic
-            # (often calendar years, sometimes pre-shifted relative times).
-            # Roth's δ_t = γ·t convention needs RELATIVE offsets from the
-            # treatment / reference period. Three label-type regimes:
-            #
-            #   1. Numeric (int / float / np.int64) — direct float() coercion
-            #      gives the correct relative offset.
-            #   2. pandas.Period — period arithmetic works on the Period
-            #      object directly (``p - ref`` returns ordinal-difference);
-            #      we cast via the `n` attribute on the resulting offset for
-            #      sub-period frequencies. Datetime-like labels (Timestamp,
-            #      np.datetime64) are caught the same way and converted to
-            #      days via numpy timedelta semantics.
-            #   3. Genuinely non-numeric / unordered labels (string period
-            #      IDs, categoricals without a ranking) — emit an explicit
-            #      UserWarning and fall back to the legacy count-based
-            #      [n_pre-1, ..., 0] / ||·||_2 normalized direction. The
-            #      reported MDV under this fallback is NOT in Roth's γ
-            #      units; users on non-numeric labels who need γ-unit MDV
-            #      should re-fit with numeric period labels.
-            ref = getattr(results, "reference_period", None)
-            relative_times: Optional[np.ndarray] = None
-            if ref is not None:
-                relative_times = _coerce_relative_times_from_reference(estimated_pre_periods, ref)
-            return effects, ses, vcov, n_pre, relative_times, covariance_source
 
         # Try CallawaySantAnnaResults
         try:
@@ -1286,8 +1213,7 @@ class PreTrendsPower(BaseEstimator):
                     raise ValueError("No pre-treatment periods found in event study.")
 
                 # An explicitly requested pre-period subset is honored,
-                # never silently ignored (mirrors the MPD branch and the
-                # container branch).
+                # never silently ignored (mirrors the container branch).
                 if pre_periods is not None:
                     _missing = [t for t in sorted(pre_periods) if t not in pre_effects]
                     if _missing:
@@ -1322,8 +1248,8 @@ class PreTrendsPower(BaseEstimator):
                 # NORMALIZED ZERO (his omitted period is labeled t=0):
                 # delta must vanish at the omitted reference, so relative
                 # times are measured FROM it - |t - t_ref| - not from
-                # treatment (the MPD branch's
-                # _coerce_relative_times_from_reference precedent).
+                # treatment (the _coerce_relative_times_from_reference
+                # precedent).
                 # Universal fits carry the anchor as the singleton
                 # reference_event_times; varying fits have no common
                 # reference (raw labels retained under the varying-base
@@ -1414,11 +1340,12 @@ class PreTrendsPower(BaseEstimator):
 
         raise TypeError(
             f"Unsupported results type: {type(results)}. "
-            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
-            "SunAbrahamResults, or an EventStudyResults container from "
+            "Expected CallawaySantAnnaResults, "
+            "SunAbrahamResults, or an EventStudyResults container (the "
+            "TwoWayFixedEffects event-study mode, "
             "CallawaySantAnnaResults.aggregate('event_study'), "
             "DMLDiDResults.aggregate('event_study'), or "
-            "StackedDiDResults.aggregate('event_study')."
+            "StackedDiDResults.aggregate('event_study'))."
         )
 
     def _extract_calendar_container_pre_period_params(
@@ -1428,8 +1355,8 @@ class PreTrendsPower(BaseEstimator):
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
         """Calendar-scale container branch (TWFE event-study mode, M-010).
 
-        Reconstructs EXACTLY the inputs the native
-        ``MultiPeriodDiDResults`` branch reads: the pre-period set from
+        Reconstructs EXACTLY the inputs the former native per-period-dict
+        branch read: the pre-period set from
         the container's authoritative ``post_periods`` partition
         provenance (never a positional split), per-period effects/SEs,
         the pre-period vcov sub-block via the container's explicit
@@ -1449,8 +1376,7 @@ class PreTrendsPower(BaseEstimator):
             raise TypeError(
                 "PreTrendsPower accepts calendar-scale EventStudyResults "
                 "containers from the TwoWayFixedEffects event-study mode "
-                f"only (got source={surface.source!r}). For MultiPeriodDiD "
-                "pass the native MultiPeriodDiDResults object."
+                f"only (got source={surface.source!r})."
             )
         if surface.post_periods is None:
             raise TypeError(
@@ -1482,7 +1408,7 @@ class PreTrendsPower(BaseEstimator):
 
         post_set = set(surface.post_periods)
         _by_label = {t: i for i, t in enumerate(_all_labels)}
-        # The native MPD complement rule for the declared pre grid; the
+        # The calendar complement rule for the declared pre grid; the
         # eligible set then drops the reference and unusable-inference rows
         # in CHRONOLOGICAL (sorted) order.
         declared_pre = [p for p in sorted(_all_labels) if p not in post_set]
@@ -1604,7 +1530,7 @@ class PreTrendsPower(BaseEstimator):
                 "mode (calendar-scale surfaces) only "
                 f"(got source={surface.source!r}). For other estimators "
                 "pass the native results object where supported "
-                "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+                "(CallawaySantAnnaResults or "
                 "SunAbrahamResults); EfficientDiDResults, "
                 "ImputationDiDResults and ContinuousDiDResults containers "
                 "are rejected BY DESIGN "
@@ -2113,7 +2039,7 @@ class PreTrendsPower(BaseEstimator):
 
     def fit(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         M: Optional[float] = None,
         pre_periods: Optional[List[int]] = None,
     ) -> PreTrendsPowerResults:
@@ -2122,7 +2048,7 @@ class PreTrendsPower(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
+        results : CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results from an event study estimation, or the unified
             event-study container from
             ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -2198,7 +2124,7 @@ class PreTrendsPower(BaseEstimator):
 
     def power_at(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         M: float,
         pre_periods: Optional[List[int]] = None,
     ) -> float:
@@ -2224,7 +2150,7 @@ class PreTrendsPower(BaseEstimator):
 
     def power_curve(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         M_grid: Optional[List[float]] = None,
         n_points: int = 50,
         pre_periods: Optional[List[int]] = None,
@@ -2283,7 +2209,7 @@ class PreTrendsPower(BaseEstimator):
 
     def sensitivity_to_honest_did(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         pre_periods: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
@@ -2368,7 +2294,7 @@ class PreTrendsPower(BaseEstimator):
 
 
 def compute_pretrends_power(
-    results: Union[MultiPeriodDiDResults, Any],
+    results: Any,
     M: Optional[float] = None,
     alpha: float = 0.05,
     target_power: float = 0.80,
@@ -2383,7 +2309,7 @@ def compute_pretrends_power(
     Parameters
     ----------
     results : results object
-        Event study results (MPD / CS / SA), or the unified event-study
+        Event study results (CS / SA), or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
@@ -2437,7 +2363,7 @@ def compute_pretrends_power(
 
 
 def compute_mdv(
-    results: Union[MultiPeriodDiDResults, Any],
+    results: Any,
     alpha: float = 0.05,
     target_power: float = 0.80,
     violation_type: str = "linear",
@@ -2451,7 +2377,7 @@ def compute_mdv(
     Parameters
     ----------
     results : results object
-        Event study results (MPD / CS / SA), or the unified event-study
+        Event study results (CS / SA), or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked

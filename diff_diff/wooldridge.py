@@ -2486,7 +2486,7 @@ class WooldridgeDiD(BaseEstimator):
             # dropped columns, so _compute_cr2_bm_contrast_dof would
             # LinAlgError on it. Reduce X / bread / contrasts to the kept-
             # column subspace before computing BM DOF (matches the existing
-            # MPD pattern at estimators.py:1860-1913 and SA's full-dummy
+            # event-study core pattern in estimators.py and SA's full-dummy
             # behavior). Identified (g, t) cells survive; cells whose
             # treatment-cell coefficient was dropped get per_cell_bm_dof=NaN
             # and the gt_effects loop fail-closes their inference.

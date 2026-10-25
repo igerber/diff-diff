@@ -35,6 +35,7 @@
       ~EventStudyResults.estimation_spec
       ~EventStudyResults.event_time_convention
       ~EventStudyResults.n_kind
+      ~EventStudyResults.period_effects
       ~EventStudyResults.post_periods
       ~EventStudyResults.reference_event_times
       ~EventStudyResults.reference_period

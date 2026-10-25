@@ -1,11 +1,16 @@
-"""Phase 3(a) merge tests: TWFE event-study mode + MPD deprecation + time->post.
+"""Merge tests: TWFE event-study mode, the MultiPeriodDiD removal, time->post.
 
 ``test_ref`` for ledger rows M-010 (TwoWayFixedEffects absorbs
-MultiPeriodDiD) and M-082 (static ``fit(time=)`` -> ``post=``), covering the
+MultiPeriodDiD), M-082 (static ``fit(time=)`` -> ``post=``) and M-083 (static
+``time=`` raises since 4.0), covering the
 v4-design section 4.1 gate triple, the mode/rename validation surfaces, the
-day-one auto-cluster carve-outs (user decision 2026-08-07), the deprecation
-choreography (M-060's EventStudy warning rides the parent shim), the unified
-surface contract, warning attribution, and the consumer ports.
+day-one auto-cluster carve-outs (user decision 2026-08-07), the 4.0 removal
+pins (M-010/M-011/M-012/M-060: the names are gone; M-007: the legacy
+reference-period warning is retired; M-016: ``period_effects`` is a
+FutureWarning view on the surface), the unified surface contract, warning
+attribution, and the consumer ports. Through 3.x the MultiPeriodDiD class was
+the live twin of every lane here; those parity pins moved to the committed
+pre-refactor oracle in ``tests/test_twfe_event_study_decoupling.py``.
 
 Conventions: message pins via ``re.escape`` of the exact text; parity
 assertions are BIT-EXACT (``assert_array_equal``) where the two sides run
@@ -23,32 +28,40 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from event_study_surface_builders import calendar_surface
 
+import diff_diff
 from diff_diff import (
+    CallawaySantAnna,
     DifferenceInDifferences,
-    EventStudy,
-    MultiPeriodDiD,
+    SurveyDesign,
     TwoWayFixedEffects,
     compute_honest_did,
+    generate_staggered_data,
 )
 from diff_diff.pretrends import compute_pretrends_power
-from diff_diff.results_base import EventStudyResults, _from_mpd
+from diff_diff.results_base import (
+    EventStudyResults,
+    _PeriodEffectView,
+    build_event_study_surface,
+)
+from diff_diff.visualization import plot_event_study, plot_honest_event_study
 
 # ---------------------------------------------------------------------------
 # Pinned messages (the deprecation/validation contract)
 # ---------------------------------------------------------------------------
 
-MPD_DEPRECATION_MSG = (
-    "MultiPeriodDiD is deprecated and will be removed in 4.0; use "
-    "TwoWayFixedEffects().fit(..., event_study=True) instead - "
-    "spec='pooled' reproduces the MultiPeriodDiD design; the default "
-    "spec='within' adds unit fixed effects. The EventStudy alias is "
-    "deprecated with it."
+PERIOD_EFFECTS_MSG = (
+    "EventStudyResults.period_effects is deprecated and will be removed in "
+    "5.0; use to_dataframe() (one row per event_time, reference row included) "
+    "or the columnar att/se/t_stat/p_value/conf_int_lower/conf_int_upper "
+    "arrays instead."
 )
-RENAME_MSG = (
-    "TwoWayFixedEffects.fit(time=) is deprecated and will be removed in "
-    "4.0; use post= instead. From 4.0, time= means the event-study "
-    "calendar column only."
+REMOVED_NAMES = ("MultiPeriodDiD", "MultiPeriodDiDResults", "PeriodEffect", "EventStudy")
+STATIC_TIME_MSG = (
+    "TwoWayFixedEffects.fit: in static mode (event_study=False) time= is "
+    "the event-study calendar column only (4.0, row M-083); pass the 0/1 "
+    "post-treatment indicator as post=."
 )
 ES_WILD_MSG = (
     "inference='wild_bootstrap' is not supported in event-study mode: the "
@@ -69,8 +82,8 @@ ES_POST_PERIODS_MSG = (
     "event-study mode requires an explicit post_periods= (the "
     "post-treatment calendar periods): the treatment boundary is not "
     "observable from a time-invariant ever-treated treatment indicator, "
-    "and the deprecated MultiPeriodDiD midpoint default (last half of the "
-    "calendar) is deliberately not carried into the merged mode."
+    "and the pre-4.0 midpoint default (last half of the calendar) is "
+    "deliberately not carried into the merged mode."
 )
 
 
@@ -116,13 +129,6 @@ def _post(n_periods=6, cut=3, str_periods=False):
 @pytest.fixture()
 def panel():
     return _panel()
-
-
-def _mpd(**kwargs):
-    """Construct MultiPeriodDiD with its deprecation warning suppressed."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        return MultiPeriodDiD(**kwargs)
 
 
 def _static_df(panel):
@@ -215,105 +221,6 @@ class TestGateTriple:
         )
         assert np.nanmax(np.abs(w.att - p.att)) > floor
 
-    def test_c_pooled_parity_unitless_repeated_cross_sections(self, panel):
-        """(c)(i) unit-less pooled == 3.x MPD default lane, BIT-EXACT.
-
-        Same code path in the same process (the shared core), so exact
-        equality is the deliberate bar - the design's "reproduced exactly"
-        gate, not a cross-implementation comparison.
-        """
-        s = TwoWayFixedEffects().fit(
-            panel,
-            "y",
-            "treated",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(_mpd().fit(panel, "y", "treated", "period", post_periods=_post()))
-        for field in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
-            _eq_with_nans(getattr(s, field), getattr(m, field))
-        np.testing.assert_array_equal(s.event_time, m.event_time)
-        assert s.reference_period == m.reference_period
-        _eq_with_nans(s.vcov, m.vcov)
-
-    def test_c_pooled_parity_explicit_cluster(self, panel):
-        """(c)(ii) pooled + matched explicit cluster= == MPD, BIT-EXACT."""
-        s = TwoWayFixedEffects(cluster="unit").fit(
-            panel,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(
-            _mpd(cluster="unit").fit(panel, "y", "treated", "period", post_periods=_post())
-        )
-        for field in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
-            _eq_with_nans(getattr(s, field), getattr(m, field))
-        _eq_with_nans(s.vcov, m.vcov)
-
-    def test_c_pooled_parity_hc2_bm_per_period_df(self, panel):
-        """(c)(iii) hc2_bm: the per-period BM-DOF df channel round-trips."""
-        s = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
-            panel,
-            "y",
-            "treated",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(
-            _mpd(vcov_type="hc2_bm").fit(panel, "y", "treated", "period", post_periods=_post())
-        )
-        _eq_with_nans(s.df, m.df)
-        # the df column is the finite per-period BM-DOF channel (on this
-        # balanced DGP the per-period DOFs coincide numerically; the parity
-        # equality above is the load-bearing pin)
-        assert np.isfinite(np.asarray(s.df)[~s.is_reference]).all()
-        for field in ("att", "se", "p_value"):
-            _eq_with_nans(getattr(s, field), getattr(m, field))
-
-    @pytest.mark.parametrize(
-        "est_kwargs",
-        [dict(cluster="unit"), dict(vcov_type="hc2")],
-        ids=["explicit-cluster", "explicit-hc2-oneway"],
-    )
-    def test_d_within_matches_mpd_absorb_unit(self, panel, est_kwargs):
-        """(d) within == MPD.fit(absorb=[unit]) under MATCHED inference.
-
-        The designs coincide (MPD's absorb path snaps the unit-absorbed D
-        column and rank-drops it; on the hc2 lane the absorb ->
-        fixed_effects auto-route drops a redundant column instead - same
-        column space either way), so the interaction block's quintet, ES
-        vcov, and per-row df agree. Matched-inference lanes only: within
-        auto-clusters at unit while MPD never auto-clusters, so their
-        DEFAULTS diverge by construction (no "plain hc1" lane exists).
-        """
-        w = TwoWayFixedEffects(**est_kwargs).fit(
-            panel,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(
-            _mpd(**est_kwargs).fit(
-                panel, "y", "treated", "period", post_periods=_post(), absorb=["unit"]
-            )
-        )
-        for field in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
-            _close_with_nans(getattr(w, field), getattr(m, field), atol=1e-12, rtol=1e-12)
-        _close_with_nans(w.vcov, m.vcov, atol=1e-12, rtol=1e-12)
-        _eq_with_nans(w.df, m.df)
-
 
 # ---------------------------------------------------------------------------
 # Mode validation + the rename shim
@@ -354,7 +261,7 @@ class TestModeValidation:
 
     def test_post_periods_required_in_event_study(self, panel):
         """R4: the calendar partition is explicit - omitting (or emptying)
-        post_periods= fails loud instead of inheriting the MPD midpoint
+        post_periods= fails loud instead of inheriting the pre-4.0 midpoint
         guess (the boundary is unobservable from time-invariant D_i)."""
         for bad_kwargs in ({}, dict(post_periods=[])):
             with pytest.raises(ValueError, match=re.escape(ES_POST_PERIODS_MSG)):
@@ -367,11 +274,6 @@ class TestModeValidation:
                     time="period",
                     **bad_kwargs,
                 )
-        # MPD's own midpoint default is UNCHANGED (compatibility bar)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            m = _mpd().fit(panel, "y", "treated", "period")
-        assert np.isfinite(m.avg_att)
         # duplicates fail at the front door, before the regression runs
         # (R10 - the container's own validation would reject only at
         # conversion time)
@@ -459,18 +361,19 @@ class TestRenameShim:
         assert not [w for w in rec if issubclass(w.category, FutureWarning)]
         assert r_kw.att == r_pos.att
 
-    def test_time_warns_and_routes_identically(self, panel):
+    def test_time_in_static_mode_raises_naming_post(self, panel):
+        """M-083 (4.0): in static mode `time=` is the event-study calendar
+        column only; passing it raises and points at `post=` instead of being
+        reinterpreted as the post dummy (the 3.x M-082 FutureWarning shim)."""
         df = _static_df(panel)
+        with pytest.raises(ValueError, match=re.escape(STATIC_TIME_MSG)) as exc:
+            TwoWayFixedEffects().fit(df, "y", "treated", time="post", unit="unit")
+        assert "post=" in str(exc.value)
+        # The canonical keyword still fits, warning-free.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r_new = TwoWayFixedEffects().fit(df, "y", "treated", post="post", unit="unit")
-        with pytest.warns(FutureWarning, match=re.escape(RENAME_MSG)):
-            r_old = TwoWayFixedEffects().fit(df, "y", "treated", time="post", unit="unit")
-        assert r_old.att == r_new.att
-        assert r_old.se == r_new.se
-        assert r_old.t_stat == r_new.t_stat
-        assert r_old.p_value == r_new.p_value
-        assert r_old.conf_int == r_new.conf_int
+            warnings.simplefilter("error")
+            r = TwoWayFixedEffects().fit(df, "y", "treated", post="post", unit="unit")
+        assert np.isfinite(r.att)
 
     def test_both_supplied_raises(self, panel):
         df = _static_df(panel)
@@ -557,41 +460,12 @@ class TestAutoCluster:
         )
         _eq_with_nans(r_auto.se, r_expl.se)
 
-    def test_pooled_without_unit_stays_one_way(self, panel):
-        """No unit id -> no auto-cluster; == the MPD default (hc1) lane."""
-        r = TwoWayFixedEffects().fit(
-            panel,
-            "y",
-            "treated",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(_mpd().fit(panel, "y", "treated", "period", post_periods=_post()))
-        _eq_with_nans(r.se, m.se)
-
-    def test_explicit_one_way_hc2_drops_auto_cluster(self, panel):
-        """The one-way exception mirror: hc2 + analytical == MPD hc2."""
-        r = TwoWayFixedEffects(vcov_type="hc2").fit(
-            panel,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=_post(),
-        )
-        m = _from_mpd(
-            _mpd(vcov_type="hc2").fit(panel, "y", "treated", "period", post_periods=_post())
-        )
-        _eq_with_nans(r.se, m.se)
-
     def test_conley_carve_out_drops_auto_cluster(self):
-        """ES pooled + unit + conley + cluster=None == MPD conley cluster=None
-        (auto-cluster dropped - no implicit spatial x unit product kernel);
-        an explicit cluster= legitimately combines and differs."""
+        """ES pooled + unit + conley + cluster=None drops the auto-cluster
+        (no implicit spatial x unit product kernel; through 3.x this lane was
+        pinned bit-exact to the MultiPeriodDiD conley fit, now the committed
+        oracle's within_conley lane); an explicit cluster= legitimately
+        combines and differs."""
         rng = np.random.default_rng(3)
         rows = []
         for u in range(30):
@@ -625,11 +499,7 @@ class TestAutoCluster:
             time="period",
             post_periods=[3, 4],
         )
-        m = _from_mpd(
-            _mpd(**kw).fit(df, "y", "treated", "period", post_periods=[3, 4], unit="unit")
-        )
-        _eq_with_nans(r.se, m.se)
-        _eq_with_nans(r.vcov, m.vcov)
+        assert np.isfinite(np.asarray(r.se)[~r.is_reference]).all()
         r_ex = TwoWayFixedEffects(cluster="unit", **kw).fit(
             df,
             "y",
@@ -648,14 +518,11 @@ class TestAutoCluster:
         assert np.isfinite(np.asarray(w.se)[~w.is_reference]).all()
 
     def test_survey_carve_out_no_implicit_psu(self, panel):
-        """ES pooled + unit + no-PSU survey == MPD survey cluster=None
-        (implicit per-observation PSUs - the auto-cluster is never injected);
-        explicit cluster= injects the PSU and changes the SEs (matching
-        MPD's own explicit-cluster behavior). Both lanes use a survey design
-        WITHOUT its own PSU: when survey_design.psu is set, the shared
-        resolver gives the PSU precedence over any cluster on every class."""
-        from diff_diff import SurveyDesign
-
+        """ES pooled + unit + no-PSU survey keeps the implicit per-observation
+        PSUs (the auto-cluster is never injected); explicit cluster= injects
+        the PSU and changes the SEs. Both lanes use a survey design WITHOUT
+        its own PSU: when survey_design.psu is set, the shared resolver gives
+        the PSU precedence over any cluster on every class."""
         rng = np.random.default_rng(11)
         df = panel.assign(w=rng.uniform(0.5, 2.0, len(panel)))
         r = TwoWayFixedEffects().fit(
@@ -669,17 +536,7 @@ class TestAutoCluster:
             post_periods=_post(),
             survey_design=SurveyDesign(weights="w"),
         )
-        m = _from_mpd(
-            _mpd().fit(
-                df,
-                "y",
-                "treated",
-                "period",
-                post_periods=_post(),
-                survey_design=SurveyDesign(weights="w"),
-            )
-        )
-        _eq_with_nans(r.se, m.se)
+        assert np.isfinite(np.asarray(r.se)[~r.is_reference]).all()
         r_ex = TwoWayFixedEffects(cluster="unit").fit(
             df,
             "y",
@@ -695,27 +552,30 @@ class TestAutoCluster:
 
 
 # ---------------------------------------------------------------------------
-# Deprecation choreography (M-010 warning; M-060 rides it)
+# The 4.0 removal (M-010 / M-011 / M-012 / M-060) and the retired M-007 warning
 # ---------------------------------------------------------------------------
 
 
-class TestDeprecation:
-    def test_mpd_construction_warns_pinned_message(self):
-        with pytest.warns(FutureWarning, match=re.escape(MPD_DEPRECATION_MSG)):
-            MultiPeriodDiD()
+class TestGateERemoval:
+    """The removed names are absent everywhere a user could reach them."""
 
-    def test_event_study_alias_warns_and_is_same_class(self):
-        assert EventStudy is MultiPeriodDiD
-        with pytest.warns(FutureWarning, match=re.escape(MPD_DEPRECATION_MSG)):
-            EventStudy()
+    @pytest.mark.parametrize("name", REMOVED_NAMES)
+    def test_name_is_absent(self, name):
+        assert not hasattr(diff_diff, name)
+        assert name not in diff_diff.__all__
+        assert name not in {str(n) for n in dir(diff_diff)}
+        with pytest.raises(ImportError):
+            exec(f"from diff_diff import {name}", {})  # noqa: S102
 
-    def test_mpd_warns_and_still_works(self, panel):
-        with pytest.warns(FutureWarning, match=re.escape(MPD_DEPRECATION_MSG)):
-            est = MultiPeriodDiD()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r = est.fit(panel, "y", "treated", "period", post_periods=_post())
-        assert np.isfinite(r.avg_att)
+    def test_internal_adapters_are_gone(self):
+        import diff_diff.estimators as est
+        import diff_diff.results as res
+        import diff_diff.results_base as rb
+
+        assert not hasattr(rb, "_from_mpd")
+        assert not hasattr(est, "_mpd_results_from_payload")
+        assert not hasattr(est, "_MPD_DEPRECATION_MSG")
+        assert not hasattr(res, "MultiPeriodDiDResults") and not hasattr(res, "PeriodEffect")
 
     def test_successors_do_not_warn(self):
         with warnings.catch_warnings(record=True) as rec:
@@ -724,15 +584,256 @@ class TestDeprecation:
             DifferenceInDifferences()
         assert not [w for w in rec if issubclass(w.category, FutureWarning)]
 
-    def test_mpd_introspection_intact(self):
-        """The __signature__ mirror keeps the BaseEstimator contract."""
-        m = _mpd()
-        d = DifferenceInDifferences()
-        assert set(m.get_params()) == set(d.get_params())
+    def test_core_requires_post_periods_even_when_called_directly(self, panel):
+        """The core's own fail-closed raise (the pre-4.0 midpoint default is
+        gone; the front door raises earlier, so only a direct call reaches it)."""
+        est = TwoWayFixedEffects()
+        with pytest.raises(ValueError, match="requires an explicit, non-empty post_periods="):
+            est._fit_event_study_core(
+                panel,
+                "y",
+                "treated",
+                "period",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "analytical",
+                include_treatment_main=True,
+                cluster_override=None,
+            )
+
+    def test_hc2_bm_contrast_batch_keeps_post_average_anchor(self, panel, monkeypatch):
+        """The clustered CR2 Bell-McCaffrey DOF guard is batch-relative, so the
+        core keeps the (otherwise unused) post-period-average contrast column as
+        the batch anchor (user decision 2026-10-25): structural pin that the
+        contrast matrix handed to linalg has n_kept + 1 columns whose last is
+        1/n_post on the post-period interaction rows and 0 elsewhere."""
+        import diff_diff.linalg as linalg
+
+        seen = {}
+        real = linalg._compute_cr2_bm_vcov_and_dof
+
+        def spy(X, cluster_ids, bread, contrasts, **kw):
+            seen["contrasts"] = np.asarray(contrasts).copy()
+            return real(X, cluster_ids, bread, contrasts, **kw)
+
+        monkeypatch.setattr(linalg, "_compute_cr2_bm_vcov_and_dof", spy)
+        s = TwoWayFixedEffects(cluster="unit", vcov_type="hc2_bm").fit(
+            panel,
+            "y",
+            "treated",
+            event_study=True,
+            spec="pooled",
+            time="period",
+            post_periods=_post(),
+        )
+        c = seen["contrasts"]
+        n_kept = c.shape[0]
+        assert c.shape == (n_kept, n_kept + 1)
+        np.testing.assert_array_equal(c[:, :n_kept], np.eye(n_kept))
+        anchor = c[:, -1]
+        n_post = len(_post())
+        post_rows = [i for i, lab in enumerate(s.vcov_index.tolist()) if lab in _post()]
+        assert len(post_rows) == n_post
+        # the surface's vcov_index rows are the interaction columns in label
+        # order; locate them in the kept design by their anchor weight
+        assert np.isclose(anchor.sum(), 1.0)
+        assert np.count_nonzero(anchor) == n_post
+        assert np.allclose(anchor[np.nonzero(anchor)], 1.0 / n_post)
+
+
+class TestPeriodEffectsView:
+    """M-016: ``period_effects`` is a FutureWarning view on calendar surfaces."""
+
+    def _fit(self, panel, alpha=0.05):
+        return TwoWayFixedEffects(alpha=alpha).fit(
+            panel,
+            "y",
+            "treated",
+            unit="unit",
+            event_study=True,
+            time="period",
+            post_periods=_post(),
+        )
+
+    def test_is_a_property_not_a_field(self):
+        import dataclasses
+        import inspect
+
+        assert "period_effects" not in {f.name for f in dataclasses.fields(EventStudyResults)}
+        assert isinstance(inspect.getattr_static(EventStudyResults, "period_effects"), property)
+
+    def test_warns_once_and_matches_the_surface_rowwise(self, panel):
+        s = self._fit(panel)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            pe = s.period_effects
+        fw = [w for w in rec if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1 and str(fw[0].message) == PERIOD_EFFECTS_MSG
+        labels = [lab for lab, ref in zip(s.event_time.tolist(), s.is_reference) if not ref]
+        assert list(pe) == labels
+        for i, lab in enumerate(s.event_time.tolist()):
+            if s.is_reference[i]:
+                assert lab not in pe
+                continue
+            rec_ = pe[lab]
+            assert isinstance(rec_, _PeriodEffectView)
+            assert rec_.period == lab
+            assert rec_.effect == float(s.att[i]) and rec_.se == float(s.se[i])
+            assert rec_.t_stat == float(s.t_stat[i]) and rec_.p_value == float(s.p_value[i])
+            assert rec_.conf_int == (float(s.conf_int_lower[i]), float(s.conf_int_upper[i]))
+            assert rec_.is_significant == bool(s.p_value[i] < s.alpha)
+        # the reference row is omitted, as the pre-4.0 dict did
+        assert len(pe) == int((~s.is_reference).sum())
+
+    def test_is_significant_uses_the_surface_alpha(self, panel):
+        s10 = self._fit(panel, alpha=0.10)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
-            m2 = m.set_params(alpha=0.10)
-        assert m2.get_params()["alpha"] == 0.10
+            pe = s10.period_effects
+        ps = {lab: r.p_value for lab, r in pe.items()}
+        for lab, r in pe.items():
+            assert r.is_significant == (ps[lab] < 0.10)
+        # a row between 0.05 and 0.10 is significant at the surface's alpha
+        # but would not have been at the removed record's hard-coded 0.05 -
+        # the pin is on the rule, so just assert the rule held for every row
+        assert all(r.is_significant == (r.p_value < 0.10) for r in pe.values())
+
+    def test_significance_stars_thresholds(self):
+        rows = {1: (1.0, 0.1), 2: (1.0, 0.2), 4: (1.0, 0.5), 5: (0.001, 1.0), 6: (0.05, 1.0)}
+        s = calendar_surface(rows, reference=3, post_periods=[4, 5, 6])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            pe = s.period_effects
+        from diff_diff.results_base import _significance_stars
+
+        for lab, r in pe.items():
+            assert r.significance_stars == _significance_stars(r.p_value)
+        assert _significance_stars(np.nan) == ""
+        assert _significance_stars(0.0005) == "***"
+        assert _significance_stars(0.005) == "**"
+        assert _significance_stars(0.03) == "*"
+        assert _significance_stars(0.07) == "."
+        assert _significance_stars(0.5) == ""
+
+    def test_nan_rows_stay_nan_records(self):
+        rows = {1: (0.1, 0.2), 2: (np.nan, np.nan), 4: (0.5, 0.1)}
+        s = calendar_surface(rows, reference=3, post_periods=[4])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r = s.period_effects[2]
+        assert np.isnan(r.effect) and np.isnan(r.p_value)
+        assert r.is_significant is False and r.significance_stars == ""
+
+    def test_datetime_labels_survive_as_keys(self):
+        import dataclasses
+
+        rows = {1: (0.1, 0.2), 2: (0.2, 0.2), 4: (0.5, 0.1)}
+        base = calendar_surface(rows, reference=3, post_periods=[4])
+        # object-dtype Timestamps are what a datetime time column produces
+        # (the surface keeps the native dtype; a datetime64[ns] array would
+        # be flattened to integer nanoseconds by .tolist(), which the view
+        # avoids by iterating the array itself)
+        stamps = np.array([pd.Timestamp(f"2020-0{m}-01") for m in (1, 2, 3, 4)], dtype=object)
+        s = dataclasses.replace(
+            base,
+            event_time=stamps,
+            vcov=None,
+            vcov_index=None,
+            reference_period=stamps[2],
+            post_periods=(stamps[3],),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            pe = s.period_effects
+        assert set(pe) == {stamps[0], stamps[1], stamps[3]}
+        assert all(isinstance(k, pd.Timestamp) for k in pe)
+        assert pe[pd.Timestamp("2020-04-01")].effect == 0.5
+
+    def test_duplicate_labels_fail_closed(self):
+        import dataclasses
+
+        rows = {1: (0.1, 0.2), 2: (0.2, 0.2), 4: (0.5, 0.1)}
+        base = calendar_surface(rows, reference=3, post_periods=[4])
+        dup = dataclasses.replace(
+            base, event_time=np.array([1, 1, 3, 4]), vcov=None, vcov_index=None
+        )
+        with pytest.raises(ValueError, match="duplicate event_time labels"):
+            dup.period_effects
+        # a label shared by the reference row and an estimated row is rejected
+        # too (it would surface the estimate under the reference's key)
+        ref_dup = dataclasses.replace(
+            base, event_time=np.array([1, 3, 3, 4]), vcov=None, vcov_index=None
+        )
+        with pytest.raises(ValueError, match="duplicate event_time labels"):
+            ref_dup.period_effects
+
+    def test_relative_surfaces_do_not_carry_the_view(self):
+        """Gated to calendar surfaces: a relative-time aggregate('event_study')
+        container never had period_effects, so hasattr is False and nothing
+        warns there."""
+        data = generate_staggered_data(n_units=40, n_periods=6, seed=3)
+        cs = CallawaySantAnna().fit(
+            data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        es = cs.aggregate("event_study")
+        assert isinstance(es, EventStudyResults) and es.time_scale == "relative"
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert not hasattr(es, "period_effects")
+            with pytest.raises(AttributeError, match="time_scale='calendar'"):
+                es.period_effects
+        assert not [w for w in rec if issubclass(w.category, FutureWarning)]
+
+    def test_hasattr_fires_the_view_on_calendar_surfaces(self, panel):
+        """Documents the hazard: any new duck sniff must guard with isinstance
+        first, because hasattr runs the getter (and warns)."""
+        s = self._fit(panel)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert hasattr(s, "period_effects")
+        assert [w for w in rec if "period_effects" in str(w.message)]
+
+    def test_builder_passthrough_never_fires_the_view(self, panel):
+        s = self._fit(panel)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert build_event_study_surface(s) is s
+        assert not [w for w in rec if "period_effects" in str(w.message)]
+
+    def test_no_consumer_path_fires_the_view(self, panel):
+        """The view-never-fires sweep: every surface-consuming path stays
+        duck-sniff free (scoped to the view's own FutureWarning, so legitimate
+        UserWarnings or matplotlib/scipy warnings do not fail it)."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        s = self._fit(panel)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            s.to_dataframe()
+            s.to_dict()
+            s.summary()
+            build_event_study_surface(s)
+            ax = plot_event_study(s)
+            plt.close("all")
+            h = compute_honest_did(s, M=1.0)
+            compute_pretrends_power(s, M=0.3, pretest_form="wald")
+            plot_honest_event_study(h)  # original_results rides on h
+            plt.close("all")
+        assert ax is not None
+        offenders = [
+            w
+            for w in rec
+            if issubclass(w.category, FutureWarning) and "period_effects" in str(w.message)
+        ]
+        assert offenders == []
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +906,9 @@ class TestSurfaceContract:
         assert s.reference_period == 1
 
     def test_no_legacy_reference_warning_in_event_study_mode(self, panel):
-        """The M-007 transition warning is MPD-only (v4-design section 4.1)."""
+        """M-007 retired at 4.0: no event-study fit emits the legacy
+        reference-period transition warning (it left with the removed class;
+        the mode was born on e=-1, v4-design section 4.1)."""
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
             TwoWayFixedEffects().fit(
@@ -818,10 +921,20 @@ class TestSurfaceContract:
                 post_periods=_post(),
             )
         assert not [w for w in rec if "reference_period has changed" in str(w.message)]
+        # the default itself is the last pre-period (e=-1), silently
         with warnings.catch_warnings(record=True) as rec2:
             warnings.simplefilter("always")
-            _mpd().fit(panel, "y", "treated", "period", post_periods=_post())
-        assert [w for w in rec2 if "reference_period has changed" in str(w.message)]
+            s = TwoWayFixedEffects().fit(
+                panel,
+                "y",
+                "treated",
+                unit="unit",
+                event_study=True,
+                time="period",
+                post_periods=_post(),
+            )
+        assert s.reference_period == _post()[0] - 1
+        assert not [w for w in rec2 if issubclass(w.category, FutureWarning)]
 
     def test_renderers_run(self, panel):
         s = TwoWayFixedEffects().fit(
@@ -860,48 +973,6 @@ class TestSurfaceContract:
         r2 = est.fit(df, "y", "treated", post="post", unit="unit")
         assert r2.att == r1.att
         assert est.results_ is r2
-
-    def test_survey_replicate_within_matches_mpd_absorb(self, panel, ci_params):
-        """Numerical replicate-lane pin: the include_treatment_main threading
-        through the absorb replicate-refit closure produces the same numbers
-        as MPD.fit(absorb=[unit]) under matched explicit cluster."""
-        from diff_diff import SurveyDesign
-
-        rng = np.random.default_rng(5)
-        df = panel.assign(w=rng.uniform(0.5, 2.0, len(panel)))
-        n_rep = max(4, min(8, ci_params.bootstrap(8)))
-        rep_cols = {}
-        for j in range(n_rep):
-            rep_cols[f"rw{j}"] = df["w"] * rng.uniform(0.5, 1.5, len(df))
-        df = df.assign(**rep_cols)
-        sd_kwargs = dict(
-            weights="w",
-            replicate_weights=[f"rw{j}" for j in range(n_rep)],
-            replicate_method="JK1",
-        )
-        w = TwoWayFixedEffects(cluster="unit").fit(
-            df,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            time="period",
-            post_periods=_post(),
-            survey_design=SurveyDesign(**sd_kwargs),
-        )
-        m = _from_mpd(
-            _mpd(cluster="unit").fit(
-                df,
-                "y",
-                "treated",
-                "period",
-                post_periods=_post(),
-                absorb=["unit"],
-                survey_design=SurveyDesign(**sd_kwargs),
-            )
-        )
-        for field in ("att", "se", "p_value"):
-            _close_with_nans(getattr(w, field), getattr(m, field), atol=1e-12, rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -947,7 +1018,7 @@ class TestInferenceIntegrity:
 
     def test_estimator_name_threading(self, panel):
         """TWFE event-study messages name TwoWayFixedEffects, never the
-        deprecated class; MPD's own messages are bit-identical legacy."""
+        removed class."""
         stag = panel.copy()
         # two adoption cohorts among former controls (0->1 transitions at
         # periods 1 and 3) so the staggered-adoption advisory fires
@@ -968,11 +1039,6 @@ class TestInferenceIntegrity:
         adv = [w for w in rec if "simultaneous adoption" in str(w.message)]
         assert adv and "TwoWayFixedEffects" in str(adv[0].message)
         assert "MultiPeriodDiD" not in str(adv[0].message)
-        with warnings.catch_warnings(record=True) as rec2:
-            warnings.simplefilter("always")
-            _mpd().fit(stag, "y", "treated", "period", post_periods=_post(), unit="unit")
-        adv2 = [w for w in rec2 if "simultaneous adoption" in str(w.message)]
-        assert adv2 and "MultiPeriodDiD" in str(adv2[0].message)
         # validation errors carry the producer too
         with pytest.raises(ValueError, match="TwoWayFixedEffects"):
             TwoWayFixedEffects().fit(
@@ -1022,9 +1088,8 @@ class TestInferenceIntegrity:
         fixest retains them; diff-diff matches the fixest default,
         class-wide). The singleton's unit-demeaned row is zero, so
         event-study points are unchanged while N/G/df count it (SEs
-        shift); the within spec inherits the class behavior EXACTLY -
-        bit-parity with the same-data MPD absorb fit holds ON the
-        singleton fixture, so the new mode introduces no divergence.
+        shift); the within spec inherits the class behavior EXACTLY (through
+        3.x pinned bit-exact to the same-data MultiPeriodDiD absorb fit).
         Opt-in pruning is the TODO.md 3(a) R5 row."""
         single = pd.DataFrame([dict(unit=999, period=0, treated=0, x=0.0, y=0.0)])
         aug = pd.concat([panel, single], ignore_index=True)
@@ -1048,13 +1113,6 @@ class TestInferenceIntegrity:
         )
         _close_with_nans(base.att, with_s.att, atol=1e-9, rtol=1e-9)
         assert not np.allclose(np.nan_to_num(base.se), np.nan_to_num(with_s.se))
-        m = _from_mpd(
-            _mpd(cluster="unit").fit(
-                aug, "y", "treated", "period", post_periods=_post(), absorb=["unit"]
-            )
-        )
-        for field in ("att", "se", "t_stat", "p_value"):
-            _close_with_nans(getattr(with_s, field), getattr(m, field), atol=1e-12, rtol=1e-12)
         # static path: the same retained-singleton behavior (point pinned
         # to ~ULP - the two-way alternating-projection demeaning remixes
         # means - while the SE visibly shifts with N/G/df)
@@ -1066,9 +1124,9 @@ class TestInferenceIntegrity:
         assert s0.se != s1.se
 
     def test_warning_attribution_baselines(self, panel):
-        """The three A1 attribution pins: inline + snap -> USER file;
-        the solve_ols rank-deficiency chain -> estimators.py (preserved
-        library attribution; never a user-file pin on that class)."""
+        """The A1 attribution pins on the TWFE event-study path: the inline
+        staggered advisory and the snap warning attribute to the USER file
+        (the _frame_offset contract the core kept through the removal)."""
         stag = panel.copy()
         # two adoption cohorts among former controls (0->1 transitions at
         # periods 1 and 3) so the staggered-adoption advisory fires
@@ -1076,28 +1134,21 @@ class TestInferenceIntegrity:
         stag.loc[(stag.unit >= 33) & (stag.unit < 36) & (stag.period >= 3), "treated"] = 1
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            _mpd().fit(stag, "y", "treated", "period", post_periods=_post(), unit="unit")
-        inline = [w for w in rec if "simultaneous adoption" in str(w.message)]
-        assert inline and inline[0].filename.endswith("test_v4_merge_mpd.py")
-        # snap (class-(i)-via-helper): unit-constant covariate under absorb
-        df2 = panel.assign(ucov=(panel["unit"] % 3).astype(float))
-        with warnings.catch_warnings(record=True) as rec2:
-            warnings.simplefilter("always")
-            _mpd().fit(
-                df2,
+            TwoWayFixedEffects().fit(
+                stag,
                 "y",
                 "treated",
-                "period",
+                unit="unit",
+                event_study=True,
+                spec="pooled",
+                time="period",
                 post_periods=_post(),
-                absorb=["unit"],
-                covariates=["ucov"],
-                reference_period=2,
             )
-        snap = [w for w in rec2 if "collinear with the absorbed" in str(w.message)]
-        assert snap and snap[0].filename.endswith("test_v4_merge_mpd.py")
-        rank = [w for w in rec2 if "Rank-deficient design matrix" in str(w.message)]
-        assert rank and rank[0].filename.endswith("estimators.py")
-        # the TWFE event-study path preserves the same attribution classes
+        inline = [w for w in rec if "simultaneous adoption" in str(w.message)]
+        assert inline and inline[0].filename.endswith("test_v4_merge_mpd.py")
+        # snap (class-(i)-via-helper): unit-constant covariate under the
+        # absorbed unit FE
+        df2 = panel.assign(ucov=(panel["unit"] % 3).astype(float))
         with warnings.catch_warnings(record=True) as rec3:
             warnings.simplefilter("always")
             TwoWayFixedEffects().fit(
@@ -1121,8 +1172,8 @@ class TestInferenceIntegrity:
 
 
 class TestConsumers:
-    def _surfaces(self, panel, **mpd_kwargs):
-        s = TwoWayFixedEffects(cluster="unit").fit(
+    def _surfaces(self, panel):
+        return TwoWayFixedEffects(cluster="unit").fit(
             panel,
             "y",
             "treated",
@@ -1132,22 +1183,12 @@ class TestConsumers:
             time="period",
             post_periods=_post(),
         )
-        m = _mpd(cluster="unit").fit(panel, "y", "treated", "period", post_periods=_post())
-        return s, m
-
-    def test_honest_did_parity_standard_geometry(self, panel):
-        s, m = self._surfaces(panel)
-        for M in (0.5, 1.0):
-            hs = compute_honest_did(s, M=M)
-            hn = compute_honest_did(m, M=M)
-            assert hs.ci_lb == hn.ci_lb and hs.ci_ub == hn.ci_ub
-            assert hs.pre_periods_used == hn.pre_periods_used
 
     def test_honest_did_survey_df_scalar_threads(self, panel):
         """Survey-backed lane: the df_survey scalar that moves FLCI critical
-        values threads identically through the calendar route."""
-        from diff_diff import SurveyDesign
-
+        values threads through the calendar route - a hand-built twin of the
+        surface with the same df_survey reproduces the FLCI exactly, and one
+        without it differs."""
         rng = np.random.default_rng(13)
         df = panel.assign(w=rng.uniform(0.5, 2.0, len(panel)))
         s = TwoWayFixedEffects().fit(
@@ -1161,17 +1202,39 @@ class TestConsumers:
             post_periods=_post(),
             survey_design=SurveyDesign(weights="w"),
         )
-        m = _mpd().fit(
-            df,
-            "y",
-            "treated",
-            "period",
-            post_periods=_post(),
-            survey_design=SurveyDesign(weights="w"),
+        assert s.df_survey is not None and np.isfinite(s.df_survey)
+        rows = {
+            lab: (
+                float(s.att[i]),
+                float(s.se[i]),
+                float(s.t_stat[i]),
+                float(s.p_value[i]),
+                (float(s.conf_int_lower[i]), float(s.conf_int_upper[i])),
+            )
+            for i, lab in enumerate(s.event_time.tolist())
+            if not s.is_reference[i]
+        }
+        twin = calendar_surface(
+            rows,
+            reference=s.reference_period,
+            post_periods=list(s.post_periods),
+            vcov=s.vcov,
+            vcov_index=list(s.vcov_index),
+            df_survey=s.df_survey,
+        )
+        no_df = calendar_surface(
+            rows,
+            reference=s.reference_period,
+            post_periods=list(s.post_periods),
+            vcov=s.vcov,
+            vcov_index=list(s.vcov_index),
+            df_survey=None,
         )
         hs = compute_honest_did(s, M=1.0)
-        hn = compute_honest_did(m, M=1.0)
-        assert hs.ci_lb == hn.ci_lb and hs.ci_ub == hn.ci_ub
+        ht = compute_honest_did(twin, M=1.0)
+        hn = compute_honest_did(no_df, M=1.0)
+        assert hs.ci_lb == ht.ci_lb and hs.ci_ub == ht.ci_ub
+        assert (hs.ci_lb, hs.ci_ub) != (hn.ci_lb, hn.ci_ub)
 
     @pytest.mark.parametrize(
         "fit_kwargs",
@@ -1253,66 +1316,11 @@ class TestConsumers:
             compute_pretrends_power(foreign, M=0.3)
 
     def test_no_unknown_provenance_warning_on_first_party_surface(self, panel):
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
             compute_honest_did(s, M=1.0)
         assert not [w for w in rec if "provenance" in str(w.message)]
-
-    @pytest.mark.parametrize(
-        "fit_kwargs",
-        [
-            dict(post_periods=[3, 4, 5]),
-            dict(post_periods=[2, 5], reference_period=4),
-            dict(post_periods=[3, 4, 5], reference_period=1),
-        ],
-        ids=["suffix", "non-suffix", "non-last-reference"],
-    )
-    def test_pretrends_parity_wald(self, panel, fit_kwargs):
-        """PreTrendsPower is NOT geometry-scoped: all three lanes are parity
-        lanes (wald form - the nis box probability is internally randomized)."""
-        s = TwoWayFixedEffects(cluster="unit").fit(
-            panel,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            **fit_kwargs,
-        )
-        m = _mpd(cluster="unit").fit(panel, "y", "treated", "period", **fit_kwargs)
-        a = compute_pretrends_power(s, M=0.3, pretest_form="wald")
-        b = compute_pretrends_power(m, M=0.3, pretest_form="wald")
-        assert a.power == b.power and a.mdv == b.mdv
-        assert a.covariance_source == b.covariance_source == "full_pre_period_vcov"
-
-    def test_pretrends_string_labels_degrade_like_native(self):
-        """String calendar labels reproduce the native route's gamma-unit
-        degradation warning - never silence, never bypass."""
-        df = _panel(str_periods=True)
-        posts = _post(str_periods=True)
-        s = TwoWayFixedEffects(cluster="unit").fit(
-            df,
-            "y",
-            "treated",
-            unit="unit",
-            event_study=True,
-            spec="pooled",
-            time="period",
-            post_periods=posts,
-        )
-        m = _mpd(cluster="unit").fit(df, "y", "treated", "period", post_periods=posts)
-        with warnings.catch_warnings(record=True) as r1:
-            warnings.simplefilter("always")
-            q1 = compute_pretrends_power(s, M=0.3, pretest_form="wald")
-        with warnings.catch_warnings(record=True) as r2:
-            warnings.simplefilter("always")
-            q2 = compute_pretrends_power(m, M=0.3, pretest_form="wald")
-        w1 = sorted(str(w.message) for w in r1 if "reference_period" in str(w.message))
-        w2 = sorted(str(w.message) for w in r2 if "reference_period" in str(w.message))
-        assert w1 == w2 and len(w1) == 1
-        assert (q1.mdv == q2.mdv) or (np.isnan(q1.mdv) and np.isnan(q2.mdv))
 
     def test_pretrends_explicit_pre_periods_validated(self, panel):
         """R8: an explicit pre_periods= selection on the calendar route
@@ -1321,7 +1329,7 @@ class TestConsumers:
         duplicates all fail loud, and a reversed-but-valid selection
         gives the identical positional analysis (last_period targets the
         chronological grid, not argument order)."""
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         with pytest.raises(ValueError, match="not eligible pre-treatment periods"):
             compute_pretrends_power(s, M=0.3, pre_periods=[0, 999], pretest_form="wald")
         with pytest.raises(ValueError, match="not eligible pre-treatment periods"):
@@ -1354,9 +1362,8 @@ class TestConsumers:
         """R6: string calendar labels cannot prove chronology - the
         HonestDiD calendar route warns loudly (sorted() order is only
         ASSUMED; unpadded numeric suffixes would reorder, silently
-        shifting the positional l_vec target) while staying
-        native-route consistent: the fit itself applied the same
-        sorted() rule, so both routes share one ordering."""
+        shifting the positional l_vec target); the fit itself applied the
+        same sorted() rule."""
         df = _panel(str_periods=True)
         posts = _post(str_periods=True)
         s = TwoWayFixedEffects(cluster="unit").fit(
@@ -1369,11 +1376,9 @@ class TestConsumers:
             time="period",
             post_periods=posts,
         )
-        m = _mpd(cluster="unit").fit(df, "y", "treated", "period", post_periods=posts)
         with pytest.warns(UserWarning, match="STRING calendar labels"):
             hs = compute_honest_did(s, M=1.0)
-        hn = compute_honest_did(m, M=1.0)
-        assert hs.ci_lb == hn.ci_lb and hs.ci_ub == hn.ci_ub
+        assert np.isfinite(hs.ci_lb) and np.isfinite(hs.ci_ub)
 
     def test_calendar_vcov_integrity_rejections(self, panel):
         """R3 hardening: the calendar routes share the relative container
@@ -1384,7 +1389,7 @@ class TestConsumers:
         documented singular handling."""
         import dataclasses
 
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         labels = list(s.vcov_index.tolist())
         row_of = {t: i for i, t in enumerate(s.event_time.tolist())}
 
@@ -1433,7 +1438,7 @@ class TestConsumers:
         fails loud, a leading one is dropped safely."""
         import dataclasses
 
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         bare = dataclasses.replace(s, vcov=None, vcov_index=None)
         with pytest.warns(UserWarning, match="no full covariance matrix"):
             hb = compute_honest_did(bare, M=0.5)
@@ -1461,7 +1466,7 @@ class TestConsumers:
         restriction system."""
         import dataclasses
 
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         row_of = {t: i for i, t in enumerate(s.event_time.tolist())}
         arrays = {
             f: np.asarray(getattr(s, f), dtype=float).copy()
@@ -1478,7 +1483,7 @@ class TestConsumers:
         from diff_diff.business_report import BusinessReport
         from diff_diff.diagnostic_report import DiagnosticReport
 
-        s, _ = self._surfaces(panel)
+        s = self._surfaces(panel)
         with pytest.raises(TypeError, match="DiagnosticReport does not yet support"):
             DiagnosticReport(s)
         with pytest.raises(TypeError, match="BusinessReport does not yet support"):

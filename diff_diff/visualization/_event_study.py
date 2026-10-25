@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     )
     from diff_diff.honest_did import HonestDiDResults
     from diff_diff.imputation import ImputationDiDResults
-    from diff_diff.results import MultiPeriodDiDResults
     from diff_diff.results_base import EventStudyResults
     from diff_diff.stacked_did import StackedDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
-    "MultiPeriodDiDResults",
     "CallawaySantAnnaResults",
     "SunAbrahamResults",
     "ImputationDiDResults",
@@ -70,8 +68,8 @@ def plot_event_study(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, EventStudyResults, or DataFrame, optional
-        Results object from MultiPeriodDiD, CallawaySantAnna, a unified
+    results : CallawaySantAnnaResults, EventStudyResults, or DataFrame, optional
+        Results object from CallawaySantAnna, a unified
         :class:`~diff_diff.results_base.EventStudyResults` container (from
         any producer's ``aggregate('event_study')`` or
         ``build_event_study_surface``), or a DataFrame with columns
@@ -381,8 +379,8 @@ def _pre_shading_runs(pre_x: List[int]) -> List[Tuple[int, int]]:
     """Contiguous runs of pre-period x-positions, as (start, end) pairs.
 
     The pre-period set need not be contiguous: a calendar surface with
-    non-suffix ``post_periods`` provenance (legal on MultiPeriodDiD /
-    the TWFE event-study mode) interleaves post periods between pre
+    non-suffix ``post_periods`` provenance (legal on the TWFE event-study
+    mode) interleaves post periods between pre
     periods, and a single min-to-max span would shade those post periods
     as pre-treatment. One span per contiguous run keeps the shading
     truthful on every partition shape.
@@ -801,10 +799,9 @@ def _extract_plot_data(
             elif surface.post_periods is not None:
                 # Calendar labels with the AUTHORITATIVE partition
                 # provenance (row M-092 amendment #5, threaded by the
-                # calendar-surface builder behind the MultiPeriodDiD adapter
-                # and the TWFE event-study producer): the declared
-                # post set may be an arbitrary subset (non-suffix splits
-                # are legal on MultiPeriodDiD), so the positional
+                # calendar-surface builder behind the TWFE event-study
+                # producer): the declared post set may be an arbitrary
+                # subset (non-suffix splits are legal), so the positional
                 # fallback below would mislabel it - always prefer the
                 # provenance. Pre = non-reference complement.
                 _post_set = set(surface.post_periods)
@@ -885,49 +882,6 @@ def _extract_plot_data(
             False,
             ci_lower_override,
             ci_upper_override,
-            None,
-            None,
-            None,
-        )
-
-    # Handle MultiPeriodDiDResults
-    if hasattr(results, "period_effects"):
-        effects = {}
-        se = {}
-
-        for period, pe in results.period_effects.items():
-            effects[period] = pe.effect
-            se[period] = pe.se
-
-        if pre_periods is None and hasattr(results, "pre_periods"):
-            pre_periods = results.pre_periods
-
-        if post_periods is None and hasattr(results, "post_periods"):
-            post_periods = results.post_periods
-
-        if periods is None:
-            periods = sorted(results.period_effects.keys())
-
-        # Auto-detect reference period from results if not explicitly provided
-        ref_inferred = False
-        if (
-            reference_period is None
-            and hasattr(results, "reference_period")
-            and results.reference_period is not None
-        ):
-            reference_period = results.reference_period
-            ref_inferred = True
-
-        return (
-            effects,
-            se,
-            periods,
-            pre_periods,
-            post_periods,
-            reference_period,
-            ref_inferred,
-            None,
-            None,
             None,
             None,
             None,
@@ -1064,7 +1018,7 @@ def _extract_plot_data(
 
     raise TypeError(
         f"Cannot extract plot data from {type(results).__name__}. "
-        "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
+        "Expected CallawaySantAnnaResults, "
         "SunAbrahamResults, ImputationDiDResults, "
         "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
         "For a result that stores no event-study surface (DMLDiD, "
@@ -1260,23 +1214,6 @@ def plot_honest_event_study(
                     "excluded from the sensitivity analysis and carry no "
                     "honest interval."
                 )
-    elif hasattr(original_results, "period_effects"):
-        # MultiPeriodDiDResults
-        effects_dict = {p: pe.effect for p, pe in original_results.period_effects.items()}
-        se_dict = {p: pe.se for p, pe in original_results.period_effects.items()}
-        if reference_period is None:
-            reference_period = getattr(original_results, "reference_period", None)
-        # Verified anchor: only the result's own reference_period metadata
-        # - a caller label that does not match it is never an anchor on
-        # this route (period_effects rows carry no constraint signature to
-        # verify against).
-        _anchor_period = (
-            reference_period
-            if reference_period is not None
-            and reference_period == getattr(original_results, "reference_period", None)
-            else None
-        )
-        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, _anchor_period)
     elif hasattr(original_results, "event_study_effects"):
         # CallawaySantAnnaResults (fit-time dict surface)
         effects_dict = {
@@ -1320,7 +1257,7 @@ def plot_honest_event_study(
 
     # Original CIs: the container's STORED intervals where available
     # (NaN preserved); z-reconstruction from the SE only for input routes
-    # that carry no stored intervals (MPD / fit-time CS dict surfaces).
+    # that carry no stored intervals (fit-time CS dict surfaces).
     alpha_val = honest_results.alpha
     if stored_ci_lower is not None:
         container_alpha = getattr(original_results, "alpha", None)

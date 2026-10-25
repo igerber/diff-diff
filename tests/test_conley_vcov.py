@@ -10,7 +10,7 @@ methodology walk-through + R `conleyreg` v0.1.9 parity at ``atol=1e-6``
 - Dispatch-level validity (vcov_type membership; cluster + one-way
   rejections; Conley + weights / survey_design fail-closed gates)
 - Estimator-level integration smoke tests (DiD + Conley, TWFE + Conley,
-  MPD + Conley) and set_params atomicity
+  TWFE event study + Conley) and set_params atomicity
 - Sparse-path activation thresholds + density-gate fallback behavior
   (the methodology file pins numerical equivalence vs dense; activation
   and fallback are defensive)
@@ -1010,7 +1010,7 @@ class TestConleyLinearRegression:
 class TestConleyEstimatorIntegration:
     """Panel-estimator rejection tests for vcov_type='conley'.
 
-    DiD and MultiPeriodDiD reject Conley at fit-time in Phase 1 because
+    DiD and the former MultiPeriodDiD reject Conley at fit-time in Phase 1 because
     cross-sectional Conley over (unit, time) rows mishandles same-unit
     cross-time pairs (d_ij = 0 -> K = 1). The supported Phase 1 path for
     Conley is direct compute_robust_vcov / LinearRegression on a single-
@@ -1069,7 +1069,7 @@ class TestConleyEstimatorIntegration:
     def test_did_conley_unknown_unit_column_raises(self, two_period_panel):
         """vcov_type='conley' with `unit=<name>` referring to an absent column
         raises a clear estimator-level ValueError, NOT a raw pandas KeyError.
-        Front-door check mirrors MultiPeriodDiD / TwoWayFixedEffects.
+        Front-door check mirrors TwoWayFixedEffects.
         Codex CI R1 P1 #1."""
         from diff_diff import DifferenceInDifferences
 
@@ -1205,62 +1205,6 @@ class TestConleyEstimatorIntegration:
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
             ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
-
-    def test_mpd_conley_wild_bootstrap_raises_without_warning(self):
-        """MPD + Conley + inference='wild_bootstrap' raises NotImplementedError
-        cleanly. The pre-Conley analytical-fallback UserWarning is suppressed
-        on this combination so the user gets one consistent error message
-        instead of "warn then raise". Codex CI R11 P3 #1.
-        """
-        import pandas as _pd
-
-        from diff_diff import MultiPeriodDiD
-
-        rng = np.random.default_rng(seed=211)
-        rows = []
-        for u in range(8):
-            lat = rng.uniform(-30, 30)
-            lon = rng.uniform(-100, 100)
-            for t in range(3):
-                rows.append(
-                    {
-                        "unit": u,
-                        "time": t,
-                        "y": rng.standard_normal(),
-                        "treated": int(u >= 4),
-                        "lat": lat,
-                        "lon": lon,
-                    }
-                )
-        df = _pd.DataFrame(rows)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            with pytest.raises(NotImplementedError, match="wild_bootstrap"):
-                MultiPeriodDiD(
-                    vcov_type="conley",
-                    inference="wild_bootstrap",
-                    conley_coords=("lat", "lon"),
-                    conley_cutoff_km=2000.0,
-                    conley_lag_cutoff=1,
-                ).fit(
-                    df,
-                    outcome="y",
-                    treatment="treated",
-                    time="time",
-                    unit="unit",
-                    post_periods=[1, 2],
-                    reference_period=0,
-                )
-            fallback_warnings = [
-                msg
-                for msg in w
-                if "falling back to analytical" in str(msg.message)
-                or "Wild bootstrap inference is not yet supported" in str(msg.message)
-            ]
-            assert len(fallback_warnings) == 0, (
-                "Got the analytical-fallback warning on a Conley fit that will "
-                "raise NotImplementedError — contradictory guidance."
-            )
 
     def test_did_conley_malformed_coord_tuple_raises(self, two_period_panel):
         """vcov_type='conley' with a malformed conley_coords (wrong arity or
@@ -1564,7 +1508,7 @@ class TestConleyEstimatorIntegration:
             )
 
     def test_twfe_event_study_conley_missing_lag_cutoff_raises(self):
-        """MPD + vcov_type='conley' without conley_lag_cutoff raises ValueError
+        """TWFE event study + vcov_type='conley' without conley_lag_cutoff raises ValueError
         (no defensible default per Conley 1999 Section 5)."""
         from diff_diff import TwoWayFixedEffects
 
@@ -1607,7 +1551,7 @@ class TestConleyEstimatorIntegration:
             )
 
     def test_twfe_event_study_conley_with_survey_design_raises(self):
-        """MPD + vcov_type='conley' + survey_design raises NotImplementedError.
+        """TWFE event study + vcov_type='conley' + survey_design raises NotImplementedError.
 
         Closes Codex P0: previously, MPD passed return_vcov=False to solve_ols
         when _use_survey_vcov=True, bypassing the conley + weights guard, and
@@ -1690,7 +1634,7 @@ class TestConleyEstimatorIntegration:
             )
 
     def test_twfe_event_study_conley_with_datetime64_time(self):
-        """End-to-end MPD + vcov_type='conley' with datetime64 time labels.
+        """End-to-end TWFE event study + vcov_type='conley' with datetime64 time labels.
         Closes Codex re-review P1: the wrapper must NOT coerce time to float64
         before passing to _compute_conley_vcov; the helper normalizes to
         dense codes internally. Verifies the SEs match an equivalent
@@ -1751,60 +1695,15 @@ class TestConleyEstimatorIntegration:
             reference_period=date_labels[0],
         )
         # Per-coefficient SE should match across the two encodings (dense
-        # codes normalize identically). MPD orders coefficients by the
+        # codes normalize identically). the pooled event study orders coefficients by the
         # reference-vs-non-reference period split; with reference_period=0
         # and post_periods=[1,2] the coefficient ordering is bit-identical.
         se_int = np.sqrt(np.diag(res_int.vcov))
         se_dt = np.sqrt(np.diag(res_dt.vcov))
         np.testing.assert_allclose(se_dt, se_int, atol=1e-10)
 
-    def test_multi_period_did_conley_to_dict_carries_lag_cutoff(self):
-        """Closes Codex re-review round 4 P1 (Maintainability) on MPD:
-        serialized `to_dict()` must include `vcov_type` and
-        `conley_lag_cutoff` so downstream programmatic consumers can tell
-        which Conley variant produced the SEs."""
-        import pandas as pd
-
-        from diff_diff import MultiPeriodDiD
-
-        rng = np.random.default_rng(seed=41)
-        n_units = 10
-        rows = []
-        for u in range(n_units):
-            lat = rng.uniform(-30, 30)
-            lon = rng.uniform(-100, 100)
-            for t in range(3):
-                rows.append(
-                    {
-                        "unit": u,
-                        "time": t,
-                        "y": rng.normal(),
-                        "treated": int(u < 5),
-                        "lat": lat,
-                        "lon": lon,
-                    }
-                )
-        df_mp = pd.DataFrame(rows)
-        res = MultiPeriodDiD(
-            vcov_type="conley",
-            conley_coords=("lat", "lon"),
-            conley_cutoff_km=2000.0,
-            conley_lag_cutoff=2,
-        ).fit(
-            df_mp,
-            outcome="y",
-            treatment="treated",
-            time="time",
-            post_periods=[1, 2],
-            unit="unit",
-            reference_period=0,
-        )
-        d = res.to_dict()
-        assert d["vcov_type"] == "conley"
-        assert d["conley_lag_cutoff"] == 2
-
     def test_twfe_event_study_conley_missing_coords_raises(self):
-        """MPD + vcov_type='conley' without conley_coords raises a clean
+        """TWFE event study + vcov_type='conley' without conley_coords raises a clean
         ValueError instead of a raw TypeError on `self.conley_coords[0]`.
         Closes Codex P2 #1.
         """
@@ -2063,7 +1962,7 @@ class TestConleyTWFE:
         """TWFE's `_treatment_post = treated * time` design step requires
         numeric `time`. Non-numeric labels (datetime64, pd.Period, strings)
         are TWFE-incompatible end-to-end and surface as a clean error before
-        the Conley path runs. Use MultiPeriodDiD if you need non-numeric
+        the Conley path runs. Use the event-study mode (``event_study=True``) if you need non-numeric
         time labels.
         """
         from diff_diff import TwoWayFixedEffects
@@ -3101,36 +3000,8 @@ class TestConleyCluster:
                 conley_lag_cutoff=1,
             ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
 
-    def test_mpd_combined_kernel_finite_se_and_cluster_name(self):
-        """MultiPeriodDiD(vcov_type='conley', cluster='region') on a 4-period
-        panel produces a finite SE and propagates `region` to cluster_name
-        on the result + to_dict()."""
-        from diff_diff import MultiPeriodDiD
-
-        df = self._multi_period_panel_with_region(n_units=12, T=4, seed=53)
-        res = MultiPeriodDiD(
-            vcov_type="conley",
-            cluster="region",
-            conley_coords=("lat", "lon"),
-            conley_cutoff_km=2000.0,
-            conley_lag_cutoff=1,
-        ).fit(
-            df,
-            outcome="y",
-            treatment="treated",
-            time="time",
-            unit="unit",
-            post_periods=[2, 3],
-            reference_period=0,
-        )
-        assert np.isfinite(res.avg_att)
-        assert np.isfinite(res.avg_se) and res.avg_se > 0
-        assert res.cluster_name == "region"
-        d = res.to_dict()
-        assert d.get("cluster_name") == "region"
-
     def test_twfe_es_combined_kernel_time_varying_cluster_raises(self):
-        """MultiPeriodDiD + Conley + cluster=<col> with a cluster that
+        """TWFE event study + Conley + cluster=<col> with a cluster that
         varies across periods within a unit raises ValueError (same time-
         invariance contract as the linalg validator). Codex CI R1 P1 #2."""
         from diff_diff import TwoWayFixedEffects

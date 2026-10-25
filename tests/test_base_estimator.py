@@ -81,7 +81,6 @@ BAD_VALUES = {
     "DifferenceInDifferences": {"vcov_type": "hc99"},
     "DMLDiD": {"n_folds": 0},
     "TwoWayFixedEffects": {"vcov_type": "hc99"},
-    "MultiPeriodDiD": {"vcov_type": "hc99"},
     "SyntheticDiD": {"variance_method": "not_a_method"},
     "CallawaySantAnna": {"vcov_type": "hc4"},
     "SunAbraham": {"vcov_type": "hc4"},
@@ -143,8 +142,9 @@ estimators = pytest.mark.parametrize("cls", MIXIN_CLASSES, ids=_params_id)
 
 def test_roster_discovered_nontrivially():
     # 26 defining classes (DMLDiD included; StaggeredTripleDifference and QDiD
-    # removed at the 4.0 cut) + TwoWayFixedEffects/MultiPeriodDiD inheritors.
-    assert len(MIXIN_CLASSES) >= 27
+    # removed at the 4.0 cut) + the TwoWayFixedEffects inheritor (the deprecated
+    # calendar-keyed event-study inheritor left at PR 4c-ii).
+    assert len(MIXIN_CLASSES) >= 26
 
 
 def test_every_fit_class_is_a_base_estimator():
@@ -184,12 +184,11 @@ def test_init_signature_matches_get_params(cls):
 # (3.9 class merges, v4-design section 4.1). The round-trip test's
 # warnings-as-errors filter exists to catch UNEXPECTED warnings from a
 # re-init; these messages are expected by contract and are ignored inside
-# the error filter. Only MultiPeriodDiD remains (StaggeredTripleDifference and
-# QDiD were removed at the 4.0 cut, PR 4a; MultiPeriodDiD follows in PR 4c), so
-# any future entry belongs to a NEW deprecation, not a pending sibling.
-DEPRECATED_CLASS_WARNINGS = {
-    "MultiPeriodDiD": r"MultiPeriodDiD is deprecated",
-}
+# the error filter. No entry remains (StaggeredTripleDifference and QDiD were
+# removed at the 4.0 cut, PR 4a; the deprecated calendar-keyed event-study
+# class followed in PR 4c-ii), so any future entry belongs to a NEW
+# deprecation, not a pending sibling. The mechanism stays for that case.
+DEPRECATED_CLASS_WARNINGS: "dict[str, str]" = {}
 
 
 @estimators

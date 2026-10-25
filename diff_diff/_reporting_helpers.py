@@ -117,20 +117,6 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "reference": ("REGISTRY.md Sec. DifferenceInDifferences / TwoWayFixedEffects"),
         }
 
-    if name == "MultiPeriodDiDResults":
-        return {
-            "name": "average ATT over post-treatment periods (event-study average)",
-            "definition": (
-                "The equally-weighted average of the post-treatment event-study "
-                "coefficients. Each coefficient is an ATT at a single event time "
-                "relative to treatment onset; the headline averages across "
-                "post-treatment horizons."
-            ),
-            "aggregation": "event_study",
-            "headline_attribute": "avg_att",
-            "reference": "REGISTRY.md Sec. MultiPeriodDiD",
-        }
-
     if name == "CallawaySantAnnaResults":
         return {
             "name": "overall ATT (cohort-size-weighted average of ATT(g,t))",

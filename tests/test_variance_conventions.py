@@ -303,57 +303,6 @@ ROWS = [
         ),
     ),
     dict(
-        key="mpd_absorb_hc1_cluster_unit",
-        fit=lambda df: diff_diff.MultiPeriodDiD(cluster="unit").fit(
-            df,
-            outcome="y",
-            treatment="grp",
-            time="time",
-            absorb=["unit", "time"],
-            reference_period=1,
-        ),
-        cr1_k=(11,),
-        tail_df=(290.0,) * 6,
-        status="legitimate",
-        reason=(
-            "K_reference: 6 visible + rank(time given unit) = 5; equals the "
-            "fixed_effects form's 70 - 59 (MPD absorb/fixed_effects equivalence)"
-        ),
-    ),
-    dict(
-        key="mpd_fixed_effects_hc1_cluster_unit",
-        fit=lambda df: diff_diff.MultiPeriodDiD(cluster="unit").fit(
-            df,
-            outcome="y",
-            treatment="grp",
-            time="time",
-            fixed_effects=["unit", "time"],
-            reference_period=1,
-        ),
-        cr1_k=(11,),
-        tail_df=(290.0,) * 6,
-        status="legitimate",
-        reason=(
-            "K_reference: 70 visible (incl. built-in period dummies, MPD's "
-            "time-FE block) minus the 59 cluster-nested unit dummies = 11 — "
-            "identical to the absorb form"
-        ),
-    ),
-    dict(
-        key="mpd_plain_hc1_cluster_time",
-        fit=lambda df: diff_diff.MultiPeriodDiD(cluster="time").fit(
-            df, outcome="y", treatment="grp", time="time", reference_period=1
-        ),
-        cr1_k=(7,),
-        tail_df=(348.0,) * 6,
-        status="legitimate",
-        reason=(
-            "the NESTED orientation of the built-in period dummies: 12 "
-            "visible minus their rank 5 under a time cluster (under-"
-            "subtraction is caught here; the unit-cluster rows catch over-)"
-        ),
-    ),
-    dict(
         key="twfe_es_within_hc1_cluster_unit",
         fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="unit").fit(
             df,
@@ -363,19 +312,19 @@ ROWS = [
             time="time",
             event_study=True,
             spec="within",
-            post_periods=[4, 5, 6],  # the former MultiPeriodDiD midpoint default
+            post_periods=[4, 5, 6],  # the former midpoint default of the removed class
             reference_period=1,
         ),
-        # tail_df: one entry per safe_inference call the shared core makes -
-        # 5 periods + the post-period average (the average block dies with
-        # MultiPeriodDiD at the 4.0 cut; re-pin then).
+        # tail_df: one entry per safe_inference call the event-study core
+        # makes - one per non-reference period (5).
         cr1_k=(11,),
-        tail_df=(290.0,) * 6,
+        tail_df=(290.0,) * 5,
         status="legitimate",
         reason=(
-            "TWFE event-study, within spec (4.0 cut, PR 4c-i): the absorbed unit FE "
-            "plus the built-in period dummies give the same K_reference as the "
-            "mpd_absorb row - 6 visible + rank(time given unit) = 5"
+            "TWFE event-study, within spec (4.0 cut, PR 4c-i): K_reference = 6 "
+            "visible (intercept + 5 interactions) + rank(time given the "
+            "absorbed, cluster-nested unit FE) = 5, i.e. 11; the full-dummy form "
+            "would read 70 visible minus the 59 cluster-nested unit dummies = 11"
         ),
     ),
     dict(
@@ -387,16 +336,17 @@ ROWS = [
             time="time",
             event_study=True,
             spec="pooled",
-            post_periods=[4, 5, 6],  # the former MultiPeriodDiD midpoint default
+            post_periods=[4, 5, 6],  # the former midpoint default of the removed class
             reference_period=1,
         ),
         cr1_k=(7,),
-        tail_df=(348.0,) * 6,
+        tail_df=(348.0,) * 5,
         status="legitimate",
         reason=(
-            "TWFE event-study, pooled spec (the MultiPeriodDiD design; 4.0 cut, PR "
-            "4c-i): the NESTED orientation of the built-in period dummies under a "
-            "time cluster - 12 visible minus their rank 5, as mpd_plain_hc1_cluster_time"
+            "TWFE event-study, pooled spec (4.0 cut, PR 4c-i): the NESTED "
+            "orientation of the built-in period dummies under a time cluster - 12 "
+            "visible minus their rank 5 = 7 (under-subtraction is caught here; the "
+            "unit-cluster within row catches over-)"
         ),
     ),
     dict(
@@ -924,7 +874,7 @@ class TestAbsorbedFeRank:
         from diff_diff.utils import absorbed_fe_rank
 
         d = self._connected()
-        # intercept-bearing designs (TWFE, DiD/MPD absorb): n_units + n_times - 2
+        # intercept-bearing designs (TWFE, DiD absorb): n_units + n_times - 2
         assert absorbed_fe_rank(d, ["unit", "time"], has_intercept_col=True) == 64
         # no-intercept design (SunAbraham): n_units + n_times - 1
         assert absorbed_fe_rank(d, ["unit", "time"], has_intercept_col=False) == 65
@@ -1016,28 +966,19 @@ class TestAbsorbedFeRank:
         for v in (r_cl.se, r_cl.t_stat, r_cl.p_value, *r_cl.conf_int):
             assert np.isfinite(v)
 
-    def test_disconnected_end_to_end_twfe_and_mpd(self):
+    def test_disconnected_end_to_end_twfe(self):
         df = self._disconnected(effect=0.5)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tw = diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
                 df, outcome="y", treatment="grp", post="time", unit="unit"
             )
-            mpd = diff_diff.MultiPeriodDiD(cluster="unit").fit(
-                df, outcome="y", treatment="grp", time="time", absorb=["unit", "time"]
-            )
         assert np.isfinite(tw.se)
-        # Discriminating df pins: the C=2 rank lowers the absorbed adjustment
-        # by 1, so each caller's reported residual df moves off the legacy
-        # value - reverting either caller to sum(levels-1) reads 114.0 (TWFE)
-        # / 111.0 (MPD) on this fixture and fails here.
+        # Discriminating df pin: the C=2 rank lowers the absorbed adjustment
+        # by 1, so the reported residual df moves off the legacy value -
+        # reverting the caller to sum(levels-1) reads 114.0 on this fixture
+        # and fails here.
         assert tw.inference_df == 115.0
-        assert mpd.inference_df == 112.0
-        assert mpd.event_study_df is not None
-        assert set(mpd.event_study_df.values()) == {112.0}
-        # at least one period effect identified and finite on each component
-        finite = [e for e in mpd.period_effects.values() if np.isfinite(e.se)]
-        assert finite, "no finite MPD period effect on the disconnected panel"
 
     def test_fail_closed_boundary_moves_both_directions(self):
         """Lowering the absorbed df by C-1 moves the n - k - adj boundary.

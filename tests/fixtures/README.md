@@ -77,12 +77,18 @@ built its surface through an internal `MultiPeriodDiDResults` and
 independent twin of every lane. Layout:
 
 - `provenance` - capture SHA, `diff_diff.__version__`, weight backend,
-  numpy/scipy/pandas/python versions.
+  numpy/scipy/pandas/python versions, plus `lane_additions.<lane>` with the
+  same fields for lanes spliced in later (`--lanes ... --merge-into`): the two
+  cluster + hc2_bm lanes (`pooled_cluster_hc2_bm`, `within_cluster_hc2_bm`)
+  were captured at `d45d5316` by PR 4c-ii, still on a tree with the live
+  MultiPeriodDiD twin, to pin the clustered CR2 Bell-McCaffrey bypass before
+  that PR pruned the core's post-average block.
 - `lanes.<name>` - one entry per lane of
   `tests/helpers/twfe_es_oracle_lanes.py::LANES` (pooled default / explicit
-  cluster / hc2_bm; within + explicit cluster / hc2 carve-out / Conley /
-  survey TSL / survey JK1 replicates; string period labels; a non-suffix
-  partition; a rank-deficient NaN post period). Each carries `echo` (the
+  cluster / hc2_bm / cluster + hc2_bm; within + explicit cluster / hc2
+  carve-out / cluster + hc2_bm / Conley / survey TSL / survey JK1 replicates;
+  string period labels; a non-suffix partition; a rank-deficient NaN post
+  period). Each carries `echo` (the
   lane's panel name, constructor and fit kwargs and survey label - the test
   asserts it equals the live lane, so an edited lane fails as lane drift, not
   as a numeric regression), `twfe` (every `dataclasses.fields(EventStudyResults)`

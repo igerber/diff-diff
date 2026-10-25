@@ -147,8 +147,8 @@ def validate_design_term_names(
 
     Backstop for :func:`validate_covariate_names`: even after the user
     covariates are cleared, a fixed-effect dummy name (``{fe}_{value}``) can
-    still collide with a structural term — most notably a ``MultiPeriodDiD``
-    ``period_{p}`` event-study key when a non-time fixed effect produces matching
+    still collide with a structural term — most notably an event-study
+    ``period_{p}`` key when a non-time fixed effect produces matching
     dummy names — or with another dummy. Such a duplicate would silently
     overwrite a coefficient when ``var_names`` is zipped into the result's
     ``coefficients`` dict (Python dict last-write-wins). This checks the FINAL
@@ -228,8 +228,8 @@ def build_fe_dummy_blocks(
     """Materialize drop-first fixed-effect dummy blocks and their column names.
 
     Single shared implementation of the ``pd.get_dummies(col, prefix=...,
-    drop_first=True)`` design-build used by ``DifferenceInDifferences`` /
-    ``MultiPeriodDiD`` (``fixed_effects=``) and the ``TwoWayFixedEffects``
+    drop_first=True)`` design-build used by ``DifferenceInDifferences`` and
+    the event-study core (``fixed_effects=``) and the ``TwoWayFixedEffects``
     HC2/HC2-BM full-dummy path — previously three inline copies whose FE
     naming / dtype / column-order conventions could drift independently.
     Names match :func:`fe_dummy_names` (the reserved-name collision guard)
@@ -647,7 +647,7 @@ def resolve_tail_df(
     and per-coefficient Bell-McCaffrey DOF keep precedence at the CALL SITE
     under every value — callers consult this helper only when no
     higher-precedence df applies. ``LinearRegression.get_inference`` and
-    MultiPeriodDiD keep their own equivalent inline ladders.
+    the event-study core keep their own equivalent inline ladders.
 
     Branch table:
 
@@ -655,8 +655,8 @@ def resolve_tail_df(
     - ``"cluster"`` — ``n_clusters - 1`` when ``n_clusters >= 2``. When
       ``n_clusters`` is not None but ``<= 1`` the cluster df is undefined:
       warn and return ``0``, the fail-closed sentinel ``safe_inference``
-      turns into all-NaN inference (the ``df = 0`` twin of MultiPeriodDiD's
-      inline ``_df_cluster_knob_invalid`` path; ``LinearRegression.
+      turns into all-NaN inference (the ``df = 0`` twin of the event-study
+      core's inline ``_df_cluster_knob_invalid`` path; ``LinearRegression.
       get_inference`` reaches the same observable warn+NaN outcome via an
       early return). Defense-in-depth only: every in-scope clustered solve
       raises "Need at least 2 clusters" at the vcov layer before df

@@ -99,14 +99,11 @@ _CHECK_NAMES: Tuple[str, ...] = (
 # as ``error``, so the narrower set is the right contract.
 #
 # ``sensitivity`` is restricted to families with a ``HonestDiD``
-# adapter: MultiPeriod, CS, dCDH (via ``placebo_event_study``). SDiD
+# adapter: CS, dCDH (via ``placebo_event_study``). SDiD
 # and TROP use their own native paths (``estimator_native``) instead
 # of HonestDiD.
 _APPLICABILITY: Dict[str, FrozenSet[str]] = {
     "DiDResults": frozenset({"parallel_trends", "design_effect"}),
-    "MultiPeriodDiDResults": frozenset(
-        {"parallel_trends", "pretrends_power", "sensitivity", "bacon", "design_effect"}
-    ),
     "CallawaySantAnnaResults": frozenset(
         {
             "parallel_trends",
@@ -267,7 +264,6 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
 #   "scm_fit"        — classic SCM donor-weighted pre-treatment fit (surfaces pre_rmspe)
 _PT_METHOD: Dict[str, str] = {
     "DiDResults": "two_x_two",
-    "MultiPeriodDiDResults": "event_study",
     "CallawaySantAnnaResults": "event_study",
     "DMLDiDResults": "event_study",
     "SunAbrahamResults": "event_study",
@@ -462,7 +458,7 @@ class DiagnosticReport:
         # (the TWFE event-study mode and aggregate('event_study')
         # containers) is tracked in TODO.md - until then, run diagnostics
         # on the fitted estimator's scalar results (e.g. the static TWFE
-        # fit or the MultiPeriodDiD results object).
+        # fit).
         from diff_diff.results_base import EventStudyResults as _ESR
 
         if isinstance(results, _ESR):
@@ -1022,19 +1018,6 @@ class DiagnosticReport:
                             "pre-periods. Re-fit with kappa_pre >= 2 so "
                             "pre-treatment event-study coefficients exist."
                         )
-                    # ``pre_period_effects`` producers (MultiPeriodDiD): a
-                    # valid one-pre-period fit has an EMPTY dict here because
-                    # its sole pre-period is the omitted reference — that is
-                    # not a missing post-fit aggregation route, so it must
-                    # not fall through to the resolver's taxonomy.
-                    if getattr(r, "pre_period_effects", None) is not None:
-                        return (
-                            "No estimated pre-period coefficients exist on "
-                            "this fit: every pre-treatment period is the "
-                            "omitted reference. Re-fit with more "
-                            "pre-treatment periods to enable pre-trend "
-                            "checks."
-                        )
                     self._derived_es_consulted.add("parallel_trends")
                     surface, surface_dict, why = self._resolve_event_study_surface()
                     if surface is not None:
@@ -1116,7 +1099,7 @@ class DiagnosticReport:
             if surface is not None and surface.source not in _DERIVED_SURFACE_CONSUMER_SOURCES:
                 # Fail closed on a non-admitted producer (M-093).
                 # Unreachable under the current applicability set
-                # (MPD/CS/DMLDiD/SA); locals only — never mutate the cache.
+                # (CS/DMLDiD/SA); locals only — never mutate the cache.
                 surface = None
                 surface_dict = None
             if not (has_vcov or has_event_vcov or has_event_es or surface is not None):
@@ -1195,11 +1178,10 @@ class DiagnosticReport:
                         "(re-fit with a placebo-producing configuration)."
                     )
                 return None
-            # MultiPeriod / CS path: ``HonestDiD.sensitivity_analysis``
-            # consumes ``event_study_effects`` plus either ``vcov`` +
-            # ``interaction_indices`` (MultiPeriod) or ``event_study_vcov``
-            # + ``event_study_vcov_index`` (CS), with a per-SE diagonal
-            # fallback otherwise.
+            # CS path: ``HonestDiD.sensitivity_analysis`` consumes
+            # ``event_study_effects`` plus ``event_study_vcov`` +
+            # ``event_study_vcov_index``, with a per-SE diagonal fallback
+            # otherwise.
             has_vcov = getattr(r, "vcov", None) is not None
             has_event_vcov = getattr(r, "event_study_vcov", None) is not None
             has_event_es = getattr(r, "event_study_effects", None) is not None
@@ -1313,7 +1295,6 @@ class DiagnosticReport:
                 "event_study_effects",
                 "treatment_effects",  # TROP per-(unit, time)
                 "group_time_effects",  # CS default aggregation
-                "period_effects",  # MultiPeriod
             ):
                 val = getattr(r, attr, None)
                 if val is None:
@@ -1691,9 +1672,9 @@ class DiagnosticReport:
     def _pt_event_study(self) -> Dict[str, Any]:
         """Event-study joint Wald (or Bonferroni fallback) on pre-period coefficients.
 
-        Works with either ``pre_period_effects`` (``MultiPeriodDiDResults`` style,
-        dict of ``PeriodEffect`` objects) or ``event_study_effects`` (CS / SA /
-        ImputationDiD style, dict of dicts with ``effect``/``se``/``p_value`` keys).
+        Works with ``event_study_effects`` (CS / SA / ImputationDiD style, dict
+        of dicts with ``effect``/``se``/``p_value`` keys) or dCDH's
+        ``placebo_event_study``.
         """
         r = self._results
         surface, surface_dict, _why = self._resolve_event_study_surface()
@@ -1760,9 +1741,6 @@ class DiagnosticReport:
                     "reason": "No pre-period event-study coefficients available.",
                 }
             )
-        interaction_indices = getattr(r, "interaction_indices", None)
-        vcov = getattr(r, "vcov", None)
-
         # pre_coefs is a sorted list of (key, effect, se, p_value) tuples.
         per_period = [
             {
@@ -1786,13 +1764,10 @@ class DiagnosticReport:
         # The schema's ``method`` field exposes which path ran so agents and
         # tests can distinguish the two unambiguously.
         #
-        # Two covariance sources are supported:
-        #   1. ``interaction_indices`` + ``vcov`` — the MultiPeriodDiDResults
-        #      convention, where ``vcov`` is the full regression covariance
-        #      matrix and ``interaction_indices`` maps period labels to rows.
-        #   2. ``event_study_vcov_index`` + ``event_study_vcov`` — the
-        #      CallawaySantAnnaResults convention, where the event-study
-        #      covariance is stored separately from the full regression vcov.
+        # Covariance source: ``event_study_vcov_index`` + ``event_study_vcov``
+        # (the CallawaySantAnnaResults convention, where the event-study
+        # covariance is stored separately from the full regression vcov; the
+        # derived post-fit surface carries the same pair).
         # Fail-closed inference guard for the JOINT-WALD path. The Wald
         # statistic consumes only effects + covariance, so with a persisted
         # vcov it would silently bypass the estimator's own fail-closed
@@ -1845,36 +1820,32 @@ class DiagnosticReport:
         # BM-adjusted per-row p-values keeps the small-sample correction.
         # See REGISTRY.md StackedDiD / REPORTING.md PT notes.
         if getattr(r, "vcov_type", None) != "hc2_bm":
-            if vcov is not None and interaction_indices is not None:
-                vcov_for_wald = vcov
-                idx_map_for_wald = interaction_indices
-            else:
-                es_vcov = getattr(r, "event_study_vcov", None)
-                es_vcov_index = getattr(r, "event_study_vcov_index", None)
-                if es_vcov is None or es_vcov_index is None:
-                    # Derived-route covariance: the post-fit container
-                    # carries the same event-study vcov + ordered index
-                    # (np.int64 labels hash-equal to the adapter's int
-                    # keys; extra vcov rows are tolerated by the sub-block
-                    # indexing below).
-                    if (
-                        derived
-                        and surface is not None
-                        and getattr(surface, "vcov", None) is not None
-                        and getattr(surface, "vcov_index", None) is not None
-                    ):
-                        es_vcov = surface.vcov
-                        es_vcov_index = list(surface.vcov_index)
-                if es_vcov is not None and es_vcov_index is not None:
-                    vcov_for_wald = es_vcov
-                    # ``event_study_vcov_index`` is an ordered list of
-                    # relative-time keys; convert it into a dict mapping
-                    # key -> position.
-                    try:
-                        idx_map_for_wald = {k: i for i, k in enumerate(es_vcov_index)}
-                        vcov_method_tag = "joint_wald_event_study"
-                    except TypeError:
-                        idx_map_for_wald = None
+            es_vcov = getattr(r, "event_study_vcov", None)
+            es_vcov_index = getattr(r, "event_study_vcov_index", None)
+            if es_vcov is None or es_vcov_index is None:
+                # Derived-route covariance: the post-fit container
+                # carries the same event-study vcov + ordered index
+                # (np.int64 labels hash-equal to the adapter's int
+                # keys; extra vcov rows are tolerated by the sub-block
+                # indexing below).
+                if (
+                    derived
+                    and surface is not None
+                    and getattr(surface, "vcov", None) is not None
+                    and getattr(surface, "vcov_index", None) is not None
+                ):
+                    es_vcov = surface.vcov
+                    es_vcov_index = list(surface.vcov_index)
+            if es_vcov is not None and es_vcov_index is not None:
+                vcov_for_wald = es_vcov
+                # ``event_study_vcov_index`` is an ordered list of
+                # relative-time keys; convert it into a dict mapping
+                # key -> position.
+                try:
+                    idx_map_for_wald = {k: i for i, k in enumerate(es_vcov_index)}
+                    vcov_method_tag = "joint_wald_event_study"
+                except TypeError:
+                    idx_map_for_wald = None
         df_denom: Optional[float] = None
         if vcov_for_wald is not None and idx_map_for_wald is not None and df > 0:
             try:
@@ -2192,12 +2163,8 @@ class DiagnosticReport:
         Classification rules:
 
         - ``"full_pre_period_vcov"`` — basic ``DiDResults`` and other
-          non-event-study, non-MPD result types that historically expose
-          the full pre-period covariance. ``MultiPeriodDiDResults`` is
-          handled by an explicit branch below because its
-          ``pretrends.py`` MPD branch only takes the full sub-block path
-          when ``interaction_indices`` is populated, otherwise falling
-          through to ``diag(ses**2)``.
+          non-event-study result types that historically expose the full
+          pre-period covariance.
         - ``"diag_fallback_available_full_vcov_unused"`` — event-study
           result types with populated ``event_study_vcov``. Under PR-B,
           new fits route through the full sub-block, but a legacy
@@ -2217,10 +2184,7 @@ class DiagnosticReport:
           persists its VCV in every inference mode and, since 3.9
           (row M-024), always materializes the event-study surface, so
           post-3.9 StackedDiD fits never reach this fallback - only
-          pre-3.9 pickles can);
-          OR ``MultiPeriodDiDResults`` without ``interaction_indices``
-          (genuine diag-only path inside ``pretrends.py:_extract_pre_period_params``,
-          no "available but unused" concern, so no downgrade applies).
+          pre-3.9 pickles can).
         """
         is_event_study_type = type(source_fit).__name__ in {
             "CallawaySantAnnaResults",
@@ -2246,22 +2210,8 @@ class DiagnosticReport:
             return "diag_fallback_available_full_vcov_unused"
         if is_event_study_type:
             return "diag_fallback"
-        # Non-event-study path. MultiPeriodDiDResults takes the full
-        # ``vcov[ix_]`` sub-block only when ``interaction_indices`` is
-        # populated (pretrends.py MPD branch); otherwise it falls
-        # through to ``diag(ses**2)`` and ships the diag-fallback path
-        # — which is a normal (not "available but unused") fallback,
-        # so no conservative downgrade applies. Legacy MPD result
-        # objects without ``interaction_indices`` should be reported as
-        # ``diag_fallback`` rather than overclaiming full-Σ_22.
-        if type(source_fit).__name__ == "MultiPeriodDiDResults":
-            mpd_has_full_vcov = (
-                getattr(source_fit, "vcov", None) is not None
-                and getattr(source_fit, "interaction_indices", None) is not None
-            )
-            return "full_pre_period_vcov" if mpd_has_full_vcov else "diag_fallback"
-        # Other non-event-study types (basic DiDResults, TWFE, etc.)
-        # historically expose the full covariance.
+        # Non-event-study types (basic DiDResults, TWFE, etc.) historically
+        # expose the full covariance.
         return "full_pre_period_vcov"
 
     def _check_sensitivity(self) -> Dict[str, Any]:
@@ -3377,13 +3327,7 @@ class DiagnosticReport:
         ge = getattr(r, "group_effects", None)
         if ge is not None:
             return self._scalars_from_mapping(ge)
-        # 2. MultiPeriodDiDResults: use the ``post_period_effects`` property
-        # (post-treatment only) instead of ``period_effects`` (which mixes
-        # pre- and post-treatment coefficients).
-        ppe = getattr(r, "post_period_effects", None)
-        if ppe is not None:
-            return self._scalars_from_mapping(ppe)
-        # 3. event_study_effects: dict keyed by relative time -> dict with
+        # 2. event_study_effects: dict keyed by relative time -> dict with
         # 'effect'. Filter to **post-treatment** horizons (rel_time >= 0),
         # exclude reference markers (``n_groups == 0`` on CS/SA;
         # ``n_obs == 0`` on Stacked/TwoStage/Imputation/EfficientDiD), and
@@ -3513,16 +3457,13 @@ class DiagnosticReport:
         """Name the attribute that produced the scalars (for the schema).
 
         Mirrors the dispatch order in ``_collect_effect_scalars`` and
-        reports the actual post-treatment surface consumed (e.g.,
-        ``post_period_effects`` rather than ``period_effects`` on
-        ``MultiPeriodDiDResults``, and ``event_study_effects_post`` to
-        make it clear pre-period / reference-marker rows were filtered).
+        reports the actual post-treatment surface consumed
+        (``event_study_effects_post`` makes it clear pre-period /
+        reference-marker rows were filtered).
         """
         r = self._results
         if getattr(r, "group_effects", None) is not None:
             return "group_effects"
-        if getattr(r, "post_period_effects", None) is not None:
-            return "post_period_effects"
         if getattr(r, "event_study_effects", None) is not None:
             return "event_study_effects_post"
         if getattr(r, "treatment_effects", None) is not None:
@@ -3916,8 +3857,6 @@ def _extract_scalar_headline(
             ["overall_p_value", "overall_att_p_value"],
             ["overall_conf_int", "overall_att_conf_int"],
         ),
-        # MultiPeriodDiDResults
-        ("avg_att", ["avg_se"], ["avg_p_value"], ["avg_conf_int"]),
         # Simple DiDResults / SyntheticDiDResults / TROPResults / TripleDifferenceResults
         ("att", ["se"], ["p_value"], ["conf_int"]),
     ]
@@ -3957,8 +3896,8 @@ def _extract_scalar_headline(
 def _extract_scalar_effect(val: Any) -> Optional[float]:
     """Pull a scalar effect out of the many shapes results expose.
 
-    Handles: ``PeriodEffect`` / ``GroupTimeEffect`` objects (``.effect``
-    or ``.att`` attr), dicts with an ``"effect"`` or ``"att"`` key, and
+    Handles: ``GroupTimeEffect``-style objects (``.effect`` or ``.att``
+    attr), dicts with an ``"effect"`` or ``"att"`` key, and
     bare scalars. Wooldridge stores ``att`` in its ``group_time_effects``
     / ``group_effects`` / ``event_study_effects`` payloads rather than
     ``effect`` (round-16 CI review on PR #318).
@@ -4135,8 +4074,7 @@ def _collect_pre_period_coefs(
     """Return ``(sorted list of (key, effect, se, p_value), n_dropped_undefined)``
     for pre-period coefficients.
 
-    Handles three shapes:
-      * ``pre_period_effects``: dict-of-``PeriodEffect`` on ``MultiPeriodDiDResults``.
+    Handles two shapes:
       * ``event_study_effects``: dict-of-dict (with ``effect`` / ``se`` / ``p_value`` keys)
         on the staggered estimators (CS / SA / ImputationDiD / Stacked / EDiD / etc.).
         Pre-period entries are those with negative relative-time keys.
@@ -4166,36 +4104,17 @@ def _collect_pre_period_coefs(
       ``n_dropped_undefined`` to force an inconclusive verdict rather
       than silently shrinking.
 
-    Returns ``([], 0)`` when none of the three sources provides valid
-    pre-period entries.
+    Returns ``([], 0)`` when neither source provides valid pre-period
+    entries.
     """
     results_list: List[Tuple[Any, float, float, Optional[float]]] = []
     n_dropped_undefined = 0
-    pre = getattr(results, "pre_period_effects", None)
     # dCDH exposes pre-period placebos via ``placebo_event_study``; the
     # round-6 CI review flagged that routing dCDH through the generic
     # ``event_study_effects`` path produced empty pre-coef lists and
     # silently skipped the PT check.
     dcdh_placebo = getattr(results, "placebo_event_study", None)
-    if pre:
-        for k, pe in pre.items():
-            eff = getattr(pe, "effect", None)
-            se = getattr(pe, "se", None)
-            p = getattr(pe, "p_value", None)
-            if eff is None or se is None:
-                n_dropped_undefined += 1
-                continue
-            try:
-                eff_f = float(eff)
-                se_f = float(se)
-            except (TypeError, ValueError):
-                n_dropped_undefined += 1
-                continue
-            if not (np.isfinite(eff_f) and np.isfinite(se_f) and se_f > 0):
-                n_dropped_undefined += 1
-                continue
-            results_list.append((k, eff_f, se_f, _to_python_float(p)))
-    elif dcdh_placebo:
+    if dcdh_placebo:
         # dCDH placebo horizons are the pre-period surface.
         for k, entry in dcdh_placebo.items():
             if not isinstance(entry, dict):

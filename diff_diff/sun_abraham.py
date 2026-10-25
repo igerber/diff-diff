@@ -1272,7 +1272,7 @@ class SunAbraham(BaseEstimator):
         # aggregated inference must use CR2 Bell-McCaffrey Satterthwaite
         # DOF for each contrast — not the normal distribution that
         # `safe_inference(..., df=None)` would otherwise default to.
-        # Mirrors the MultiPeriodDiD post-period-average contrast pattern
+        # Mirrors the event-study core's per-contrast BM DOF pattern
         # added in PR #465 (`_compute_cr2_bm_contrast_dof`).
         _es_contrast_dofs: Dict[int, float] = {}
         _overall_att_contrast_dof: Optional[float] = None

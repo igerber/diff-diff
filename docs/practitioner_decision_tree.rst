@@ -96,7 +96,6 @@ change in your test markets to the before/after change in your control markets.
   :class:`~diff_diff.TwoWayFixedEffects`
 - If you want to see how the effect evolves over time (week by week):
   :class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True``
-  (``MultiPeriodDiD`` is deprecated in 3.9)
 
 
 .. _section-staggered:

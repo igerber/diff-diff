@@ -9,7 +9,7 @@ Phase 1a of the HeterogeneousAdoptionDiD implementation. Ships:
 - ``vcov_type="hc2_bm"`` + ``cluster=``: Pustejovsky-Tipton (2018) CR2 cluster-
   robust with per-coefficient and (via ``_compute_cr2_bm_contrast_dof``) compound
   contrast Bell-McCaffrey Satterthwaite DOF. The contrast-DOF helper is the
-  backend for ``MultiPeriodDiD``'s post-period-average ATT inference under the
+  backend for the former ``MultiPeriodDiD``'s post-period-average ATT inference under the
   cluster+hc2_bm combination.
 
 Weighted CR2 Bell-McCaffrey (``hc2_bm`` + ``weights=``, both one-way and
@@ -850,7 +850,7 @@ class TestCR2BMContrastDOF:
 
     The helper generalizes the per-coefficient Satterthwaite DOF in
     `_compute_cr2_bm` to arbitrary linear combinations of coefficients
-    (used by `MultiPeriodDiD` to compute the cluster-aware DOF for the
+    (used by the former `MultiPeriodDiD` to compute the cluster-aware DOF for the
     post-period-average ATT contrast).
     """
 

@@ -695,8 +695,8 @@ class BusinessReport:
                     inference_label = "undefined-df (replicate-weight)"
                 else:
                     # Ordinary analytical fit with a finite but unexposed
-                    # ``df`` (``DifferenceInDifferences`` / ``MultiPeriodDiD``
-                    # / most staggered estimators / TROP). We cannot
+                    # ``df`` (``DifferenceInDifferences`` / most staggered
+                    # estimators / TROP). We cannot
                     # reproduce the t-quantile without the fit's ``df``.
                     inference_label = "analytical (native degrees of freedom)"
 
@@ -1127,7 +1127,7 @@ def _anticipation_periods(results: Any) -> int:
     """Return the non-negative anticipation-period count from a result, or 0.
 
     Helper for ``_describe_assumption``. Anticipation-capable estimators
-    (MultiPeriodDiD, CS, SA, ImputationDiD, TwoStageDiD, Stacked, EfficientDiD,
+    (CS, SA, ImputationDiD, TwoStageDiD, Stacked, EfficientDiD,
     StaggeredTripleDiff, ContinuousDiD, Wooldridge) expose ``anticipation``
     as an int defaulting to ``0``.
     """
@@ -1202,7 +1202,7 @@ def _apply_anticipation_to_assumption(block: Dict[str, Any], results: Any) -> Di
 
     Round-17 CI review flagged the strict "plus no anticipation" language
     on anticipation-enabled fits. Per REGISTRY.md §CallawaySantAnna lines
-    355-395 and the matching sections for SA / MultiPeriod / Wooldridge /
+    355-395 and the matching sections for SA / Wooldridge /
     EfficientDiD, a fit with ``anticipation=k`` shifts the effective
     treatment boundary by ``k`` pre-periods; the identifying assumption
     becomes "no treatment effects earlier than ``k`` periods before the
@@ -1800,11 +1800,10 @@ def _build_caveats(
     # use" prose; BR must carry the same distinction through to the
     # caveat. The TWFE-style estimators whose results route through
     # Bacon and for which the "switch to a robust estimator"
-    # recommendation is load-bearing are the DiDResults-type fits; all
-    # other result classes are already robust.
-    _TWFE_STYLE_RESULTS: FrozenSet[str] = frozenset(
-        {"DiDResults", "MultiPeriodDiDResults", "TwoWayFixedEffectsResults"}
-    )
+    # recommendation is load-bearing are the DiDResults-type fits (static
+    # TwoWayFixedEffects returns DiDResults too); all other result classes
+    # are already robust.
+    _TWFE_STYLE_RESULTS: FrozenSet[str] = frozenset({"DiDResults"})
     if dr_schema:
         bacon = dr_schema.get("bacon") or {}
         if bacon.get("status") == "ran":

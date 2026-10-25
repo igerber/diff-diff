@@ -733,9 +733,10 @@ class TestLinearViolationAnchoring:
     Roth labels the omitted period t=0, so delta = gamma*t vanishes there
     by construction; translated to estimator-native labels the threaded
     relative times are t - t_ref, NOT raw treatment-relative labels
-    (which overstate the violation by the reference offset). MPD already
-    anchored via _coerce_relative_times_from_reference; these pin the
-    CS-universal, SunAbraham and container routes.
+    (which overstate the violation by the reference offset). The removed
+    calendar-dict route already anchored via
+    _coerce_relative_times_from_reference; these pin the CS-universal,
+    SunAbraham and container routes.
     """
 
     def test_universal_weights_are_reference_relative(self, panel):
@@ -1140,7 +1141,7 @@ class TestPlotting:
         # Pin: an all-invalid post block never reaches zero-dimensional
         # optimization - HonestDiD.fit's centralized num_post check
         # rejects it with a clear message (verified for the container
-        # route; the MPD twin is pinned in test_honest_did.py).
+        # route).
         surface = _tiny_container(
             se=np.array([0.1, np.nan, 0.0, np.nan]),
             t_stat=np.array([1.0, np.nan, np.nan, np.nan]),
@@ -2222,23 +2223,6 @@ class TestHonestRawRouteZeroSE:
         with pytest.raises(ValueError, match="undefined inference"):
             plot_honest_event_study(self._honest(original), periods=[-1, 0, 1], show=False)
 
-    def test_mpd_route_filters_zero_se(self):
-        from types import SimpleNamespace
-
-        from diff_diff.visualization import plot_honest_event_study
-
-        original = SimpleNamespace(
-            period_effects={
-                1: SimpleNamespace(effect=1.0, se=0.5),
-                2: SimpleNamespace(effect=1.2, se=0.0),
-            }
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ax = plot_honest_event_study(self._honest(original), show=False)
-        ticks = self._ticks(ax)
-        assert "1" in ticks and "2" not in ticks
-
     def test_markerless_surface_has_no_minus_one_fallback(self):
         from types import SimpleNamespace
 
@@ -2326,28 +2310,6 @@ class TestHonestRawRouteZeroSE:
                 self._honest(original), reference_period=1, periods=[0, 1], show=False
             )
 
-    def test_explicit_reference_label_mpd_route_zero_se_row_excluded(self):
-        from types import SimpleNamespace
-
-        from diff_diff.visualization import plot_honest_event_study
-
-        original = SimpleNamespace(
-            period_effects={
-                1: SimpleNamespace(effect=1.0, se=0.5),
-                2: SimpleNamespace(effect=1.2, se=0.0),
-            }
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ax = plot_honest_event_study(self._honest(original), reference_period=2, show=False)
-        ticks = self._ticks(ax)
-        assert "1" in ticks and "2" not in ticks
-
-        with pytest.raises(ValueError, match="undefined inference"):
-            plot_honest_event_study(
-                self._honest(original), reference_period=2, periods=[1, 2], show=False
-            )
-
     def test_explicit_reference_label_zero_effect_estimated_row_not_promoted(self):
         # CI review round-6 P0: effect == 0.0 alone is not the anchor
         # signature - an ESTIMATED row with effect exactly 0.0, se 0.0 and
@@ -2374,31 +2336,6 @@ class TestHonestRawRouteZeroSE:
         with pytest.raises(ValueError, match="undefined inference"):
             plot_honest_event_study(
                 self._honest(original), reference_period=1, periods=[0, 1], show=False
-            )
-
-    def test_explicit_reference_label_zero_effect_mpd_row_not_promoted(self):
-        # MPD twin of the round-6 case: period_effects rows carry no
-        # constraint signature, so a caller label never verifies unless it
-        # matches the result's own reference_period metadata.
-        from types import SimpleNamespace
-
-        from diff_diff.visualization import plot_honest_event_study
-
-        original = SimpleNamespace(
-            period_effects={
-                1: SimpleNamespace(effect=1.0, se=0.5),
-                2: SimpleNamespace(effect=0.0, se=0.0),
-            }
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ax = plot_honest_event_study(self._honest(original), reference_period=2, show=False)
-        ticks = self._ticks(ax)
-        assert "1" in ticks and "2" not in ticks
-
-        with pytest.raises(ValueError, match="undefined inference"):
-            plot_honest_event_study(
-                self._honest(original), reference_period=2, periods=[1, 2], show=False
             )
 
     def test_explicit_reference_with_anchor_signature_still_retained(self):

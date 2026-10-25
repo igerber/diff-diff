@@ -27,9 +27,6 @@ from scipy import optimize
 
 from diff_diff._base import BaseEstimator
 from diff_diff.aggregation import resolve_inference_df
-from diff_diff.results import (
-    MultiPeriodDiDResults,
-)
 from diff_diff.results_base import Diagnostic, _coverage_pct, _validate_vcov_subblock
 from diff_diff.utils import _get_critical_value
 
@@ -583,8 +580,8 @@ def _extract_calendar_container_params(
 ) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
     """Calendar-scale container branch (TWFE event-study mode, row M-010).
 
-    Reconstructs EXACTLY the inputs the native ``MultiPeriodDiDResults``
-    branch reads - the authoritative pre/post partition (from the
+    Reconstructs EXACTLY the inputs the former native per-period-dict
+    branch read - the authoritative pre/post partition (from the
     container's ``post_periods`` provenance, never derived positionally),
     the per-period estimates, the event-study vcov sub-block, and the
     scalar ``df_survey`` - and applies the same row filter and
@@ -617,8 +614,7 @@ def _extract_calendar_container_params(
         raise TypeError(
             "HonestDiD accepts calendar-scale EventStudyResults containers "
             "from the TwoWayFixedEffects event-study mode only (got "
-            f"source={surface.source!r}). For MultiPeriodDiD pass the "
-            "native MultiPeriodDiDResults object."
+            f"source={surface.source!r})."
         )
     if surface.post_periods is None:
         raise TypeError(
@@ -692,7 +688,7 @@ def _extract_calendar_container_params(
             stacklevel=5,
         )
 
-    # Native-branch reconstruction. Row filter mirrors the MPD branch:
+    # Native-branch reconstruction. Row filter mirrors the former native branch:
     # non-reference rows with finite EFFECT and finite, positive SE (the
     # native branch requires both - a NaN/Inf coefficient with a positive
     # SE must not reach the LP/optimizer).
@@ -855,7 +851,7 @@ def _extract_container_params(
             "surfaces) only "
             f"(got source={surface.source!r}). For other estimators pass "
             "the native results object where supported "
-            "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+            "(CallawaySantAnnaResults or "
             "ChaisemartinDHaultfoeuilleResults); "
             "EfficientDiDResults, ImputationDiDResults and "
             "ContinuousDiDResults containers are rejected BY DESIGN "
@@ -1144,14 +1140,14 @@ def _extract_container_params(
 
 
 def _extract_event_study_params(
-    results: Union[MultiPeriodDiDResults, Any],
+    results: Any,
 ) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
     """
     Extract event study parameters from results objects.
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+    results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Estimation results with event study structure, or the unified
         event-study container produced by
         ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -1184,531 +1180,411 @@ def _extract_event_study_params(
     if isinstance(results, EventStudyResults):
         return _extract_container_params(results)
 
-    if isinstance(results, MultiPeriodDiDResults):
-        # Extract from MultiPeriodDiD
-        pre_periods = results.pre_periods
-        post_periods = results.post_periods
+    # Try CallawaySantAnnaResults
+    try:
+        from diff_diff.staggered import CallawaySantAnnaResults
 
-        # Filter periods with finite effects/SEs, maintaining pre-then-post
-        # order. se <= 0 drops too: safe_inference treats it as undefined
-        # inference, and admitting such a row would launder NaN source
-        # inference into finite sensitivity bounds (mirrors the CS and
-        # container branches and pretrends).
-        finite_periods = {
-            p
-            for p in results.period_effects.keys()
-            if np.isfinite(results.period_effects[p].effect)
-            and np.isfinite(results.period_effects[p].se)
-            and results.period_effects[p].se > 0
-        }
+        if isinstance(results, CallawaySantAnnaResults):
+            if results.event_study_effects is None:
+                raise ValueError(
+                    f"{type(results).__name__} must have event_study_effects "
+                    "for HonestDiD. Pass the post-fit container "
+                    "(compute_honest_did(results.aggregate('event_study')))"
+                    " instead."
+                )
 
-        pre_estimated = [p for p in pre_periods if p in finite_periods]
-        post_estimated = [p for p in post_periods if p in finite_periods]
-
-        # The RR constraint builders treat retained coefficients as
-        # CONSECUTIVE around the reference (they index by position, not
-        # label), so a dropped interior or reference-adjacent horizon
-        # would silently change the smoothness / first-difference
-        # geometry and return wrong bounds. Require the retained
-        # pre-periods to be a contiguous SUFFIX of the estimable pre grid
-        # (ending adjacent to the reference) and the retained
-        # post-periods a contiguous PREFIX (starting immediately after
-        # it). Leading-pre / trailing-post drops keep valid geometry;
-        # anything else fails closed (mirrors the CS branch's
-        # consecutive-grid validation).
-        _pre_grid = [p for p in pre_periods if p in results.period_effects]
-        _post_grid = [p for p in post_periods if p in results.period_effects]
-        _pre_ok = pre_estimated == _pre_grid[len(_pre_grid) - len(pre_estimated) :]
-        _post_ok = post_estimated == _post_grid[: len(post_estimated)]
-        if not (_pre_ok and _post_ok):
-            _dropped_pre = [p for p in _pre_grid if p not in finite_periods]
-            _dropped_post = [p for p in _post_grid if p not in finite_periods]
-            raise ValueError(
-                "HonestDiD requires consecutive estimated horizons around "
-                "the reference period: retained pre-periods must end "
-                "immediately before it and retained post-periods must "
-                "start immediately after it, with no interior gaps (the "
-                "Rambachan-Roth restrictions are built positionally). "
-                "Horizons with undefined inference (non-finite or zero "
-                f"SE) break that grid here: dropped pre {_dropped_pre}, "
-                f"dropped post {_dropped_post}. Only leading pre-periods "
-                "and trailing post-periods can be dropped safely."
-            )
-
-        all_estimated = pre_estimated + post_estimated
-
-        if not all_estimated:
-            raise ValueError(
-                "No period effects with finite estimates found. " "Cannot compute HonestDiD bounds."
-            )
-
-        effects = [results.period_effects[p].effect for p in all_estimated]
-        ses = [results.period_effects[p].se for p in all_estimated]
-
-        beta_hat = np.array(effects)
-        num_pre_periods = sum(1 for p in all_estimated if p in pre_periods)
-        num_post_periods = sum(1 for p in all_estimated if p in post_periods)
-
-        if num_pre_periods == 0:
-            raise ValueError(
-                "No pre-period effects with finite estimates found. "
-                "HonestDiD requires at least one identified pre-period "
-                "coefficient."
-            )
-        if num_post_periods == 0:
-            raise ValueError(
-                "No post-period effects with finite estimates found. "
-                "HonestDiD requires at least one identified post-treatment "
-                "coefficient (the sensitivity target)."
-            )
-
-        # Extract proper sub-VCV for interaction terms
-        if (
-            results.vcov is not None
-            and hasattr(results, "interaction_indices")
-            and results.interaction_indices is not None
-        ):
-            indices = [results.interaction_indices[p] for p in all_estimated]
-            sigma = results.vcov[np.ix_(indices, indices)]
-        else:
-            # Fallback: diagonal from SEs
-            sigma = np.diag(np.array(ses) ** 2)
-
-        # Extract inference df via the shared precedence helper: prefer
-        # ``survey_metadata.df_survey`` (the actual internal df, which may
-        # have been tightened post-resolve for replicate designs; undefined
-        # replicate df -> the 0.0 sentinel) over the ``df_inference``
-        # FALLBACK carrier (bare-``cluster=`` fits where
-        # ``survey_metadata`` is intentionally None). Reading
-        # ``df_inference`` first would silently overstate the denominator
-        # df on panel survey fits whose df was tightened during
-        # aggregation.
-        df_survey = resolve_inference_df(results)
-
-        # Return the ESTIMATED label lists - the ones beta_hat/sigma were
-        # built from - not the declared results.pre_periods/post_periods
-        # (which include the reference period and any dropped
-        # zero/non-finite-SE horizons). HonestDiDResults.pre_periods_used /
-        # post_periods_used relay these verbatim, so misaligned labels
-        # would claim excluded horizons entered the estimand.
-        return (
-            beta_hat,
-            sigma,
-            num_pre_periods,
-            num_post_periods,
-            pre_estimated,
-            post_estimated,
-            df_survey,
-        )
-
-    else:
-        # Try CallawaySantAnnaResults
-        try:
-            from diff_diff.staggered import CallawaySantAnnaResults
-
-            if isinstance(results, CallawaySantAnnaResults):
-                if results.event_study_effects is None:
-                    raise ValueError(
-                        f"{type(results).__name__} must have event_study_effects "
-                        "for HonestDiD. Pass the post-fit container "
-                        "(compute_honest_did(results.aggregate('event_study')))"
-                        " instead."
-                    )
-
-                # Common-reference guard, mirroring the container branch:
-                # multiple distinct cohort base event times = coefficients
-                # normalized against different bases (gapped universal
-                # grid, including the overlapped-base layout no
-                # reference-only row marks). Provenance-less universal
-                # results (pre-3.9 pickles, replace()-stripped copies)
-                # must not FAIL OPEN: derive the bases from the
-                # materialized reference cells; warn fail-safe when even
-                # those are absent.
-                _ref_e = getattr(results, "reference_event_times", None)
-                if _ref_e is None and getattr(results, "base_period", None) == "universal":
-                    _gte = getattr(results, "group_time_effects", None) or {}
-                    _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
-                    if _derived:
-                        _ref_e = tuple(sorted(_derived))
-                    else:
-                        import warnings
-
-                        warnings.warn(
-                            "This CallawaySantAnna base_period='universal' "
-                            "result carries no reference_event_times "
-                            "provenance and no materialized reference "
-                            "cells, so a common reference period cannot "
-                            "be verified (a gapped time grid may mix "
-                            "cohort-specific bases). Re-fit with the "
-                            "current version to record provenance.",
-                            UserWarning,
-                            stacklevel=4,
-                        )
-                if _ref_e is not None and len(set(_ref_e)) > 1:
-                    raise ValueError(
-                        "HonestDiD requires event-study coefficients "
-                        "normalized against one common reference period, "
-                        "but this CallawaySantAnna base_period='universal' "
-                        "fit selected cohort-specific positional bases at "
-                        f"event times {sorted(set(_ref_e))} (gapped time "
-                        "grid). On such grids a cohort's base can overlap "
-                        "another cohort's estimated horizon, so the "
-                        "coefficients are normalized against different "
-                        "bases and are not jointly interpretable under "
-                        "Rambachan-Roth's delta_0 = 0 normalization. "
-                        "Re-estimate on a consecutive (ungapped) time grid "
-                        "so every cohort's base falls at the same event "
-                        "time."
-                    )
-
-                # Warn if not using universal base period (R's HonestDiD requires it)
-                if getattr(results, "base_period", "universal") != "universal":
+            # Common-reference guard, mirroring the container branch:
+            # multiple distinct cohort base event times = coefficients
+            # normalized against different bases (gapped universal
+            # grid, including the overlapped-base layout no
+            # reference-only row marks). Provenance-less universal
+            # results (pre-3.9 pickles, replace()-stripped copies)
+            # must not FAIL OPEN: derive the bases from the
+            # materialized reference cells; warn fail-safe when even
+            # those are absent.
+            _ref_e = getattr(results, "reference_event_times", None)
+            if _ref_e is None and getattr(results, "base_period", None) == "universal":
+                _gte = getattr(results, "group_time_effects", None) or {}
+                _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
+                if _derived:
+                    _ref_e = tuple(sorted(_derived))
+                else:
                     import warnings
 
                     warnings.warn(
-                        "HonestDiD sensitivity analysis on CallawaySantAnna results "
-                        "requires base_period='universal' for valid interpretation. "
-                        "With base_period='varying', pre-treatment coefficients use "
-                        "consecutive comparisons (not a common reference period), "
-                        "which changes the meaning of the parallel trends restriction. "
-                        "Re-run with CallawaySantAnna(base_period='universal') for "
-                        "methodologically valid HonestDiD bounds.",
+                        "This CallawaySantAnna base_period='universal' "
+                        "result carries no reference_event_times "
+                        "provenance and no materialized reference "
+                        "cells, so a common reference period cannot "
+                        "be verified (a gapped time grid may mix "
+                        "cohort-specific bases). Re-fit with the "
+                        "current version to record provenance.",
                         UserWarning,
-                        stacklevel=3,
+                        stacklevel=4,
                     )
-
-                # Extract event study effects by relative time
-                # Filter out normalization constraints (n_groups=0), non-finite
-                # SEs, and zero SEs (safe_inference treats se <= 0 as undefined
-                # inference - admitting such a row would launder NaN source
-                # inference into finite sensitivity bounds; mirrors pretrends).
-                event_effects = {
-                    t: data
-                    for t, data in results.event_study_effects.items()
-                    if data.get("n_groups", 1) > 0
-                    and np.isfinite(data.get("se", np.nan))
-                    and float(data.get("se", 0.0)) > 0
-                }
-                rel_times = sorted(event_effects.keys())
-
-                # Infer the omitted reference period from the normalization
-                # marker injected by _aggregate_event_study for universal base.
-                # The reference has the exact signature: effect=0.0, se=NaN, n_groups=0.
-                # Other empty bins may also have n_groups=0 but with NaN effect.
-                ref_period = None
-                for t, data in results.event_study_effects.items():
-                    if (
-                        data.get("n_groups", 1) == 0
-                        and data.get("effect", None) == 0.0
-                        and not np.isfinite(data.get("se", 0.0))
-                    ):
-                        ref_period = t
-                        break
-
-                if ref_period is not None:
-                    # Universal base: split relative to the reference period
-                    pre_times = [t for t in rel_times if t < ref_period]
-                    post_times = [t for t in rel_times if t > ref_period]
-                else:
-                    # Varying base or no reference marker: the anticipation
-                    # window [e = -k, -1] carries anticipated TREATMENT
-                    # effects (REGISTRY anticipation contract; pretrends
-                    # applies the same cutoff), so the clean pre-period set
-                    # is e < -k and beta_post starts at -k. Splitting at 0
-                    # would misclassify anticipated effects as pre-trend
-                    # coefficients. Mirrors the container branch.
-                    _post_start = -int(getattr(results, "anticipation", 0) or 0)
-                    pre_times = [t for t in rel_times if t < _post_start]
-                    post_times = [t for t in rel_times if t >= _post_start]
-
-                if len(pre_times) == 0:
-                    raise ValueError(
-                        "No pre-period effects with finite estimates found in "
-                        "CallawaySantAnna event study. HonestDiD requires at "
-                        "least one identified pre-period coefficient."
-                    )
-
-                effects = []
-                ses = []
-                for t in rel_times:
-                    effects.append(event_effects[t]["effect"])
-                    ses.append(event_effects[t]["se"])
-
-                beta_hat = np.array(effects)
-
-                # Use full event-study VCV if available (Phase 7d),
-                # otherwise fall back to diagonal from SEs
-                if hasattr(results, "event_study_vcov") and results.event_study_vcov is not None:
-                    vcov = results.event_study_vcov
-                    # VCV is indexed by the aggregated event times (stored in
-                    # event_study_vcov_index), NOT by event_study_effects keys
-                    # (which may include an injected reference period).
-                    # Subset to match the surviving rel_times.
-                    vcov_index = getattr(results, "event_study_vcov_index", None)
-                    if vcov_index is not None and len(rel_times) < len(vcov_index):
-                        idx = [vcov_index.index(t) for t in rel_times if t in vcov_index]
-                        if len(idx) == len(rel_times):
-                            sigma = vcov[np.ix_(idx, idx)]
-                        else:
-                            sigma = np.diag(np.array(ses) ** 2)
-                    elif vcov.shape[0] == len(rel_times):
-                        sigma = vcov
-                    else:
-                        sigma = np.diag(np.array(ses) ** 2)
-                    # Same integrity contract as the container route
-                    # (_extract_container_params): finite, symmetric,
-                    # diagonal == se**2, and allow_singular=False because
-                    # Rambachan-Roth inference assumes covariance eigenvalues
-                    # bounded away from zero. A few-PSU fit (fewer clusters
-                    # than horizons) stores a singular matrix on both the
-                    # analytical and the bootstrap path, so it fails loud
-                    # here exactly as results.aggregate('event_study') does.
-                    sigma = _validate_vcov_subblock(
-                        sigma, np.asarray(ses, dtype=float), "HonestDiD", allow_singular=False
-                    )
-                else:
-                    # No full VCV available. A bootstrap fit carries the
-                    # covariance of its event-study draws instead of the
-                    # analytical VCV, except when n_bootstrap does not exceed
-                    # the number of event times (singular by construction) or
-                    # a draw is non-finite.
-                    if (
-                        hasattr(results, "bootstrap_results")
-                        and results.bootstrap_results is not None
-                    ):
-                        import warnings
-
-                        warnings.warn(
-                            "HonestDiD on bootstrap-fitted CallawaySantAnna results "
-                            "uses a diagonal covariance matrix (no covariance of the "
-                            "event-study bootstrap draws is available: n_bootstrap "
-                            "does not exceed the number of event times, or a draw is "
-                            "non-finite). For full covariance structure, increase "
-                            "n_bootstrap or use analytical SEs (n_bootstrap=0).",
-                            UserWarning,
-                            stacklevel=4,
-                        )
-                    sigma = np.diag(np.array(ses) ** 2)
-
-                # Validate the full event-time grid is consecutive.
-                # For universal base: exactly one gap for the omitted reference.
-                # For varying base: no gap expected (pre ends at -1, post starts at 0).
-                if pre_times and post_times:
-                    if ref_period is not None:
-                        # Universal: pre[-1]+1 = ref, ref+1 = post[0] → gap of 2
-                        ref_gap = post_times[0] - pre_times[-1]
-                        has_gap = ref_gap != 2
-                    else:
-                        # Varying: pre ends at -1, post starts at 0 → gap of 1
-                        ref_gap = post_times[0] - pre_times[-1]
-                        has_gap = ref_gap != 1
-                elif pre_times:
-                    has_gap = False  # only pre, no ref gap to check
-                elif post_times:
-                    has_gap = False  # only post, no ref gap to check
-                else:
-                    has_gap = False
-                # Also check within-block consecutiveness
-                for block in [pre_times, post_times]:
-                    if len(block) >= 2:
-                        for i in range(len(block) - 1):
-                            if block[i + 1] - block[i] != 1:
-                                has_gap = True
-                                break
-                if has_gap:
-                    raise ValueError(
-                        "HonestDiD requires a consecutive event-time grid "
-                        "around the omitted reference period. Retained "
-                        f"pre-periods {pre_times} and post-periods "
-                        f"{post_times} have gaps. This can happen when "
-                        "some event-study horizons have non-finite SEs. "
-                        "Ensure all event-study periods have valid estimates, "
-                        "or use balance_e to restrict to a balanced subset."
-                    )
-
-                # Extract inference df via the shared precedence helper
-                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
-                # -> ``df_inference`` fallback carrier) - the same order the
-                # MPD branch uses, so all branches agree.
-                df_survey = resolve_inference_df(results)
-
-                return (
-                    beta_hat,
-                    sigma,
-                    len(pre_times),
-                    len(post_times),
-                    pre_times,
-                    post_times,
-                    df_survey,
+            if _ref_e is not None and len(set(_ref_e)) > 1:
+                raise ValueError(
+                    "HonestDiD requires event-study coefficients "
+                    "normalized against one common reference period, "
+                    "but this CallawaySantAnna base_period='universal' "
+                    "fit selected cohort-specific positional bases at "
+                    f"event times {sorted(set(_ref_e))} (gapped time "
+                    "grid). On such grids a cohort's base can overlap "
+                    "another cohort's estimated horizon, so the "
+                    "coefficients are normalized against different "
+                    "bases and are not jointly interpretable under "
+                    "Rambachan-Roth's delta_0 = 0 normalization. "
+                    "Re-estimate on a consecutive (ungapped) time grid "
+                    "so every cohort's base falls at the same event "
+                    "time."
                 )
-        except ImportError:
-            pass
 
-        # Try ChaisemartinDHaultfoeuilleResults (dCDH estimator)
-        try:
-            from diff_diff.chaisemartin_dhaultfoeuille_results import (
-                ChaisemartinDHaultfoeuilleResults,
-            )
-
-            if isinstance(results, ChaisemartinDHaultfoeuilleResults):
+            # Warn if not using universal base period (R's HonestDiD requires it)
+            if getattr(results, "base_period", "universal") != "universal":
                 import warnings
 
                 warnings.warn(
-                    "HonestDiD on dCDH results uses DID^{pl}_l placebo "
-                    "estimates as pre-period coefficients, not standard "
-                    "event-study pre-treatment coefficients. The Rambachan-"
-                    "Roth restrictions bound violations of the parallel "
-                    "trends assumption underlying the dCDH placebo "
-                    "estimand. This is a library extension; interpretation "
-                    "differs from canonical event-study HonestDiD.",
+                    "HonestDiD sensitivity analysis on CallawaySantAnna results "
+                    "requires base_period='universal' for valid interpretation. "
+                    "With base_period='varying', pre-treatment coefficients use "
+                    "consecutive comparisons (not a common reference period), "
+                    "which changes the meaning of the parallel trends restriction. "
+                    "Re-run with CallawaySantAnna(base_period='universal') for "
+                    "methodologically valid HonestDiD bounds.",
                     UserWarning,
                     stacklevel=3,
                 )
 
-                if results.placebo_event_study is None:
-                    raise ValueError(
-                        "ChaisemartinDHaultfoeuilleResults must have placebo_event_study "
-                        "for HonestDiD. Re-run ChaisemartinDHaultfoeuille.fit() with "
-                        "L_max >= 1 to compute multi-horizon placebos."
-                    )
-                if results.event_study_effects is None:
-                    raise ValueError(
-                        "ChaisemartinDHaultfoeuilleResults must have event_study_effects "
-                        "for HonestDiD."
-                    )
+            # Extract event study effects by relative time
+            # Filter out normalization constraints (n_groups=0), non-finite
+            # SEs, and zero SEs (safe_inference treats se <= 0 as undefined
+            # inference - admitting such a row would launder NaN source
+            # inference into finite sensitivity bounds; mirrors pretrends).
+            event_effects = {
+                t: data
+                for t, data in results.event_study_effects.items()
+                if data.get("n_groups", 1) > 0
+                and np.isfinite(data.get("se", np.nan))
+                and float(data.get("se", 0.0)) > 0
+            }
+            rel_times = sorted(event_effects.keys())
 
-                # Filter for finite, strictly positive SEs in both surfaces
-                # (se <= 0 = undefined inference per safe_inference; a zero
-                # row would enter Sigma with zero variance and launder NaN
-                # source inference into finite bounds - mirrors the MPD, CS
-                # and container branches and pretrends).
-                placebo_finite = {
-                    h: data
-                    for h, data in results.placebo_event_study.items()
-                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
-                }
-                effects_finite = {
-                    h: data
-                    for h, data in results.event_study_effects.items()
-                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
-                }
+            # Infer the omitted reference period from the normalization
+            # marker injected by _aggregate_event_study for universal base.
+            # The reference has the exact signature: effect=0.0, se=NaN, n_groups=0.
+            # Other empty bins may also have n_groups=0 but with NaN effect.
+            ref_period = None
+            for t, data in results.event_study_effects.items():
+                if (
+                    data.get("n_groups", 1) == 0
+                    and data.get("effect", None) == 0.0
+                    and not np.isfinite(data.get("se", 0.0))
+                ):
+                    ref_period = t
+                    break
 
-                pre_times = sorted(placebo_finite.keys())  # -P, ..., -1
-                post_times = sorted(effects_finite.keys())  # 1, ..., L_max
+            if ref_period is not None:
+                # Universal base: split relative to the reference period
+                pre_times = [t for t in rel_times if t < ref_period]
+                post_times = [t for t in rel_times if t > ref_period]
+            else:
+                # Varying base or no reference marker: the anticipation
+                # window [e = -k, -1] carries anticipated TREATMENT
+                # effects (REGISTRY anticipation contract; pretrends
+                # applies the same cutoff), so the clean pre-period set
+                # is e < -k and beta_post starts at -k. Splitting at 0
+                # would misclassify anticipated effects as pre-trend
+                # coefficients. Mirrors the container branch.
+                _post_start = -int(getattr(results, "anticipation", 0) or 0)
+                pre_times = [t for t in rel_times if t < _post_start]
+                post_times = [t for t in rel_times if t >= _post_start]
 
-                if len(pre_times) == 0:
-                    raise ValueError(
-                        "No placebo horizons with finite SEs found in dCDH results. "
-                        "HonestDiD requires at least one identified pre-period "
-                        "coefficient."
-                    )
-                if len(post_times) == 0:
-                    raise ValueError(
-                        "No event study horizons with finite SEs found in dCDH results. "
-                        "HonestDiD requires at least one post-period coefficient."
-                    )
+            if len(pre_times) == 0:
+                raise ValueError(
+                    "No pre-period effects with finite estimates found in "
+                    "CallawaySantAnna event study. HonestDiD requires at "
+                    "least one identified pre-period coefficient."
+                )
 
-                # Consecutiveness check: more permissive than CS because
-                # trends_nonparam support-trimming can create legitimate gaps.
-                # Filter to the largest consecutive block spanning the -1/+1
-                # boundary; warn about dropped horizons.
-                def _largest_consecutive_block(times, boundary_val):
-                    """Find largest consecutive block containing boundary_val."""
-                    if not times:
-                        return []
-                    if boundary_val not in times:
-                        raise ValueError(
-                            f"HonestDiD requires horizon {boundary_val} in "
-                            f"the dCDH "
-                            f"{'placebo' if boundary_val < 0 else 'event study'}"
-                            f" surface, but it was removed by finite-SE "
-                            f"filtering. Retained horizons: {times}. Ensure "
-                            f"horizon {boundary_val} has a finite SE."
-                        )
-                    # Expand outward from boundary_val
-                    block = [boundary_val]
-                    idx = times.index(boundary_val)
-                    # Expand left
-                    for i in range(idx - 1, -1, -1):
-                        if times[i] == block[0] - 1:
-                            block.insert(0, times[i])
-                        else:
-                            break
-                    # Expand right
-                    for i in range(idx + 1, len(times)):
-                        if times[i] == block[-1] + 1:
-                            block.append(times[i])
-                        else:
-                            break
-                    return block
+            effects = []
+            ses = []
+            for t in rel_times:
+                effects.append(event_effects[t]["effect"])
+                ses.append(event_effects[t]["se"])
 
-                pre_consec = _largest_consecutive_block(pre_times, -1)
-                post_consec = _largest_consecutive_block(post_times, 1)
+            beta_hat = np.array(effects)
 
-                dropped_pre = set(pre_times) - set(pre_consec)
-                dropped_post = set(post_times) - set(post_consec)
-
-                if dropped_pre or dropped_post:
+            # Use full event-study VCV if available (Phase 7d),
+            # otherwise fall back to diagonal from SEs
+            if hasattr(results, "event_study_vcov") and results.event_study_vcov is not None:
+                vcov = results.event_study_vcov
+                # VCV is indexed by the aggregated event times (stored in
+                # event_study_vcov_index), NOT by event_study_effects keys
+                # (which may include an injected reference period).
+                # Subset to match the surviving rel_times.
+                vcov_index = getattr(results, "event_study_vcov_index", None)
+                if vcov_index is not None and len(rel_times) < len(vcov_index):
+                    idx = [vcov_index.index(t) for t in rel_times if t in vcov_index]
+                    if len(idx) == len(rel_times):
+                        sigma = vcov[np.ix_(idx, idx)]
+                    else:
+                        sigma = np.diag(np.array(ses) ** 2)
+                elif vcov.shape[0] == len(rel_times):
+                    sigma = vcov
+                else:
+                    sigma = np.diag(np.array(ses) ** 2)
+                # Same integrity contract as the container route
+                # (_extract_container_params): finite, symmetric,
+                # diagonal == se**2, and allow_singular=False because
+                # Rambachan-Roth inference assumes covariance eigenvalues
+                # bounded away from zero. A few-PSU fit (fewer clusters
+                # than horizons) stores a singular matrix on both the
+                # analytical and the bootstrap path, so it fails loud
+                # here exactly as results.aggregate('event_study') does.
+                sigma = _validate_vcov_subblock(
+                    sigma, np.asarray(ses, dtype=float), "HonestDiD", allow_singular=False
+                )
+            else:
+                # No full VCV available. A bootstrap fit carries the
+                # covariance of its event-study draws instead of the
+                # analytical VCV, except when n_bootstrap does not exceed
+                # the number of event times (singular by construction) or
+                # a draw is non-finite.
+                if hasattr(results, "bootstrap_results") and results.bootstrap_results is not None:
                     import warnings
 
-                    dropped = sorted(dropped_pre | dropped_post)
                     warnings.warn(
-                        f"HonestDiD requires a consecutive event-time grid. "
-                        f"Dropping non-consecutive horizons {dropped} from dCDH "
-                        f"results. This can happen when trends_nonparam "
-                        f"support-trimming removes horizons. Retained: "
-                        f"pre={pre_consec}, post={post_consec}.",
+                        "HonestDiD on bootstrap-fitted CallawaySantAnna results "
+                        "uses a diagonal covariance matrix (no covariance of the "
+                        "event-study bootstrap draws is available: n_bootstrap "
+                        "does not exceed the number of event times, or a draw is "
+                        "non-finite). For full covariance structure, increase "
+                        "n_bootstrap or use analytical SEs (n_bootstrap=0).",
                         UserWarning,
-                        stacklevel=3,
+                        stacklevel=4,
                     )
-                    pre_times = pre_consec
-                    post_times = post_consec
-
-                if len(pre_times) == 0 or len(post_times) == 0:
-                    raise ValueError(
-                        "After filtering for consecutive horizons, no pre- or "
-                        "post-periods remain. Cannot compute HonestDiD bounds."
-                    )
-
-                # Build beta_hat and sigma (diagonal - no full VCV for dCDH)
-                effects = []
-                ses = []
-                for h in pre_times:
-                    effects.append(placebo_finite[h]["effect"])
-                    ses.append(placebo_finite[h]["se"])
-                for h in post_times:
-                    effects.append(effects_finite[h]["effect"])
-                    ses.append(effects_finite[h]["se"])
-
-                beta_hat = np.array(effects)
                 sigma = np.diag(np.array(ses) ** 2)
 
-                # Extract inference df via the shared precedence helper
-                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
-                # -> ``df_inference`` fallback carrier) - the same order the
-                # MPD branch uses, so all branches agree.
-                df_survey = resolve_inference_df(results)
-
-                return (
-                    beta_hat,
-                    sigma,
-                    len(pre_times),
-                    len(post_times),
-                    pre_times,
-                    post_times,
-                    df_survey,
+            # Validate the full event-time grid is consecutive.
+            # For universal base: exactly one gap for the omitted reference.
+            # For varying base: no gap expected (pre ends at -1, post starts at 0).
+            if pre_times and post_times:
+                if ref_period is not None:
+                    # Universal: pre[-1]+1 = ref, ref+1 = post[0] → gap of 2
+                    ref_gap = post_times[0] - pre_times[-1]
+                    has_gap = ref_gap != 2
+                else:
+                    # Varying: pre ends at -1, post starts at 0 → gap of 1
+                    ref_gap = post_times[0] - pre_times[-1]
+                    has_gap = ref_gap != 1
+            elif pre_times:
+                has_gap = False  # only pre, no ref gap to check
+            elif post_times:
+                has_gap = False  # only post, no ref gap to check
+            else:
+                has_gap = False
+            # Also check within-block consecutiveness
+            for block in [pre_times, post_times]:
+                if len(block) >= 2:
+                    for i in range(len(block) - 1):
+                        if block[i + 1] - block[i] != 1:
+                            has_gap = True
+                            break
+            if has_gap:
+                raise ValueError(
+                    "HonestDiD requires a consecutive event-time grid "
+                    "around the omitted reference period. Retained "
+                    f"pre-periods {pre_times} and post-periods "
+                    f"{post_times} have gaps. This can happen when "
+                    "some event-study horizons have non-finite SEs. "
+                    "Ensure all event-study periods have valid estimates, "
+                    "or use balance_e to restrict to a balanced subset."
                 )
-        except ImportError:
-            pass
 
-        raise TypeError(
-            f"Unsupported results type: {type(results)}. "
-            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
-            "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
-            "container from CallawaySantAnnaResults.aggregate('event_study'), "
-            "DMLDiDResults.aggregate('event_study'), "
-            "or StackedDiDResults.aggregate('event_study')."
+            # Extract inference df via the shared precedence helper
+            # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+            # -> ``df_inference`` fallback carrier) - the same order the
+            # calendar branch uses, so all branches agree.
+            df_survey = resolve_inference_df(results)
+
+            return (
+                beta_hat,
+                sigma,
+                len(pre_times),
+                len(post_times),
+                pre_times,
+                post_times,
+                df_survey,
+            )
+    except ImportError:
+        pass
+
+    # Try ChaisemartinDHaultfoeuilleResults (dCDH estimator)
+    try:
+        from diff_diff.chaisemartin_dhaultfoeuille_results import (
+            ChaisemartinDHaultfoeuilleResults,
         )
+
+        if isinstance(results, ChaisemartinDHaultfoeuilleResults):
+            import warnings
+
+            warnings.warn(
+                "HonestDiD on dCDH results uses DID^{pl}_l placebo "
+                "estimates as pre-period coefficients, not standard "
+                "event-study pre-treatment coefficients. The Rambachan-"
+                "Roth restrictions bound violations of the parallel "
+                "trends assumption underlying the dCDH placebo "
+                "estimand. This is a library extension; interpretation "
+                "differs from canonical event-study HonestDiD.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+            if results.placebo_event_study is None:
+                raise ValueError(
+                    "ChaisemartinDHaultfoeuilleResults must have placebo_event_study "
+                    "for HonestDiD. Re-run ChaisemartinDHaultfoeuille.fit() with "
+                    "L_max >= 1 to compute multi-horizon placebos."
+                )
+            if results.event_study_effects is None:
+                raise ValueError(
+                    "ChaisemartinDHaultfoeuilleResults must have event_study_effects "
+                    "for HonestDiD."
+                )
+
+            # Filter for finite, strictly positive SEs in both surfaces
+            # (se <= 0 = undefined inference per safe_inference; a zero
+            # row would enter Sigma with zero variance and launder NaN
+            # source inference into finite bounds - mirrors the calendar, CS
+            # and container branches and pretrends).
+            placebo_finite = {
+                h: data
+                for h, data in results.placebo_event_study.items()
+                if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
+            }
+            effects_finite = {
+                h: data
+                for h, data in results.event_study_effects.items()
+                if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
+            }
+
+            pre_times = sorted(placebo_finite.keys())  # -P, ..., -1
+            post_times = sorted(effects_finite.keys())  # 1, ..., L_max
+
+            if len(pre_times) == 0:
+                raise ValueError(
+                    "No placebo horizons with finite SEs found in dCDH results. "
+                    "HonestDiD requires at least one identified pre-period "
+                    "coefficient."
+                )
+            if len(post_times) == 0:
+                raise ValueError(
+                    "No event study horizons with finite SEs found in dCDH results. "
+                    "HonestDiD requires at least one post-period coefficient."
+                )
+
+            # Consecutiveness check: more permissive than CS because
+            # trends_nonparam support-trimming can create legitimate gaps.
+            # Filter to the largest consecutive block spanning the -1/+1
+            # boundary; warn about dropped horizons.
+            def _largest_consecutive_block(times, boundary_val):
+                """Find largest consecutive block containing boundary_val."""
+                if not times:
+                    return []
+                if boundary_val not in times:
+                    raise ValueError(
+                        f"HonestDiD requires horizon {boundary_val} in "
+                        f"the dCDH "
+                        f"{'placebo' if boundary_val < 0 else 'event study'}"
+                        f" surface, but it was removed by finite-SE "
+                        f"filtering. Retained horizons: {times}. Ensure "
+                        f"horizon {boundary_val} has a finite SE."
+                    )
+                # Expand outward from boundary_val
+                block = [boundary_val]
+                idx = times.index(boundary_val)
+                # Expand left
+                for i in range(idx - 1, -1, -1):
+                    if times[i] == block[0] - 1:
+                        block.insert(0, times[i])
+                    else:
+                        break
+                # Expand right
+                for i in range(idx + 1, len(times)):
+                    if times[i] == block[-1] + 1:
+                        block.append(times[i])
+                    else:
+                        break
+                return block
+
+            pre_consec = _largest_consecutive_block(pre_times, -1)
+            post_consec = _largest_consecutive_block(post_times, 1)
+
+            dropped_pre = set(pre_times) - set(pre_consec)
+            dropped_post = set(post_times) - set(post_consec)
+
+            if dropped_pre or dropped_post:
+                import warnings
+
+                dropped = sorted(dropped_pre | dropped_post)
+                warnings.warn(
+                    f"HonestDiD requires a consecutive event-time grid. "
+                    f"Dropping non-consecutive horizons {dropped} from dCDH "
+                    f"results. This can happen when trends_nonparam "
+                    f"support-trimming removes horizons. Retained: "
+                    f"pre={pre_consec}, post={post_consec}.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                pre_times = pre_consec
+                post_times = post_consec
+
+            if len(pre_times) == 0 or len(post_times) == 0:
+                raise ValueError(
+                    "After filtering for consecutive horizons, no pre- or "
+                    "post-periods remain. Cannot compute HonestDiD bounds."
+                )
+
+            # Build beta_hat and sigma (diagonal - no full VCV for dCDH)
+            effects = []
+            ses = []
+            for h in pre_times:
+                effects.append(placebo_finite[h]["effect"])
+                ses.append(placebo_finite[h]["se"])
+            for h in post_times:
+                effects.append(effects_finite[h]["effect"])
+                ses.append(effects_finite[h]["se"])
+
+            beta_hat = np.array(effects)
+            sigma = np.diag(np.array(ses) ** 2)
+
+            # Extract inference df via the shared precedence helper
+            # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+            # -> ``df_inference`` fallback carrier) - the same order the
+            # calendar branch uses, so all branches agree.
+            df_survey = resolve_inference_df(results)
+
+            return (
+                beta_hat,
+                sigma,
+                len(pre_times),
+                len(post_times),
+                pre_times,
+                post_times,
+                df_survey,
+            )
+    except ImportError:
+        pass
+
+    raise TypeError(
+        f"Unsupported results type: {type(results)}. "
+        "Expected CallawaySantAnnaResults, "
+        "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
+        "container (the TwoWayFixedEffects event-study mode, "
+        "CallawaySantAnnaResults.aggregate('event_study'), "
+        "DMLDiDResults.aggregate('event_study'), "
+        "or StackedDiDResults.aggregate('event_study'))."
+    )
 
 
 def _construct_A_sd(num_pre_periods: int, num_post_periods: int) -> np.ndarray:
@@ -3127,7 +3003,7 @@ class HonestDiD(BaseEstimator):
 
     def fit(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         M: Optional[float] = None,
     ) -> HonestDiDResults:
         """
@@ -3135,7 +3011,7 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified event-study
             container from
             ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -3476,20 +3352,6 @@ class HonestDiD(BaseEstimator):
         Uses pre-period coefficients if available, otherwise returns
         a default based on the overall SE.
         """
-        if isinstance(results, MultiPeriodDiDResults):
-            # Pre-period effects are now in period_effects directly
-            # Filter out non-finite effects (e.g. from rank-deficient designs)
-            pre_effects = [
-                abs(results.period_effects[p].effect)
-                for p in pre_periods
-                if p in results.period_effects and np.isfinite(results.period_effects[p].effect)
-            ]
-            if pre_effects:
-                return max(pre_effects)
-
-            # Fallback: use avg_se as a scale
-            return results.avg_se
-
         # For CallawaySantAnna, use pre-period event study effects
         try:
             from diff_diff.staggered import CallawaySantAnnaResults
@@ -3516,7 +3378,7 @@ class HonestDiD(BaseEstimator):
 
     def sensitivity_analysis(
         self,
-        results: Union[MultiPeriodDiDResults, Any],
+        results: Any,
         M_grid: Optional[List[float]] = None,
     ) -> SensitivityResults:
         """
@@ -3524,7 +3386,7 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified
             event-study container from
             ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -3620,9 +3482,7 @@ class HonestDiD(BaseEstimator):
 
         return None
 
-    def breakdown_value(
-        self, results: Union[MultiPeriodDiDResults, Any], tol: float = 0.01
-    ) -> Optional[float]:
+    def breakdown_value(self, results: Any, tol: float = 0.01) -> Optional[float]:
         """
         Find the breakdown value directly using binary search.
 
@@ -3631,7 +3491,7 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified
             event-study container from
             ``CallawaySantAnnaResults.aggregate('event_study')``,
@@ -3682,7 +3542,7 @@ class HonestDiD(BaseEstimator):
 
 
 def compute_honest_did(
-    results: Union[MultiPeriodDiDResults, Any],
+    results: Any,
     method: str = "relative_magnitude",
     M: float = 1.0,
     alpha: float = 0.05,
@@ -3693,7 +3553,7 @@ def compute_honest_did(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+    results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation, or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,
@@ -3727,7 +3587,7 @@ def compute_honest_did(
 
 
 def sensitivity_plot(
-    results: Union[MultiPeriodDiDResults, Any],
+    results: Any,
     method: str = "relative_magnitude",
     M_grid: Optional[List[float]] = None,
     alpha: float = 0.05,
@@ -3739,7 +3599,7 @@ def sensitivity_plot(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+    results : CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation, or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,

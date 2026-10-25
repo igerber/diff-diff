@@ -1585,7 +1585,7 @@ def aggregate_survey(
         - ``"aweight"``: Precision weights - inverse variance
           (``1 / V(y_bar)``). Targets precision-weighted second-stage
           estimation via WLS. Compatible with estimators that accept ``aweight``
-          (DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD,
+          (DifferenceInDifferences, TwoWayFixedEffects,
           SunAbraham, ContinuousDiD, EfficientDiD); rejected by
           ``pweight``-only estimators.
 
