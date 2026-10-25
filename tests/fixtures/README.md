@@ -93,6 +93,10 @@ Arrays are stored as `{"dtype": <numpy dtype string>, "values": [...]}` (the
 real dtype, e.g. `"<i8"`, `"<f8"`, `"<U2"`, `"|b1"`; 2-D arrays as nested
 lists) with NaN serialized as `null`; tuples as lists; scalars verbatim. The
 NumPy and Rust captures agreed to rtol 1e-12 / atol 1e-13 (CI bounds 1e-9),
-so one copy is stored. Re-capturing on a post-4c-ii tree is NOT a substitute:
+so one copy is stored. The consumer checks `t_stat` against the bound those
+tolerances imply for a ratio, `atol (1 + |t|) / se + 2 rtol |t|`, not a flat
+atol: Linux OpenBLAS and Windows drift 1.6e-13 / 2.4e-13 from the macOS
+Accelerate capture on the rank-deficient lane's near-zero effect (`se` 0.29),
+where `att` and `se` each pass at atol 1e-13. Re-capturing on a post-4c-ii tree is NOT a substitute:
 `MultiPeriodDiD` is gone there, so the `mpd_twin` half has no independent
 producer left.

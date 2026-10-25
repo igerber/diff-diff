@@ -15,9 +15,12 @@ Three layers of oracle:
   same payload (same inputs, same shared builder).
 
 Tolerances follow ``tests/test_aggregate_contract.py``: analytic arithmetic at
-rtol 1e-12 / atol 1e-13, t-statistics at 2x (a ratio of two bounded columns),
-confidence-interval bounds at rtol 1e-9 (scipy's ``t.ppf`` moved between 1.13
-and 1.14+).
+rtol 1e-12 / atol 1e-13; confidence-interval bounds at rtol 1e-9 (scipy's
+``t.ppf`` moved between 1.13 and 1.14+). Committed-oracle ``t_stat`` columns
+are checked against the bound those input tolerances imply for the ratio
+``att / se`` (``_assert_t_stat_within_propagated_bound``), because a flat atol
+is tighter than the inputs' own contract whenever ``se < 1``; the live
+TWFE-vs-MPD within-lane comparison keeps the base analytic tolerance.
 """
 
 from __future__ import annotations
@@ -92,9 +95,33 @@ def _fit_lane(lane: Lane):
 def _tol_for(field: str) -> Dict[str, float]:
     if field in CI_FIELDS:
         return dict(rtol=CI_RTOL, atol=ANALYTIC_TOL["atol"])
-    if field == "t_stat":
-        return dict(rtol=T_STAT_RTOL_FACTOR * ANALYTIC_TOL["rtol"], atol=ANALYTIC_TOL["atol"])
     return dict(ANALYTIC_TOL)
+
+
+def _assert_t_stat_within_propagated_bound(
+    live_t: np.ndarray, stored_t: np.ndarray, stored_att: np.ndarray, stored_se: np.ndarray
+) -> None:
+    """``t_stat = att / se`` checked against the bound its inputs' tolerances imply.
+
+    With ``|d att| <= atol + rtol |att|`` and ``|d se| <= atol + rtol |se|`` (the
+    ``ANALYTIC_TOL`` contract that ``att`` and ``se`` pass individually), first-order
+    propagation gives ``|d t| <= atol (1 + |t|) / se + 2 rtol |t|``. A flat
+    ``atol=1e-13`` on ``t`` is tighter than that whenever ``se < 1``: on the
+    rank-deficient ``pooled_nan_post_period`` lane the near-zero period-0 effect
+    (``att`` -3.8e-3, ``se`` 0.29, ``t`` -0.013) drifts 1.6e-13 (Linux OpenBLAS) and
+    2.4e-13 (Windows) against the macOS Accelerate capture while ``att`` and ``se``
+    both pass, exactly the ``atol / se`` amplification this bound allows for.
+    """
+    mask = ~np.isnan(stored_t)
+    np.testing.assert_array_equal(np.isnan(live_t), ~mask, err_msg="t_stat")
+    atol, rtol = ANALYTIC_TOL["atol"], ANALYTIC_TOL["rtol"]
+    t, se = stored_t[mask], stored_se[mask]
+    bound = atol * (1.0 + np.abs(t)) / se + T_STAT_RTOL_FACTOR * rtol * np.abs(t)
+    diff = np.abs(live_t[mask] - t)
+    assert np.all(diff <= bound), (
+        "t_stat outside the propagated att/se bound",
+        dict(diff=diff, bound=bound, live=live_t[mask], stored=t, att=stored_att[mask], se=se),
+    )
 
 
 def _assert_surface_matches_record(live: EventStudyResults, stored: Dict[str, Any]) -> None:
@@ -108,7 +135,14 @@ def _assert_surface_matches_record(live: EventStudyResults, stored: Dict[str, An
             expected = _decode_array(rec)
             assert np.asarray(value).dtype.str == rec["dtype"], (name, np.asarray(value).dtype)
             assert np.asarray(value).shape == expected.shape, name
-            if expected.dtype.kind == "f":
+            if name == "t_stat":
+                _assert_t_stat_within_propagated_bound(
+                    np.asarray(value, dtype=float),
+                    expected,
+                    _decode_array(stored["att"]),
+                    _decode_array(stored["se"]),
+                )
+            elif expected.dtype.kind == "f":
                 np.testing.assert_array_equal(np.isnan(value), np.isnan(expected), err_msg=name)
                 mask = ~np.isnan(expected)
                 np.testing.assert_allclose(
