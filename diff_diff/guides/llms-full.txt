@@ -323,7 +323,7 @@ results = est.fit(
 results.print_summary()
 
 # Decomposition
-print(f"DID_M (overall):  {results.overall_att:.3f}")
+print(f"DID_M (overall):  {results.att:.3f}")
 print(f"DID_+ (joiners):  {results.joiners_att:.3f}")
 print(f"DID_- (leavers):  {results.leavers_att:.3f}")
 print(f"Placebo (DID^pl): {results.placebo_effect:.3f}")
@@ -774,7 +774,7 @@ ContinuousDiD(
 
 Covariates give conditional parallel trends: each (g,t) cell's control counterfactual becomes a
 covariate-adjusted prediction. `reg`/`dr` share the ATT(d) *shape* and ACRT(d); `dr` (doubly-robust,
-default) differs only in the overall_att/ATT(d) level and SE. `overall_att`+SE match DRDID
+default) differs only in the att/ATT(d) level and SE. `att`+SE match DRDID
 reg_did_panel/drdid_panel. `covariates=` + `survey_design=` is not yet supported.
 
 `treatment_type="discrete"` fits a **saturated regression** for a multi-valued dose: one indicator per
@@ -1713,17 +1713,18 @@ results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_tre
 
 ## Results Objects
 
-**Flat-alias compatibility note.** Every staggered result class in this
-section (those with canonical `overall_*` / `overall_att_*` / `avg_*`
-prefixed inference fields) ALSO exposes the unprefixed flat names
-`att` / `se` / `conf_int` / `p_value` / `t_stat` as read-only `@property`
-aliases over the canonical fields. The canonical prefixed fields remain
-the documented and computed surface; the flat aliases are pure
-read-throughs for compatibility with external adapters that
-`getattr(res, "se", None)`-style query the inference surface (e.g.
-`balance.interop.diff_diff.as_balance_diagnostic()`). Tables below list
-the canonical names; assume the flat aliases are present on every
-staggered class unless explicitly noted otherwise.
+**Canonical quintet note.** Every staggered result class in this
+section exposes the headline inference under the canonical flat names
+`att` / `se` / `conf_int` / `p_value` / `t_stat` (4.0 design spec section
+5) - read those. The `overall_*` / `overall_att_*` spellings in the tables
+below are the 3.x STORED field names; they resolve to the same values
+(the flat names are read-only `@property` aliases over them until the 4.0
+storage flip makes the flat names the native fields, after which the
+`overall_*` spellings become `FutureWarning` aliases removed at 5.0).
+External adapters that `getattr(res, "se", None)`-style query the
+inference surface (e.g. `balance.interop.diff_diff.as_balance_diagnostic()`)
+therefore work on every staggered class; assume the flat names are
+present unless explicitly noted otherwise.
 
 **balance interop.** Meta's `balance` package (>= 0.21) ships the
 one-way adapter `balance.interop.diff_diff` (`pip install "balance[did]"`,

@@ -129,17 +129,17 @@ PT-Post mode (matches CS for post-treatment ATT)::
     edid_post = EfficientDiD(pt_assumption="post")
     results_post = edid_post.fit(data, outcome='outcome', unit='unit',
                                   time='period', first_treat='first_treat')
-    print(f"PT-All ATT:  {results.overall_att:.4f} (SE={results.overall_se:.4f})")
-    print(f"PT-Post ATT: {results_post.overall_att:.4f} (SE={results_post.overall_se:.4f})")
+    print(f"PT-All ATT:  {results.att:.4f} (SE={results.se:.4f})")
+    print(f"PT-Post ATT: {results_post.att:.4f} (SE={results_post.se:.4f})")
 
 Bootstrap inference::
 
     edid_boot = EfficientDiD(pt_assumption="all", n_bootstrap=999, seed=42)
     results_boot = edid_boot.fit(data, outcome='outcome', unit='unit',
                                   time='period', first_treat='first_treat')
-    print(f"Bootstrap SE: {results_boot.overall_se:.4f}")
-    print(f"Bootstrap CI: [{results_boot.overall_conf_int[0]:.4f}, "
-          f"{results_boot.overall_conf_int[1]:.4f}]")
+    print(f"Bootstrap SE: {results_boot.se:.4f}")
+    print(f"Bootstrap CI: [{results_boot.conf_int[0]:.4f}, "
+          f"{results_boot.conf_int[1]:.4f}]")
 
 Comparison with Other Staggered Estimators
 ------------------------------------------

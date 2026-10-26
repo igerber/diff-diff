@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
 # This ensures the backend configuration is respected by all modules
 def _get_backend_from_args():
@@ -22,6 +23,7 @@ def _get_backend_from_args():
     parser.add_argument("--backend", default="auto", choices=["auto", "python", "rust"])
     args, _ = parser.parse_known_args()
     return args.backend
+
 
 _requested_backend = _get_backend_from_args()
 if _requested_backend in ("python", "rust"):
@@ -38,14 +40,14 @@ from benchmarks.python.utils import Timer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Benchmark Imputation DiD estimator"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark Imputation DiD estimator")
     parser.add_argument("--data", required=True, help="Path to input CSV data")
     parser.add_argument("--output", required=True, help="Path to output JSON results")
     parser.add_argument(
-        "--backend", default="auto", choices=["auto", "python", "rust"],
-        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+        "--backend",
+        default="auto",
+        choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)",
     )
     return parser.parse_args()
 
@@ -98,19 +100,21 @@ def main():
     for row in es.to_dataframe().sort_values("event_time").itertuples(index=False):
         if bool(row.is_reference):
             continue
-        es_effects.append({
-            "event_time": int(row.event_time),
-            "att": float(row.att),
-            "se": float(row.se),
-        })
+        es_effects.append(
+            {
+                "event_time": int(row.event_time),
+                "att": float(row.att),
+                "se": float(row.se),
+            }
+        )
 
     # Build output
     output = {
         "estimator": "diff_diff.ImputationDiD",
         "backend": actual_backend,
         # Overall ATT
-        "overall_att": float(results.overall_att),
-        "overall_se": float(results.overall_se),
+        "overall_att": float(results.att),
+        "overall_se": float(results.se),
         # Event study
         "event_study": es_effects,
         # Timing
@@ -135,7 +139,7 @@ def main():
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"Overall ATT: {results.overall_att:.6f} (SE: {results.overall_se:.6f})")
+    print(f"Overall ATT: {results.att:.6f} (SE: {results.se:.6f})")
     print(f"Completed in {total_time:.3f} seconds")
     return output
 

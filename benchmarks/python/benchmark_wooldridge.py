@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
 def _get_backend_from_args():
     """Parse --backend argument without importing diff_diff."""
@@ -22,6 +23,7 @@ def _get_backend_from_args():
     parser.add_argument("--backend", default="auto", choices=["auto", "python", "rust"])
     args, _ = parser.parse_known_args()
     return args.backend
+
 
 _requested_backend = _get_backend_from_args()
 if _requested_backend in ("python", "rust"):
@@ -38,14 +40,14 @@ from benchmarks.python.utils import Timer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Benchmark WooldridgeDiD (ETWFE) estimator"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark WooldridgeDiD (ETWFE) estimator")
     parser.add_argument("--data", required=True, help="Path to input CSV data (mpdta format)")
     parser.add_argument("--output", required=True, help="Path to output JSON results")
     parser.add_argument(
-        "--backend", default="auto", choices=["auto", "python", "rust"],
-        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+        "--backend",
+        default="auto",
+        choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)",
     )
     return parser.parse_args()
 
@@ -91,22 +93,26 @@ def main():
     # Format ATT(g,t) effects
     gt_effects_out = []
     for (g, t), cell in sorted(results.group_time_effects.items()):
-        gt_effects_out.append({
-            "cohort": int(g),
-            "time": int(t),
-            "att": float(cell["att"]),
-            "se": float(cell["se"]),
-        })
+        gt_effects_out.append(
+            {
+                "cohort": int(g),
+                "time": int(t),
+                "att": float(cell["att"]),
+                "se": float(cell["se"]),
+            }
+        )
 
     # Format event study effects
     es_effects = []
     if results.event_study_effects:
         for rel_t, effect_data in sorted(results.event_study_effects.items()):
-            es_effects.append({
-                "event_time": int(rel_t),
-                "att": float(effect_data["att"]),
-                "se": float(effect_data["se"]),
-            })
+            es_effects.append(
+                {
+                    "event_time": int(rel_t),
+                    "att": float(effect_data["att"]),
+                    "se": float(effect_data["se"]),
+                }
+            )
 
     output = {
         "estimator": "diff_diff.WooldridgeDiD",
@@ -114,8 +120,8 @@ def main():
         "control_group": "not_yet_treated",
         "backend": actual_backend,
         # Overall ATT
-        "overall_att": float(results.overall_att),
-        "overall_se": float(results.overall_se),
+        "overall_att": float(results.att),
+        "overall_se": float(results.se),
         # Group-time ATT(g,t)
         "group_time_effects": gt_effects_out,
         # Event study
@@ -140,7 +146,7 @@ def main():
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"Overall ATT: {results.overall_att:.6f} (SE: {results.overall_se:.6f})")
+    print(f"Overall ATT: {results.att:.6f} (SE: {results.se:.6f})")
     print(f"Completed in {total_time:.3f} seconds")
     return output
 

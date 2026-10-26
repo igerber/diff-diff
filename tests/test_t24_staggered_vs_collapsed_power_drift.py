@@ -112,7 +112,7 @@ def fit_cs(panel):
             time="period",
             first_treat="first_treat",
         )
-    return r.overall_att, r.overall_se, r.overall_conf_int, bool(r.overall_p_value < 0.05)
+    return r.att, r.se, r.conf_int, bool(r.p_value < 0.05)
 
 
 def estimands(panel, rollout_start):

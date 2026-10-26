@@ -40,17 +40,17 @@ ALL_CODE_CELL_HASHES = [
     "9405e25ece47ce8b",
     "68f3f1e50a2a3c60",
     "128c08960b3dfd45",
-    "c48f19ab5c5b76ad",
+    "23196c712d274b23",
     "d4eed65cbf569b74",
-    "8ecbf97a1a817414",
+    "ec20e769aadf5d89",
     "98695413c281f252",
     "84d167bbdd9af3c8",
     "9efefccaf9379ba7",
     "c3573fc2030e099a",
-    "bbd6bc001d063ff8",
-    "ffe1220f7721cb2f",
-    "6b746ea09fd9e3da",
-    "ed87cf8c4a4cd42f",
+    "cc122ea44a2f98e0",
+    "74e236f960fd5fd6",
+    "7780f1338bd5eede",
+    "f192d80ba989b535",
     "9ee221cd97948c35",
 ]
 
@@ -324,8 +324,8 @@ class TestPanelRederivation:
             num += w * (2.0 + 0.3 * (t - g))
             den += w
         np.testing.assert_allclose(num / den, 2.2388, atol=5e-4)
-        np.testing.assert_allclose(sieve_fit.overall_att, 2.2804, atol=5e-4)
-        np.testing.assert_allclose(sieve_fit.overall_se, 0.0438, atol=5e-4)
+        np.testing.assert_allclose(sieve_fit.att, 2.2804, atol=5e-4)
+        np.testing.assert_allclose(sieve_fit.se, 0.0438, atol=5e-4)
 
     def test_learner_table(self, panel_df):
         expected = {
@@ -338,8 +338,8 @@ class TestPanelRederivation:
             r = DMLDiD(outcome_learner=learner, n_folds=5, seed=42, base_period="universal").fit(
                 panel_df, **FIT_KW
             )
-            np.testing.assert_allclose(r.overall_att, att, atol=5e-4, err_msg=name)
-            np.testing.assert_allclose(r.overall_se, se, atol=5e-4, err_msg=name)
+            np.testing.assert_allclose(r.att, att, atol=5e-4, err_msg=name)
+            np.testing.assert_allclose(r.se, se, atol=5e-4, err_msg=name)
 
     def test_honest_bounds(self, sieve_fit):
         honest = compute_honest_did(
@@ -365,7 +365,7 @@ class TestPanelRederivation:
         )
         # bootstrap overrides inference only; point estimate matches the
         # analytical fit across base_period (post cells share the g-1 base)
-        np.testing.assert_allclose(r.overall_att, sieve_fit.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(r.att, sieve_fit.att, rtol=1e-12)
         es = r.aggregate("event_study").to_dataframe()
         row0 = es[es["event_time"] == 0].iloc[0]
         np.testing.assert_allclose(row0["cband_lower"], 1.9245, atol=5e-4)
@@ -435,8 +435,8 @@ class TestRCSRederivation:
         r = self._fit_expecting_only_a23(
             DMLDiD(outcome_learner="sieve", n_folds=5, seed=42, panel=False), rcs_df, **FIT_KW
         )
-        np.testing.assert_allclose(r.overall_att, 2.4428, atol=5e-4)
-        np.testing.assert_allclose(r.overall_se, 0.2373, atol=5e-4)
+        np.testing.assert_allclose(r.att, 2.4428, atol=5e-4)
+        np.testing.assert_allclose(r.se, 0.2373, atol=5e-4)
 
     def test_survey_fit(self, rcs_df):
         r = self._fit_expecting_only_a23(
@@ -445,8 +445,8 @@ class TestRCSRederivation:
             **FIT_KW,
             survey_design=SurveyDesign(weights="w", strata="stratum", psu="psu"),
         )
-        np.testing.assert_allclose(r.overall_att, 2.2886, atol=5e-4)
-        np.testing.assert_allclose(r.overall_se, 0.1509, atol=5e-4)
+        np.testing.assert_allclose(r.att, 2.2886, atol=5e-4)
+        np.testing.assert_allclose(r.se, 0.1509, atol=5e-4)
         assert r.survey_metadata.df_survey == 16
         assert r.survey_metadata.n_psu == 20
         assert r.effective_n_folds is None  # 20 PSUs >= 5 folds: no reduction

@@ -64,31 +64,29 @@ results.se           # Standard error
 results.conf_int     # Confidence interval
 
 # CallawaySantAnna (post-fit aggregate(); fit() takes no aggregate= keyword):
-results.overall_att       # Overall ATT
-results.overall_se        # Standard error
+results.att       # Overall ATT
+results.se        # Standard error
 results.aggregate('group')        # Per-cohort ATTs (results.group_effects is
                                   # None on every 4.0 fit)
 results.aggregate('event_study')  # Dynamic effects (results.event_study_effects
                                   # is None on every 4.0 fit)
 
 # SunAbraham (no aggregate parameter — effects computed automatically):
-results.overall_att           # Overall ATT
+results.att           # Overall ATT
 results.event_study_effects   # Dynamic effects by relative period
 results.cohort_effects        # Per-cohort effects (via to_dataframe(level='cohort'))
 
 # Other staggered (ImputationDiD, TwoStageDiD, etc.):
-results.overall_att       # Overall ATT
-results.overall_se        # Standard error
+results.att       # Overall ATT
+results.se        # Standard error
 
-# Flat-alias compatibility: every staggered class above (canonical
-# `overall_*` / `overall_att_*` / `avg_*` prefixed) also exposes the
-# unprefixed flat names `att` / `se` / `conf_int` / `p_value` /
-# `t_stat` as read-only `@property` aliases over the canonical fields.
-# The canonical prefixed names remain the documented and computed
-# surface; the flat aliases are pure read-throughs for compatibility
-# with adapters that `getattr(res, "se", None)`-style query inference.
-results.att               # alias of overall_att (or overall_att for ContinuousDiD ATT side)
-results.se                # alias of overall_se / avg_se (or overall_att_se for ContinuousDiD ATT side)
+# Canonical quintet: every estimator result class above exposes the
+# headline inference as `att` / `se` / `conf_int` / `p_value` / `t_stat`
+# (spec section 5 of the 4.0 design). The staggered containers' 3.x
+# `overall_*` / `overall_att_*` spellings still resolve to the same values
+# through the 4.0 -> 5.0 deprecation window; read the canonical names.
+results.att               # headline ATT (ContinuousDiD: the ATT side; ACRT stays overall_acrt)
+results.se                # its standard error
 ```
 
 ---
@@ -485,7 +483,7 @@ Aggregate treatment effects may mask important variation.
 # Post-fit, no refit needed (the fit-time aggregate= / balance_e= keywords
 # were removed at 4.0 on CS/StackedDiD/EfficientDiD/ImputationDiD/TwoStageDiD):
 results = cs.fit(data, ...)
-print(results.overall_att)                              # Overall ATT
+print(results.att)                              # Overall ATT
 print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
 print(results.aggregate('event_study').to_dataframe())  # Dynamic effects
 # balance_e moves onto aggregate() too:
@@ -553,9 +551,9 @@ cs_result = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
 sa_result = sa.fit(data, outcome='y', unit='id', time='t', first_treat='g')
 bjs_result = bjs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
 
-print(f"CS ATT:  {cs_result.overall_att:.4f} (SE: {cs_result.overall_se:.4f})")
-print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
-print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+print(f"CS ATT:  {cs_result.att:.4f} (SE: {cs_result.se:.4f})")
+print(f"SA ATT:  {sa_result.att:.4f} (SE: {sa_result.se:.4f})")
+print(f"BJS ATT: {bjs_result.att:.4f} (SE: {bjs_result.se:.4f})")
 ```
 
 ### Report with and without covariates — REQUIRED
@@ -572,8 +570,8 @@ result_no_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
 result_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g',
                     covariates=['x1', 'x2'])
 
-print(f"Without covariates: ATT={result_no_cov.overall_att:.4f} (SE: {result_no_cov.overall_se:.4f})")
-print(f"With covariates:    ATT={result_cov.overall_att:.4f} (SE: {result_cov.overall_se:.4f})")
+print(f"Without covariates: ATT={result_no_cov.att:.4f} (SE: {result_no_cov.se:.4f})")
+print(f"With covariates:    ATT={result_cov.att:.4f} (SE: {result_cov.se:.4f})")
 # If estimates differ substantially, covariates matter for identification.
 # If they are similar, the unconditional PT assumption appears sufficient.
 ```
@@ -768,15 +766,15 @@ bjs = ImputationDiD(cluster='countyreal')
 bjs_result = bjs.fit(data, outcome='lemp', unit='countyreal', time='year',
                      first_treat='first_treat')
 
-print(f"CS ATT:  {results.overall_att:.4f} (SE: {results.overall_se:.4f})")
-print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
-print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+print(f"CS ATT:  {results.att:.4f} (SE: {results.se:.4f})")
+print(f"SA ATT:  {sa_result.att:.4f} (SE: {sa_result.se:.4f})")
+print(f"BJS ATT: {bjs_result.att:.4f} (SE: {bjs_result.se:.4f})")
 
 # Step 8 (continued): REQUIRED with/without covariates comparison
 results_no_cov = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
                         first_treat='first_treat')
-print(f"Without covariates: ATT={results_no_cov.overall_att:.4f}")
-print(f"With covariates:    ATT={results.overall_att:.4f}")
+print(f"Without covariates: ATT={results_no_cov.att:.4f}")
+print(f"With covariates:    ATT={results.att:.4f}")
 
 # Context-aware next steps
 guidance = practitioner_next_steps(results)

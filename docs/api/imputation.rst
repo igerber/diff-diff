@@ -122,6 +122,6 @@ Comparison with other estimators::
     cs = CallawaySantAnna().fit(data, ...)
     sa = SunAbraham().fit(data, ...)
 
-    print(f"Imputation ATT: {imp.overall_att:.3f} (SE: {imp.overall_se:.3f})")
-    print(f"CS ATT: {cs.overall_att:.3f} (SE: {cs.overall_se:.3f})")
-    print(f"SA ATT: {sa.overall_att:.3f} (SE: {sa.overall_se:.3f})")
+    print(f"Imputation ATT: {imp.att:.3f} (SE: {imp.se:.3f})")
+    print(f"CS ATT: {cs.att:.3f} (SE: {cs.se:.3f})")
+    print(f"SA ATT: {sa.att:.3f} (SE: {sa.se:.3f})")

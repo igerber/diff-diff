@@ -856,10 +856,10 @@ calibration. `PanelProfile.outcome_shape` exposes the relevant facts:
   distributional misspecification (Wooldridge 2023). It estimates the
   overall ATT as an ASF-based outcome-scale difference (per-cell
   average of `E[exp(η_1)] - E[exp(η_0)]`; see REGISTRY.md
-  §WooldridgeDiD nonlinear / ASF path). The headline `overall_att` is
+  §WooldridgeDiD nonlinear / ASF path). The headline `att` is
   a difference on the outcome scale, NOT a multiplicative ratio; a
   proportional interpretation can be derived post-hoc as
-  `overall_att / E[Y_0]` if desired but is not the estimator's
+  `att / E[Y_0]` if desired but is not the estimator's
   reported scalar. The choice between linear-OLS DiD and Poisson
   ETWFE is about which functional form (additive vs. multiplicative)
   best summarizes the treatment effect on the count outcome, not
@@ -1098,7 +1098,7 @@ Reasoning chain:
 3. Decision: fit `WooldridgeDiD(method="poisson")` if you want a
    multiplicative effect summary (with the outcome-scale headline
    reported as a difference; a percent-change reading can be derived
-   post-hoc as `overall_att / E[Y_0]`). Fit linear-OLS DiD if the
+   post-hoc as `att / E[Y_0]`). Fit linear-OLS DiD if the
    additive ATT is the right summary and counterfactual predictions
    stay safely within the non-negative support — the cluster-robust
    SEs are calibrated either way. Document which functional form

@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
 # This ensures the backend configuration is respected by all modules
 def _get_backend_from_args():
@@ -20,6 +21,7 @@ def _get_backend_from_args():
     parser.add_argument("--backend", default="auto", choices=["auto", "python", "rust"])
     args, _ = parser.parse_known_args()
     return args.backend
+
 
 _requested_backend = _get_backend_from_args()
 if _requested_backend in ("python", "rust"):
@@ -44,9 +46,7 @@ from benchmarks.python.utils import BenchmarkResult, Timer, collect_provenance
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Benchmark Callaway-Sant'Anna estimator"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark Callaway-Sant'Anna estimator")
     parser.add_argument("--data", required=True, help="Path to input CSV data")
     parser.add_argument("--output", required=True, help="Path to output JSON results")
     parser.add_argument(
@@ -62,12 +62,15 @@ def parse_args():
         help="Control group definition",
     )
     parser.add_argument(
-        "--backend", default="auto", choices=["auto", "python", "rust"],
-        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+        "--backend",
+        default="auto",
+        choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)",
     )
     parser.add_argument(
-        "--warmup", action="store_true",
-        help="Run one untimed fit before the timed fit (JIT/cache warm-up)"
+        "--warmup",
+        action="store_true",
+        help="Run one untimed fit before the timed fit (JIT/cache warm-up)",
     )
     return parser.parse_args()
 
@@ -153,20 +156,24 @@ def main():
     # run_refresh.py joins these records against R on `event_time`.
     es_effects = []
     for row in es.to_dataframe().sort_values("event_time").itertuples(index=False):
-        es_effects.append({
-            "event_time": int(row.event_time),
-            "att": float(row.att),
-            "se": float(row.se),
-        })
+        es_effects.append(
+            {
+                "event_time": int(row.event_time),
+                "att": float(row.att),
+                "se": float(row.se),
+            }
+        )
 
     # Format group effects from the post-fit container (joined on `group`).
     grp_effects = []
     for row in grp.to_dataframe().sort_values("label").itertuples(index=False):
-        grp_effects.append({
-            "group": int(row.label),
-            "att": float(row.att),
-            "se": float(row.se),
-        })
+        grp_effects.append(
+            {
+                "group": int(row.label),
+                "att": float(row.att),
+                "se": float(row.se),
+            }
+        )
 
     # Build output
     output = {
@@ -175,8 +182,8 @@ def main():
         "method": args.method,
         "control_group": args.control_group,
         # Overall ATT
-        "overall_att": float(results.overall_att),
-        "overall_se": float(results.overall_se),
+        "overall_att": float(results.att),
+        "overall_se": float(results.se),
         # Group-time effects
         "group_time_effects": gt_effects,
         # Event study

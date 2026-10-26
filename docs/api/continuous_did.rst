@@ -122,7 +122,7 @@ Accessing dose-response curves (always computed by ``fit()``)::
     acrt_df = results.dose_response_acrt.to_dataframe()
 
     # Overall summary parameters
-    print(f"Overall ATT: {results.overall_att:.3f} (SE: {results.overall_att_se:.3f})")
+    print(f"Overall ATT: {results.att:.3f} (SE: {results.se:.3f})")
     print(f"Overall ACRT: {results.overall_acrt:.3f} (SE: {results.overall_acrt_se:.3f})")
 
     # Or as post-fit aggregation tables (views - work on any fit):

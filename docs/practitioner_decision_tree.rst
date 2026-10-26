@@ -130,7 +130,7 @@ a few months later, and so on. Different markets were treated at different times
        data, outcome="outcome", unit="unit",
        time="period", first_treat="first_treat",
    )
-   print(f"Overall campaign lift: {results.overall_att:.1f}")
+   print(f"Overall campaign lift: {results.att:.1f}")
 
 .. note::
 
@@ -183,7 +183,7 @@ assumption — also handle non-absorbing treatment, under stronger assumptions.)
    )
    results.print_summary()
 
-   print(f"Overall lift (DID_M): {results.overall_att:.2f}")
+   print(f"Overall lift (DID_M): {results.att:.2f}")
    print(f"Joiners only (DID_+): {results.joiners_att:.2f}")
    print(f"Leavers only (DID_-): {results.leavers_att:.2f}")
 
@@ -247,7 +247,7 @@ appropriate identification assumptions in place.
        data, outcome="outcome", unit="unit",
        time="period", first_treat="first_treat", dose="dose",
    )
-   print(f"Average lift across dose levels: {results.overall_att:.1f}")
+   print(f"Average lift across dose levels: {results.att:.1f}")
 
 .. tip::
 

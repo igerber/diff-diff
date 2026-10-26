@@ -134,8 +134,8 @@ def main():
         "estimator": "diff_diff.StackedDiD",
         "backend": actual_backend,
         # Overall ATT
-        "overall_att": float(results.overall_att),
-        "overall_se": float(results.overall_se),
+        "overall_att": float(results.att),
+        "overall_se": float(results.se),
         # Event study
         "event_study": es_effects,
         # Timing
@@ -164,7 +164,7 @@ def main():
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"Overall ATT: {results.overall_att:.6f} (SE: {results.overall_se:.6f})")
+    print(f"Overall ATT: {results.att:.6f} (SE: {results.se:.6f})")
     if results.event_study_effects:
         for h, eff in sorted(results.event_study_effects.items()):
             if eff.get("n_obs", 1) > 0:

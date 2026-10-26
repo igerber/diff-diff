@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
@@ -73,16 +74,19 @@ class CarouselV26PDF(FPDF):
         for i, line in enumerate(latex_lines):
             y_frac = 1.0 - (2 * i + 1) / (2 * n)
             fig.text(
-                0.5, y_frac, line,
-                fontsize=fontsize, ha="center", va="center",
+                0.5,
+                y_frac,
+                line,
+                fontsize=fontsize,
+                ha="center",
+                va="center",
                 color=NAVY_HEX,
             )
 
         fig.patch.set_alpha(0)
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
-        fig.savefig(path, dpi=250, bbox_inches="tight", pad_inches=0.06,
-                    transparent=True)
+        fig.savefig(path, dpi=250, bbox_inches="tight", pad_inches=0.06, transparent=True)
         plt.close(fig)
 
         with PILImage.open(path) as img:
@@ -91,8 +95,7 @@ class CarouselV26PDF(FPDF):
         self._temp_files.append(path)
         return path, pw, ph
 
-    def _place_equation(self, path, pw, ph, box_x, _box_y, box_w,
-                        content_top, content_bottom):
+    def _place_equation(self, path, pw, ph, box_x, _box_y, box_w, content_top, content_bottom):
         """Place an equation image centered in a region of a box."""
         max_w = box_w * 0.82
         aspect = ph / pw
@@ -127,8 +130,7 @@ class CarouselV26PDF(FPDF):
         fig, ax = plt.subplots(figsize=(8, 4.5))
 
         # Confidence band
-        ax.fill_between(d, lower, upper, alpha=0.25, color=VIOLET_LIGHT_HEX,
-                         label="95% CI")
+        ax.fill_between(d, lower, upper, alpha=0.25, color=VIOLET_LIGHT_HEX, label="95% CI")
         # ATT(d) curve
         ax.plot(d, att, color=VIOLET_HEX, linewidth=2.5, label="ATT(d)")
         # Zero line
@@ -146,8 +148,7 @@ class CarouselV26PDF(FPDF):
 
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
-        fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.1,
-                    facecolor="white")
+        fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.1, facecolor="white")
         plt.close(fig)
 
         with PILImage.open(path) as img:
@@ -198,9 +199,7 @@ class CarouselV26PDF(FPDF):
             ]
         for i, (dx, dy) in enumerate(dot_positions):
             dot_radius = 3 - i * 0.5
-            self.ellipse(
-                dx - dot_radius, dy - dot_radius, dot_radius * 2, dot_radius * 2, "F"
-            )
+            self.ellipse(dx - dot_radius, dy - dot_radius, dot_radius * 2, dot_radius * 2, "F")
 
     def light_gradient_background(self):
         """Draw light gradient background (top #e1f0ff fading to white)."""
@@ -316,7 +315,7 @@ class CarouselV26PDF(FPDF):
         self.set_text_color(*RED)
         bars_bottom = panel_y + n_bars * (bar_h + bar_gap)
         self.set_xy(left_x, bars_bottom - 2)
-        self.cell(panel_w, 10, "All collapsed to \"Treated\"", align="C")
+        self.cell(panel_w, 10, 'All collapsed to "Treated"', align="C")
 
         # Right panel: Continuous — bars proportional to dose
         right_x = margin * 2 + panel_w
@@ -355,7 +354,8 @@ class CarouselV26PDF(FPDF):
         self.set_font("Helvetica", "B", 14)
         self.set_text_color(*VIOLET)
         self.multi_cell(
-            callout_w - 16, 10,
+            callout_w - 16,
+            10,
             "TWFE with a continuous treatment is biased --\n"
             "negative weights, contamination, and scale dependence.",
             align="C",
@@ -366,12 +366,16 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             ann_y,
             "Binarizing discards the dose-response relationship entirely",
-            size=13, bold=False, color=GRAY,
+            size=13,
+            bold=False,
+            color=GRAY,
         )
         self.centered_text(
             ann_y + 16,
             "You need level effects AND marginal effects",
-            size=13, bold=False, color=GRAY,
+            size=13,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -390,7 +394,8 @@ class CarouselV26PDF(FPDF):
         self.set_font("Helvetica", "I", 15)
         self.set_text_color(*GRAY)
         self.cell(
-            WIDTH, 8,
+            WIDTH,
+            8,
             "Callaway, Goodman-Bacon & Sant'Anna (2024)  |  NBER WP 32117",
             align="C",
         )
@@ -418,8 +423,11 @@ class CarouselV26PDF(FPDF):
 
             self.set_fill_color(*VIOLET)
             self.ellipse(
-                circle_x - circle_r, circle_y - circle_r,
-                circle_r * 2, circle_r * 2, "F",
+                circle_x - circle_r,
+                circle_y - circle_r,
+                circle_r * 2,
+                circle_r * 2,
+                "F",
             )
             self.set_xy(circle_x - circle_r, circle_y - 6)
             self.set_font("Helvetica", "B", 18)
@@ -451,12 +459,16 @@ class CarouselV26PDF(FPDF):
                 # Arrowhead
                 head_size = 5
                 self.line(
-                    arrow_x - head_size, arrow_bottom - head_size,
-                    arrow_x, arrow_bottom,
+                    arrow_x - head_size,
+                    arrow_bottom - head_size,
+                    arrow_x,
+                    arrow_bottom,
                 )
                 self.line(
-                    arrow_x + head_size, arrow_bottom - head_size,
-                    arrow_x, arrow_bottom,
+                    arrow_x + head_size,
+                    arrow_bottom - head_size,
+                    arrow_x,
+                    arrow_bottom,
                 )
 
         # Footer text
@@ -464,7 +476,9 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             footer_y,
             "From binary to the full dose-response curve.",
-            size=15, bold=False, color=GRAY,
+            size=15,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -477,8 +491,7 @@ class CarouselV26PDF(FPDF):
         self.light_gradient_background()
 
         self.centered_text(30, "The Math", size=38)
-        self.centered_text(63, "Three targets, one estimation", size=18,
-                           bold=False, color=GRAY)
+        self.centered_text(63, "Three targets, one estimation", size=18, bold=False, color=GRAY)
 
         margin = 30
         box_w = WIDTH - margin * 2
@@ -493,8 +506,7 @@ class CarouselV26PDF(FPDF):
             [r"$\mathrm{ATT}(d) = \psi^K(d)'\hat{\beta}$"]
         )
         eq3_path, eq3_pw, eq3_ph = self._render_equations(
-            [r"$\mathrm{ACRT}(d) = \frac{\partial \psi^K(d)}{\partial d}"
-             r" \cdot \hat{\beta}$"]
+            [r"$\mathrm{ACRT}(d) = \frac{\partial \psi^K(d)}{\partial d}" r" \cdot \hat{\beta}$"]
         )
 
         boxes = [
@@ -551,9 +563,14 @@ class CarouselV26PDF(FPDF):
             # Place equation image
             eq_path, eq_pw, eq_ph = box["eq"]
             self._place_equation(
-                eq_path, eq_pw, eq_ph,
-                margin, y_cursor, box_w,
-                content_top, content_bottom,
+                eq_path,
+                eq_pw,
+                eq_ph,
+                margin,
+                y_cursor,
+                box_w,
+                content_top,
+                content_bottom,
             )
 
             # Annotation text
@@ -569,7 +586,9 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             y_cursor + 2,
             "Influence-function SEs + multiplier bootstrap",
-            size=14, bold=True, color=VIOLET,
+            size=14,
+            bold=True,
+            color=VIOLET,
         )
 
         self.add_footer()
@@ -598,12 +617,16 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             ann_y,
             "ATT(d): total impact at each dose level",
-            size=16, bold=True, color=NAVY,
+            size=16,
+            bold=True,
+            color=NAVY,
         )
         self.centered_text(
             ann_y + 20,
             "Confidence bands from influence functions or bootstrap",
-            size=14, bold=False, color=GRAY,
+            size=14,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -695,7 +718,8 @@ class CarouselV26PDF(FPDF):
         self.set_font("Helvetica", "B", 15)
         self.set_text_color(*VIOLET)
         self.cell(
-            callout_w, 12,
+            callout_w,
+            12,
             "Both are functions of d -- not just single numbers.",
             align="C",
         )
@@ -704,7 +728,9 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             callout_y + 34,
             "Plus global summaries: overall ATT and overall ACRT",
-            size=14, bold=False, color=GRAY,
+            size=14,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -733,7 +759,7 @@ class CarouselV26PDF(FPDF):
                 "headline": "Parallel trends in untreated outcomes",
                 "identifies": "ATT(d|d) level effects within each dose group",
                 "meaning": "Counterfactual trends are the same across\n"
-                           "all dose groups and the untreated.",
+                "all dose groups and the untreated.",
             },
             {
                 "badge": "Strong PT",
@@ -741,7 +767,7 @@ class CarouselV26PDF(FPDF):
                 "headline": "No selection into dose based on effects",
                 "identifies": "ATT(d) + ACRT(d) dose-response curves",
                 "meaning": "Units don't choose their dose based on\n"
-                           "how much they would benefit from it.",
+                "how much they would benefit from it.",
             },
         ]
 
@@ -776,8 +802,7 @@ class CarouselV26PDF(FPDF):
             self.set_xy(margin + 12, y + 28)
             self.set_font("Helvetica", "B", 15)
             self.set_text_color(*row["badge_color"])
-            self.cell(row_w - 24, 10,
-                      "Identifies:  " + row["identifies"])
+            self.cell(row_w - 24, 10, "Identifies:  " + row["identifies"])
 
             # Meaning
             self.set_xy(margin + 12, y + 43)
@@ -797,7 +822,8 @@ class CarouselV26PDF(FPDF):
         self.set_font("Helvetica", "", 14)
         self.set_text_color(*VIOLET)
         self.multi_cell(
-            callout_w - 16, 12,
+            callout_w - 16,
+            12,
             "Note: Under standard PT, the slope of the dose-response\n"
             "curve does NOT identify the causal marginal effect.",
             align="C",
@@ -831,7 +857,7 @@ class CarouselV26PDF(FPDF):
             ("    aggregate='dose',", 1.0),
             (")", 1.0),
             ("", 0.5),
-            ("results.overall_att    # level effect", 1.0),
+            ("results.att    # level effect", 1.0),
             ("results.overall_acrt   # marginal effect", 1.0),
         ]
         line_height = 11
@@ -853,12 +879,16 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             subtitle_y,
             "Same fit() API as every other diff-diff estimator.",
-            size=15, bold=False, color=GRAY,
+            size=15,
+            bold=False,
+            color=GRAY,
         )
         self.centered_text(
             subtitle_y + 17,
             "Full walkthrough in Tutorial 14: Continuous DiD",
-            size=15, bold=False, color=GRAY,
+            size=15,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -927,7 +957,9 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             cards_bottom + 6,
             "Any setting where treatment intensity varies across units.",
-            size=15, bold=False, color=GRAY,
+            size=15,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -1000,7 +1032,9 @@ class CarouselV26PDF(FPDF):
         self.centered_text(
             grid_bottom + 2,
             "The most complete DiD toolkit in any language.",
-            size=15, bold=False, color=GRAY,
+            size=15,
+            bold=False,
+            color=GRAY,
         )
         self.add_footer()
 
@@ -1026,23 +1060,31 @@ class CarouselV26PDF(FPDF):
         self.set_text_color(*WHITE)
         self.cell(box_width, 14, "$ pip install --upgrade diff-diff", align="C")
 
-        self.centered_text(200, "github.com/igerber/diff-diff", size=20,
-                           color=MID_BLUE)
+        self.centered_text(200, "github.com/igerber/diff-diff", size=20, color=MID_BLUE)
 
         self.centered_text(
-            232, "Full documentation & 14 tutorials included",
-            size=16, bold=False, color=GRAY,
+            232,
+            "Full documentation & 14 tutorials included",
+            size=16,
+            bold=False,
+            color=GRAY,
         )
         self.centered_text(
-            252, "MIT Licensed  |  Open Source",
-            size=16, bold=False, color=GRAY,
+            252,
+            "MIT Licensed  |  Open Source",
+            size=16,
+            bold=False,
+            color=GRAY,
         )
 
         self.draw_split_logo(278, size=28)
 
         self.centered_text(
-            298, "Difference-in-Differences for Python",
-            size=14, bold=False, color=GRAY,
+            298,
+            "Difference-in-Differences for Python",
+            size=14,
+            bold=False,
+            color=GRAY,
         )
 
 

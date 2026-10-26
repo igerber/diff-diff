@@ -248,7 +248,7 @@ This is the recommended estimator for most applied work with staggered adoption.
                     covariates=['x1', 'x2'])
 
    # Overall ATT
-   print(f"Overall ATT: {results.overall_att:.3f}")
+   print(f"Overall ATT: {results.att:.3f}")
 
    # Event study aggregation (post-fit - no refit needed)
    es = results.aggregate('event_study')
@@ -307,7 +307,7 @@ integration on placebos, and survey support via Taylor-series linearization.
    )
    results.print_summary()
 
-   print(f"DID_M (overall): {results.overall_att:.3f}")
+   print(f"DID_M (overall): {results.att:.3f}")
    print(f"DID_+ (joiners): {results.joiners_att:.3f}")
    print(f"DID_- (leavers): {results.leavers_att:.3f}")
    print(f"Placebo:         {results.placebo_effect:.3f}")
@@ -387,7 +387,7 @@ Use :class:`~diff_diff.ContinuousDiD` when:
                      dose='dose')
 
    # Overall effect and dose-response curve (always computed by fit)
-   print(f"Overall ATT: {results.overall_att:.3f}")
+   print(f"Overall ATT: {results.att:.3f}")
    att_curve = results.dose_response_att.to_dataframe()
 
 Universal Rollout / No Untreated Control

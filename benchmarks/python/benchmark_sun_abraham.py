@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
 def _get_backend_from_args():
     """Parse --backend argument without importing diff_diff."""
@@ -22,6 +23,7 @@ def _get_backend_from_args():
     parser.add_argument("--backend", default="auto", choices=["auto", "python", "rust"])
     args, _ = parser.parse_known_args()
     return args.backend
+
 
 _requested_backend = _get_backend_from_args()
 if _requested_backend in ("python", "rust"):
@@ -43,8 +45,10 @@ def parse_args():
     parser.add_argument("--data", required=True, help="Path to input CSV data")
     parser.add_argument("--output", required=True, help="Path to output JSON results")
     parser.add_argument(
-        "--backend", default="auto", choices=["auto", "python", "rust"],
-        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+        "--backend",
+        default="auto",
+        choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)",
     )
     return parser.parse_args()
 
@@ -78,19 +82,21 @@ def main():
             first_treat="first_treat",
         )
 
-    overall_att = results.overall_att
-    overall_se = results.overall_se
-    overall_pvalue = results.overall_p_value
+    overall_att = results.att
+    overall_se = results.se
+    overall_pvalue = results.p_value
 
     # Extract event study effects
     event_study = []
     for e in sorted(results.event_study_effects.keys()):
         eff = results.event_study_effects[e]
-        event_study.append({
-            "event_time": int(e),
-            "att": float(eff["effect"]),
-            "se": float(eff["se"]),
-        })
+        event_study.append(
+            {
+                "event_time": int(e),
+                "att": float(eff["effect"]),
+                "se": float(eff["se"]),
+            }
+        )
 
     total_time = timer.elapsed
 
