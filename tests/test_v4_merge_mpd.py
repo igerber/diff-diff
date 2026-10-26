@@ -809,10 +809,16 @@ class TestPeriodEffectsView:
         """The view-never-fires sweep: every surface-consuming path stays
         duck-sniff free (scoped to the view's own FutureWarning, so legitimate
         UserWarnings or matplotlib/scipy warnings do not fail it)."""
-        import matplotlib
+        # matplotlib is an optional dependency (absent on the CI test legs):
+        # the plotting half of the sweep runs only when it is importable;
+        # the rest of the sweep always runs.
+        try:
+            import matplotlib
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:  # pragma: no cover - depends on the environment
+            plt = None
 
         s = self._fit(panel)
         with warnings.catch_warnings(record=True) as rec:
@@ -821,13 +827,14 @@ class TestPeriodEffectsView:
             s.to_dict()
             s.summary()
             build_event_study_surface(s)
-            ax = plot_event_study(s)
-            plt.close("all")
             h = compute_honest_did(s, M=1.0)
             compute_pretrends_power(s, M=0.3, pretest_form="wald")
-            plot_honest_event_study(h)  # original_results rides on h
-            plt.close("all")
-        assert ax is not None
+            if plt is not None:
+                ax = plot_event_study(s)
+                plt.close("all")
+                plot_honest_event_study(h)  # original_results rides on h
+                plt.close("all")
+                assert ax is not None
         offenders = [
             w
             for w in rec
