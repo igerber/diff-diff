@@ -21,8 +21,8 @@ import numpy as np
 
 from diff_diff import (
     DifferenceInDifferences,
-    MultiPeriodDiD,
     SurveyDesign,
+    TwoWayFixedEffects,
     check_parallel_trends,
     compute_honest_did,
 )
@@ -125,10 +125,17 @@ def make_phases(data, results, rw_cols):
         )
 
     def honest_did_grid():
-        es = MultiPeriodDiD()
+        # Pooled event study (repeated cross-section form, no unit FE): the
+        # 3.x MultiPeriodDiD call this replaces passed unit= but only the
+        # Conley/cluster paths read it, so the measured design was the
+        # pooled one. Cohort onset is period 7 (cohort_periods=[7] above),
+        # so post_periods = {7..12} with the last pre-period as reference.
+        es = TwoWayFixedEffects()
         es_result = es.fit(
             data, outcome="outcome", treatment="treat_unit",
-            time="period", unit="unit", reference_period=6,
+            time="period", event_study=True, spec="pooled",
+            reference_period=6,
+            post_periods=[p for p in sorted(data["period"].unique()) if p >= 7],
             survey_design=sd_tsl,
         )
         results["event_study"] = es_result

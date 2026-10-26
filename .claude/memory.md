@@ -85,7 +85,8 @@ print(results.summary())
 The canonical inference quintet is `att` / `se` / `t_stat` / `p_value` /
 `conf_int` (never `.pvalue` / `.ci`). Every results class exposes all five,
 but native STORAGE varies in 3.x (`overall_att` on the staggered family,
-`avg_att` on MultiPeriodDiD, with canonical names as properties). `summary()`
+`avg_att` on the MultiPeriodDiD class removed at the 4.0 cut, with canonical
+names as properties). `summary()`
 everywhere; `to_dict()` / `to_dataframe()` on most classes. See
 `.claude/../docs/methodology/REGISTRY.md` per estimator.
 

@@ -132,7 +132,9 @@ Field semantics:
 - `aggregation` — machine-readable tag dispatching agents can
   branch on. Complete enumeration per estimator:
   - `"did_or_twfe"` (DiDResults / TwoWayFixedEffects both route here — neutral tag; ambiguous at the result-class level until estimator provenance is persisted)
-  - `"event_study"` (MultiPeriodDiDResults)
+  - `"event_study"` (the removed MultiPeriodDiDResults, through 3.x; since 4.0
+    `EventStudyResults` surfaces - the TWFE event-study mode's output - are
+    rejected by type pending admission, TODO.md)
   - `"simple"` (CallawaySantAnna / DMLDiD / Imputation / TwoStage / Wooldridge)
   - `"iw"` (SunAbraham)
   - `"stacked"` (StackedDiD)
@@ -152,8 +154,8 @@ Field semantics:
     `"twfe"` (BaconDecomposition read-out) / `"unknown"` (default
     fallback).
 - `headline_attribute` — the raw result attribute the scalar
-  comes from (`"overall_att"` / `"att"` / `"avg_att"` /
-  `"twfe_estimate"`), OR `None` when `aggregation ==
+  comes from (`"overall_att"` / `"att"` / `"twfe_estimate"`;
+  `"avg_att"` left with the removed MultiPeriodDiDResults at 4.0), OR `None` when `aggregation ==
   "no_scalar_headline"` (the dCDH `trends_linear=True,
   L_max>=2` branch where `overall_att` is intentionally NaN by
   design). Agents dispatching on this field must handle `None` by
@@ -225,7 +227,7 @@ A few branches read fit-time config from the result object:
 A few branches emit a fixed tag regardless of fit-time config —
 notably `CallawaySantAnna`, `ImputationDiD`, `TwoStageDiD`, and
 `WooldridgeDiD`. For these estimators the `overall_att`
-(or `att` / `avg_att`) scalar is ALWAYS the simple weighted
+(or `att`) scalar is ALWAYS the simple weighted
 aggregation; post-fit `results.aggregate()` (the successor to the
 deprecated fit-time `aggregate` kwarg, rows M-020..M-027) returns
 the horizon / group tables without changing the headline scalar —
@@ -385,8 +387,10 @@ a library setting.
 - **Note:** Power-aware phrasing for `no_detected_violation`. DR calls
   `compute_pretrends_power(results, violation_type='linear',
   alpha=alpha, target_power=0.80)` for the estimator families that
-  ship a `compute_pretrends_power` adapter: `MultiPeriodDiDResults`,
-  `CallawaySantAnnaResults`, and `SunAbrahamResults` (see
+  ship a `compute_pretrends_power` adapter: `CallawaySantAnnaResults`
+  and `SunAbrahamResults` (the removed `MultiPeriodDiDResults` adapter went
+  at 4.0; the TWFE event-study mode's `EventStudyResults` surface is
+  rejected by DR pending admission - see
   `_APPLICABILITY["pretrends_power"]` in
   `diff_diff/diagnostic_report.py`). `DMLDiDResults` reaches power via
   the DERIVED route instead: it ships no native adapter (its native
@@ -470,10 +474,10 @@ a library setting.
     `well_powered → moderately_powered` downgrade still applies —
     because without the persisted provenance we cannot rule out that
     the stored power was computed from `diag(ses^2)` under PR-A
-    semantics. For `MultiPeriodDiDResults` without
-    `interaction_indices`, the legacy fallback reports
-    `"diag_fallback"` (a genuine fallback, not the "available but
-    unused" case, so no downgrade applies).
+    semantics. The removed `MultiPeriodDiDResults` without
+    `interaction_indices` reported `"diag_fallback"` through 3.x (a
+    genuine fallback, not the "available but unused" case, so no
+    downgrade applied); that route went at 4.0.
 
   Remaining `"diag_fallback"` cases on new fits — replicate-weight CS,
   bootstrap CS with `n_bootstrap` at or below the number of event
@@ -489,7 +493,8 @@ a library setting.
   policy and rank guard below); on the derived route the same
   covariance arrives via the container's `vcov` / `vcov_index`
   fields. Pretrends POWER: natively
-  `compute_pretrends_power()` supports MPD / CS / SunAbraham fits;
+  `compute_pretrends_power()` supports CS / SunAbraham fits and the TWFE
+  event-study calendar container (the removed MPD's successor);
   since row M-024 a Stacked `results.aggregate('event_study')`
   CONTAINER also admits (kappa_pre >= 2). On CS fits (whose raw
   `event_study_effects` is None on every fit since 4.0),

@@ -896,7 +896,13 @@ def run_multiperiod_benchmark(
     n_replications: int = 1,
     backends: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Run MultiPeriodDiD event study benchmarks (Python and R) with replications."""
+    """Run the TwoWayFixedEffects event-study benchmarks (Python and R) with replications.
+
+    Live successor of the 3.x MultiPeriodDiD arm (removed in the 4.0 cut): the same
+    unit-FE event-study design, fit via ``TwoWayFixedEffects(...).fit(..., event_study=True,
+    spec="within")``. The dataset / result names keep the ``multiperiod`` key and the R
+    script is unchanged (the model is identical).
+    """
     print(f"\n{'='*60}")
     print(f"MULTIPERIOD DID BENCHMARK ({scale})")
     print(f"{'='*60}")
@@ -920,7 +926,8 @@ def run_multiperiod_benchmark(
     for backend in backends:
         backend_label = f"python_{'pure' if backend == 'python' else backend}"
         print(
-            f"\nRunning Python (diff_diff.MultiPeriodDiD, backend={backend}) - {n_replications} replications..."
+            f"\nRunning Python (diff_diff.TwoWayFixedEffects[event_study, spec=within], "
+            f"backend={backend}) - {n_replications} replications..."
         )
         py_output = RESULTS_DIR / "accuracy" / f"{backend_label}_{name}_{scale}.json"
         py_output.parent.mkdir(parents=True, exist_ok=True)
@@ -930,7 +937,7 @@ def run_multiperiod_benchmark(
         for rep in range(n_replications):
             try:
                 py_result = run_python_benchmark(
-                    "benchmark_multiperiod.py",
+                    "benchmark_twfe_event_study.py",
                     data_path,
                     py_output,
                     extra_args=extra_args,
@@ -996,7 +1003,7 @@ def run_multiperiod_benchmark(
         comparison = compare_estimates(
             results["python"],
             results["r"],
-            "MultiPeriodDiD",
+            "TWFE[event_study]",
             scale=scale,
             se_rtol=0.01,
             python_pure_results=results.get("python_pure"),

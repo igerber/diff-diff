@@ -2,6 +2,16 @@
 """
 Benchmark: MultiPeriodDiD event study (diff-diff MultiPeriodDiD).
 
+FROZEN 3.x ARM - NOT RUNNABLE ON A 4.0 TREE. ``MultiPeriodDiD`` was removed in
+the 4.0 cut (PR 4c-ii); this script is kept verbatim because the
+``benchmarks/refresh_2026_07/`` harness (``run_refresh.py`` HEADLINE_PIN 3.7.0,
+``run_version_story.py`` 3.5.3/3.7.0, via ``refresh_common.run_python_rep``)
+executes it inside PINNED diff-diff venvs whose wheels predate
+``event_study=True``, and the committed refresh results carry its labels.
+The live arm consumed by ``run_benchmarks.py`` is
+``benchmarks/python/benchmark_twfe_event_study.py`` (same CLI and output keys;
+``TwoWayFixedEffects(...).fit(..., event_study=True, spec="within")``).
+
 Usage:
     python benchmark_multiperiod.py --data path/to/data.csv --output path/to/results.json \
         --n-pre 4 --n-post 4

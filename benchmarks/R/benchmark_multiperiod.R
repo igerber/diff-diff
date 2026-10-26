@@ -1,5 +1,6 @@
 #!/usr/bin/env Rscript
-# Benchmark: MultiPeriodDiD event study (R `fixest` package)
+# Benchmark: the TwoWayFixedEffects event-study arm (within spec; the 3.x
+# MultiPeriodDiD arm) - R `fixest` package side
 #
 # Usage:
 #   Rscript benchmark_multiperiod.R --data path/to/data.csv --output path/to/results.json \
@@ -98,7 +99,7 @@ if (config$warmup) {
 }
 
 # Run benchmark
-message("Running MultiPeriodDiD estimation (fixest::feols)...")
+message("Running the TwoWayFixedEffects event-study arm (within spec; the 3.x MultiPeriodDiD arm) estimation (fixest::feols)...")
 start_time <- Sys.time()
 
 # Regression: outcome ~ treated * time_f | unit, clustered SEs

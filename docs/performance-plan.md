@@ -108,7 +108,7 @@ the gap is machinery, not architecture:
 - **The engine is mainline, not edge.** `within_transform` is a thin two-way
   wrapper over `demean_by_groups`, so every fit of TwoWayFixedEffects,
   SunAbraham, BaconDecomposition, and WooldridgeDiD runs the MAP loop;
-  DiD/MultiPeriodDiD hit it via `absorb=`; the survey replicate path re-runs
+  DiD hits it via `absorb=`; the survey replicate path re-runs
   the full weighted demean once per replicate (~80-200x per fit).
 - **Attribution.** cProfile on SunAbraham's canonical staggered entry/exit
   panel (30k units x 30 periods, 540k rows): 13.5s fit with **82% inside

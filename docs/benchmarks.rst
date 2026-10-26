@@ -37,9 +37,9 @@ where no runnable R reference exists:
    * - ``CallawaySantAnna``
      - ``did::att_gt``
      - Callaway & Sant'Anna (2021)
-   * - ``MultiPeriodDiD``
+   * - ``TwoWayFixedEffects`` event-study mode (``spec="within"``)
      - ``fixest::feols``
-     - Event study with treatment × period interactions
+     - Event study with treatment × period interactions (unit FE absorbed)
    * - ``SyntheticDiD``
      - ``synthdid::synthdid_estimate``
      - Arkhangelsky et al. (2021)
@@ -155,6 +155,11 @@ registry note (benchmark SE gate is Monte Carlo-bounded).
 
 .. refresh-table-end: summary
 
+The ``MultiPeriodDiD`` row above is the committed 2026-07 snapshot, run on the
+3.7.0 wheel through the ``MultiPeriodDiD`` class removed at the 4.0 cut; the
+live arm is the ``TwoWayFixedEffects`` event-study mode (``spec="within"``),
+which runs the same shared core.
+
 Basic DiD Results
 ~~~~~~~~~~~~~~~~~
 
@@ -191,10 +196,15 @@ Basic DiD Results
 
 **Validation**: PASS - Results are numerically identical across all implementations.
 
-MultiPeriodDiD Results
-~~~~~~~~~~~~~~~~~~~~~~
+TWFE Event-Study Results
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Data**: 200 units, 8 periods (4 pre, 4 post), true ATT = 3.0 (small scale)
+
+The table below is the committed 2026-07 snapshot, run on the 3.7.0 wheel
+through the ``MultiPeriodDiD`` class removed at the 4.0 cut; the live arm is
+``TwoWayFixedEffects().fit(..., event_study=True, spec="within")``, which
+runs the same shared core.
 
 .. refresh-table-start: accuracy_multiperiod
 
@@ -578,7 +588,7 @@ Dataset Sizes
 
    * - Scale
      - BasicDiD
-     - MultiPeriodDiD
+     - TWFE event study
      - CallawaySantAnna
      - SyntheticDiD
      - Observations
@@ -1114,9 +1124,12 @@ When to Trust Results
 
 - **BasicDiD/TWFE**: Results are identical to R. Use with confidence.
 
-- **MultiPeriodDiD**: Results are identical to R's ``fixest::feols`` with
-  ``treated * time_f | unit`` interaction syntax (unit FE absorbed). Both average
-  ATT and all period-level effects match to machine precision. Use with confidence.
+- **TWFE event-study mode** (``spec="within"``): Results are identical to R's
+  ``fixest::feols`` with ``treated * time_f | unit`` interaction syntax (unit FE
+  absorbed). Both the post-period average and all period-level effects match to
+  machine precision (the committed snapshot ran through the removed
+  ``MultiPeriodDiD`` class; the live arm runs the same shared core). Use with
+  confidence.
 
 - **SyntheticDiD**: Point estimates are numerically identical (< 1e-10 diff) and
   standard errors agree within placebo Monte Carlo dispersion. Both
