@@ -1,26 +1,24 @@
-"""PR 4c-i (4.0 cut): the TWFE event-study surface is built from the core's
-payload, not from a MultiPeriodDiD container - and nothing moved.
+"""PR 4c-i / 4c-ii (4.0 cut): the TWFE event-study surface is built from the
+core's payload - and nothing moved.
 
-Three layers of oracle:
-
-* the COMMITTED oracle ``tests/fixtures/v4_twfe_event_study_oracles.json``,
-  captured on the unmodified tree (``provenance.captured_at_head``) by
-  ``tests/_capture_v4_merge_mpd_oracles.py`` for every lane of
-  ``tests/helpers/twfe_es_oracle_lanes.py`` - the TWFE surface AND its
-  MultiPeriodDiD twin, every ``EventStudyResults`` field;
-* the LIVE MultiPeriodDiD twin (``_from_mpd(MultiPeriodDiD(...).fit(...))``),
-  which exists until PR 4c-ii deletes the class;
-* the payload itself: ``_from_event_study_payload`` and
-  ``_from_mpd(_mpd_results_from_payload(...))`` must be bit-identical on the
-  same payload (same inputs, same shared builder).
+One layer of oracle remains: the COMMITTED oracle
+``tests/fixtures/v4_twfe_event_study_oracles.json``, captured on the
+PRE-REFACTOR tree (``provenance.captured_at_head`` = 68e383bd; the two
+clustered hc2_bm lanes at d45d5316 under ``provenance.lane_additions``) by
+``tests/_capture_v4_merge_mpd_oracles.py`` for every lane of
+``tests/helpers/twfe_es_oracle_lanes.py`` - every ``EventStudyResults`` field
+of the TWFE surface. The live-twin and payload-identity layers that PR 4c-i
+carried (``MultiPeriodDiD``, ``_from_mpd``, ``_mpd_results_from_payload``)
+went with the class in PR 4c-ii; the committed capture is what pins the
+surface now, so a re-capture on the current tree is a re-baseline, not an
+oracle.
 
 Tolerances follow ``tests/test_aggregate_contract.py``: analytic arithmetic at
 rtol 1e-12 / atol 1e-13; confidence-interval bounds at rtol 1e-9 (scipy's
 ``t.ppf`` moved between 1.13 and 1.14+). Committed-oracle ``t_stat`` columns
 are checked against the bound those input tolerances imply for the ratio
 ``att / se`` (``_assert_t_stat_within_propagated_bound``), because a flat atol
-is tighter than the inputs' own contract whenever ``se < 1``; the live
-TWFE-vs-MPD within-lane comparison keeps the base analytic tolerance.
+is tighter than the inputs' own contract whenever ``se < 1``.
 """
 
 from __future__ import annotations
@@ -36,17 +34,15 @@ import numpy as np
 import pytest
 from event_study_average import post_period_average
 from event_study_surface_builders import calendar_surface
-from twfe_es_oracle_lanes import FINITE_POOLED_LANES, LANES, PANELS, WITHIN_LANES, Lane
+from twfe_es_oracle_lanes import LANES, PANELS, Lane
 
 import diff_diff.twfe
-from diff_diff import MultiPeriodDiD, TwoWayFixedEffects
-from diff_diff.estimators import _mpd_results_from_payload
-from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
+from diff_diff import TwoWayFixedEffects
 from diff_diff.results_base import (
     EventStudyResults,
+    _calendar_surface_from_arrays,
     _EventStudyCorePayload,
     _from_event_study_payload,
-    _from_mpd,
     _resolve_scalar_df_survey,
     _scalar_df_survey_from_metadata,
 )
@@ -87,9 +83,8 @@ def _fit_lane(lane: Lane):
         twfe = TwoWayFixedEffects(**lane.twfe_ctor).fit(
             df, event_study=True, survey_design=sd, **lane.twfe_fit
         )
-        mpd_native = MultiPeriodDiD(**lane.mpd_ctor).fit(df, survey_design=sd, **lane.mpd_fit)
     assert isinstance(twfe, EventStudyResults)
-    return df, twfe, mpd_native
+    return df, twfe
 
 
 def _tol_for(field: str) -> Dict[str, float]:
@@ -158,30 +153,6 @@ def _assert_surface_matches_record(live: EventStudyResults, stored: Dict[str, An
             assert rec == value, (name, rec, value)
 
 
-def _assert_surfaces_equal(a: EventStudyResults, b: EventStudyResults, *, exact: bool, skip=()):
-    for f in dataclasses.fields(a):
-        name = f.name
-        if name in skip:
-            continue
-        va, vb = getattr(a, name), getattr(b, name)
-        if isinstance(va, np.ndarray) or isinstance(vb, np.ndarray):
-            assert va is not None and vb is not None, name
-            va, vb = np.asarray(va), np.asarray(vb)
-            assert va.dtype == vb.dtype, name
-            assert va.shape == vb.shape, name
-            if va.dtype.kind == "f":
-                np.testing.assert_array_equal(np.isnan(va), np.isnan(vb), err_msg=name)
-                m = ~np.isnan(va)
-                if exact:
-                    np.testing.assert_array_equal(va[m], vb[m], err_msg=name)
-                else:
-                    np.testing.assert_allclose(va[m], vb[m], err_msg=name, **_tol_for(name))
-            else:
-                np.testing.assert_array_equal(va, vb, err_msg=name)
-        else:
-            assert va == vb, (name, va, vb)
-
-
 # --------------------------------------------------------------------------- #
 # Committed oracle (captured before the refactor)
 # --------------------------------------------------------------------------- #
@@ -198,71 +169,13 @@ def test_lane_echo_matches_committed_oracle(name):
 def test_surface_matches_committed_oracle(name):
     """The refactored TWFE event-study surface reproduces the pre-refactor capture."""
     oracle = _load_oracle()
-    _, twfe, _ = _fit_lane(LANES[name])
+    _, twfe = _fit_lane(LANES[name])
     _assert_surface_matches_record(twfe, oracle["lanes"][name]["twfe"])
 
 
-@pytest.mark.parametrize("name", sorted(LANES))
-def test_mpd_twin_still_matches_committed_oracle(name):
-    """The refactor left MultiPeriodDiD's own surface untouched too."""
-    oracle = _load_oracle()
-    _, _, mpd_native = _fit_lane(LANES[name])
-    _assert_surface_matches_record(_from_mpd(mpd_native), oracle["lanes"][name]["mpd_twin"])
-
-
 # --------------------------------------------------------------------------- #
-# Live oracles (MultiPeriodDiD exists until PR 4c-ii)
+# The core's payload and the shared surface builder
 # --------------------------------------------------------------------------- #
-
-
-def _payload_for(lane: Lane) -> _EventStudyCorePayload:
-    df = PANELS[lane.panel]()
-    fit = dict(lane.mpd_fit)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        est = MultiPeriodDiD(**lane.mpd_ctor)
-        payload = est._fit_event_study_core(
-            df,
-            fit["outcome"],
-            fit["treatment"],
-            fit["time"],
-            fit.get("post_periods"),
-            fit.get("covariates"),
-            fit.get("fixed_effects"),
-            fit.get("absorb"),
-            fit.get("reference_period"),
-            fit.get("unit"),
-            lane.survey(),
-            "analytical",
-            _frame_offset=1,
-        )
-    assert isinstance(payload, _EventStudyCorePayload)
-    return payload
-
-
-@pytest.mark.parametrize("name", sorted(LANES))
-def test_payload_surface_bit_identical_to_from_mpd(name):
-    """Same payload, same shared builder: the two routes must be byte-equal."""
-    payload = _payload_for(LANES[name])
-    a = _from_event_study_payload(payload, source="MultiPeriodDiDResults")
-    b = _from_mpd(_mpd_results_from_payload(payload))
-    _assert_surfaces_equal(a, b, exact=True)
-
-
-@pytest.mark.parametrize("name", sorted(LANES))
-def test_twfe_surface_full_container_matches_mpd_twin(name):
-    """TWFE fit vs the live MultiPeriodDiD twin over EVERY field but the provenance
-    labels: exact on the pooled lanes (same design), 1e-12 on the within lanes
-    (the within spec absorbs the unit FE where MPD snaps it)."""
-    lane = LANES[name]
-    _, twfe, mpd_native = _fit_lane(lane)
-    twin = _from_mpd(mpd_native)
-    _assert_surfaces_equal(
-        twfe, twin, exact=lane.twfe_fit["spec"] == "pooled", skip=("source", "estimation_spec")
-    )
-    assert twfe.source == "TwoWayFixedEffects"
-    assert twfe.estimation_spec == lane.twfe_fit["spec"]
-    assert twin.source == "MultiPeriodDiDResults"
 
 
 def test_core_returns_payload():
@@ -281,7 +194,7 @@ def test_core_returns_payload():
         None,
         "analytical",
         include_treatment_main=True,
-        warn_legacy_reference_default=False,
+        cluster_override=None,
         estimator_name="TwoWayFixedEffects",
     )
     assert isinstance(payload, _EventStudyCorePayload)
@@ -290,59 +203,66 @@ def test_core_returns_payload():
     for arr in (payload.att, payload.se, payload.t_stat, payload.p_value, payload.ci_lower):
         assert arr.shape == (len(payload.periods),)
     assert set(payload.df_by_period) == set(payload.periods)
+    surface = _from_event_study_payload(
+        payload, source="TwoWayFixedEffects", estimation_spec="pooled"
+    )
+    assert isinstance(surface, EventStudyResults)
+    assert surface.source == "TwoWayFixedEffects"
+    assert surface.estimation_spec == "pooled"
+    assert surface.event_time.tolist() == sorted(payload.periods + [3])
+    assert surface.is_reference.sum() == 1
     src = inspect.getsource(diff_diff.twfe)
     assert "_from_mpd" not in src
     assert "MultiPeriodDiDResults" not in src
     assert "period_effects" not in src
 
 
-def test_from_mpd_unsorted_dict_keeps_label_value_pairing():
-    """The sorted-zip contract: an insertion order of {5, 6, 1, 2} must still pair
-    every label with ITS PeriodEffect and sort the vcov sub-block with it."""
-    effects = {5: 0.5, 6: 0.6, 1: 0.1, 2: 0.2}
-    idx = {5: 2, 6: 3, 1: 0, 2: 1}
-    period_effects = {
-        p: PeriodEffect(
-            period=p,
-            effect=e,
-            se=0.1 * p,
-            t_stat=1.0,  # deliberate literal: the test pins label/value pairing, not inference
-            p_value=0.5,
-            conf_int=(e - 1, e + 1),
+def test_calendar_surface_builder_rejects_unsorted_periods():
+    """The sorted-label contract of the shared builder: ``periods`` arrive
+    index-aligned with the per-period arrays, so an unsorted list must raise
+    instead of being silently re-sorted (which would pair labels with the wrong
+    values). Formerly guarded through the removed dict-keyed adapter."""
+    with pytest.raises(ValueError, match="sorted order"):
+        _calendar_surface_from_arrays(
+            periods=[5, 6, 1, 2],
+            ref=3,
+            att=[0.5, 0.6, 0.1, 0.2],
+            se=[0.5, 0.6, 0.1, 0.2],
+            t_stat=[1.0, 1.0, 1.0, 1.0],
+            p_value=[0.5, 0.5, 0.5, 0.5],
+            ci_lo=[-0.5, -0.4, -0.9, -0.8],
+            ci_hi=[1.5, 1.6, 1.1, 1.2],
+            full_vcov=None,
+            interaction_indices=None,
+            df_map=None,
+            post_periods=[5, 6],
+            alpha=0.05,
+            source="TwoWayFixedEffects",
+            df_survey=None,
         )
-        for p, e in effects.items()  # insertion order 5, 6, 1, 2
-    }
-    full_vcov = np.diag([0.01, 0.04, 0.25, 0.36])
-    res = MultiPeriodDiDResults(
-        period_effects=period_effects,
-        avg_att=0.55,
-        avg_se=0.1,
-        avg_t_stat=5.5,
-        avg_p_value=0.0,
-        avg_conf_int=(0.3, 0.8),
-        n_obs=10,
-        n_treated=5,
-        n_control=5,
-        pre_periods=[1, 2, 3],
+    # The same arrays in sorted order build cleanly.
+    s = _calendar_surface_from_arrays(
+        periods=[1, 2, 5, 6],
+        ref=3,
+        att=[0.1, 0.2, 0.5, 0.6],
+        se=[0.1, 0.2, 0.5, 0.6],
+        t_stat=[1.0, 1.0, 1.0, 1.0],
+        p_value=[0.5, 0.5, 0.5, 0.5],
+        ci_lo=[-0.9, -0.8, -0.5, -0.4],
+        ci_hi=[1.1, 1.2, 1.5, 1.6],
+        full_vcov=None,
+        interaction_indices=None,
+        df_map=None,
         post_periods=[5, 6],
-        reference_period=3,
-        vcov=full_vcov,
-        interaction_indices=idx,
+        alpha=0.05,
+        source="TwoWayFixedEffects",
+        df_survey=None,
     )
-    s = _from_mpd(res)
     np.testing.assert_array_equal(s.event_time, [1, 2, 3, 5, 6])
-    for row, label in enumerate(s.event_time.tolist()):
-        if label == 3:
-            assert s.is_reference[row]
-            continue
-        assert s.att[row] == effects[label]
-        assert s.se[row] == 0.1 * label
-        assert (s.conf_int_lower[row], s.conf_int_upper[row]) == (
-            effects[label] - 1,
-            effects[label] + 1,
-        )
-    np.testing.assert_array_equal(s.vcov_index, [1, 2, 5, 6])
-    np.testing.assert_array_equal(np.diag(s.vcov), [0.01, 0.04, 0.25, 0.36])
+    ref_row = int(np.where(s.event_time == 3)[0][0])
+    # the synthesized reference row: att 0.0 (the normalization), NaN inference
+    assert s.is_reference[ref_row] and s.att[ref_row] == 0.0 and np.isnan(s.se[ref_row])
+    np.testing.assert_array_equal(s.att[~s.is_reference], [0.1, 0.2, 0.5, 0.6])
 
 
 def test_df_survey_metadata_split_equals_resolver():
@@ -365,18 +285,8 @@ def test_df_survey_metadata_split_equals_resolver():
 
 
 # --------------------------------------------------------------------------- #
-# The post-period average helper (replaces avg_att / avg_se in ported tests)
+# The post-period average helper (the former post-average block, now test-side)
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("name", sorted(FINITE_POOLED_LANES))
-def test_post_average_identity_matches_mpd_avg(name):
-    """`post_period_average` reproduces MultiPeriodDiD's avg_att / avg_se EXACTLY
-    on the pooled twin (the live pin that licenses the ported sites' rewrite)."""
-    _, twfe, mpd_native = _fit_lane(LANES[name])
-    att_bar, se_bar = post_period_average(twfe)
-    assert att_bar == mpd_native.avg_att
-    assert se_bar == mpd_native.avg_se
 
 
 def _surface(att, se, vcov, post, ref):
@@ -438,23 +348,14 @@ def test_post_period_average_nan_contract():
         warnings.simplefilter("error")
         att_bar, se_bar = post_period_average(s)
     assert att_bar == 1.5 and np.isnan(se_bar)
-    # (e) a REAL fit: the rank-deficient NaN post period, TWFE pooled vs MPD twin
+    # (e) a REAL fit: the rank-deficient NaN post period on the TWFE pooled lane
     lane = LANES["pooled_nan_post_period"]
-    _, twfe, mpd_native = _fit_lane(lane)
+    _, twfe = _fit_lane(lane)
     row3 = int(np.where(twfe.event_time == 3)[0][0])
     assert np.isnan(twfe.att[row3])
     att_bar, se_bar = post_period_average(twfe)
-    assert np.isnan(att_bar) and np.isnan(mpd_native.avg_att)
-    assert np.isnan(se_bar) and np.isnan(mpd_native.avg_se)
-
-
-def test_within_lanes_are_the_absorb_twins():
-    """Guards the lane table itself: every within lane pairs spec='within' + unit
-    with an MPD absorb=['unit'] fit (the 1e-12 twin the merge tests pin)."""
-    for name in WITHIN_LANES:
-        lane = LANES[name]
-        assert lane.twfe_fit["unit"] == "unit"
-        assert lane.mpd_fit["absorb"] == ["unit"]
+    assert np.isnan(att_bar)
+    assert np.isnan(se_bar)
 
 
 def test_calendar_surface_builder_uses_safe_inference():

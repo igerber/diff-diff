@@ -146,9 +146,7 @@ Supported Estimators
    * - :class:`~diff_diff.DifferenceInDifferences`
      - Basic 2x2 DiD with robust/clustered standard errors
    * - :class:`~diff_diff.TwoWayFixedEffects`
-     - Panel data with unit and time fixed effects
-   * - :class:`~diff_diff.MultiPeriodDiD`
-     - Event study with period-specific treatment effects (deprecated 3.9 — use :class:`~diff_diff.TwoWayFixedEffects` ``event_study=True``)
+     - Panel data with unit and time fixed effects; event study with period-specific treatment effects via ``event_study=True``
    * - :class:`~diff_diff.CallawaySantAnna`
      - Callaway & Sant'Anna (2021) group-time ATT for staggered adoption
    * - :class:`~diff_diff.ChaisemartinDHaultfoeuille`

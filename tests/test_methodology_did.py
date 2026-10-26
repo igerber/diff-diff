@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import DifferenceInDifferences, MultiPeriodDiD
+from diff_diff import DifferenceInDifferences
 from diff_diff.survey import SurveyDesign
 
 # =============================================================================
@@ -1593,63 +1593,6 @@ class TestMultiAbsorbIterativeDemean:
         # The interaction (the ATT) survives and is finite.
         assert np.isfinite(res.att)
 
-    @pytest.mark.parametrize("weighted", [False, True])
-    def test_mpd_multi_absorb_matches_fixed_effects(self, weighted):
-        """MultiPeriodDiD with two non-structural cross-classified FE (a, b).
-        (absorb=['unit','period'] is intentionally NOT used: period is structural
-        in the MPD design, so absorbing it is a different specification.)"""
-        rng = np.random.default_rng(5)
-        rows = []
-        for a in range(6):
-            for b in range(5):
-                for _ in range(int(rng.integers(0, 4))):
-                    rows.append((a, b))
-        df = pd.DataFrame(rows, columns=["a", "b"])
-        n = len(df)
-        df["treated"] = ((df["a"] >= 3) & (rng.integers(0, 2, size=n) == 1)).astype(int)
-        df["time"] = rng.integers(0, 3, size=n)
-        df["outcome"] = (
-            1.5 * df["treated"]
-            + 0.4 * df["a"]
-            - 0.3 * df["b"]
-            + 0.5 * df["time"]
-            + rng.normal(scale=0.5, size=n)
-        )
-        df["w"] = rng.uniform(0.5, 2.0, size=n)
-        kw = {}
-        if weighted:
-            kw["survey_design"] = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res_abs = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                absorb=["a", "b"],
-                **kw,
-            )
-            res_fe = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                fixed_effects=["a", "b"],
-                **kw,
-            )
-        a_eff = {p: pe.effect for p, pe in res_abs.period_effects.items()}
-        f_eff = {p: pe.effect for p, pe in res_fe.period_effects.items()}
-        compared = [
-            (a_eff[p], f_eff[p])
-            for p in a_eff
-            if p in f_eff and np.isfinite(a_eff[p]) and np.isfinite(f_eff[p])
-        ]
-        assert compared, "no finite period effects to compare"
-        for ae, fe in compared:
-            assert abs(ae - fe) < 1e-8
-
     def test_did_multi_absorb_zero_total_weight_group_is_inert(self):
         """Survey subpopulation / zero-weight domain padding: an absorbed category
         that is entirely zero-weight must not break the weighted MAP (no NaN/Inf
@@ -1691,53 +1634,3 @@ class TestMultiAbsorbIterativeDemean:
             )
         assert np.isfinite(res_abs.att)  # no NaN/Inf from the zero-weight group
         assert abs(res_abs.att - res_fe.att) < 1e-8
-
-    def test_mpd_multi_absorb_zero_total_weight_group_is_inert(self):
-        """MultiPeriodDiD analogue of the zero-total-weight inertness guard."""
-        rng = np.random.default_rng(8)
-        rows = []
-        for a in range(5):
-            for b in range(4):
-                for _ in range(2):
-                    rows.append((a, b))
-        df = pd.DataFrame(rows, columns=["a", "b"])
-        n = len(df)
-        df["treated"] = ((df["a"] >= 3) & (rng.integers(0, 2, size=n) == 1)).astype(int)
-        df["time"] = rng.integers(0, 3, size=n)
-        df["outcome"] = (
-            1.5 * df["treated"]
-            + 0.3 * df["a"]
-            - 0.2 * df["b"]
-            + 0.5 * df["time"]
-            + rng.normal(size=n)
-        )
-        df["w"] = rng.uniform(0.5, 2.0, size=n)
-        df.loc[df["a"] == 0, "w"] = 0.0
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res_abs = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                absorb=["a", "b"],
-                survey_design=sd,
-            )
-            res_fe = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                fixed_effects=["a", "b"],
-                survey_design=sd,
-            )
-        a_eff = {p: pe.effect for p, pe in res_abs.period_effects.items()}
-        f_eff = {p: pe.effect for p, pe in res_fe.period_effects.items()}
-        compared = [(a_eff[p], f_eff[p]) for p in a_eff if p in f_eff and np.isfinite(f_eff[p])]
-        assert compared, "no period effects to compare"
-        for ae, fe in compared:
-            assert np.isfinite(ae)  # no NaN/Inf leaked from the zero-weight group
-            assert abs(ae - fe) < 1e-8

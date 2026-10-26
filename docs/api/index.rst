@@ -15,7 +15,6 @@ regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
 
    diff_diff.DifferenceInDifferences
    diff_diff.TwoWayFixedEffects
-   diff_diff.MultiPeriodDiD
    diff_diff.SyntheticDiD
    diff_diff.CallawaySantAnna
    diff_diff.ChaisemartinDHaultfoeuille
@@ -49,9 +48,7 @@ Result containers returned by estimators:
    :nosignatures:
 
    diff_diff.DiDResults
-   diff_diff.MultiPeriodDiDResults
    diff_diff.SyntheticDiDResults
-   diff_diff.PeriodEffect
    diff_diff.CallawaySantAnnaResults
    diff_diff.CSBootstrapResults
    diff_diff.GroupTimeEffect

@@ -150,9 +150,9 @@ Event Study Design
 ------------------
 
 Examine treatment effects over time with the TwoWayFixedEffects
-event-study mode (``spec="pooled"`` reproduces the deprecated
-``MultiPeriodDiD`` design; the default ``spec="within"`` adds unit fixed
-effects):
+event-study mode (the default ``spec="within"`` adds unit fixed effects;
+``spec="pooled"`` runs the pooled design of the ``MultiPeriodDiD`` class
+removed at the 4.0 cut):
 
 .. code-block:: python
 

@@ -38,7 +38,6 @@ The following estimators/features MUST have documentation:
 |-----------|---------------|----------------|---------|-------------------|
 | DifferenceInDifferences | "DifferenceInDifferences" | "DifferenceInDifferences" | estimators.rst | "Difference-in-Differences" |
 | TwoWayFixedEffects | "TwoWayFixedEffects" | "TwoWayFixedEffects" | estimators.rst | "Two-Way Fixed Effects" |
-| MultiPeriodDiD | "MultiPeriodDiD" | "MultiPeriodDiD" | estimators.rst | "Multi-Period and Staggered" |
 | SyntheticDiD | "SyntheticDiD" | "SyntheticDiD" | estimators.rst | "Synthetic Difference-in-Differences" |
 | CallawaySantAnna | "CallawaySantAnna" | "CallawaySantAnna" | staggered.rst | "Multi-Period and Staggered" |
 | SunAbraham | "SunAbraham" | "SunAbraham" | staggered.rst | "Multi-Period and Staggered" |

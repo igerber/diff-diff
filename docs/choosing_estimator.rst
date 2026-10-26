@@ -46,8 +46,8 @@ Start here and follow the questions:
 
    - **No** → Use :class:`~diff_diff.TwoWayFixedEffects`
    - **Yes** → Use :class:`~diff_diff.TwoWayFixedEffects` with
-     ``event_study=True`` (``MultiPeriodDiD`` is deprecated in 3.9;
-     ``spec="pooled"`` reproduces its design)
+     ``event_study=True`` (``spec="pooled"`` runs the design of the
+     ``MultiPeriodDiD`` class removed at the 4.0 cut)
 
 6. **Is your treated group small?** (Few treated units, many controls)
 
@@ -72,7 +72,7 @@ Quick Reference
      - Panel data, simultaneous treatment
      - Parallel trends (all periods)
      - Single ATT with unit/time FE
-   * - ``MultiPeriodDiD`` (deprecated 3.9 → ``TwoWayFixedEffects`` ``event_study=True``)
+   * - ``TwoWayFixedEffects`` (``event_study=True``)
      - Event studies, dynamic effects
      - Parallel trends (pre-periods)
      - Period-specific effects
@@ -207,9 +207,9 @@ Use :class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True`` when:
 - All treated units receive treatment at the same time (simultaneous adoption)
 
 The default ``spec="within"`` estimates the unit-FE event study;
-``spec="pooled"`` reproduces the design of the deprecated
-:class:`~diff_diff.MultiPeriodDiD` (removed in 4.0) and is the only spec
-valid for repeated cross-sections.
+``spec="pooled"`` runs the pooled design of the ``MultiPeriodDiD`` class
+removed at the 4.0 cut and is the only spec valid for repeated
+cross-sections.
 
 .. code-block:: python
 
@@ -855,9 +855,6 @@ differences helps interpret results and choose appropriate inference.
    * - ``TwoWayFixedEffects``
      - Cluster-robust (unit level)
      - Always clusters at unit level after within-transformation (static AND event-study mode). Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters (static mode only; event-study mode raises).
-   * - ``MultiPeriodDiD`` (deprecated 3.9)
-     - HC1 (heteroskedasticity-robust)
-     - Same as basic DiD. Cluster-robust available via ``cluster``. Wild bootstrap not yet supported for multi-coefficient inference.
    * - ``CallawaySantAnna``
      - Analytical (influence function)
      - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).
@@ -987,12 +984,7 @@ estimation. The depth of support varies by estimator and variance method:
      - Full
      - Full
      - --
-   * - ``TwoWayFixedEffects``
-     - Full
-     - Full
-     - Full
-     - --
-   * - ``MultiPeriodDiD``
+   * - ``TwoWayFixedEffects`` (static and ``event_study=True``)
      - Full
      - Full
      - Full

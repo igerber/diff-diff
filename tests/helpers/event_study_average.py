@@ -1,16 +1,17 @@
-"""Post-period average of an event-study surface with MultiPeriodDiD's arithmetic.
+"""Post-period average of an event-study surface with the former post-period
+average arithmetic.
 
-The 4.0 cut (PR 4c-i) migrates MultiPeriodDiD-fixture tests to
+The 4.0 cut (PR 4c-i) migrated the event-study fixture tests to
 ``TwoWayFixedEffects().fit(..., event_study=True)``, whose
 :class:`~diff_diff.results_base.EventStudyResults` carries no ``avg_att`` /
-``avg_se``. Ported sites whose subject is the FIT LANE (not the MPD container)
-replace those reads with this helper, which reproduces the core's
-post-average arithmetic and NaN contract (``diff_diff/estimators.py``,
-``_fit_event_study_core``): ``avg_att = mean(post effects)`` and
-``avg_se = sqrt(sum(post vcov block) / n_post**2)``; any NaN post effect
+``avg_se``; PR 4c-ii then removed the core's post-average block itself.
+Ported sites whose subject is the FIT LANE (not the removed container)
+replace those reads with this helper, which reproduces the former
+post-average arithmetic and NaN contract: ``avg_att = mean(post effects)``
+and ``avg_se = sqrt(sum(post vcov block) / n_post**2)``; any NaN post effect
 voids both; a NaN or negative summed variance voids the SE (guarded before
-the sqrt, no RuntimeWarning). Exact equality with MultiPeriodDiD's values on
-the pooled twin is pinned by ``tests/test_twfe_event_study_decoupling.py``.
+the sqrt, no RuntimeWarning). Its NaN contract is pinned by
+``tests/test_twfe_event_study_decoupling.py``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ def post_period_average(es: EventStudyResults) -> Tuple[float, float]:
 
     ``att_bar`` is the equal-weight mean of the post-period ``att`` rows;
     ``se_bar`` is ``sqrt(sum of the post-period vcov block) / n_post``
-    (computed as ``sqrt(sum / n_post**2)``, MultiPeriodDiD's expression).
+    (computed as ``sqrt(sum / n_post**2)``, the former post-average expression).
     """
     if es.post_periods is None:
         raise ValueError("post_period_average requires a surface with post_periods provenance")

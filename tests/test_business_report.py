@@ -36,7 +36,6 @@ from diff_diff import (
     CallawaySantAnna,
     DiagnosticReport,
     DifferenceInDifferences,
-    MultiPeriodDiD,
     SyntheticControl,
     SyntheticDiD,
     TwoWayFixedEffects,
@@ -75,22 +74,6 @@ def did_fit():
     df = generate_did_data(n_units=80, n_periods=4, treatment_effect=1.5, seed=7)
     did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", post="post")
     return did, df
-
-
-@pytest.fixture(scope="module")
-def legacy_mpd_fit():
-    """Native MultiPeriodDiD fit for the MPD-only tests (event-study lanes, the
-    name-string dispatch pins): dies with the class at the 4.0 cut (PR 4c-ii)."""
-    df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-    es = MultiPeriodDiD().fit(
-        df,
-        outcome="outcome",
-        treatment="treated",
-        time="period",
-        unit="unit",
-        reference_period=3,
-    )
-    return es, df
 
 
 @pytest.fixture(scope="module")
@@ -245,8 +228,8 @@ class TestDiagnosticsIntegration:
 # HonestDiD passthrough
 # ---------------------------------------------------------------------------
 class TestHonestDiDPassthrough:
-    def test_supplied_sensitivity_is_not_recomputed(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_supplied_sensitivity_is_not_recomputed(self, cs_fit):
+        fit, _ = cs_fit
 
         class _FakeSens:
             M_values = np.array([0.5, 1.0])
@@ -350,8 +333,8 @@ class TestOutcomeDirection:
 class TestWarningsPassthrough:
     """Broad exception handling still records provenance in schema.warnings."""
 
-    def test_diagnostic_error_surfaces_as_top_level_warning(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_diagnostic_error_surfaces_as_top_level_warning(self, cs_fit):
+        fit, _ = cs_fit
 
         def _raise(*args, **kwargs):
             raise RuntimeError("synthetic test failure")
@@ -407,11 +390,10 @@ class TestSignificancePhrasing:
 class TestPreTrendsVerdictPhrasing:
     """Verdict and tier should flow through into schema AND phrasing."""
 
-    def test_verdict_and_tier_surface_in_schema(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_verdict_and_tier_surface_in_schema(self, cs_fit):
+        fit, _ = cs_fit
         br = BusinessReport(fit, auto_diagnostics=True)
         pt = br.to_dict()["pre_trends"]
-        # This fixture has a clear violation and an underpowered test — both set.
         assert pt["status"] == "computed"
         assert pt["verdict"] in {
             "no_detected_violation",
@@ -419,8 +401,8 @@ class TestPreTrendsVerdictPhrasing:
             "clear_violation",
         }
 
-    def test_clear_violation_phrased_tentatively(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_clear_violation_phrased_tentatively(self, cs_fit):
+        fit, _ = cs_fit
         br = BusinessReport(fit, auto_diagnostics=True)
         if br.to_dict()["pre_trends"].get("verdict") == "clear_violation":
             summary = br.summary()
@@ -459,19 +441,6 @@ class TestPreTrendsVerdictPhrasing:
 # NaN ATT
 # ---------------------------------------------------------------------------
 class TestNaNATT:
-    def test_nan_att_produces_caveat_and_does_not_crash(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
-        original = fit.avg_att
-        try:
-            fit.avg_att = float("nan")
-            br = BusinessReport(fit, auto_diagnostics=False)
-            summary = br.summary()
-            caveats = br.caveats()
-            assert isinstance(summary, str)
-            assert any(c.get("topic") == "estimation_failure" for c in caveats)
-            assert br.to_dict()["headline"]["sign"] == "undefined"
-        finally:
-            fit.avg_att = original
 
     def test_nan_att_produces_caveat_and_does_not_crash_twfe(self, twfe_fit):
         """Static-fit twin (4.0 cut, PR 4c-i): the headline field is `att`."""
@@ -2100,7 +2069,7 @@ class TestAnticipationAwareAssumptionBlock:
     """Round-17 P1 regression: ``_describe_assumption`` must drop the
     strict "plus no anticipation" language when the fit allows
     ``anticipation > 0``. REGISTRY.md §CallawaySantAnna lines 355-395
-    (and the matching SA / MultiPeriod / Wooldridge / EfficientDiD
+    (and the matching SA / Wooldridge / EfficientDiD
     sections) treat anticipation as a relaxation of the strict no-
     anticipation assumption: no treatment effects earlier than ``k``
     periods before treatment, not none at all.
@@ -3835,8 +3804,8 @@ class TestFullReportSingleM:
             alpha=0.05,
         )
 
-    def test_full_report_does_not_claim_full_grid_for_single_m(self, legacy_mpd_fit):
-        fit, _ = legacy_mpd_fit
+    def test_full_report_does_not_claim_full_grid_for_single_m(self, cs_fit):
+        fit, _ = cs_fit
         br = BusinessReport(fit, honest_did_results=self._fake_single_m())
         md = br.full_report()
         assert "robust across full grid" not in md
@@ -3847,8 +3816,8 @@ class TestFullReportSingleM:
 # Summary + full_report work across estimators
 # ---------------------------------------------------------------------------
 class TestAcrossEstimators:
-    def test_summary_nonempty_for_all(self, did_fit, legacy_mpd_fit, cs_fit, sdid_fit):
-        for fit, _ in (did_fit, legacy_mpd_fit, cs_fit, sdid_fit):
+    def test_summary_nonempty_for_all(self, did_fit, cs_fit, sdid_fit):
+        for fit, _ in (did_fit, cs_fit, sdid_fit):
             br = BusinessReport(fit, auto_diagnostics=False)
             s = br.summary()
             assert isinstance(s, str)
@@ -3948,7 +3917,7 @@ class TestBootstrapResultsAndNBootstrapDetection:
     def test_n_bootstrap_zero_still_preserves_on_alpha_mismatch(self):
         """Analytic fits (``n_bootstrap = 0``) also preserve the fitted CI
         on alpha mismatch — BR cannot reproduce a ``DiDResults`` /
-        ``MultiPeriodDiDResults`` / TROP t-quantile CI without the fit's
+        TROP t-quantile CI without the fit's
         finite ``df``, which is not exposed uniformly. Round-7 regression.
         """
         stub = self._base_stub()
@@ -3996,7 +3965,7 @@ class TestAnalyticalFiniteDfAlphaOverride:
     """Round-7 regressions for the P0 finding that
     ``_extract_headline`` was recomputing a normal-z CI on alpha
     mismatch for analytical fits whose native inference used a finite
-    ``df`` (``DifferenceInDifferences`` / ``MultiPeriodDiD`` / TROP)
+    ``df`` (``DifferenceInDifferences`` / ``TwoWayFixedEffects`` / TROP)
     that BR cannot reproduce from ``(att, se)`` alone. The fix is to
     always preserve the fitted CI on alpha mismatch.
     """
@@ -4016,26 +3985,6 @@ class TestAnalyticalFiniteDfAlphaOverride:
         assert h["ci_upper"] == pytest.approx(native_hi)
         topics = {c.get("topic") for c in br.caveats()}
         assert "alpha_override_preserved" in topics
-
-    def test_multiperiod_preserves_native_ci_on_alpha_override(self):
-        from diff_diff import MultiPeriodDiD, generate_did_data
-
-        df = generate_did_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        fit = MultiPeriodDiD().fit(
-            df,
-            outcome="outcome",
-            treatment="treated",
-            time="period",
-            unit="unit",
-            reference_period=3,
-        )
-        native_lo, native_hi = fit.avg_conf_int
-
-        br = BusinessReport(fit, alpha=0.10, auto_diagnostics=False)
-        h = br.to_dict()["headline"]
-        assert h["ci_level"] == 95
-        assert h["ci_lower"] == pytest.approx(native_lo)
-        assert h["ci_upper"] == pytest.approx(native_hi)
 
     def test_undefined_df_survey_stub_does_not_invent_finite_ci(self):
         """When the fit's native inference returned NaN (rank-deficient
@@ -4551,20 +4500,23 @@ class TestBaconCaveatEstimatorAware:
 
     @staticmethod
     def _make_twfe_style_stub():
-        class MultiPeriodDiDResults:
+        """``DiDResults``-shaped stub: the TWFE-style family whose Bacon
+        caveat keeps the switch-to-robust recommendation."""
+
+        class DiDResults:
             pass
 
-        obj = MultiPeriodDiDResults()
-        obj.avg_att = 1.0
-        obj.avg_se = 0.2
-        obj.avg_p_value = 0.001
-        obj.avg_conf_int = (0.6, 1.4)
+        obj = DiDResults()
+        obj.att = 1.0
+        obj.se = 0.2
+        obj.t_stat = 5.0
+        obj.p_value = 0.001
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 500
         obj.n_treated = 100
         obj.n_control = 400
         obj.survey_metadata = None
-        obj.pre_period_effects = None
         obj.inference_method = "analytical"
         return obj
 
@@ -4631,7 +4583,7 @@ class TestBaconCaveatEstimatorAware:
         msg = bacon_caveats[0]["message"]
         # TWFE-style fit: keep the explicit switch recommendation.
         assert "Re-estimate with a heterogeneity-robust estimator" in msg, (
-            f"MultiPeriodDiDResults (TWFE event-study) must keep the "
+            f"DiDResults (TWFE-style) must keep the "
             f"switch-to-robust recommendation. Got: {msg!r}"
         )
 
@@ -4883,7 +4835,7 @@ class TestBusinessReportPrecomputedPassthrough:
         with pytest.raises(ValueError, match="precomputed="):
             BusinessReport(obj, precomputed={"unknown_check": object()})
 
-    def test_br_explicit_precomputed_sensitivity_wins_over_honest_did_results(self):
+    def test_br_explicit_precomputed_sensitivity_wins_over_honest_did_results(self, cs_fit):
         """When both ``honest_did_results`` (shorthand) and explicit
         ``precomputed['sensitivity']`` are supplied, the explicit
         passthrough wins. Documented contract: honest_did_results is a
@@ -4891,24 +4843,7 @@ class TestBusinessReportPrecomputedPassthrough:
         present."""
         from types import SimpleNamespace
 
-        class MultiPeriodDiDResults:
-            pass
-
-        obj = MultiPeriodDiDResults()
-        obj.avg_att = 1.0
-        obj.avg_se = 0.1
-        obj.avg_p_value = 0.001
-        obj.avg_conf_int = (0.8, 1.2)
-        obj.alpha = 0.05
-        obj.n_obs = 100
-        obj.n_treated = 40
-        obj.n_control = 60
-        obj.survey_metadata = None
-        obj.pre_period_effects = {}
-        obj.vcov = None
-        obj.interaction_indices = None
-        obj.event_study_vcov = None
-        obj.event_study_vcov_index = None
+        obj, _ = cs_fit
 
         explicit_sens = SimpleNamespace(
             M_values=[0.5, 1.0],

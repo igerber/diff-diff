@@ -9,7 +9,6 @@ from event_study_average import post_period_average
 
 from diff_diff import (
     DifferenceInDifferences,
-    MultiPeriodDiD,
     SurveyDesign,
     SurveyMetadata,
 )
@@ -1309,41 +1308,6 @@ class TestP0P1Fixes:
         # Treatment coefficient should match
         np.testing.assert_allclose(coef_wt[1], coef_full[1], atol=1e-6)
 
-    def test_multiperiod_survey_metadata_populated(self, multiperiod_data):
-        """MultiPeriodDiD populates survey_metadata in results (P2-1)."""
-        mpd = MultiPeriodDiD()
-        sd = SurveyDesign(
-            weights="weight",
-            strata="stratum",
-            psu="psu",
-            weight_type="pweight",
-        )
-        result = mpd.fit(
-            multiperiod_data,
-            outcome="outcome",
-            treatment="treated",
-            time="period",
-            post_periods=[3, 4, 5],
-            survey_design=sd,
-        )
-
-        assert result.survey_metadata is not None
-        assert isinstance(result.survey_metadata, SurveyMetadata)
-        assert result.survey_metadata.weight_type == "pweight"
-        assert result.survey_metadata.n_strata == 3
-        assert result.survey_metadata.n_psu > 0  # Varies with fixture PSU structure
-
-        # Survey info should appear in summary
-        summary_text = result.summary()
-        assert "Survey Design" in summary_text
-        assert "pweight" in summary_text
-
-        # Survey info should appear in to_dict
-        d = result.to_dict()
-        assert "weight_type" in d
-        assert d["weight_type"] == "pweight"
-        assert "effective_n" in d
-
 
 # =============================================================================
 # P1-1 / P1-2 regression tests (PR #218 review round 3)
@@ -2472,66 +2436,6 @@ class TestRound9Fixes:
 
         np.testing.assert_allclose(result_absorb.att, result_explicit.att, atol=1e-6)
 
-    def test_multiperiod_absorb_matches_explicit_wls_dummies(self):
-        """MultiPeriodDiD absorbed WLS matches explicit WLS with dummies (P0)."""
-        np.random.seed(902)
-        n_units = 10
-        periods = [1, 2, 3, 4]
-        rows = []
-        for u in range(n_units):
-            for t in periods:
-                treated = 1 if u < 5 else 0
-                post = 1 if t >= 3 else 0
-                region = u % 3
-                y = 5.0 + region * 0.5 + t * 0.3 + 2.0 * treated * post
-                y += np.random.randn() * 0.1
-                rows.append(
-                    {
-                        "unit": u,
-                        "time": t,
-                        "treated": treated,
-                        "post": post,
-                        "outcome": y,
-                        "region": region,
-                    }
-                )
-        df = pd.DataFrame(rows)
-        weights = np.array([1.0 + 0.3 * (i % 4) for i in range(len(df))])
-        weights = weights * len(df) / np.sum(weights)
-        df["weight"] = weights
-
-        sd = SurveyDesign(weights="weight", weight_type="pweight")
-
-        # Method 1: absorb region FE
-        mpd_absorb = MultiPeriodDiD()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result_absorb = mpd_absorb.fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[3, 4],
-                absorb=["region"],
-                survey_design=sd,
-            )
-
-        # Method 2: explicit region dummies
-        mpd_explicit = MultiPeriodDiD()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result_explicit = mpd_explicit.fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[3, 4],
-                fixed_effects=["region"],
-                survey_design=sd,
-            )
-
-        np.testing.assert_allclose(result_absorb.avg_att, result_explicit.avg_att, atol=1e-6)
-
     def test_fractional_fweight_rejected_solve_ols(self):
         """Fractional fweights raise ValueError via solve_ols."""
         np.random.seed(903)
@@ -2858,52 +2762,6 @@ class TestRound11Fixes:
         assert np.isfinite(res_abs.att)
         assert abs(res_abs.att - res_fe.att) < 1e-8
 
-    def test_multi_absorb_survey_now_supported_multiperiod(self):
-        """MultiPeriodDiD with multi-absorb + survey weights is now supported."""
-        np.random.seed(42)
-        n = 60
-        df = pd.DataFrame(
-            {
-                "outcome": np.random.randn(n),
-                "treated": np.array([1] * 30 + [0] * 30),
-                "time": np.tile([0, 1, 2], 20),
-                "w": np.ones(n),
-                "a": np.repeat(np.arange(6), 10),
-                "b": np.tile(np.arange(5), 12),
-            }
-        )
-        sd = SurveyDesign(weights="w", weight_type="pweight")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res_abs = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                absorb=["a", "b"],
-                survey_design=sd,
-            )
-            res_fe = MultiPeriodDiD().fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2],
-                fixed_effects=["a", "b"],
-                survey_design=sd,
-            )
-        a_eff = {p: pe.effect for p, pe in res_abs.period_effects.items()}
-        f_eff = {p: pe.effect for p, pe in res_fe.period_effects.items()}
-        compared = [
-            (a_eff[p], f_eff[p])
-            for p in a_eff
-            if p in f_eff and np.isfinite(a_eff[p]) and np.isfinite(f_eff[p])
-        ]
-        assert compared, "no finite period effects to compare"
-        for ae, fe in compared:
-            assert abs(ae - fe) < 1e-8
-
     def test_single_absorb_survey_allowed(self):
         """Single-absorb with survey weights should still work (regression guard)."""
         np.random.seed(42)
@@ -3029,37 +2887,6 @@ class TestRound13Fixes:
         vcov = compute_survey_vcov(X, residuals, resolved=resolved)
         # Zero residuals → zero scores → zero V_h per stratum → zero vcov
         np.testing.assert_array_equal(vcov, np.zeros((2, 2)))
-
-
-class TestRound14Fixes:
-    """Tests for PR #218 review round 14 fixes."""
-
-    def test_multiperiod_bootstrap_survey_fallback(self):
-        """MultiPeriodDiD with wild_bootstrap + survey_design falls back gracefully."""
-        np.random.seed(42)
-        n = 40
-        df = pd.DataFrame(
-            {
-                "outcome": np.random.randn(n),
-                "treated": np.array([1] * 20 + [0] * 20),
-                "time": np.tile([0, 1, 2, 3], 10),
-                "w": np.ones(n),
-            }
-        )
-        sd = SurveyDesign(weights="w", weight_type="pweight")
-        mpd = MultiPeriodDiD(inference="wild_bootstrap")
-        # Should warn about fallback and produce valid analytical results
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = mpd.fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                post_periods=[2, 3],
-                survey_design=sd,
-            )
-        assert np.isfinite(result.avg_att)
 
 
 class TestRound15Fixes:
@@ -3474,21 +3301,6 @@ class TestRound21Fixes:
                 survey_design=SurveyDesign(weights="sw"),
             )
 
-    def test_absorb_fe_survey_rejected_multi_period(self):
-        """MultiPeriodDiD rejects absorb + fixed_effects + survey_design."""
-        df = self._make_panel()
-        model = MultiPeriodDiD()
-        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
-            model.fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
-                absorb=["unit"],
-                fixed_effects=["region"],
-                survey_design=SurveyDesign(weights="sw"),
-            )
-
     def test_absorb_fe_rejected_without_survey_did(self):
         """DiD rejects absorb + fixed_effects even without survey weights."""
         df = self._make_panel()
@@ -3497,20 +3309,6 @@ class TestRound21Fixes:
             model.fit(
                 df,
                 formula="outcome ~ treated * post",
-                absorb=["unit"],
-                fixed_effects=["region"],
-            )
-
-    def test_absorb_fe_rejected_without_survey_multi_period(self):
-        """MultiPeriodDiD rejects absorb + fixed_effects even without survey weights."""
-        df = self._make_panel()
-        model = MultiPeriodDiD()
-        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
-            model.fit(
-                df,
-                outcome="outcome",
-                treatment="treated",
-                time="time",
                 absorb=["unit"],
                 fixed_effects=["region"],
             )

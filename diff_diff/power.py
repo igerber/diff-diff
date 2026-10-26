@@ -317,20 +317,6 @@ def _twfe_fit_kwargs(
     return dict(outcome="outcome", treatment="treated", post="post", unit="unit")
 
 
-def _multiperiod_fit_kwargs(
-    data: pd.DataFrame,
-    n_units: int,
-    n_periods: int,
-    treatment_period: int,
-) -> Dict[str, Any]:
-    return dict(
-        outcome="outcome",
-        treatment="treated",
-        time="period",
-        post_periods=list(range(treatment_period, n_periods)),
-    )
-
-
 def _staggered_fit_kwargs(
     data: pd.DataFrame,
     n_units: int,
@@ -468,25 +454,6 @@ def _survey_twfe_fit_kwargs(
     )
 
 
-def _survey_multiperiod_fit_kwargs(
-    data: pd.DataFrame,
-    n_units: int,
-    n_periods: int,
-    treatment_period: int,
-    survey_config: SurveyPowerConfig,
-) -> Dict[str, Any]:
-    """Fit kwargs for MultiPeriodDiD with survey design (1-indexed periods)."""
-    return dict(
-        outcome="outcome",
-        treatment="ever_treated",
-        unit="unit",
-        time="period",
-        # 1-indexed: post periods run from treatment_period+1 to n_periods
-        post_periods=list(range(treatment_period + 1, n_periods + 1)),
-        survey_design=survey_config._build_survey_design(),
-    )
-
-
 def _survey_staggered_fit_kwargs(
     data: pd.DataFrame,
     n_units: int,
@@ -509,12 +476,6 @@ def _survey_staggered_fit_kwargs(
 
 def _extract_simple(result: Any) -> Tuple[float, float, float, Tuple[float, float]]:
     return (result.att, result.se, result.p_value, result.conf_int)
-
-
-def _extract_multiperiod(
-    result: Any,
-) -> Tuple[float, float, float, Tuple[float, float]]:
-    return (result.avg_att, result.avg_se, result.avg_p_value, result.avg_conf_int)
 
 
 def _extract_staggered(
@@ -597,7 +558,6 @@ _SURVEY_POST_ESTIMATORS = frozenset({"DifferenceInDifferences", "TwoWayFixedEffe
 _SURVEY_FIT_BUILDERS: Dict[str, Callable] = {
     "DifferenceInDifferences": _survey_basic_fit_kwargs,
     "TwoWayFixedEffects": _survey_twfe_fit_kwargs,
-    "MultiPeriodDiD": _survey_multiperiod_fit_kwargs,
     **{name: _survey_staggered_fit_kwargs for name in _STAGGERED_ESTIMATORS},
 }
 
@@ -950,13 +910,6 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
             dgp_kwargs_builder=_basic_dgp_kwargs,
             fit_kwargs_builder=_twfe_fit_kwargs,
             result_extractor=_extract_simple,
-            min_n=20,
-        ),
-        "MultiPeriodDiD": _EstimatorProfile(
-            default_dgp=generate_did_data,
-            dgp_kwargs_builder=_basic_dgp_kwargs,
-            fit_kwargs_builder=_multiperiod_fit_kwargs,
-            result_extractor=_extract_multiperiod,
             min_n=20,
         ),
         # --- Staggered group ---
@@ -2149,7 +2102,7 @@ def simulate_power(
         When provided, generates survey-structured data via
         ``generate_survey_did_data`` and injects ``SurveyDesign`` into
         estimator ``fit()``. Mutually exclusive with ``data_generator``.
-        Supported estimators: DiD, TWFE, MultiPeriod, CS, SA, ImputationDiD,
+        Supported estimators: DiD, TWFE, CS, SA, ImputationDiD,
         TwoStageDiD, StackedDiD, EfficientDiD. Unsupported: TROP,
         SyntheticDiD, TripleDifference. ``heterogeneous_te_by_strata`` must be False.
 
@@ -2496,8 +2449,8 @@ def simulate_power(
                 data = _generate_survey_did_data(seed=sim_seed, **dgp_kwargs)
 
                 # Derive columns for non-staggered estimators.
-                # Survey DGP's `treated` is time-varying (1{g>0, t>=g}); basic/TWFE/
-                # MultiPeriod need a time-invariant group indicator (`ever_treated`).
+                # Survey DGP's `treated` is time-varying (1{g>0, t>=g}); basic/TWFE
+                # need a time-invariant group indicator (`ever_treated`).
                 if estimator_name not in _STAGGERED_ESTIMATORS:
                     data["ever_treated"] = (data["first_treat"] > 0).astype(int)
                 # Basic/TWFE also need a `post` period indicator.
@@ -2577,10 +2530,23 @@ def simulate_power(
                 elif result_extractor is not None:
                     att, se, p_val, ci = result_extractor(result)
                 else:
-                    att = result.att if hasattr(result, "att") else result.avg_att
-                    se = result.se if hasattr(result, "se") else result.avg_se
-                    p_val = result.p_value if hasattr(result, "p_value") else result.avg_p_value
-                    ci = result.conf_int if hasattr(result, "conf_int") else result.avg_conf_int
+                    # Unregistered / custom estimators: the canonical flat
+                    # results names (the avg_* fallback left with the removed
+                    # event-study container at the 4.0 cut).
+                    missing = [
+                        n for n in ("att", "se", "p_value", "conf_int") if not hasattr(result, n)
+                    ]
+                    if missing:
+                        raise TypeError(
+                            f"{type(result).__name__} exposes no {', '.join(missing)}; "
+                            "simulate_power reads the flat att/se/p_value/conf_int names "
+                            "from unregistered estimators' results - register an "
+                            "_EstimatorProfile (or pass result_extractor=) for other shapes."
+                        )
+                    att = result.att
+                    se = result.se
+                    p_val = result.p_value
+                    ci = result.conf_int
 
                 # NaN p-value → treat as non-rejection
                 rejected = bool(p_val < alpha) if not np.isnan(p_val) else False

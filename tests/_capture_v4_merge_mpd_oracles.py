@@ -1,25 +1,38 @@
 """Capture the TWFE event-study decoupling oracles for
-tests/test_twfe_event_study_decoupling.py (4.0 cut, PR 4c-i).
+tests/test_twfe_event_study_decoupling.py (4.0 cut, PR 4c-i / 4c-ii).
 
-Run on the UNMODIFIED tree (the commit named in ``provenance.captured_at_head``
-of ``tests/fixtures/v4_twfe_event_study_oracles.json``) BEFORE the TWFE
-event-study mode is decoupled from the MultiPeriodDiD containers, and write to
-stdout like the aggregate precedent::
+The committed records in ``tests/fixtures/v4_twfe_event_study_oracles.json``
+are the 68e383bd capture (``provenance.captured_at_head``: origin/main at the
+PR 4c-i branch cut, BEFORE the TWFE event-study mode was decoupled from the
+MultiPeriodDiD containers) plus, for the two clustered hc2_bm lanes
+(``pooled_cluster_hc2_bm``, ``within_cluster_hc2_bm``), the d45d5316 capture
+recorded under ``provenance.lane_additions`` (PR 4c-ii, before the core's
+post-average block was removed). Both were taken while ``MultiPeriodDiD``, the
+independent twin of every lane, still existed; PR 4c-ii deleted it, so a
+RE-RUN of this script on the current tree is a RE-BASELINE of the current
+code, NOT an oracle - nothing independent remains to disagree with. Re-run
+only to deliberately re-baseline after an intended numeric change, and say so
+in the commit.
+
+Full capture writes to stdout like the aggregate precedent::
 
     DIFF_DIFF_BACKEND=python python tests/_capture_v4_merge_mpd_oracles.py \
         > tests/fixtures/v4_twfe_event_study_oracles.json
     DIFF_DIFF_BACKEND=rust   python tests/_capture_v4_merge_mpd_oracles.py \
         > /path/to/scratch/rust.json   # cross-backend check only
 
-Why. PR 4c-i rewrites how ``TwoWayFixedEffects.fit(..., event_study=True)``
-builds its ``EventStudyResults`` (today: an internal ``MultiPeriodDiDResults``
-converted by ``results_base._from_mpd``; after: a private payload from
-``_fit_event_study_core``). Every ``dataclasses.fields(EventStudyResults)``
-value of the TWFE surface and of the MultiPeriodDiD twin
-(``_from_mpd(MultiPeriodDiD(...).fit(...))``) is recorded per lane, so the
-refactor's output can be compared field by field against the pre-refactor
-tree. PR 4c-ii deletes MultiPeriodDiD; re-capturing on a post-4c-ii tree is
-NOT a substitute for the MPD-twin half (nothing independent remains).
+Adding lanes splices only the named lanes into the committed file, leaving
+every other lane and the top-level provenance byte-identical and recording the
+new lanes' own provenance under ``provenance.lane_additions``::
+
+    DIFF_DIFF_BACKEND=python python tests/_capture_v4_merge_mpd_oracles.py \
+        --lanes pooled_cluster_hc2_bm within_cluster_hc2_bm \
+        --merge-into tests/fixtures/v4_twfe_event_study_oracles.json
+
+What is recorded: every ``dataclasses.fields(EventStudyResults)`` value of the
+``TwoWayFixedEffects.fit(..., event_study=True)`` surface, per lane, so the
+current tree's output can be compared field by field against the pre-refactor
+numbers.
 
 Panels and lanes come from ``tests/helpers/twfe_es_oracle_lanes.py`` (shared
 with the test module); the fixture carries each lane's ``echo()`` so an edited
@@ -43,8 +56,8 @@ sys.path.insert(0, os.path.join(HERE, "helpers"))
 
 from twfe_es_oracle_lanes import LANES, PANELS  # noqa: E402
 
-from diff_diff import MultiPeriodDiD, TwoWayFixedEffects  # noqa: E402
-from diff_diff.results_base import EventStudyResults, _from_mpd  # noqa: E402
+from diff_diff import TwoWayFixedEffects  # noqa: E402
+from diff_diff.results_base import EventStudyResults  # noqa: E402
 
 
 def _encode_value(value: Any) -> Any:
@@ -82,13 +95,12 @@ def capture_lane(name: str) -> Dict[str, Any]:
     df = PANELS[lane.panel]()
     sd = lane.survey()
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # MPD's FutureWarning + rank-deficiency notices
+        warnings.simplefilter("ignore")  # rank-deficiency notices
         twfe = TwoWayFixedEffects(**lane.twfe_ctor).fit(
             df, event_study=True, survey_design=sd, **lane.twfe_fit
         )
-        mpd = _from_mpd(MultiPeriodDiD(**lane.mpd_ctor).fit(df, survey_design=sd, **lane.mpd_fit))
     assert isinstance(twfe, EventStudyResults)
-    return {"echo": lane.echo(), "twfe": encode_surface(twfe), "mpd_twin": encode_surface(mpd)}
+    return {"echo": lane.echo(), "twfe": encode_surface(twfe)}
 
 
 def dump_fixture(obj: Any) -> str:
@@ -121,7 +133,7 @@ def _git_head() -> str:
         return "unknown"
 
 
-if __name__ == "__main__":
+def _provenance() -> Dict[str, Any]:
     import platform
 
     import pandas as pd
@@ -130,16 +142,59 @@ if __name__ == "__main__":
     import diff_diff
     from diff_diff.bootstrap_chunking import effective_weight_backend
 
-    payload = {
-        "provenance": {
-            "captured_at_head": _git_head(),
-            "diff_diff_version": diff_diff.__version__,
-            "backend": effective_weight_backend(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-            "pandas": pd.__version__,
-            "python": platform.python_version(),
-        },
-        "lanes": {name: capture_lane(name) for name in LANES},
+    return {
+        "captured_at_head": _git_head(),
+        "diff_diff_version": diff_diff.__version__,
+        "backend": effective_weight_backend(),
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "pandas": pd.__version__,
+        "python": platform.python_version(),
     }
-    sys.stdout.write(dump_fixture(payload))
+
+
+def _main(argv: list) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--lanes",
+        nargs="+",
+        metavar="NAME",
+        help="capture only these lanes (default: every lane in LANES)",
+    )
+    ap.add_argument(
+        "--merge-into",
+        metavar="PATH",
+        help=(
+            "splice the captured lanes into an existing fixture file in place "
+            "(other lanes and the top-level provenance stay byte-identical; each "
+            "spliced lane records its own provenance under "
+            "provenance.lane_additions.<lane>) instead of writing a full fixture "
+            "to stdout"
+        ),
+    )
+    args = ap.parse_args(argv)
+    names = args.lanes or list(LANES)
+    unknown = [n for n in names if n not in LANES]
+    if unknown:
+        ap.error(f"unknown lane(s): {unknown}")
+    prov = _provenance()
+    captured = {name: capture_lane(name) for name in names}
+    if args.merge_into is None:
+        payload = {"provenance": prov, "lanes": captured}
+        sys.stdout.write(dump_fixture(payload))
+        return
+    with open(args.merge_into) as fh:
+        existing = json.load(fh)
+    existing["lanes"].update(captured)
+    additions = existing["provenance"].setdefault("lane_additions", {})
+    for name in names:
+        additions[name] = dict(prov)
+    with open(args.merge_into, "w") as fh:
+        fh.write(dump_fixture(existing))
+    sys.stderr.write(f"spliced {len(names)} lane(s) into {args.merge_into}\n")
+
+
+if __name__ == "__main__":
+    _main(sys.argv[1:])

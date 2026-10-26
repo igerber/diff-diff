@@ -42,7 +42,9 @@ updated, CI fails.
 
 ## The three merges
 
-Each merge keeps one class and retires the other. The retired class still works in 3.9 and warns.
+Each merge keeps one class and retires the other. The retired classes warned through 3.9 and are
+gone at 4.0 (`ImportError` on `from diff_diff import MultiPeriodDiD`, `StaggeredTripleDifference`,
+`QDiD`).
 
 ### MultiPeriodDiD → TwoWayFixedEffects(event_study=True)
 
@@ -69,6 +71,39 @@ Two things are easy to get wrong here, and both change numbers:
 - **`post_periods=` is required** in event-study mode. MultiPeriodDiD defaulted to a midpoint
   split of the calendar, which is a silent guess; the merged mode makes you state the treatment
   boundary. `spec="pooled"` is also the only spec valid for repeated cross-sections.
+- **`unit=` changes the standard errors on `spec="pooled"`.** The 3.x call above passed
+  `unit="id"`, which MultiPeriodDiD read only for Conley / staggered-adoption checks. The merged
+  mode auto-clusters at `unit` whenever `unit=` is passed and the fit is not an explicit
+  `classical`/`hc2`/`hc3`, Conley or survey fit (`hc1`, the default, is NOT an opt-out). To
+  reproduce MultiPeriodDiD's unclustered HC1 numbers, drop `unit=`; an explicit `cluster=`
+  reproduces a MultiPeriodDiD fit that passed the same `cluster=`. (`cluster=False` as the
+  uniform off-switch arrives with [M-080].)
+
+```python
+# 4.0 - bit-exact with the 3.x unclustered MultiPeriodDiD default (no unit=)
+results = TwoWayFixedEffects().fit(
+    data, outcome="y", time="period", treatment="treat",
+    event_study=True, spec="pooled", post_periods=[3, 4, 5],
+)
+```
+
+- **`results.period_effects` still works, with a `FutureWarning`** ([M-016]; removed in 5.0).
+  On a `TwoWayFixedEffects` event-study surface it returns the same calendar-keyed dict of
+  per-period records (`period, effect, se, t_stat, p_value, conf_int, is_significant,
+  significance_stars`; the reference period omitted; `is_significant` at the fit's `alpha`).
+  The successor is the surface itself: `results.to_dataframe()` has one row per `event_time`
+  (reference row included) and the columnar `att`/`se`/`p_value`/`conf_int_lower`/
+  `conf_int_upper` arrays.
+
+```python
+# 4.0 - the per-period surface replaces the period_effects dict
+es = TwoWayFixedEffects().fit(
+    data, outcome="y", unit="id", time="period", treatment="treat",
+    event_study=True, post_periods=[3, 4, 5], reference_period=2,
+)
+table = es.to_dataframe()          # one row per event_time, reference row included
+post = table[table["event_time"].isin(es.post_periods)]
+```
 
 ### StaggeredTripleDifference → TripleDifference
 
@@ -451,7 +486,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-010 | merge-mpd | `diff_diff:MultiPeriodDiD` | `diff_diff:TwoWayFixedEffects.fit[event_study]` | See the merges section for the worked before/after. |
 | M-011 | merge-mpd | `diff_diff:MultiPeriodDiDResults` | — | Read the unified event-study surface on the merged `TwoWayFixedEffects` results instead of this container. |
 | M-012 | merge-mpd | `diff_diff:PeriodEffect` | — | Superseded by the unified event-study representation - read the event-study surface rather than per-period `PeriodEffect` objects. |
-| M-016 | merge-mpd | `diff_diff:MultiPeriodDiDResults.period_effects` | — | Not removed at 4.0: it becomes a `FutureWarning` property view over the unified event-study surface on the successor container, and is removed at 5.0. Migrate the read to the successor class. |
+| M-016 | merge-mpd | `diff_diff:EventStudyResults.period_effects` | — | Not removed at 4.0: `period_effects` is a `FutureWarning` property view over the unified event-study surface (calendar surfaces only; keyed by calendar period, reference omitted), removed at 5.0. Read `to_dataframe()` or the columnar arrays instead. |
 | M-083 | merge-mpd | `diff_diff:TwoWayFixedEffects.fit[time]` | — | In static mode (`event_study=False`), `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the calendar column only. |
 | M-015 | merge-qdid | `diff_diff:QDiD` | `diff_diff:ChangesInChanges[method]` | See the merges section for the worked before/after. |
 | M-143 | merge-qdid | `diff_diff:ChangesInChangesResults.estimator` | `diff_diff:ChangesInChangesResults.method` | See the merges section for the worked before/after. |
@@ -460,7 +495,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-001 | obligation-sdid-params | `diff_diff:SyntheticDiD[lambda_reg]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_omega=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_omega=` only as a deliberate new choice. |
 | M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
-| M-007 | obligation-warning-retirements | `diff_diff.estimators` | — | The MultiPeriodDiD `e=-1` transition FutureWarning stops being emitted; drop any warning filter that suppressed it. |
+| M-007 | obligation-warning-retirements | `diff_diff.estimators` | — | The MultiPeriodDiD `e=-1` transition FutureWarning is no longer emitted (the class is gone; the event-study mode defaults to the last pre-period silently); drop any warning filter that suppressed it. |
 | M-080 | policy-auto-cluster | `diff_diff:SpilloverDiD[cluster]` | — | `SpilloverDiD` now clusters at `unit` when `cluster=` is omitted; pass `cluster=False` for the 3.x observation-level HC standard errors (`None`/omission means auto-cluster, not off). Every other panel estimator already clustered at unit or is unit-level by construction, so its numbers do not move. `cluster=False` is also newly accepted on `TwoWayFixedEffects`/`SunAbraham`/`WooldridgeDiD`/`LPDiD` (plain HC sandwich - new behaviour) and as a no-op on the by-construction estimators and `ImputationDiD`/`TwoStageDiD`; `StackedDiD` still rejects it. |
 | M-032 | renames-cohort | `diff_diff:WooldridgeDiD.fit[cohort]` | `diff_diff:WooldridgeDiD.fit[first_treat]` | Rename the keyword: `cohort=` becomes `first_treat=`. |
 | M-035 | renames-col-suffix | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome_col]` | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome]` | Rename the keyword: `outcome_col=` becomes `outcome=`. |

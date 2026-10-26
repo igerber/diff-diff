@@ -3,9 +3,9 @@ Estimators
 
 Core estimator classes for Difference-in-Differences analysis.
 
-The main estimators module (``diff_diff.estimators``) contains the base classes
-``DifferenceInDifferences`` and ``MultiPeriodDiD``. Additional estimators are
-organized in separate modules for maintainability:
+The main estimators module (``diff_diff.estimators``) contains the base class
+``DifferenceInDifferences``. Additional estimators are organized in separate
+modules for maintainability:
 
 - ``diff_diff.twfe`` - ``TwoWayFixedEffects`` estimator
 - ``diff_diff.synthetic_did`` - ``SyntheticDiD`` estimator
@@ -15,13 +15,13 @@ for backward compatibility, so you can import any of them using:
 
 .. code-block:: python
 
-    from diff_diff import DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD, SyntheticDiD
+    from diff_diff import DifferenceInDifferences, TwoWayFixedEffects, SyntheticDiD
 
 Most estimators have short aliases (``TROP`` already uses its short canonical name):
 
 .. code-block:: python
 
-    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, SA, BJS, DDD, SCM, Bacon
+    from diff_diff import DiD, TWFE, SDiD, CS, SA, BJS, DDD, SCM, Bacon
 
 .. module:: diff_diff.estimators
 
@@ -51,25 +51,14 @@ post-estimation result-object contract is designed.
       ~DifferenceInDifferences.get_params
       ~DifferenceInDifferences.set_params
 
-MultiPeriodDiD (alias: ``EventStudy``)
---------------------------------------
-
-Event study estimator with period-specific treatment effects.
-*Deprecated in 3.9, removed in 4.0*: use
-:class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True``
-(``spec="pooled"`` reproduces this design exactly).
-
-.. autoclass:: diff_diff.MultiPeriodDiD
-   :no-index:
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :inherited-members:
-
 TwoWayFixedEffects (alias: ``TWFE``)
 -------------------------------------
 
-Panel DiD with unit and time fixed effects.
+Panel DiD with unit and time fixed effects. ``fit(..., event_study=True,
+spec="pooled" | "within", post_periods=, reference_period=)`` is the
+event-study mode with period-specific treatment effects, returning an
+:class:`~diff_diff.EventStudyResults` (``spec="pooled"`` runs the pooled
+design of the ``MultiPeriodDiD`` class removed at the 4.0 cut).
 
 .. module:: diff_diff.twfe
 

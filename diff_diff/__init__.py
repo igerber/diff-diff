@@ -100,7 +100,6 @@ from diff_diff.efficient_did import (
 )
 from diff_diff.estimators import (
     DifferenceInDifferences,
-    MultiPeriodDiD,
     SyntheticDiD,
     TwoWayFixedEffects,
 )
@@ -233,8 +232,6 @@ from diff_diff.rdplot import (
 )
 from diff_diff.results import (
     DiDResults,
-    MultiPeriodDiDResults,
-    PeriodEffect,
     SpilloverDiDResults,  # re-export
     SyntheticDiDResults,
 )
@@ -321,7 +318,6 @@ from diff_diff.wooldridge_results import WooldridgeDiDResults
 # Estimator aliases — short names for convenience
 DiD = DifferenceInDifferences
 TWFE = TwoWayFixedEffects
-EventStudy = MultiPeriodDiD
 SDiD = SyntheticDiD
 CS = CallawaySantAnna
 SA = SunAbraham
@@ -341,7 +337,6 @@ __all__ = [
     # Estimators
     "DifferenceInDifferences",
     "TwoWayFixedEffects",
-    "MultiPeriodDiD",
     "SyntheticDiD",
     "CallawaySantAnna",
     "ChaisemartinDHaultfoeuille",
@@ -358,7 +353,6 @@ __all__ = [
     # Estimator aliases (short names).
     "DiD",
     "TWFE",
-    "EventStudy",
     "SDiD",
     "CS",
     "DCDH",
@@ -374,9 +368,7 @@ __all__ = [
     "Comparison2x2",
     # Results
     "DiDResults",
-    "MultiPeriodDiDResults",
     "SyntheticDiDResults",
-    "PeriodEffect",
     "CallawaySantAnnaResults",
     "CSBootstrapResults",
     "GroupTimeEffect",

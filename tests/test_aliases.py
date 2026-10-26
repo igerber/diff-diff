@@ -29,7 +29,6 @@ def test_alias_identity():
         warnings.simplefilter("error", FutureWarning)
         assert diff_diff.DiD is diff_diff.DifferenceInDifferences
         assert diff_diff.TWFE is diff_diff.TwoWayFixedEffects
-        assert diff_diff.EventStudy is diff_diff.MultiPeriodDiD
         assert diff_diff.SDiD is diff_diff.SyntheticDiD
         assert diff_diff.CS is diff_diff.CallawaySantAnna
         assert diff_diff.SA is diff_diff.SunAbraham
@@ -45,7 +44,6 @@ def test_aliases_in_all():
     aliases = [
         "DiD",
         "TWFE",
-        "EventStudy",
         "SDiD",
         "CS",
         "SA",

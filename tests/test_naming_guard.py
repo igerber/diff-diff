@@ -870,14 +870,13 @@ def _live_family_code_refs(tok):
 # 3.9 class merges, v4-design section 4.1). Their effective __init__ is no
 # longer the base's function object, but calls under the shim's name still
 # read every base constructor param - so they stay in the base's
-# init-sharing group. MultiPeriodDiD is the last such shim (removed in PR 4c);
-# the other two phase-3 siblings are gone: QDiD was a standalone class (never a
-# forwarding shim) and StaggeredTripleDifference kept its own __init__ and only
-# SHARED an engine mixin with TripleDifference - both removed at the 4.0 cut
-# (PR 4a).
-_FORWARDING_INIT_SHIMS = {
-    "MultiPeriodDiD": "DifferenceInDifferences",
-}
+# init-sharing group. The table is EMPTY at the 4.0 cut but the mechanism
+# stays for the next such shim: MultiPeriodDiD (-> DifferenceInDifferences)
+# was the last entry, removed in PR 4c-ii; the other two phase-3 siblings
+# went earlier - QDiD was a standalone class (never a forwarding shim) and
+# StaggeredTripleDifference kept its own __init__ and only SHARED an engine
+# mixin with TripleDifference - both removed at the 4.0 cut (PR 4a).
+_FORWARDING_INIT_SHIMS: dict = {}
 
 
 def _init_sharing_class_names(_cache={}):
@@ -1296,7 +1295,7 @@ CONSUMER_ALLOWLIST = {
     ("period_effects", "docs/methodology/REGISTRY.md"): (
         "the LWDiD API-conformance/aggregation Notes name PR #588's "
         "pre-release `period_effects` surface being RETIRED before it ever "
-        "ships - not a read of MultiPeriodDiDResults.period_effects (M-016), "
+        "ships - not a read of EventStudyResults.period_effects (M-016), "
         "whose reader inventory this registry entry documents rather than "
         "consumes"
     ),
@@ -1798,10 +1797,10 @@ def test_ast_lane_kwarg_callee_bare_call_and_wrapper_exemption():
     child_tree = ast.parse("est = Child(robust=True)")
     assert not ast_call_hits("robust", {"Base", "__init__"}, child_tree, [])
     assert ast_call_hits("robust", {"Base", "Child", "__init__"}, child_tree, [])
-    # and the real ledger case: TwoWayFixedEffects/MultiPeriodDiD inherit
-    # DifferenceInDifferences.__init__, so M-045's callee set names them
+    # and the real ledger case: TwoWayFixedEffects inherits
+    # DifferenceInDifferences.__init__, so M-045's callee set names it
     m045_callees = _ast_callees(_ROW_INDEX["M-045"])
-    assert {"DifferenceInDifferences", "TwoWayFixedEffects", "MultiPeriodDiD"} <= m045_callees
+    assert {"DifferenceInDifferences", "TwoWayFixedEffects"} <= m045_callees
     # a module holding ONLY the wrapper: its interior call is exempt
     wrapper_only_src = "def stacked_did(data):\n    return bacon_decompose(data)\n"
     wtree = ast.parse(wrapper_only_src)

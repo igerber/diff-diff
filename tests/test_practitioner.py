@@ -10,7 +10,6 @@ from diff_diff import (
     DifferenceInDifferences,
     HeterogeneousAdoptionDiDEventStudyResults,
     HeterogeneousAdoptionDiDResults,
-    MultiPeriodDiD,
     generate_did_data,
     generate_staggered_data,
 )
@@ -45,12 +44,6 @@ def staggered_data():
 def did_results(did_data):
     did = DifferenceInDifferences()
     return did.fit(did_data, outcome="outcome", treatment="treated", post="post")
-
-
-@pytest.fixture(scope="session")
-def multi_period_results(did_data):
-    es = MultiPeriodDiD()
-    return es.fit(did_data, outcome="outcome", unit="unit", time="period", treatment="treated")
 
 
 @pytest.fixture(scope="session")
@@ -282,11 +275,6 @@ class TestResultTypeDispatch:
         output = practitioner_next_steps(did_results, verbose=False)
         assert len(output["next_steps"]) > 0
 
-    def test_multi_period_results(self, multi_period_results):
-        output = practitioner_next_steps(multi_period_results, verbose=False)
-        assert len(output["next_steps"]) > 0
-        assert output["estimator"] == "MultiPeriodDiD (Event Study)"
-
     def test_cs_results(self, cs_results):
         output = practitioner_next_steps(cs_results, verbose=False)
         assert len(output["next_steps"]) > 0
@@ -509,15 +497,6 @@ class TestNaNHandling:
         )
         output = practitioner_next_steps(r, verbose=False)
         assert len(output["warnings"]) > 0
-        assert any("NaN" in w for w in output["warnings"])
-
-    def test_nan_avg_att_multi_period(self):
-        """MultiPeriodDiDResults uses avg_att, not att."""
-        from diff_diff.results import MultiPeriodDiDResults
-
-        r = MultiPeriodDiDResults.__new__(MultiPeriodDiDResults)
-        r.avg_att = float("nan")
-        output = practitioner_next_steps(r, verbose=False)
         assert any("NaN" in w for w in output["warnings"])
 
 

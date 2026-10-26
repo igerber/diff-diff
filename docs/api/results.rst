@@ -37,41 +37,6 @@ Results from basic DifferenceInDifferences estimation.
       ~DiDResults.to_dict
       ~DiDResults.to_dataframe
 
-MultiPeriodDiDResults
----------------------
-
-Results from MultiPeriodDiD event study estimation.
-
-.. autoclass:: diff_diff.MultiPeriodDiDResults
-   :no-index:
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   .. rubric:: Attributes
-
-   .. autosummary::
-
-      ~MultiPeriodDiDResults.period_effects
-      ~MultiPeriodDiDResults.att
-      ~MultiPeriodDiDResults.pre_periods
-      ~MultiPeriodDiDResults.post_periods
-      ~MultiPeriodDiDResults.reference_period
-      ~MultiPeriodDiDResults.interaction_indices
-      ~MultiPeriodDiDResults.pre_period_effects
-      ~MultiPeriodDiDResults.post_period_effects
-
-PeriodEffect
-------------
-
-Container for a single period's treatment effect in event studies.
-
-.. autoclass:: diff_diff.PeriodEffect
-   :no-index:
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 SyntheticDiDResults
 -------------------
 
@@ -98,7 +63,11 @@ Shared bases introduced by the 4.0 API-unification program.
 ``BaseResults`` is the estimator-results base;
 ``Diagnostic`` marks diagnostic result containers (which carry no
 inference row); ``EventStudyResults`` is the unified per-event-time
-representation.
+representation. On calendar-time surfaces (``TwoWayFixedEffects`` event-study
+mode) ``EventStudyResults.period_effects`` is a deprecated compatibility view
+of the removed ``MultiPeriodDiDResults.period_effects`` (FutureWarning, ledger
+M-016, removed in 5.0): a dict keyed by calendar period with the reference
+period omitted; ``to_dataframe()`` is the successor.
 
 .. autoclass:: diff_diff.BaseResults
    :no-index:

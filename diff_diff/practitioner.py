@@ -32,7 +32,6 @@ STEPS: Set[str] = {
 # ---------------------------------------------------------------------------
 _ESTIMATOR_NAMES: Dict[str, str] = {
     "DiDResults": "DifferenceInDifferences",
-    "MultiPeriodDiDResults": "MultiPeriodDiD (Event Study)",
     "CallawaySantAnnaResults": "CallawaySantAnna",
     "DMLDiDResults": "DMLDiD (Chang 2020 double/debiased ML)",
     "SunAbrahamResults": "SunAbraham",
@@ -261,7 +260,7 @@ def _parallel_trends_step(staggered: bool = False) -> Dict[str, Any]:
         why=(
             "Parallel trends is the core identifying assumption. "
             "Insignificant pre-trends do NOT prove it holds. For "
-            "MultiPeriodDiD or CS results, use HonestDiD to bound "
+            "event-study or CS results, use HonestDiD to bound "
             "the impact of violations."
         ),
         code=(
@@ -384,18 +383,6 @@ def _handle_did(results: Any):
             ),
             step_name="estimator_selection",
         ),
-    ]
-    warnings = _check_nan_att(results)
-    return steps, warnings
-
-
-def _handle_multi_period(results: Any):
-    steps = [
-        _parallel_trends_step(),
-        _honest_did_step(),
-        # Note: run_all_placebo_tests() requires binary time indicator,
-        # which MultiPeriodDiD does not use. Omit placebo for this type.
-        _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD"),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -2488,7 +2475,6 @@ def _handle_duration_did(results: Any):
 # ---------------------------------------------------------------------------
 _HANDLERS = {
     "DiDResults": _handle_did,
-    "MultiPeriodDiDResults": _handle_multi_period,
     "CallawaySantAnnaResults": _handle_cs,
     "DMLDiDResults": _handle_dml_did,
     "SunAbrahamResults": _handle_sa,
@@ -2525,12 +2511,10 @@ def _check_nan_att(results: Any) -> List[str]:
     too: any future estimator returning ndarray ``att`` without a
     dedicated handler gets the same all-NaN warning shape.
     """
-    # Check .att (DiDResults), .overall_att (staggered), .avg_att (MultiPeriod)
+    # Check .att (DiDResults), .overall_att (staggered)
     att = getattr(results, "att", None)
     if att is None:
         att = getattr(results, "overall_att", None)
-    if att is None:
-        att = getattr(results, "avg_att", None)
     if att is None:
         return []
     try:

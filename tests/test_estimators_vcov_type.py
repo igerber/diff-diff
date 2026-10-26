@@ -7,7 +7,7 @@ removed at 4.0 - rows M-045..M-047/M-115):
   raw `None` so clones preserve the implicit-vs-explicit distinction.
 - Explicit `vcov_type` values validate against {classical, hc1, hc2, hc2_bm}.
 - `vcov_type="classical"` + `cluster=` raises at fit (one-way only).
-- `MultiPeriodDiD` and `TwoWayFixedEffects` inherit through `get_params`.
+- `TwoWayFixedEffects` inherits through `get_params`.
 - HC2+BM produces a wider CI than HC1 on the same data (property of the DOF
   correction).
 - `get_params` / `set_params` round-trip preserves `vcov_type`.
@@ -24,7 +24,7 @@ import pytest
 from event_study_average import post_period_average
 
 from diff_diff import SunAbraham, SurveyDesign
-from diff_diff.estimators import DifferenceInDifferences, MultiPeriodDiD
+from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import _absorbed_fe_vcov_scale
 from diff_diff.twfe import TwoWayFixedEffects
 
@@ -182,11 +182,6 @@ class TestParamsRoundTrip:
         est.set_params(vcov_type=None)
         assert est.vcov_type == "hc1"
         assert est._vcov_type_explicit is False
-
-    def test_set_params_multi_period_inherits(self):
-        est = MultiPeriodDiD(vcov_type="hc2_bm")
-        params = est.get_params()
-        assert params["vcov_type"] == "hc2_bm"
 
     def test_set_params_twfe_inherits(self):
         est = TwoWayFixedEffects(vcov_type="hc2")
@@ -393,7 +388,7 @@ class TestFitBehavior:
     def test_event_study_fit_honors_classical(self):
         """The TWFE event-study fit with vcov_type='classical' produces non-robust SEs.
 
-        Regression test for the CI review finding: `MultiPeriodDiD` inherits
+        Regression test for the CI review finding: the former `MultiPeriodDiD` inherited
         `vcov_type` from the base class via get_params but its `fit()` path
         used to ignore the knob. Here we compare classical vs hc1 SEs on the
         same data and assert they differ (i.e. the parameter actually took).
@@ -443,7 +438,7 @@ class TestFitBehavior:
         `_compute_cr2_bm_contrast_dof` helper that generalizes the
         per-coefficient loop in `_compute_cr2_bm` to arbitrary linear
         combinations of coefficients. End-to-end smoke test: assert
-        finite avg_att inference (was `NotImplementedError` pre-PR).
+        finite post-period-average inference (was `NotImplementedError` pre-PR).
         """
         rng = np.random.default_rng(2)
         rows = []
@@ -527,15 +522,19 @@ class TestFitBehavior:
         # The per-period df carries the NaN BM DOF (no silent residual-df fallback).
         assert np.all(np.isnan(res.df[~res.is_reference]))
 
-    def test_multi_period_cluster_hc2_bm_avg_att_uses_clubsandwich_dof(self):
-        """MPD(cluster=..., hc2_bm) `avg_att` inference uses the new
-        cluster-aware contrast Satterthwaite DOF, not the shared n-k fallback.
+    def test_twfe_event_study_cluster_hc2_bm_per_period_df_matches_clubsandwich(self):
+        """TWFE event study (within spec, cluster="unit", hc2_bm): the per-period
+        BM Satterthwaite DOF matches R/clubSandwich's CR2 per-coefficient DOF.
 
-        Pins the implied DOF from `avg_p_value` against the R `dof_avg` target
-        on the `mpd_clustered_avg_att_dof` fixture. The R-side compound contrast
-        DOF (from `Wald_test(test="HTZ")$df_denom` on a 1-row constraint matrix
-        — equivalent to the Satterthwaite t-test DOF) is the parity target.
-        Recovers the DOF by inverting `avg_p_value = 2 * (1 - t.cdf(|t|, df))`.
+        Migrated from the former MultiPeriodDiD pin (4.0 cut, PR 4c-ii): the
+        `avg_att` compound-contrast half died with the class; this is the only
+        R-backed pin of the clustered CR2 per-period DOF. The MPD side fitted
+        `fixed_effects=["unit"]`, which equals the R generator's `factor(unit)`
+        term and the within spec's auto-promoted unit dummies. Each event-study
+        row maps to R's `treated_period_p` coefficient: the surface's per-period
+        `df` must equal the golden `dof_per_coef`, and reconstructing that
+        period's CI from the golden DOF must reproduce the stored CI (effect+se
+        already fixed -> the CI matches iff the DOF matches).
         """
         import json
         from pathlib import Path
@@ -555,7 +554,6 @@ class TestFitBehavior:
         if "mpd_clustered_avg_att_dof" not in golden:
             pytest.skip("Golden JSON missing `mpd_clustered_avg_att_dof` scenario.")
         d = golden["mpd_clustered_avg_att_dof"]
-        dof_avg_r = float(d["dof_avg"])
 
         data = pd.DataFrame(
             {
@@ -565,75 +563,41 @@ class TestFitBehavior:
                 "y": d["y"],
             }
         )
-        # MPD parameterization with `fixed_effects=["unit"]` matches the R
-        # generator's `factor(unit)` term (the cluster column is the unit).
-        # Derive `post_periods` from the R `post_interaction_names` so the
-        # contrast we compare to is the SAME `c_avg = (1/n_post) Σ e_p` that
-        # the R generator builds. Without this, MPD defaults to the
-        # last-half-of-periods rule and computes avg_att over [3, 4] on this
-        # 4-period panel, but the R fixture's `c_avg` is over [2, 3, 4] —
-        # the DOFs happen to coincide here but the avg_att estimands differ.
+        # Derive `post_periods` from the R `post_interaction_names` so the fit
+        # labels the same post periods the R generator builds (this 4-period
+        # panel's reference is period 1; post = [2, 3, 4]).
         post_periods = [int(name.rsplit("_", 1)[1]) for name in d["post_interaction_names"]]
-        res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
+        res = TwoWayFixedEffects(vcov_type="hc2_bm", cluster="unit").fit(
             data,
             outcome="y",
             treatment="treated",
             time="period",
-            fixed_effects=["unit"],
+            event_study=True,
+            spec="within",
+            unit="unit",
             reference_period=int(d["reference_period"]),
             post_periods=post_periods,
-            unit="unit",
         )
-        assert np.isfinite(res.avg_att) and np.isfinite(res.avg_se)
-        # SE-audit C2: pin the average-effect SE (was only checked finite). The
-        # R golden carries the contrast `c_avg` and the CR2 vcov, so the expected
-        # avg SE is sqrt(c_avg' Vcr2 c_avg).
-        c_avg = np.asarray(d["c_avg"], dtype=np.float64)
-        vcov_cr2 = np.asarray(d["vcov_cr2"]).reshape(d["vcov_cr2_shape"], order="F")
-        expected_avg_se = float(np.sqrt(c_avg @ vcov_cr2 @ c_avg))
-        np.testing.assert_allclose(res.avg_se, expected_avg_se, atol=1e-8, rtol=0)
-        # Recover the implied DOF from the reported p_value:
-        # avg_p_value = 2 * (1 - t.cdf(|t|, df))  ->  df = root of
-        # `t.sf(|t|, df) * 2 - p` (Satterthwaite-bounded scalar bisection
-        # via scipy's brentq on a sane interval).
-        t_stat = abs(res.avg_t_stat)
-        p_target = res.avg_p_value
-        # Sanity: BM Satterthwaite DOF is bounded in [1, n-k]. With 60 obs and
-        # ~21 coefficients (per the fixture), DOF is in [1, 39].
-        from scipy.optimize import brentq
-
-        def _residual(df):
-            return 2.0 * stats.t.sf(t_stat, df) - p_target
-
-        implied_dof = brentq(_residual, 1.0, 100.0, xtol=1e-8)
-        # The implied DOF should match the R golden at 1e-6 (small tolerance
-        # accounts for the t.cdf evaluation roundoff, not the DOF computation).
-        np.testing.assert_allclose(implied_dof, dof_avg_r, atol=1e-6)
-        # Pin that the new path is in use, not the n-k fallback: dof_avg_r
-        # is well below n-k for this fixture (60 obs - 21 coefs = 39 > 8.1).
-        assert implied_dof < 30, (
-            f"Implied DOF {implied_dof:.2f} is suspiciously large; expected "
-            f"~{dof_avg_r:.2f} (Satterthwaite-corrected) and the n-k fallback "
-            "would be ~39, so the contrast-DOF helper may not be wired."
-        )
-
-        # SE-audit C2: lock the per-period BM Satterthwaite DOF (`dof_per_coef`)
-        # via CI-inversion. Each event-study period effect maps to R's
-        # `treated_period_p` coefficient; reconstructing that period's CI from
-        # the golden per-coef DOF and asserting equality with the reported
-        # `conf_int` pins the DOF (effect+se already fixed → the CI matches iff
-        # the DOF matches). On this fixture the post-period entries coincide
-        # with `dof_avg`, so this completes the per-PERIOD path coverage (a
-        # distinct code path from the avg-contrast DOF pinned above), not a new
-        # numeric target.
+        rows = ~res.is_reference
+        assert np.all(np.isfinite(res.att[rows])) and np.all(np.isfinite(res.se[rows]))
+        assert np.all(np.isfinite(res.df[rows]))
         name_to_dof = dict(zip(d["finite_coef_names"], d["dof_per_coef"]))
         for p in post_periods:
-            pe = res.period_effects[p]
+            (i,) = np.flatnonzero(res.event_time == p)
             gold_dof = name_to_dof.get(f"treated_period_{p}")
             assert gold_dof is not None, f"golden dof_per_coef missing treated_period_{p}"
+            # The surface's per-period df IS the BM Satterthwaite DOF (no
+            # residual-df fallback): pin it directly ...
+            np.testing.assert_allclose(res.df[i], gold_dof, atol=1e-6, rtol=0)
+            # ... and through CI inversion against the stored interval.
             t_crit = float(stats.t.ppf(1.0 - res.alpha / 2.0, gold_dof))
-            expected_ci = (pe.effect - t_crit * pe.se, pe.effect + t_crit * pe.se)
-            np.testing.assert_allclose(pe.conf_int, expected_ci, atol=1e-8, rtol=0)
+            expected_ci = (res.att[i] - t_crit * res.se[i], res.att[i] + t_crit * res.se[i])
+            np.testing.assert_allclose(
+                (res.conf_int_lower[i], res.conf_int_upper[i]), expected_ci, atol=1e-8, rtol=0
+            )
+        # Pin that the Satterthwaite path is in use, not the n-k fallback: the
+        # golden DOFs are well below n-k for this fixture (60 obs - 21 coefs = 39).
+        assert np.all(res.df[rows] < 30), res.df[rows]
 
     def test_event_study_fit_honors_hc2_bm(self):
         """The TWFE event-study fit with vcov_type='hc2_bm' uses Bell-McCaffrey DOF.
@@ -923,8 +887,8 @@ class TestFitBehavior:
         per-replicate refits return point estimates only, identical across
         vcov families by FWL), so vcov_type cannot influence any reported
         number. The previous NotImplementedError is replaced by the
-        warn-and-remap contract shared with DifferenceInDifferences /
-        MultiPeriodDiD; explicit hc1 (the old error's own guidance) stays
+        warn-and-remap contract shared with DifferenceInDifferences;
+        explicit hc1 (the old error's own guidance) stays
         silent.
         """
         data = _make_did_panel(n_units=20).copy()
@@ -990,8 +954,8 @@ class TestFitBehavior:
         carry one entry per `result.vcov` column (no duplicates, no
         collapsing).
 
-        Mirrors the MPD invariant at
-        ``test_absorb_hc2_bm_coefficients_align_with_vcov`` (line 1611)
+        Mirrors the former MultiPeriodDiD absorb invariant
+        (``test_absorb_hc2_bm_coefficients_align_with_vcov``, retired with the class in PR 4c-ii)
         and the REGISTRY/CHANGELOG promise that the full-dummy fit
         exposes the FE-dummy entries alongside the ATT key.
         """
@@ -1024,7 +988,7 @@ class TestFitBehavior:
         Regression for the REGISTRY/CHANGELOG disclosure that under
         `vcov_type in {"hc2","hc2_bm"}`, `result.residuals`,
         `result.fitted_values`, and `result.r_squared` reflect the
-        un-demeaned full-dummy fit (matching DiD-absorb / MPD-absorb
+        un-demeaned full-dummy fit (matching the DiD-absorb
         auto-route behavior).
         """
         data = _make_did_panel(n_units=20)
@@ -1472,32 +1436,6 @@ class TestSummarySurveyLabeling:
         # Survey metadata should surface the replicate method.
         assert "BRR" in summary or "replicate" in summary.lower()
 
-    def test_multi_period_survey_taylor_suppresses_variance_label(self):
-        """Same survey suppression holds for `MultiPeriodDiDResults.summary()`.
-
-        MultiPeriodDiD has its own summary block and its own gating logic; the
-        P2 fix applies there too.
-        """
-        data = _make_survey_panel()
-        sd = SurveyDesign(
-            weights="weight",
-            strata="stratum",
-            psu="psu",
-            weight_type="pweight",
-        )
-        est = MultiPeriodDiD(vcov_type="hc1")
-        res = est.fit(
-            data,
-            outcome="y",
-            treatment="treated",
-            time="time",
-            unit="unit",
-            survey_design=sd,
-        )
-        assert res.survey_metadata is not None
-        summary = res.summary()
-        assert "Variance:" not in summary
-
     def test_non_survey_fit_still_prints_variance_label(self):
         """Regression guard: the survey-only suppression must not break the
         non-survey path, which should still print the analytical Variance: line.
@@ -1859,433 +1797,6 @@ class TestDiDAbsorbedFERParity:
         )
 
 
-class TestMPDAbsorbedFERParity:
-    """R-parity for `MultiPeriodDiD(absorb=..., vcov_type in {hc2, hc2_bm})`.
-
-    Mirrors `TestDiDAbsorbedFERParity`. The auto-route promotes `absorb=` to
-    `fixed_effects=` internally; MPD's existing `fixed_effects=` code path
-    builds the full-dummy design that R's `lm()` produces.
-
-    Collinearity note: MPD's `treated` is a time-invariant ever-treated
-    indicator, so it lies in the span of the intercept and the
-    post-auto-route unit FE dummies (under `pd.get_dummies(drop_first=True)`
-    the dropped reference unit is folded into the intercept; the exact
-    alias relation depends on the omitted category and is NOT simply
-    "the sum of treated-cohort unit dummies"). `solve_ols` resolves this
-    by dropping one column from the collinear set under R-style
-    rank-deficiency handling. In the shipped parity fixture the dropped
-    column is a unit dummy from the never-treated cohort (`unit_25`) and
-    the `treated` main effect remains finite, but the specific column
-    dropped is pivot-order and dummy-coding dependent. Tests therefore
-    pin parity on a per-period interaction (`treated:period_4`) which is
-    identified independent of that choice, exposed as
-    `result.period_effects[4]`.
-
-    Time-FE skip note: when the routed (or explicit) `fixed_effects` list
-    contains the `time` column, MPD silently skips emitting `<time>_<X>`
-    dummies for that entry because the design already absorbs the time
-    dimension via the non-reference period dummies. The
-    `test_absorb_hc2_result_surface_invariants_multi_absorb` test pins
-    that the resulting `coefficients` dict cardinality matches `vcov`
-    rank and has no duplicate names.
-    """
-
-    def _load_golden(self):
-        import json
-        from pathlib import Path
-
-        golden_path = (
-            Path(__file__).parent.parent / "benchmarks" / "data" / "clubsandwich_cr2_golden.json"
-        )
-        if not golden_path.exists():
-            pytest.skip(
-                "Golden JSON not present; run `Rscript "
-                "benchmarks/R/generate_clubsandwich_golden.R` to generate."
-            )
-        with open(golden_path) as f:
-            golden = json.load(f)
-        if "mpd_absorbed_fe_did" not in golden:
-            pytest.skip(
-                "Golden JSON does not yet include `mpd_absorbed_fe_did` scenario; "
-                "regenerate via the R script."
-            )
-        return golden["mpd_absorbed_fe_did"]
-
-    def _make_data(self, d):
-        return pd.DataFrame(
-            {
-                "unit": d["unit"],
-                "period": d["period"],
-                "treated": d["treated"],
-                "y": d["y"],
-            }
-        )
-
-    def _fit_absorb(self, d, vcov_type, absorb_cols=("unit",)):
-        return MultiPeriodDiD(vcov_type=vcov_type).fit(
-            self._make_data(d),
-            outcome="y",
-            treatment="treated",
-            time="period",
-            absorb=list(absorb_cols),
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-        )
-
-    def _fit_fixed_effects(self, d, vcov_type, fe_cols=("unit",)):
-        return MultiPeriodDiD(vcov_type=vcov_type).fit(
-            self._make_data(d),
-            outcome="y",
-            treatment="treated",
-            time="period",
-            fixed_effects=list(fe_cols),
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-        )
-
-    def test_absorb_hc2_matches_fixed_effects_dummies_single_absorb(self):
-        """`absorb=["unit"]` + hc2 produces the same per-period SE as
-        `fixed_effects=["unit"]` + hc2 (auto-route invariant)."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        res_a = self._fit_absorb(d, "hc2", absorb_cols=("unit",))
-        res_f = self._fit_fixed_effects(d, "hc2", fe_cols=("unit",))
-        pe_a = res_a.period_effects[target_period]
-        pe_f = res_f.period_effects[target_period]
-        np.testing.assert_allclose(pe_a.effect, pe_f.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_a.se, pe_f.se, atol=1e-12)
-
-    def test_absorb_hc2_result_surface_invariants_multi_absorb(self):
-        """Result-surface contract on the multi-absorb auto-route: the
-        returned `MultiPeriodDiDResults.coefficients` dict must remain
-        complete (one entry per fitted column), uniquely named, and aligned
-        in cardinality with `vcov`.
-
-        Regression for the duplicate-name collision the auto-route would
-        otherwise expose: MPD already includes period dummies in its
-        event-study design, so adding the `time` column as a fixed-effect
-        dummy via `pd.get_dummies(prefix="period", drop_first=True)` would
-        produce a second `period_<X>` block. Under `var_names`-keyed
-        `coef_dict` construction, the duplicates silently collapse and the
-        original event-study period coefficients are overwritten by the
-        rank-deficient NaN drops on the redundant FE block. The fix at
-        `estimators.py:fit()` (skip `fe == time` in the fixed_effects
-        loop) eliminates the duplicate columns entirely. Test pins both
-        the auto-route and the explicit `fixed_effects=` paths.
-        """
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        from collections import Counter
-
-        for kwarg in ("absorb", "fixed_effects"):
-            res = MultiPeriodDiD(vcov_type="hc2").fit(
-                self._make_data(d),
-                outcome="y",
-                treatment="treated",
-                time="period",
-                **{kwarg: ["unit", "period"]},
-                reference_period=int(d["reference_period"]),
-                unit="unit",
-            )
-            assert res.vcov is not None
-            assert len(res.coefficients) == res.vcov.shape[0], (
-                f"[{kwarg}=] coefficients dict length ({len(res.coefficients)}) "
-                f"must match vcov rank ({res.vcov.shape[0]}); duplicate var_names "
-                "collapsed the dict and broke coefficients-vs-vcov alignment."
-            )
-            assert res.vcov.shape[0] == res.vcov.shape[1]
-            dups = {k: v for k, v in Counter(res.coefficients.keys()).items() if v > 1}
-            assert not dups, f"[{kwarg}=] duplicate names in coefficients: {dups}"
-            # Sanity: the event-study period coefficients should be finite
-            # (they are MPD's own non-reference period dummies, NOT the
-            # redundant FE-block that was skipped).
-            pe_name = f"period_{target_period}"
-            assert pe_name in res.coefficients
-            assert np.isfinite(res.coefficients[pe_name]), (
-                f"[{kwarg}=] event-study {pe_name!r} should remain finite "
-                "after the time-FE-skip fix (the duplicate FE-block that "
-                "would have NaN'd it is no longer emitted)."
-            )
-
-    def test_absorb_hc2_matches_fixed_effects_dummies_multi_absorb(self):
-        """`absorb=["unit","time"]` invariant: with both unit and time
-        FE auto-routed, the period dummies collide with time-FE dummies;
-        `solve_ols` handles rank deficiency, slope SE on the
-        target per-period interaction stays well-defined and matches the
-        explicit `fixed_effects=` path."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        # Use "period" as the time/FE column name to match the data column.
-        res_a = MultiPeriodDiD(vcov_type="hc2").fit(
-            self._make_data(d),
-            outcome="y",
-            treatment="treated",
-            time="period",
-            absorb=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-        )
-        res_f = MultiPeriodDiD(vcov_type="hc2").fit(
-            self._make_data(d),
-            outcome="y",
-            treatment="treated",
-            time="period",
-            fixed_effects=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-        )
-        pe_a = res_a.period_effects[target_period]
-        pe_f = res_f.period_effects[target_period]
-        assert np.isfinite(pe_a.se)
-        np.testing.assert_allclose(pe_a.effect, pe_f.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_a.se, pe_f.se, atol=1e-12)
-
-    def test_absorb_hc2_bm_matches_fixed_effects_dummies(self):
-        """`absorb=` + hc2_bm equals `fixed_effects=` + hc2_bm bit-for-bit
-        on both per-period SE and inference (DOF transfers identically)."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        res_a = self._fit_absorb(d, "hc2_bm", absorb_cols=("unit",))
-        res_f = self._fit_fixed_effects(d, "hc2_bm", fe_cols=("unit",))
-        pe_a = res_a.period_effects[target_period]
-        pe_f = res_f.period_effects[target_period]
-        np.testing.assert_allclose(pe_a.effect, pe_f.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_a.se, pe_f.se, atol=1e-12)
-        np.testing.assert_allclose(pe_a.p_value, pe_f.p_value, atol=1e-12)
-
-    def test_absorb_hc2_matches_sandwich_vcovhc(self):
-        """`absorb=` + hc2 matches `lm() + sandwich::vcovHC(type="HC2")`
-        at 1e-10 on the target per-period interaction."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        target_coef = f"treated_period_{target_period}"
-        coef_names = d["coef_names"]
-        idx = coef_names.index(target_coef)
-        expected_vcov = np.asarray(d["vcov_hc2"]).reshape(d["vcov_hc2_shape"])
-        expected_se = float(np.sqrt(expected_vcov[idx, idx]))
-        expected_coef = float(d["coef"][idx])
-
-        res = self._fit_absorb(d, "hc2", absorb_cols=("unit",))
-        pe = res.period_effects[target_period]
-        np.testing.assert_allclose(pe.effect, expected_coef, atol=1e-10)
-        np.testing.assert_allclose(pe.se, expected_se, atol=1e-10)
-
-    def test_absorb_hc2_bm_matches_clubsandwich_singleton_cluster(self):
-        """`absorb=` + hc2_bm matches `clubSandwich::vcovCR(cluster=1:n, type="CR2")`
-        at 1e-10 on the target per-period interaction (singleton-cluster
-        CR2 = one-way HC2-BM by PT2018 §3.3)."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        target_coef = f"treated_period_{target_period}"
-        coef_names = d["coef_names"]
-        idx = coef_names.index(target_coef)
-        expected_vcov = np.asarray(d["vcov_hc2_bm"]).reshape(d["vcov_hc2_bm_shape"])
-        expected_se = float(np.sqrt(expected_vcov[idx, idx]))
-
-        res = self._fit_absorb(d, "hc2_bm", absorb_cols=("unit",))
-        pe = res.period_effects[target_period]
-        np.testing.assert_allclose(pe.se, expected_se, atol=1e-10)
-
-    def test_absorb_plus_fixed_effects_still_rejected_under_hc2_bm(self):
-        """Mutual-exclusion of `absorb=` and `fixed_effects=` is preserved
-        on MPD across all vcov_types (the auto-route does NOT silently merge)."""
-        d = self._load_golden()
-        for vcov in ("hc1", "hc2", "hc2_bm"):
-            with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
-                MultiPeriodDiD(vcov_type=vcov).fit(
-                    self._make_data(d),
-                    outcome="y",
-                    treatment="treated",
-                    time="period",
-                    absorb=["unit"],
-                    fixed_effects=["period"],
-                    reference_period=int(d["reference_period"]),
-                    unit="unit",
-                )
-
-    def test_absorb_hc2_bm_df_sensitive_inference(self):
-        """HC2 vs HC2-BM produce the same SE on the target per-period
-        interaction but different `p_value` / `conf_int` because the BM
-        Satterthwaite DOF differs from n-k. Guards against an unwired DOF
-        path (R1 review on PR #458 caught the analogous gap on DiD)."""
-        d = self._load_golden()
-        target_period = int(d["target_period"])
-        res_hc2 = self._fit_absorb(d, "hc2", absorb_cols=("unit",))
-        res_hc2_bm = self._fit_absorb(d, "hc2_bm", absorb_cols=("unit",))
-        pe_hc2 = res_hc2.period_effects[target_period]
-        pe_hc2_bm = res_hc2_bm.period_effects[target_period]
-        np.testing.assert_allclose(pe_hc2.effect, pe_hc2_bm.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_hc2.se, pe_hc2_bm.se, atol=1e-12)
-        assert pe_hc2.p_value != pe_hc2_bm.p_value, (
-            "HC2 and HC2-BM should have different p_values "
-            "because the BM Satterthwaite DOF differs from n-k."
-        )
-        width_hc2 = float(pe_hc2.conf_int[1] - pe_hc2.conf_int[0])
-        width_hc2_bm = float(pe_hc2_bm.conf_int[1] - pe_hc2_bm.conf_int[0])
-        assert width_hc2_bm > width_hc2, (
-            f"HC2-BM CI width ({width_hc2_bm:.6f}) should exceed "
-            f"HC2 CI width ({width_hc2:.6f}) — BM Satterthwaite DOF is "
-            "smaller than n-k, so the critical value is larger."
-        )
-
-    def test_absorb_hc2_bm_avg_att_df_sensitive_inference(self):
-        """The post-period-average ATT (`avg_att`, the MPD-specific
-        contrast that does NOT have a DiD analogue) must also reflect
-        the Satterthwaite DOF under HC2-BM: HC2 and HC2-BM share
-        `avg_se` but differ in `avg_p_value` and `avg_conf_int`. This is
-        the MPD-specific inference pin that the DiD test class cannot
-        cover."""
-        d = self._load_golden()
-        res_hc2 = self._fit_absorb(d, "hc2", absorb_cols=("unit",))
-        res_hc2_bm = self._fit_absorb(d, "hc2_bm", absorb_cols=("unit",))
-        np.testing.assert_allclose(res_hc2.avg_att, res_hc2_bm.avg_att, atol=1e-12)
-        np.testing.assert_allclose(res_hc2.avg_se, res_hc2_bm.avg_se, atol=1e-12)
-        assert res_hc2.avg_p_value != res_hc2_bm.avg_p_value, (
-            "HC2 and HC2-BM should produce different `avg_p_value` because "
-            "the BM Satterthwaite DOF on the post-period-average contrast "
-            "differs from n-k. Same p_value indicates the DOF was not "
-            "propagated to the avg_att inference path."
-        )
-        width_hc2 = float(res_hc2.avg_conf_int[1] - res_hc2.avg_conf_int[0])
-        width_hc2_bm = float(res_hc2_bm.avg_conf_int[1] - res_hc2_bm.avg_conf_int[0])
-        assert width_hc2_bm > width_hc2, (
-            f"HC2-BM avg_att CI width ({width_hc2_bm:.6f}) should exceed "
-            f"HC2 avg_att CI width ({width_hc2:.6f}) — BM Satterthwaite "
-            "DOF is smaller than n-k, so the critical value is larger."
-        )
-
-    def test_absorb_hc2_bm_survey_multi_absorb_auto_routes(self):
-        """Survey-weighted multi-absorb + HC2-BM should auto-route, not reject.
-
-        Mirrors the DiD-class test of the same name: the legacy guard at
-        `estimators.py:1505-1512` rejects `survey_design + len(absorb) > 1`
-        because single-pass demeaning is not the correct weighted FWL
-        projection for multiple absorbed dimensions. But when the auto-route
-        fires (hc2/hc2_bm), absorb is swapped for fixed_effects= BEFORE the
-        survey guard sees it, so the demeaning rationale doesn't apply. The
-        auto-route placement is precisely tuned for this case; this test
-        pins it on the MPD path."""
-        from diff_diff import SurveyDesign
-
-        d = self._load_golden()
-        rng = np.random.default_rng(20260420)
-        n = len(d["y"])
-        data = pd.DataFrame(
-            {
-                "unit": d["unit"],
-                "period": d["period"],
-                "treated": d["treated"],
-                "y": d["y"],
-                "weight": rng.uniform(0.5, 2.0, size=n),
-            }
-        )
-        sd = SurveyDesign(weights="weight", weight_type="aweight")
-        # Multi-absorb (unit + period) + survey + hc2_bm: auto-route fires
-        # and the multi-absorb-survey guard is bypassed cleanly.
-        res = MultiPeriodDiD(vcov_type="hc2_bm").fit(
-            data,
-            outcome="y",
-            treatment="treated",
-            time="period",
-            absorb=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-            survey_design=sd,
-        )
-        # Parity invariant: the explicit fixed_effects= path on the same
-        # data must produce the same per-period SE.
-        res_fe = MultiPeriodDiD(vcov_type="hc2_bm").fit(
-            data,
-            outcome="y",
-            treatment="treated",
-            time="period",
-            fixed_effects=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-            survey_design=sd,
-        )
-        target_period = int(d["target_period"])
-        pe_a = res.period_effects[target_period]
-        pe_f = res_fe.period_effects[target_period]
-        assert np.isfinite(pe_a.effect)
-        assert np.isfinite(pe_a.se)
-        np.testing.assert_allclose(pe_a.effect, pe_f.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_a.se, pe_f.se, atol=1e-12)
-        np.testing.assert_allclose(res.avg_att, res_fe.avg_att, atol=1e-12)
-        np.testing.assert_allclose(res.avg_se, res_fe.avg_se, atol=1e-12)
-
-    def test_absorb_hc2_bm_replicate_weights_auto_routes(self):
-        """Replicate-weight survey design + absorb + HC2-BM auto-routes
-        through `compute_replicate_vcov` on the full-dummy design.
-
-        The CHANGELOG/REGISTRY claim that, under the auto-route, the
-        survey-replicate absorb-refit branch at `estimators.py:1693` is
-        short-circuited (no per-replicate refit needed because the
-        full-dummy design does not depend on replicate weights — the
-        standard `compute_replicate_vcov` path applies directly). This
-        test pins the parity invariant on a JK1 fixture: `absorb=`
-        + replicate weights must produce the same `period_effects`
-        and `avg_att` SEs as the explicit `fixed_effects=` form."""
-        from diff_diff import SurveyDesign
-
-        d = self._load_golden()
-        rng = np.random.default_rng(20260420)
-        n = len(d["y"])
-        data = pd.DataFrame(
-            {
-                "unit": d["unit"],
-                "period": d["period"],
-                "treated": d["treated"],
-                "y": d["y"],
-                "weight": rng.uniform(0.5, 2.0, size=n),
-            }
-        )
-        # 10 JK1 jackknife replicate-weight columns; weights drawn from
-        # {0.5, 1.5} match the BRR pattern of the existing replicate
-        # tests in this file.
-        rep_cols = [f"rep{r}" for r in range(10)]
-        for col in rep_cols:
-            data[col] = rng.choice([0.5, 1.5], size=n)
-        sd = SurveyDesign(
-            weights="weight",
-            replicate_weights=rep_cols,
-            replicate_method="JK1",
-            replicate_scale=1.0,
-        )
-        res_absorb = MultiPeriodDiD(vcov_type="hc2_bm").fit(
-            data,
-            outcome="y",
-            treatment="treated",
-            time="period",
-            absorb=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-            survey_design=sd,
-        )
-        res_fe = MultiPeriodDiD(vcov_type="hc2_bm").fit(
-            data,
-            outcome="y",
-            treatment="treated",
-            time="period",
-            fixed_effects=["unit", "period"],
-            reference_period=int(d["reference_period"]),
-            unit="unit",
-            survey_design=sd,
-        )
-        target_period = int(d["target_period"])
-        pe_a = res_absorb.period_effects[target_period]
-        pe_f = res_fe.period_effects[target_period]
-        assert np.isfinite(pe_a.effect)
-        assert np.isfinite(pe_a.se)
-        # The auto-route short-circuits the absorb-refit branch and routes
-        # both calls through the standard replicate-vcov path; SE parity
-        # is therefore exact (bit-identical, not just to within 1e-10).
-        np.testing.assert_allclose(pe_a.effect, pe_f.effect, atol=1e-12)
-        np.testing.assert_allclose(pe_a.se, pe_f.se, atol=1e-12)
-        np.testing.assert_allclose(res_absorb.avg_att, res_fe.avg_att, atol=1e-12)
-        np.testing.assert_allclose(res_absorb.avg_se, res_fe.avg_se, atol=1e-12)
-
-
 class TestTWFECovariateNameCollision:
     """PR3: TwoWayFixedEffects covariate-name collision guard.
 
@@ -2388,7 +1899,7 @@ class TestEventStudyClusterHC2BMSharedPrecompute:
     adjustment matrices at all — the low-rank factored `A_g` apply.)
 
     (Absolute SE/DOF values are pinned independently by the R/clubSandwich
-    goldens in `test_multi_period_cluster_hc2_bm_avg_att_uses_clubsandwich_dof`
+    goldens in `test_twfe_event_study_cluster_hc2_bm_per_period_df_matches_clubsandwich`
     and `test_linalg_hc2_bm.py`; these tests guard the *new invariants* the
     refactor introduces.)
     """
@@ -2487,10 +1998,10 @@ class TestEventStudyClusterHC2BMSharedPrecompute:
 class TestTWFEEventStudyAbsorbedFERParity:
     """R-parity for the TWFE event-study mode's within spec with the explicit
     hc2 family (the classical/hc2/hc3 carve-out: no auto-cluster), against the
-    same ``mpd_absorbed_fe_did`` golden the MultiPeriodDiD absorb tests use
+    same ``mpd_absorbed_fe_did`` golden the former MultiPeriodDiD absorb tests used
     (4.0 cut, PR 4c-i). The one-way HC2-BM lane has no within twin (within +
-    hc2_bm auto-clusters at unit) and stays on the MultiPeriodDiD class until
-    PR 4c-ii; see TODO.md."""
+    hc2_bm auto-clusters at unit); the MultiPeriodDiD lanes died with the
+    class in PR 4c-ii; see TODO.md."""
 
     def _load_golden(self):
         import json
@@ -2602,24 +2113,6 @@ class TestAbsorbedFEFullKParity:
         np.testing.assert_allclose(ab.att, fe.att, rtol=1e-9)
         np.testing.assert_allclose(ab.se, fe.se, rtol=1e-9)
 
-    @pytest.mark.parametrize("vcov", ["classical", "hc1"])
-    def test_mpd_absorb_matches_full_dummy_oracle(self, vcov):
-        df = _make_absorb_panel()
-        ab = MultiPeriodDiD(vcov_type=vcov).fit(
-            df, outcome="y", treatment="treated", time="time", absorb=["unit"], covariates=["x"]
-        )
-        fe = MultiPeriodDiD(vcov_type=vcov).fit(
-            df,
-            outcome="y",
-            treatment="treated",
-            time="time",
-            fixed_effects=["unit"],
-            covariates=["x"],
-        )
-        assert np.isfinite(ab.avg_se)
-        np.testing.assert_allclose(ab.avg_att, fe.avg_att, rtol=1e-9)
-        np.testing.assert_allclose(ab.avg_se, fe.avg_se, rtol=1e-9)
-
     def test_twfe_classical_matches_full_dummy_oracle(self):
         """TWFE always within-transforms; the equivalent explicit full-dummy
         DiD is the oracle. After the fix TWFE(classical) SE == that oracle."""
@@ -2728,34 +2221,6 @@ class TestAbsorbedFEFullKParity:
         assert np.isnan(_absorbed_fe_vcov_scale(10, 3, 8))  # full-K denom = -1
         assert np.isnan(_absorbed_fe_vcov_scale(10, 2, 8))  # full-K denom = 0
         assert np.isnan(_absorbed_fe_vcov_scale(10, 12, 2))  # visible denom < 0
-
-    def test_absorb_saturated_full_k_df_le_zero_nan_inference(self):
-        """A saturated within-transform design (full-K residual dof <= 0) yields
-        NaN SE/inference end-to-end, not a misleading finite k_visible SE.
-
-        2 units x 5 periods with ``absorb=["unit"]`` drives K_full past n, so the
-        classical full-K variance is undefined -> the rescale helper returns NaN
-        and the vcov is voided (fail-closed), even though the point estimate is
-        still computed.
-        """
-        rng = np.random.default_rng(0)
-        rows = []
-        for u in range(2):
-            tr = int(u >= 1)
-            for t in range(5):
-                rows.append(
-                    {
-                        "unit": u,
-                        "time": t,
-                        "treated": tr,
-                        "y": float(rng.normal()) + 0.5 * tr * (t >= 1),
-                    }
-                )
-        df = pd.DataFrame(rows)
-        r = MultiPeriodDiD(vcov_type="classical").fit(
-            df, outcome="y", treatment="treated", time="time", absorb=["unit"]
-        )
-        assert np.isnan(r.avg_se), "saturated full-K design must yield NaN SE (fail-closed)"
 
     def test_within_event_study_saturated_full_k_df_le_zero_nan_inference(self):
         """TWFE event-study twin (spec='within' + classical) of the saturated
@@ -2909,36 +2374,6 @@ class TestDfConvention:
                     2 * stats.t.sf(abs(m1.att[i] / m1.se[i]), G - 1),
                     rtol=1e-12,
                 )
-
-    def test_mpd_avg_att_follows_convention(self):
-        """MPD's headline avg_att p-value/CI route through the shared df,
-        so the knob moves them to t(G-1); avg_att/avg_se/avg_t_stat are
-        unchanged. Also locks the new inference_df/df_convention metadata."""
-        from scipy import stats
-
-        data = self._clustered_panel()
-        data["treated"] = data["group"]
-        kw = dict(outcome="y", treatment="treated", time="time", unit="unit")
-        m0 = MultiPeriodDiD(cluster="unit").fit(data, **kw)
-        m1 = MultiPeriodDiD(cluster="unit", df_convention="cluster").fit(data, **kw)
-        G = data["unit"].nunique()
-        assert m0.avg_att == m1.avg_att
-        assert m0.avg_se == m1.avg_se
-        assert m0.avg_t_stat == m1.avg_t_stat
-        np.testing.assert_allclose(
-            m1.avg_p_value, 2 * stats.t.sf(abs(m1.avg_t_stat), G - 1), rtol=1e-12
-        )
-        crit = stats.t.ppf(0.975, G - 1)
-        np.testing.assert_allclose(
-            m1.avg_conf_int,
-            (m1.avg_att - crit * m1.avg_se, m1.avg_att + crit * m1.avg_se),
-            rtol=1e-12,
-        )
-        assert m0.avg_p_value != m1.avg_p_value
-        # result metadata
-        assert m1.df_convention == "cluster" and m1.inference_df == G - 1
-        assert m0.df_convention == "residual" and m0.inference_df > G - 1
-        assert m1.to_dict()["inference_df"] == G - 1
 
     def test_results_metadata_did_twfe(self):
         """DiDResults carries df_convention + the effective inference_df,
@@ -3165,7 +2600,7 @@ class TestDfConvention:
 
 class TestDfConventionNormal:
     """The third knob value "normal" on the ORIGINAL knob surfaces
-    (DiD/TWFE/MPD/LinearRegression), added 3.9 (M-127): deliberate
+    (DiD/TWFE/LinearRegression), added 3.9 (M-127): deliberate
     normal-theory z at the fallback level on EVERY fit — clustered,
     unclustered, AND conley (the ungated-fallback semantic; "cluster"
     stays conley-excluded, "normal" does not). Survey df and BM DOF keep
@@ -3227,7 +2662,7 @@ class TestDfConventionNormal:
         rk_res = DifferenceInDifferences(**common).fit(data, unit="unit", **self._kw)
         assert rk.p_value != rk_res.p_value
 
-    def test_twfe_and_mpd_normal(self):
+    def test_twfe_normal(self):
         from scipy import stats
 
         data = self._panel()
@@ -3235,17 +2670,7 @@ class TestDfConventionNormal:
             data, outcome="y", treatment="group", post="post", unit="unit"
         )
         assert rt.p_value == pytest.approx(2 * stats.norm.sf(abs(rt.t_stat)), rel=1e-14)
-        rm = MultiPeriodDiD(cluster="unit", df_convention="normal").fit(
-            data,
-            outcome="y",
-            treatment="group",
-            time="time",
-            post_periods=[3, 4, 5],
-            reference_period=2,
-        )
-        assert rm.inference_df is None
-        assert rm.avg_p_value == pytest.approx(2 * stats.norm.sf(abs(rm.avg_t_stat)), rel=1e-13)
-        # TWFE event-study twin (pooled design): z-based p-values on every
+        # TWFE event-study mode (pooled design): z-based p-values on every
         # non-reference row and no finite df under the normal convention.
         re_ = TwoWayFixedEffects(cluster="unit", df_convention="normal").fit(
             data,
@@ -3282,7 +2707,7 @@ class TestDfConventionNormal:
         assert inf2.df == 7
 
     def test_validation_accepts_normal_everywhere(self):
-        for ctor in (DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD):
+        for ctor in (DifferenceInDifferences, TwoWayFixedEffects):
             est = ctor(df_convention="normal")
             assert est.get_params()["df_convention"] == "normal"
 
@@ -3330,23 +2755,6 @@ class TestHC3SharedSurfaceHardening:
         np.testing.assert_allclose(r_absorb.att, r_fe.att, rtol=1e-10)
         np.testing.assert_allclose(r_absorb.se, r_fe.se, rtol=1e-10)
 
-    def test_mpd_hc3_absorb_matches_full_dummy(self):
-        df = self._staggered_fe_panel()
-        kw = dict(outcome="y", treatment="treated", time="time", post_periods=[3, 4, 5])
-        r_absorb = MultiPeriodDiD(vcov_type="hc3").fit(df, absorb=["unit"], **kw)
-        r_fe = MultiPeriodDiD(vcov_type="hc3").fit(df, fixed_effects=["unit"], **kw)
-        for period in r_absorb.period_effects:
-            np.testing.assert_allclose(
-                r_absorb.period_effects[period].effect,
-                r_fe.period_effects[period].effect,
-                rtol=1e-10,
-            )
-            np.testing.assert_allclose(
-                r_absorb.period_effects[period].se,
-                r_fe.period_effects[period].se,
-                rtol=1e-10,
-            )
-
     def test_twfe_hc3_fits_without_misleading_cluster_error(self):
         # Pre-fix: explicit hc3 kept the unit auto-cluster, and solve_ols
         # raised "hc3 is one-way only ... for cluster-robust" although the
@@ -3354,7 +2762,7 @@ class TestHC3SharedSurfaceHardening:
         df = self._staggered_fe_panel()
         df["treat_it"] = df["treated"] * df["post"]
         res = TwoWayFixedEffects(vcov_type="hc3").fit(
-            df, outcome="y", treatment="treat_it", unit="unit", time="time"
+            df, outcome="y", treatment="treat_it", unit="unit", post="time"
         )
         assert np.isfinite(res.att) and np.isfinite(res.se) and res.se > 0
 
@@ -3373,7 +2781,6 @@ class TestHC3SharedSurfaceHardening:
         HC3_SUPPORTED = {
             "DifferenceInDifferences",
             "TwoWayFixedEffects",
-            "MultiPeriodDiD",
             "LWDiD",  # reg path only; ipw/dr/psm restricted by its own validator
         }
         checked = []

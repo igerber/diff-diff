@@ -87,7 +87,7 @@ results.overall_se        # Standard error
 # The canonical prefixed names remain the documented and computed
 # surface; the flat aliases are pure read-throughs for compatibility
 # with adapters that `getattr(res, "se", None)`-style query inference.
-results.att               # alias of overall_att / avg_att (or overall_att for ContinuousDiD ATT side)
+results.att               # alias of overall_att (or overall_att for ContinuousDiD ATT side)
 results.se                # alias of overall_se / avg_se (or overall_att_se for ContinuousDiD ATT side)
 ```
 
@@ -359,8 +359,8 @@ print(results.summary())
 ```python
 from diff_diff import TwoWayFixedEffects
 
-# TwoWayFixedEffects event-study mode (MultiPeriodDiD is deprecated in
-# 3.9; spec='pooled' reproduces its design). post_periods= is REQUIRED:
+# TwoWayFixedEffects event-study mode (the MultiPeriodDiD class was removed
+# at the 4.0 cut; spec='pooled' runs its design). post_periods= is REQUIRED:
 # the treatment boundary cannot be inferred from a time-invariant
 # ever-treated indicator.
 es = TwoWayFixedEffects(cluster='unit_id')
@@ -398,7 +398,7 @@ This step is CRITICAL and most often skipped. Run at least one of:
 
 ### HonestDiD (Rambachan & Roth 2023) - recommended
 Bounds on the treatment effect under violations of parallel trends.
-Works with MultiPeriodDiD (deprecated - the TWFE event-study surface also admits), CallawaySantAnna, and ChaisemartinDHaultfoeuille
+Works with the TwoWayFixedEffects event-study surface (`event_study=True`), CallawaySantAnna, and ChaisemartinDHaultfoeuille
 (dCDH) results, plus StackedDiD via the post-fit
 `results.aggregate('event_study')` container (needs `kappa_pre >= 2` so
 estimated pre-periods exist).

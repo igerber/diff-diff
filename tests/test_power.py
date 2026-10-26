@@ -12,7 +12,6 @@ from diff_diff import (
     DifferenceInDifferences,
     EfficientDiD,
     ImputationDiD,
-    MultiPeriodDiD,
     PowerAnalysis,
     PowerResults,
     SimulationMDEResults,
@@ -39,7 +38,6 @@ from diff_diff.power import (
     _ddd_dgp_kwargs,
     _ddd_fit_kwargs,
     _ddd_panel_viable_min_n,
-    _extract_multiperiod,
     _extract_simple,
     _extract_staggered,
     _factor_dgp_kwargs,
@@ -844,7 +842,6 @@ class TestEstimatorRegistry:
 
     EXPECTED_ESTIMATORS = [
         "DifferenceInDifferences",
-        "MultiPeriodDiD",
         "CallawaySantAnna",
         "SunAbraham",
         "ImputationDiD",
@@ -914,21 +911,6 @@ class TestEstimatorRegistry:
         assert se == 0.5
         assert p == 0.01
         assert ci == (2.0, 4.0)
-
-    def test_extract_multiperiod(self):
-        """_extract_multiperiod extracts from avg_* attributes."""
-
-        class MockResult:
-            avg_att = 4.0
-            avg_se = 0.6
-            avg_p_value = 0.001
-            avg_conf_int = (2.8, 5.2)
-
-        att, se, p, ci = _extract_multiperiod(MockResult())
-        assert att == 4.0
-        assert se == 0.6
-        assert p == 0.001
-        assert ci == (2.8, 5.2)
 
     def test_extract_staggered_analytical(self):
         """_extract_staggered handles analytical result objects."""
@@ -1016,15 +998,6 @@ class TestEstimatorCoverage:
             progress=False,
         )
         self._assert_valid_result(result, "DifferenceInDifferences")
-
-    def test_multiperiod(self):
-        result = simulate_power(
-            MultiPeriodDiD(),
-            n_simulations=10,
-            seed=42,
-            progress=False,
-        )
-        self._assert_valid_result(result, "MultiPeriodDiD")
 
     def test_callaway_santanna(self):
         result = simulate_power(
@@ -1756,6 +1729,95 @@ class TestEstimatorCoverage:
         )
         assert 0 <= result.power <= 1
         assert result.n_simulations > 0
+
+    def test_custom_fallback_avg_only_result_raises_naming_profile(self):
+        """4.0 cut: the generic fallback reads the canonical flat
+        ``att/se/p_value/conf_int`` names. A custom result exposing only
+        the removed ``avg_*`` names must raise ``TypeError`` that names
+        ``_EstimatorProfile`` (and the ``result_extractor=`` escape hatch)
+        rather than being silently skipped as a failed simulation."""
+        from types import SimpleNamespace
+
+        class _AvgOnlyEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                r = self._inner.fit(data, **kwargs)
+                return SimpleNamespace(
+                    avg_att=r.att, avg_se=r.se, avg_p_value=r.p_value, avg_conf_int=r.conf_int
+                )
+
+        with pytest.raises(TypeError, match="_EstimatorProfile") as excinfo:
+            simulate_power(
+                _AvgOnlyEstimator(),
+                data_generator=generate_did_data,
+                estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+        msg = str(excinfo.value)
+        assert "result_extractor" in msg
+        for name in ("att", "se", "p_value", "conf_int"):
+            assert name in msg
+
+    def test_custom_fallback_flat_result_still_works(self):
+        """A custom result exposing the flat ``att/se/p_value/conf_int``
+        names goes through the generic fallback without a profile."""
+        from types import SimpleNamespace
+
+        class _FlatEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                r = self._inner.fit(data, **kwargs)
+                return SimpleNamespace(att=r.att, se=r.se, p_value=r.p_value, conf_int=r.conf_int)
+
+        result = simulate_power(
+            _FlatEstimator(),
+            data_generator=generate_did_data,
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
+            n_simulations=3,
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationPowerResults)
+        assert 0 <= result.power <= 1
+        assert result.n_simulations == 3
+        assert np.isfinite(result.mean_estimate)
+
+    def test_custom_fallback_avg_only_result_with_explicit_extractor(self):
+        """The ``result_extractor=`` escape hatch reads any result shape,
+        including the removed ``avg_*`` names, bypassing the TypeError."""
+        from types import SimpleNamespace
+
+        class _AvgOnlyEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                r = self._inner.fit(data, **kwargs)
+                return SimpleNamespace(
+                    avg_att=r.att, avg_se=r.se, avg_p_value=r.p_value, avg_conf_int=r.conf_int
+                )
+
+        def _avg_extractor(result):
+            return (result.avg_att, result.avg_se, result.avg_p_value, result.avg_conf_int)
+
+        result = simulate_power(
+            _AvgOnlyEstimator(),
+            data_generator=generate_did_data,
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
+            result_extractor=_avg_extractor,
+            n_simulations=3,
+            seed=42,
+            progress=False,
+        )
+        assert 0 <= result.power <= 1
+        assert result.n_simulations == 3
+        assert np.isfinite(result.mean_estimate)
 
     @pytest.mark.slow
     def test_custom_result_extractor_mde_forwarding(self):
@@ -2496,21 +2558,6 @@ class TestSurveyPower:
         """TwoWayFixedEffects with survey_config produces finite estimates."""
         result = simulate_power(
             TwoWayFixedEffects(),
-            treatment_effect=3.0,
-            n_simulations=20,
-            seed=42,
-            survey_config=_SURVEY_CFG,
-            **_SIM_KW,
-        )
-        assert 0 <= result.power <= 1
-        assert np.isfinite(result.mean_estimate)
-        assert np.isfinite(result.mean_se)
-        assert result.mean_se > 0
-
-    def test_survey_simulate_power_multiperiod(self):
-        """MultiPeriodDiD with survey_config produces finite estimates."""
-        result = simulate_power(
-            MultiPeriodDiD(),
             treatment_effect=3.0,
             n_simulations=20,
             seed=42,

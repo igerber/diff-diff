@@ -121,14 +121,14 @@ twfe.fit(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    post: str,                    # 0/1 post dummy (renamed from time=, which warns through 3.9)
+    post: str,                    # the static 0/1 post dummy; time= in static mode raises since 4.0 (M-083)
     unit: str,
     covariates: list[str] = None,
     event_study: bool = False,    # per-period event study returning EventStudyResults
-    spec: str = "within",         # "within" (unit-FE event study) | "pooled" (the MultiPeriodDiD design)
+    spec: str = "within",         # "within" (unit-FE event study) | "pooled" (the pre-4.0 pooled event-study design)
     reference_period: Any = None, # ES mode: omitted period (default: last pre-period, e=-1)
     post_periods: list = None,    # ES mode: post-treatment period values
-    time: str = ...,              # ES mode: the CALENDAR column (keyword); static: deprecated alias for post
+    time: str = ...,              # ES mode: the CALENDAR column (keyword); static mode: raises - pass post=
 ) -> DiDResults | EventStudyResults
 ```
 
@@ -141,9 +141,9 @@ twfe = TwoWayFixedEffects()
 results = twfe.fit(data, outcome='y', treatment='treated', post='post', unit='unit_id')
 results.print_summary()
 
-# Event-study mode (absorbs the deprecated MultiPeriodDiD; spec="pooled"
-# reproduces its design; wild bootstrap raises in this mode; the unit
-# auto-cluster applies with the static carve-outs)
+# Event-study mode (the MultiPeriodDiD class was removed at the 4.0 cut;
+# spec="pooled" runs its design; wild bootstrap raises in this mode; the
+# unit auto-cluster applies with the static carve-outs)
 es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
               event_study=True, time='period', post_periods=[4, 5, 6, 7])
 print(es.summary())
@@ -151,50 +151,32 @@ print(es.summary())
 
 **Note:** TWFE can be biased with staggered treatment timing and heterogeneous effects. Consider CallawaySantAnna, SunAbraham, or ImputationDiD for staggered designs.
 
-### MultiPeriodDiD
+### EventStudyResults.period_effects (compatibility view)
 
-DEPRECATED (3.9, removed in 4.0; ledger row M-010): use
-`TwoWayFixedEffects(...).fit(..., event_study=True)` - `spec="pooled"`
-reproduces this design exactly. Constructing MultiPeriodDiD (or its
-EventStudy alias) emits a FutureWarning. Event-study style DiD with
-period-specific treatment effects. Inherits from DifferenceInDifferences.
+The `MultiPeriodDiD` class, `MultiPeriodDiDResults`, `PeriodEffect` and the
+`EventStudy` alias were removed at the 4.0 cut (ledger rows M-010/M-011/M-012/
+M-060); `TwoWayFixedEffects(...).fit(..., event_study=True)` is the estimator.
+For code that still reads the old per-period dict, the `EventStudyResults`
+returned by the TWFE event-study mode exposes `period_effects` as a deprecated
+compatibility VIEW (ledger row M-016, removed in 5.0):
 
-```python
-MultiPeriodDiD(
-    cluster: str | None = None,
-    alpha: float = 0.05,
-    df_convention: str = "residual",  # Analytical t/p/CI df: "residual" (default), "cluster" (G-1), or "normal" (z); flips at v4
-)
-```
-
-**Alias:** `EventStudy`
-
-**fit() parameters:**
-
-```python
-mp_did.fit(
-    data: pd.DataFrame,
-    outcome: str,
-    treatment: str,
-    time: str,
-    post_periods: list = None,             # Which periods are post-treatment
-    covariates: list[str] = None,
-    fixed_effects: list[str] = None,
-    absorb: list[str] = None,
-    reference_period: Any = None,          # Reference period (default: last pre-period)
-) -> MultiPeriodDiDResults
-```
-
-**Usage:**
+- Reading it emits a `FutureWarning`; `to_dataframe()` (one row per
+  `event_time`, reference row included) is the successor.
+- Calendar-time surfaces only (`time_scale="calendar"`, i.e. the TWFE
+  event-study mode); on a relative-time surface the attribute raises
+  `AttributeError`, so `hasattr(es, "period_effects")` is False there.
+- A dict keyed by calendar period with the reference period OMITTED (as the
+  old dict was). Each value is a read-only record with `period`, `effect`,
+  `se`, `t_stat`, `p_value`, `conf_int`, `is_significant` and
+  `significance_stars`; `is_significant` is evaluated at the fit's `alpha`
+  (NaN p-value -> False), not the removed record's fixed 0.05.
 
 ```python
-from diff_diff import MultiPeriodDiD, plot_event_study
-
-did = MultiPeriodDiD()
-results = did.fit(data, outcome='sales', treatment='treated',
-                  time='period', post_periods=[4, 5, 6, 7])
-results.print_summary()
-plot_event_study(results)
+es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
+              event_study=True, time='period', post_periods=[4, 5, 6, 7])
+table = es.to_dataframe()          # successor: columnar per-event-time table
+pe = es.period_effects             # FutureWarning; {period: record}, reference omitted
+pe[5].effect, pe[5].conf_int
 ```
 
 ### CallawaySantAnna
@@ -1788,47 +1770,6 @@ Returned by `DifferenceInDifferences.fit()` and `TwoWayFixedEffects.fit()`.
 
 **Properties:** `is_significant`, `significance_stars`
 
-### MultiPeriodDiDResults
-
-Returned by `MultiPeriodDiD.fit()`.
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `period_effects` | `dict[Any, PeriodEffect]` | Period-specific effects (pre and post) |
-| `avg_att` | `float` | Average ATT across post-periods |
-| `avg_se` | `float` | SE of average ATT |
-| `avg_t_stat` | `float` | T-statistic for average ATT |
-| `avg_p_value` | `float` | P-value for average ATT |
-| `avg_conf_int` | `tuple[float, float]` | CI for average ATT |
-| `n_obs` | `int` | Number of observations |
-| `n_treated` | `int` | Number of treated observations |
-| `n_control` | `int` | Number of control observations |
-| `pre_periods` | `list` | Pre-treatment period identifiers |
-| `post_periods` | `list` | Post-treatment period identifiers |
-| `reference_period` | `Any` | Reference (omitted) period |
-| `r_squared` | `float` | R-squared |
-| `vcov` | `np.ndarray` | Variance-covariance matrix |
-| `interaction_indices` | `dict` | Period to VCV column index mapping |
-
-**Methods:** `summary()`, `print_summary()`, `get_effect(period)`, `to_dict()`, `to_dataframe()`
-
-**Properties:** `pre_period_effects`, `post_period_effects`, `is_significant`, `significance_stars`
-
-### PeriodEffect
-
-Individual period treatment effect (used in MultiPeriodDiDResults).
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `period` | `Any` | Time period identifier |
-| `effect` | `float` | Treatment effect estimate |
-| `se` | `float` | Standard error |
-| `t_stat` | `float` | T-statistic |
-| `p_value` | `float` | P-value |
-| `conf_int` | `tuple[float, float]` | Confidence interval |
-
-**Properties:** `is_significant`, `significance_stars`
-
 ### CallawaySantAnnaResults
 
 Returned by `CallawaySantAnna.fit()`.
@@ -2461,7 +2402,7 @@ All plotting functions return a matplotlib `Figure` object.
 from diff_diff import plot_event_study
 
 plot_event_study(
-    results,                           # MultiPeriodDiDResults, CS, SA, BJS, TwoStageDiD, StackedDiD, or DataFrame
+    results,                           # EventStudyResults (TWFE event-study surface), CS, SA, BJS, TwoStageDiD, StackedDiD, or DataFrame
     effects=None,                      # Manual dict of effects (alternative to results)
     se=None,                           # Manual dict of SEs
     periods=None,
@@ -2825,8 +2766,8 @@ modes:
 - **Cross-sectional:** Direct `compute_robust_vcov` / `LinearRegression` on
   a single-period design.
 - **Panel block-decomposed** (matches R `conleyreg` with `lag_cutoff > 0`):
-  `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` with
-  `vcov_type="conley"` and `conley_lag_cutoff=<int>`. The sandwich sums
+  `DifferenceInDifferences` / `TwoWayFixedEffects` (static or event-study
+  mode) with `vcov_type="conley"` and `conley_lag_cutoff=<int>`. The sandwich sums
   within-period spatial pairs plus within-unit Bartlett serial pairs
   (excluding lag=0 to avoid double-counting); NOT a multiplicative
   product kernel.
@@ -2834,7 +2775,7 @@ modes:
 `DifferenceInDifferences(vcov_type="conley").fit(..., unit="<col>")` is
 supported (Wave A #118). `unit` is a fit-time kwarg (NOT on `__init__`;
 unused unless Conley is set; not part of `get_params()` / `set_params()`)
-mirroring `MultiPeriodDiD.fit(unit=...)` / `TwoWayFixedEffects.fit(unit=...)`.
+mirroring `TwoWayFixedEffects.fit(unit=...)`.
 
 ```python
 import numpy as np
@@ -2854,11 +2795,11 @@ se = np.sqrt(np.diag(reg.vcov_))
 
 # Panel design: TWFE with within-unit Bartlett serial HAC.
 # Static TWFE's `post` column is a binary post indicator (treatment * post
-# interaction; `time=` is its deprecated alias through 3.9); only numeric
-# encodings are supported on this surface. `conley_lag_cutoff=1` includes
-# the cross-period pair under the Bartlett taper. For multi-period panels,
-# use the TWFE event-study mode (`event_study=True, time=<calendar col>`;
-# MultiPeriodDiD is deprecated).
+# interaction; passing `time=` in static mode raises since 4.0 - M-083); only
+# numeric encodings are supported on this surface. `conley_lag_cutoff=1`
+# includes the cross-period pair under the Bartlett taper. For multi-period
+# panels, use the TWFE event-study mode (`event_study=True, time=<calendar
+# col>`; the MultiPeriodDiD class was removed at the 4.0 cut).
 res = TwoWayFixedEffects(
     vcov_type="conley",
     conley_coords=("lat", "lon"),        # column names on `data`
@@ -2866,8 +2807,8 @@ res = TwoWayFixedEffects(
     conley_lag_cutoff=1,                 # within-unit Bartlett, lag 1 panel period
 ).fit(data, outcome="y", treatment="treated", post="post", unit="unit_id")
 
-# Panel design: multi-period event study (TWFE event-study mode; the
-# deprecated MultiPeriodDiD behaves identically via the shared core).
+# Panel design: multi-period event study (TWFE event-study mode; the same
+# shared core that ran the removed MultiPeriodDiD class).
 # The design builds period dummies (NOT a treated * time product), so
 # `time` can be any orderable encoding — int years (2020, 2021, ...),
 # YYYYMM (202012, 202101, ...), datetime64, pd.Period, strings.
@@ -2909,14 +2850,15 @@ combined_res = TwoWayFixedEffects(
 **Note on `conley_lag_cutoff` semantics:** the lag is counted in **panel
 periods** (number of distinct sorted values in the `time` column), NOT in
 raw-label differences. Internally, time labels are normalized to dense codes
-`0..T-1` via `np.unique(return_inverse=True)`. For example, MultiPeriodDiD
-with `time` values `(2020, 2021, 2022)` and `(202012, 202101, 202102)` both
+`0..T-1` via `np.unique(return_inverse=True)`. For example, the TWFE
+event-study mode with `time` values `(2020, 2021, 2022)` and `(202012, 202101,
+202102)` both
 produce the same codes `(0, 1, 2)` and the same lag matrix. **TWFE caveat:**
 the time-label normalization runs inside `_compute_conley_vcov`, but TWFE's
 own design step `_treatment_post = treated * time` requires numeric `time`;
 non-numeric labels (datetime64, pd.Period, strings) are TWFE-incompatible
-end-to-end. Use MultiPeriodDiD if you need datetime/Period/string time
-labels. **Deviation from R `conleyreg`:** R uses raw `time` values directly
+end-to-end. Use the TWFE event-study mode (`event_study=True,
+time=<calendar col>`) if you need datetime/Period/string time labels. **Deviation from R `conleyreg`:** R uses raw `time` values directly
 in the lag computation, which silently mishandles non-dense encodings.
 diff-diff is the more robust default; for bit-exact R parity, pass `time`
 as a dense integer index.
@@ -2950,11 +2892,11 @@ recommends a sensitivity grid (e.g., 50, 100, 200, 500 km) and reporting the
 SE range.
 
 **Restrictions in this release:**
-- `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `+ vcov_type="conley"` without `conley_lag_cutoff` → `ValueError` (no defensible default; explicit user choice required).
-- `DifferenceInDifferences` / `MultiPeriodDiD` `+ vcov_type="conley"` without `unit=` at fit-time → `ValueError`.
+- `DifferenceInDifferences` / `TwoWayFixedEffects` `+ vcov_type="conley"` without `conley_lag_cutoff` → `ValueError` (no defensible default; explicit user choice required).
+- `DifferenceInDifferences` `+ vcov_type="conley"` without `unit=` at fit-time → `ValueError`.
 - Combining `vcov_type="conley"` with explicit `cluster=<col>` applies the combined spatial + cluster product kernel (Wave A #119). On the panel path the cluster must be constant within each unit across periods (validator raises `ValueError` otherwise). TWFE's default auto-cluster on the Conley path is silently dropped; users opt into the combined kernel explicitly.
-- `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `(vcov_type="conley", inference="wild_bootstrap")` → `NotImplementedError` (wild bootstrap does not consume the analytical sandwich).
-- `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `(vcov_type="conley")` + `survey_design=` → `NotImplementedError` (estimator-level gate; weighted spatial-HAC under probability sampling is an open methodological question).
+- `DifferenceInDifferences` / `TwoWayFixedEffects` `(vcov_type="conley", inference="wild_bootstrap")` → `NotImplementedError` (wild bootstrap does not consume the analytical sandwich).
+- `DifferenceInDifferences` / `TwoWayFixedEffects` `(vcov_type="conley")` + `survey_design=` → `NotImplementedError` (estimator-level gate; weighted spatial-HAC under probability sampling is an open methodological question).
 - `SyntheticDiD(vcov_type="conley")` → `TypeError` (uses bootstrap, not analytical sandwich).
 - Generic `LinearRegression(vcov_type="conley", survey_design=...)` → `NotImplementedError`. Generic `LinearRegression` / `compute_robust_vcov` Conley rejects `weights=` for any `weight_type` (`pweight` / `aweight` / `fweight`) → `NotImplementedError` (weighted Conley is not implemented on the generic linalg surface; `compute_robust_vcov` does not accept `survey_design=`, the survey-design surface is `LinearRegression` only). The `pweight` / `survey_design` subset additionally reflects an open methodological question — no canonical extension of Conley (1999) exists for weighted spatial-HAC under probability sampling.
 - A sparse k-d-tree fast path auto-activates for `n > 5_000` with `conley_kernel="bartlett"` AND `conley_metric` in `{"haversine", "euclidean"}` (Wave A #120); callable metrics and uniform kernel fall back to the dense path. `n > 20_000` with the dense fallback still emits a memory-OOM `UserWarning`.
@@ -2991,7 +2933,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 |----------|----------------------|
 | Classic 2x2 design (one treated group, one time split) | `DifferenceInDifferences` |
 | Panel data with unit + time FE | `TwoWayFixedEffects` |
-| Event study with multiple periods (simultaneous adoption) | `TwoWayFixedEffects` with `event_study=True` (`spec="pooled"` reproduces the deprecated `MultiPeriodDiD`) |
+| Event study with multiple periods (simultaneous adoption) | `TwoWayFixedEffects` with `event_study=True` (`spec="pooled"` runs the design of the `MultiPeriodDiD` class removed at the 4.0 cut) |
 | Staggered treatment timing | `CallawaySantAnna`, `ImputationDiD`, or `SunAbraham` |
 | Few treated units / synthetic control | `SyntheticDiD` |
 | Very few treated units, exact small-sample inference (valid down to one treated unit) | `LWDiD` |

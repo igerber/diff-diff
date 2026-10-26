@@ -12,7 +12,7 @@ import pytest
 from event_study_surface_builders import calendar_surface
 from legacy_surface import legacy_standin
 
-from diff_diff import MultiPeriodDiD, TwoWayFixedEffects
+from diff_diff import TwoWayFixedEffects
 from diff_diff.honest_did import (
     DeltaRM,
     DeltaSD,
@@ -27,7 +27,6 @@ from diff_diff.honest_did import (
     _extract_event_study_params,
     compute_honest_did,
 )
-from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
 
 # =============================================================================
 # Fixtures
@@ -72,76 +71,11 @@ def simple_panel_data():
 
 
 @pytest.fixture
-def legacy_mock_mpd_results():
-    """Create mock MultiPeriodDiDResults for the MPD-branch tests (4.0 cut: dies with the class).
-
-    Simulates a full event-study with pre-period and post-period effects.
-    Reference period is 3 (last pre-period), so period_effects has
-    periods 0, 1, 2 (pre) and 4, 5, 6, 7 (post).
-    """
-    period_effects = {
-        # Pre-period effects (should be ~0 under parallel trends)
-        0: PeriodEffect(
-            period=0, effect=0.05, se=0.4, t_stat=0.125, p_value=0.90, conf_int=(-0.73, 0.83)
-        ),
-        1: PeriodEffect(
-            period=1, effect=-0.02, se=0.35, t_stat=-0.057, p_value=0.95, conf_int=(-0.71, 0.67)
-        ),
-        2: PeriodEffect(
-            period=2, effect=0.08, se=0.3, t_stat=0.267, p_value=0.79, conf_int=(-0.51, 0.67)
-        ),
-        # Post-period effects
-        4: PeriodEffect(
-            period=4, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
-        ),
-        5: PeriodEffect(
-            period=5, effect=5.2, se=0.5, t_stat=10.4, p_value=0.0001, conf_int=(4.22, 6.18)
-        ),
-        6: PeriodEffect(
-            period=6, effect=4.8, se=0.5, t_stat=9.6, p_value=0.0001, conf_int=(3.82, 5.78)
-        ),
-        7: PeriodEffect(
-            period=7, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
-        ),
-    }
-
-    # SE^2 for all 7 interaction terms (periods 0,1,2,4,5,6,7)
-    vcov_diag = [0.4**2, 0.35**2, 0.3**2, 0.5**2, 0.5**2, 0.5**2, 0.5**2]
-
-    # interaction_indices maps period -> column index in the full regression VCV
-    # (in a real fit, these would be the actual column positions)
-    interaction_indices = {0: 10, 1: 11, 2: 12, 4: 13, 5: 14, 6: 15, 7: 16}
-
-    # Build a larger "full" VCV that the sub-extraction will index into
-    full_vcov = np.zeros((20, 20))
-    for i, period in enumerate(sorted(interaction_indices.keys())):
-        col = interaction_indices[period]
-        full_vcov[col, col] = vcov_diag[i]
-
-    return MultiPeriodDiDResults(
-        period_effects=period_effects,
-        avg_att=5.0,
-        avg_se=0.25,
-        avg_t_stat=20.0,
-        avg_p_value=0.0001,
-        avg_conf_int=(4.51, 5.49),
-        n_obs=800,
-        n_treated=400,
-        n_control=400,
-        pre_periods=[0, 1, 2, 3],
-        post_periods=[4, 5, 6, 7],
-        vcov=full_vcov,
-        reference_period=3,
-        interaction_indices=interaction_indices,
-    )
-
-
-@pytest.fixture
 def mock_event_study_results():
     """The same event study as a hand-built calendar ``EventStudyResults`` - what
     ``TwoWayFixedEffects().fit(..., event_study=True)`` emits (4.0 cut, PR 4c-i):
     pre 0/1/2, reference 3, post 4-7; the event-study vcov is the 7x7 diagonal
-    sub-block (the MPD mock spreads it into a 20x20 full vcov)."""
+    sub-block (the former MPD mock spread it into a 20x20 full vcov)."""
     rows = {
         0: (0.05, 0.4, 0.125, 0.90, (-0.73, 0.83)),
         1: (-0.02, 0.35, -0.057, 0.95, (-0.71, 0.67)),
@@ -302,102 +236,6 @@ class TestCIMethods:
 
 class TestParameterExtraction:
     """Tests for extracting parameters from results objects."""
-
-    def test_extract_from_multiperiod(self, legacy_mock_mpd_results):
-        """Test extraction from MultiPeriodDiDResults."""
-        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
-            _extract_event_study_params(legacy_mock_mpd_results)
-        )
-
-        # 7 estimated effects: 3 pre (0,1,2) + 4 post (4,5,6,7), ref=3 excluded
-        assert len(beta_hat) == 7
-        assert sigma.shape == (7, 7)
-        assert num_pre == 3
-        assert num_post == 4
-        assert post_periods == [4, 5, 6, 7]
-
-        # Verify sub-VCV diagonal matches squared SEs
-        for i, period in enumerate(sorted(legacy_mock_mpd_results.period_effects.keys())):
-            pe = legacy_mock_mpd_results.period_effects[period]
-            assert sigma[i, i] == pytest.approx(pe.se**2, abs=1e-10)
-
-    def test_zero_se_period_dropped_from_multiperiod(self, legacy_mock_mpd_results):
-        """se == 0 rows drop on the MPD branch (undefined inference).
-
-        safe_inference treats se <= 0 as undefined inference; admitting
-        such a row would enter Sigma with zero variance and launder NaN
-        source inference into finite sensitivity bounds. Mirrors the CS,
-        dCDH and container branches and pretrends.
-        """
-        import dataclasses
-
-        pe0 = legacy_mock_mpd_results.period_effects[0]
-        legacy_mock_mpd_results.period_effects[0] = dataclasses.replace(pe0, se=0.0)
-        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
-            _extract_event_study_params(legacy_mock_mpd_results)
-        )
-        assert num_pre == 2 and num_post == 4
-        assert len(beta_hat) == 6
-        assert sigma.shape == (6, 6)
-        # First retained row is period 1 (period 0 dropped): its variance
-        # leads the sub-VCV diagonal.
-        assert sigma[0, 0] == pytest.approx(0.35**2, abs=1e-12)
-        # Label/index contract: the returned lists are the ESTIMATED
-        # horizons beta_hat/sigma were built from - the dropped zero-SE
-        # period and the reference are absent, and lengths match the
-        # counts.
-        assert pre_periods == [1, 2]
-        assert post_periods == [4, 5, 6, 7]
-        assert len(pre_periods) == num_pre and len(post_periods) == num_post
-        # End to end: the metadata a user sees relays the same lists.
-        h = compute_honest_did(legacy_mock_mpd_results, M=0.5)
-        assert h.pre_periods_used == [1, 2]
-        assert h.post_periods_used == [4, 5, 6, 7]
-
-    @pytest.mark.parametrize(
-        "bad_period",
-        [1, 2, 4, 5],
-        ids=["interior-pre", "ref-adjacent-pre", "first-post", "interior-post"],
-    )
-    def test_zero_se_breaking_grid_geometry_fails_closed(self, legacy_mock_mpd_results, bad_period):
-        """Interior / reference-adjacent zero-SE drops fail closed.
-
-        The RR constraint builders index retained coefficients
-        positionally, so dropping an interior or reference-adjacent
-        horizon would silently treat non-adjacent periods as consecutive
-        and return wrong bounds. Only leading-pre / trailing-post drops
-        keep valid geometry (previous test).
-        """
-        import dataclasses
-
-        pe = legacy_mock_mpd_results.period_effects[bad_period]
-        legacy_mock_mpd_results.period_effects[bad_period] = dataclasses.replace(pe, se=0.0)
-        with pytest.raises(ValueError, match="consecutive estimated horizons"):
-            _extract_event_study_params(legacy_mock_mpd_results)
-
-    def test_all_pre_periods_zero_se_fails_closed(self, legacy_mock_mpd_results):
-        """Pin: an all-invalid pre block is rejected with a clear message
-        (never a zero-dimensional restriction build)."""
-        import dataclasses
-
-        for p in (0, 1, 2):
-            pe = legacy_mock_mpd_results.period_effects[p]
-            legacy_mock_mpd_results.period_effects[p] = dataclasses.replace(pe, se=0.0)
-        with pytest.raises(ValueError, match="No pre-period effects"):
-            _extract_event_study_params(legacy_mock_mpd_results)
-
-    def test_zero_se_trailing_post_dropped_ok(self, legacy_mock_mpd_results):
-        """A trailing post-period drop keeps valid positional geometry."""
-        import dataclasses
-
-        pe = legacy_mock_mpd_results.period_effects[7]
-        legacy_mock_mpd_results.period_effects[7] = dataclasses.replace(pe, se=0.0)
-        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
-            legacy_mock_mpd_results
-        )
-        assert num_pre == 3 and num_post == 3
-        assert pre_p == [0, 1, 2] and post_p == [4, 5, 6]
-        assert len(beta_hat) == 6 and sigma.shape == (6, 6)
 
     def test_extract_unsupported_type_raises(self):
         """Test that unsupported types raise TypeError, naming the container route."""
@@ -758,41 +596,6 @@ class TestIntegration:
         assert isinstance(bounds, HonestDiDResults)
         assert bounds.method == "smoothness"
 
-    def test_multiperiod_sub_vcov_extraction(self, simple_panel_data):
-        """Test that interaction_indices enables correct sub-VCV extraction.
-
-        Fit MultiPeriodDiD, pass to _extract_event_study_params, and verify:
-        - sigma shape matches len(period_effects) x len(period_effects)
-        - Diagonal of sigma matches squared SEs from period_effects
-        - beta_hat length equals num_pre + num_post
-        """
-        mp_did = MultiPeriodDiD()
-        results = mp_did.fit(
-            simple_panel_data,
-            outcome="outcome",
-            treatment="treated",
-            time="period",
-            post_periods=[4, 5, 6, 7],
-            reference_period=3,
-        )
-
-        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
-            _extract_event_study_params(results)
-        )
-
-        n_effects = len(results.period_effects)
-        assert len(beta_hat) == n_effects
-        assert sigma.shape == (n_effects, n_effects)
-        assert num_pre + num_post == n_effects
-
-        # Verify sub-VCV diagonal matches squared SEs from period_effects
-        sorted_periods = sorted(results.period_effects.keys())
-        for i, period in enumerate(sorted_periods):
-            pe = results.period_effects[period]
-            assert sigma[i, i] == pytest.approx(
-                pe.se**2, rel=1e-6
-            ), f"sigma[{i},{i}] = {sigma[i, i]} != se^2 = {pe.se**2} for period {period}"
-
 
 # =============================================================================
 # Tests for Edge Cases
@@ -924,100 +727,13 @@ class TestEdgeCases:
             # The actual effects are non-zero due to sampling variation
             assert max_violation > 0, "max_pre_violation should be > 0 when real pre-periods exist"
 
-    def test_honest_did_filters_nan_pre_period_effects(self):
-        """HonestDiD should filter NaN pre-period effects from MultiPeriodDiDResults.
-
-        When MultiPeriodDiD produces NaN effects (e.g. from rank-deficient designs
-        with time-varying treatment), HonestDiD should skip those periods rather
-        than propagating NaN into sensitivity bounds.
-        """
-        # Create results with one NaN pre-period (simulating rank deficiency)
-        period_effects = {
-            0: PeriodEffect(
-                period=0,
-                effect=np.nan,
-                se=np.nan,
-                t_stat=np.nan,
-                p_value=np.nan,
-                conf_int=(np.nan, np.nan),
-            ),
-            1: PeriodEffect(
-                period=1,
-                effect=0.1,
-                se=0.3,
-                t_stat=0.33,
-                p_value=0.74,
-                conf_int=(-0.49, 0.69),
-            ),
-            # Reference period (2) omitted
-            3: PeriodEffect(
-                period=3,
-                effect=2.5,
-                se=0.4,
-                t_stat=6.25,
-                p_value=0.0001,
-                conf_int=(1.72, 3.28),
-            ),
-            4: PeriodEffect(
-                period=4,
-                effect=2.8,
-                se=0.4,
-                t_stat=7.0,
-                p_value=0.0001,
-                conf_int=(2.02, 3.58),
-            ),
-        }
-
-        # Build VCV with NaN row/col for period 0 (rank-deficient)
-        interaction_indices = {0: 0, 1: 1, 3: 2, 4: 3}
-        vcov_with_nan = np.full((4, 4), 0.0)
-        vcov_with_nan[0, :] = np.nan
-        vcov_with_nan[:, 0] = np.nan
-        vcov_with_nan[1, 1] = 0.09
-        vcov_with_nan[2, 2] = 0.16
-        vcov_with_nan[3, 3] = 0.16
-
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=2.65,
-            avg_se=0.4,
-            avg_t_stat=6.625,
-            avg_p_value=0.0001,
-            avg_conf_int=(1.87, 3.43),
-            n_obs=400,
-            n_treated=200,
-            n_control=200,
-            pre_periods=[0, 1, 2],
-            post_periods=[3, 4],
-            vcov=vcov_with_nan,
-            reference_period=2,
-            interaction_indices=interaction_indices,
-        )
-
-        # _extract_event_study_params should filter out period 0 (NaN)
-        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
-            results
-        )
-        assert len(beta_hat) == 3  # periods 1, 3, 4 (period 0 filtered)
-        assert num_pre == 1  # only period 1
-        assert num_post == 2  # periods 3, 4
-        assert np.all(np.isfinite(beta_hat))
-        assert np.all(np.isfinite(sigma))
-
-        # _estimate_max_pre_violation should ignore the NaN period
-        honest = HonestDiD(method="relative_magnitude", M=1.0)
-        max_viol = honest._estimate_max_pre_violation(results, [0, 1])
-        assert np.isfinite(max_viol)
-        assert max_viol == pytest.approx(0.1, abs=1e-10)  # only period 1's |effect|
-
     def test_calendar_surface_filters_nan_pre_period_effects(self):
-        """The TWFE event-study surface twin of the MPD-branch test above: a NaN
-        pre-period row (rank-deficient design) is filtered by the calendar
-        route's `_extract_event_study_params`, not propagated.
+        """A NaN pre-period row (rank-deficient design) is filtered by the
+        calendar route's `_extract_event_study_params`, not propagated (the TWFE
+        event-study surface twin of the former MPD-branch test, 4.0 cut, PR 4c-i).
 
-        Only the extraction half is twinned: `_estimate_max_pre_violation` has
-        no surface branch (it falls through to a constant), so that half stays
-        on the MPD original (4.0 cut, PR 4c-i).
+        Only the extraction half is pinned: `_estimate_max_pre_violation` has
+        no surface branch (it falls through to a constant).
         """
         nan_row = (np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan))
         vcov_with_nan = np.full((4, 4), 0.0)
@@ -1117,74 +833,6 @@ class TestEdgeCases:
         honest = HonestDiD(method="relative_magnitude", M=1.0)
         with pytest.raises(ValueError, match="No post-period effects with finite"):
             honest.fit(cs_results)
-
-    def test_honest_did_nonmonotone_period_labels(self):
-        """HonestDiD extraction should handle period labels where sorted order
-        doesn't separate pre/post (e.g. pre=[5,6], post=[1,2]).
-
-        The extraction must place pre-period effects before post-period effects
-        in beta_hat regardless of label values.
-        """
-        # Pre-periods 5, 6, 7 (reference=7 omitted), post-periods 1, 2
-        # sorted() would give [1, 2, 5, 6] — post before pre — which is wrong
-        period_effects = {
-            5: PeriodEffect(
-                period=5, effect=0.1, se=0.3, t_stat=0.33, p_value=0.74, conf_int=(-0.49, 0.69)
-            ),
-            6: PeriodEffect(
-                period=6, effect=0.2, se=0.35, t_stat=0.57, p_value=0.57, conf_int=(-0.49, 0.89)
-            ),
-            1: PeriodEffect(
-                period=1, effect=2.5, se=0.4, t_stat=6.25, p_value=0.0001, conf_int=(1.72, 3.28)
-            ),
-            2: PeriodEffect(
-                period=2, effect=2.8, se=0.45, t_stat=6.22, p_value=0.0001, conf_int=(1.92, 3.68)
-            ),
-        }
-
-        # VCV column mapping: period -> index in regression VCV
-        interaction_indices = {5: 0, 6: 1, 1: 2, 2: 3}
-
-        # Distinct diagonal entries so we can verify VCV block extraction
-        vcov = np.diag([0.09, 0.1225, 0.16, 0.2025])
-
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=2.65,
-            avg_se=0.42,
-            avg_t_stat=6.31,
-            avg_p_value=0.0001,
-            avg_conf_int=(1.83, 3.47),
-            n_obs=400,
-            n_treated=200,
-            n_control=200,
-            pre_periods=[5, 6, 7],
-            post_periods=[1, 2],
-            vcov=vcov,
-            reference_period=7,
-            interaction_indices=interaction_indices,
-        )
-
-        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
-            results
-        )
-
-        # Pre-periods: 5, 6 (7 is reference, omitted)
-        assert num_pre == 2
-        # Post-periods: 1, 2
-        assert num_post == 2
-
-        # beta_hat must be [pre_5, pre_6, post_1, post_2]
-        assert beta_hat[0] == pytest.approx(0.1)  # period 5
-        assert beta_hat[1] == pytest.approx(0.2)  # period 6
-        assert beta_hat[2] == pytest.approx(2.5)  # period 1
-        assert beta_hat[3] == pytest.approx(2.8)  # period 2
-
-        # sigma blocks must match: pre block = diag(0.09, 0.1225), post block = diag(0.16, 0.2025)
-        assert sigma[0, 0] == pytest.approx(0.09)  # period 5 variance
-        assert sigma[1, 1] == pytest.approx(0.1225)  # period 6 variance
-        assert sigma[2, 2] == pytest.approx(0.16)  # period 1 variance
-        assert sigma[3, 3] == pytest.approx(0.2025)  # period 2 variance
 
 
 # =============================================================================
@@ -1585,7 +1233,7 @@ class TestDCDHIntegration:
 
     def test_dcdh_survey_df_matches_shared_resolver(self):
         """Survey dCDH fit: the extracted df equals the shared resolver's
-        value (float-typed), pinning the MPD/CS/dCDH single-source
+        value (float-typed), pinning the CS/dCDH single-source
         consolidation on a branch with a FINITE df."""
         import warnings
 

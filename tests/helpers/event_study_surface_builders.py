@@ -1,8 +1,8 @@
 """Hand-built calendar ``EventStudyResults`` for consumer tests (4.0 PR 4c-i).
 
-Replaces the hand-built ``MultiPeriodDiDResults`` / ``PeriodEffect`` mocks of
-the MultiPeriodDiD-fixture tests with the surface the TWFE event-study
-producer emits: one row per calendar label, the reference row marked
+Replaces the hand-built dict-keyed per-period mocks of the former
+event-study fixture tests (removed in PR 4c-ii) with the surface the TWFE
+event-study producer emits: one row per calendar label, the reference row marked
 ``is_reference`` (NaN inference), ``time_scale="calendar"``,
 ``source="TwoWayFixedEffects"`` and the authoritative ``post_periods``
 partition. The calendar consumer route requires exactly one reference row,

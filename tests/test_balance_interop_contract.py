@@ -208,11 +208,13 @@ def test_survey_design_replicate_construction():
 # 4. Estimator resolution by name and alias
 # ---------------------------------------------------------------------------
 
-# 16 of the 17 estimator names promised in balance/interop/diff_diff.py's module
-# docstring ("weight_type='pweight' is ... compatible with ..."). The 17th,
-# StaggeredTripleDifference, was removed at the 4.0 cut (PR 4a; its staggered DDD
-# is TripleDifference's first_treat= mode). balance's [did] extra pins
-# diff-diff>=3.3.0,<4, so 3.x users keep the name until the adapter follows.
+# 15 of the 17 estimator names promised in balance/interop/diff_diff.py's module
+# docstring ("weight_type='pweight' is ... compatible with ..."). The other two
+# were removed at the 4.0 cut: StaggeredTripleDifference (PR 4a; its staggered DDD
+# is TripleDifference's first_treat= mode) and the calendar-keyed event-study
+# class (PR 4c-ii; its mode is TwoWayFixedEffects.fit(event_study=True)).
+# balance's [did] extra pins diff-diff>=3.3.0,<4, so 3.x users keep the names
+# until the adapter follows.
 ADAPTER_DOCSTRING_ESTIMATORS = [
     "CallawaySantAnna",
     "StackedDiD",
@@ -227,7 +229,6 @@ ADAPTER_DOCSTRING_ESTIMATORS = [
     "EfficientDiD",
     "DifferenceInDifferences",
     "TwoWayFixedEffects",
-    "MultiPeriodDiD",
     "SunAbraham",
     "ContinuousDiD",
 ]

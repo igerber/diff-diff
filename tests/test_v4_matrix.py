@@ -1619,11 +1619,11 @@ def test_migration_guide_examples_bind_to_real_signatures():
     ), f"expected at least 4 ```python blocks in the guide, found {len(blocks)}"
     assert len(pairs) >= 20, f"expected at least 20 resolvable keywords, found {len(pairs)}"
     # Owners whose worked example must still resolve. The 3.x-side owners of the
-    # merge examples drop out as their classes are removed (StaggeredTripleDifference
-    # and QDiD at PR 4a; MultiPeriodDiD follows in PR 4c): the collector skips names
-    # diff_diff no longer exports, so only the surviving side is asserted.
+    # merge examples dropped out as their classes were removed
+    # (StaggeredTripleDifference and QDiD at PR 4a; MultiPeriodDiD in PR 4c-ii):
+    # the collector skips names diff_diff no longer exports, so only the
+    # surviving side is asserted.
     for owner in (
-        "MultiPeriodDiD",
         "TwoWayFixedEffects",
         "TripleDifference",
         "ChangesInChanges",

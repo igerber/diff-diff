@@ -9,7 +9,6 @@ from legacy_surface import es_dict_from_container, legacy_standin
 
 from diff_diff import (
     CallawaySantAnna,
-    MultiPeriodDiD,
     TwoWayFixedEffects,
     plot_event_study,
 )
@@ -84,7 +83,7 @@ def generate_staggered_data(
 @pytest.fixture
 def twfe_es_results():
     """TWFE event-study surface (pooled design) on the multi-period panel - the
-    successor of the MultiPeriodDiD fixture for the plot-option tests."""
+    successor of the former MultiPeriodDiD fixture for the plot-option tests."""
     data = generate_multi_period_data()
     return TwoWayFixedEffects().fit(
         data,
@@ -100,22 +99,6 @@ def twfe_es_results():
 
 class TestPlotEventStudy:
     """Tests for plot_event_study function."""
-
-    @pytest.fixture
-    def legacy_mpd_results(self):
-        """Fixture for native MultiPeriodDiD results - the only remaining pin of
-        plot_event_study's ``period_effects`` branch (4.0 cut, PR 4c-i; dies with
-        the class in PR 4c-ii)."""
-        data = generate_multi_period_data()
-        did = MultiPeriodDiD()
-        return did.fit(
-            data,
-            outcome="outcome",
-            treatment="treated",
-            time="period",
-            post_periods=[2, 3],
-            reference_period=1,
-        )
 
     @pytest.fixture
     def cs_fit(self):
@@ -134,13 +117,6 @@ class TestPlotEventStudy:
     def cs_results(self, cs_fit):
         """The post-fit event-study container - what plot_event_study consumes."""
         return cs_fit.aggregate("event_study")
-
-    def test_plot_from_multi_period_results(self, legacy_mpd_results):
-        """Test plotting from native MultiPeriodDiD results (the period_effects branch)."""
-        pytest.importorskip("matplotlib")
-
-        ax = plot_event_study(legacy_mpd_results, show=False)
-        assert ax is not None
 
     def test_plot_from_twfe_event_study_results(self, twfe_es_results):
         """Test plotting from the TWFE event-study surface."""

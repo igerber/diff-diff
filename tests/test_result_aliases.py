@@ -31,7 +31,6 @@ from diff_diff.continuous_did_results import ContinuousDiDResults
 from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.imputation_results import ImputationDiDResults
-from diff_diff.results import MultiPeriodDiDResults
 from diff_diff.stacked_did_results import StackedDiDResults
 from diff_diff.staggered_results import CallawaySantAnnaResults
 from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
@@ -286,28 +285,6 @@ def test_continuous_did_double_alias_resolves_same_value():
 
 
 # ============================================================================
-# Pattern D — MultiPeriodDiDResults: avg_* -> flat aliases
-# ============================================================================
-
-
-def test_multi_period_did_aliases():
-    """MultiPeriodDiD flat aliases map to the avg_* canonical fields."""
-    overrides = {
-        "avg_att": _ATT,
-        "avg_se": _SE,
-        "avg_t_stat": _T,
-        "avg_p_value": _P,
-        "avg_conf_int": _CI,
-    }
-    res = MultiPeriodDiDResults(**_required_init_kwargs(MultiPeriodDiDResults, overrides))
-    assert res.att == _ATT
-    assert res.se == _SE
-    assert res.conf_int == _CI
-    assert res.p_value == _P
-    assert res.t_stat == _T
-
-
-# ============================================================================
 # Read-only semantics
 # ============================================================================
 
@@ -326,16 +303,6 @@ def test_multi_period_did_aliases():
             },
         ),
         (ContinuousDiDResults, _continuous_did_overrides()),
-        (
-            MultiPeriodDiDResults,
-            {
-                "avg_att": _ATT,
-                "avg_se": _SE,
-                "avg_t_stat": _T,
-                "avg_p_value": _P,
-                "avg_conf_int": _CI,
-            },
-        ),
     ],
     ids=lambda v: v.__name__ if hasattr(v, "__name__") else "ovr",
 )
@@ -366,7 +333,7 @@ def test_aliases_are_read_only(cls, ovr):
 
 @pytest.mark.parametrize(
     "cls",
-    [CallawaySantAnnaResults, ContinuousDiDResults, MultiPeriodDiDResults],
+    [CallawaySantAnnaResults, ContinuousDiDResults],
     ids=lambda v: v.__name__,
 )
 def test_aliases_excluded_from_dataclass_fields_and_asdict(cls):
@@ -378,10 +345,10 @@ def test_aliases_excluded_from_dataclass_fields_and_asdict(cls):
     would silently surface aliases to serializers and field-walkers
     without this regression catching it.
 
-    Three representative classes cover the three alias patterns:
-    Pattern B (`CallawaySantAnnaResults`), the double-alias case
-    (`ContinuousDiDResults`), and the `avg_*` mapping
-    (`MultiPeriodDiDResults`).
+    Two representative classes cover the surviving alias patterns:
+    Pattern B (`CallawaySantAnnaResults`) and the double-alias case
+    (`ContinuousDiDResults`); the `avg_*` mapping left with its
+    calendar-keyed event-study container at the 4.0 cut.
     """
     ovr = {
         CallawaySantAnnaResults: {
@@ -392,13 +359,6 @@ def test_aliases_excluded_from_dataclass_fields_and_asdict(cls):
             "overall_conf_int": _CI,
         },
         ContinuousDiDResults: _continuous_did_overrides(),
-        MultiPeriodDiDResults: {
-            "avg_att": _ATT,
-            "avg_se": _SE,
-            "avg_t_stat": _T,
-            "avg_p_value": _P,
-            "avg_conf_int": _CI,
-        },
     }[cls]
     res = cls(**_required_init_kwargs(cls, ovr))
     field_names = {f.name for f in fields(res)}

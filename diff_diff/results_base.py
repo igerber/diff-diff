@@ -20,6 +20,7 @@ TwoWayFixedEffects event-study mode returns the container natively.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -212,6 +213,59 @@ N_KIND_VOCABULARY: Tuple[str, ...] = (
 )
 
 
+def _significance_stars(p_value: float) -> str:
+    """Leaf-local twin of ``results._get_significance_stars`` (NaN -> "").
+
+    ``results_base`` imports no other ``diff_diff`` module, so the M-016 view
+    carries its own copy of the convention.
+    """
+    if np.isnan(p_value):
+        return ""
+    if p_value < 0.001:
+        return "***"
+    if p_value < 0.01:
+        return "**"
+    if p_value < 0.05:
+        return "*"
+    if p_value < 0.1:
+        return "."
+    return ""
+
+
+_PERIOD_EFFECTS_REMOVED_MSG = (
+    "EventStudyResults.period_effects is deprecated and will be removed in "
+    "5.0; use to_dataframe() (one row per event_time, reference row included) "
+    "or the columnar att/se/t_stat/p_value/conf_int_lower/conf_int_upper "
+    "arrays instead."
+)
+
+_PERIOD_EFFECTS_SCALE_MSG = (
+    "period_effects is a compatibility view of the former calendar-keyed "
+    "per-period dict (row M-016) and exists only on time_scale='calendar' "
+    "surfaces; relative-time surfaces never had it - use to_dataframe()."
+)
+
+
+@dataclass(frozen=True)
+class _PeriodEffectView:
+    """One row of the deprecated ``EventStudyResults.period_effects`` view (row M-016).
+
+    Private, read-only snapshot of a non-reference row of a calendar surface;
+    mirrors the per-period record the 4.0 cut removed (row M-012).
+    ``is_significant`` is evaluated at the surface's ``alpha`` (NaN p-value ->
+    False); ``significance_stars`` follows the package convention.
+    """
+
+    period: Any
+    effect: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
+    is_significant: bool
+    significance_stars: str
+
+
 @dataclass
 class EventStudyResults(BaseResults):
     """Unified event-study representation (spec section 5, row M-092).
@@ -228,9 +282,9 @@ class EventStudyResults(BaseResults):
     event_time : np.ndarray
         Sorted estimator-native event-time labels, NEVER renumbered.
         Relative producers use their own origin (see
-        ``event_time_convention``); the pre-4.0 MultiPeriodDiD surface is
-        calendar-keyed (``time_scale="calendar"``) and may carry object
-        dtype (str/datetime period labels).
+        ``event_time_convention``); the TwoWayFixedEffects event-study
+        surface is calendar-keyed (``time_scale="calendar"``) and may carry
+        object dtype (str/datetime period labels).
     att, se, t_stat, p_value : np.ndarray
         Canonical per-event-time inference columns. On the reference row
         (if any): ``att == 0.0`` and ``se``/``t_stat``/``p_value`` are NaN.
@@ -276,8 +330,9 @@ class EventStudyResults(BaseResults):
         ``int(t - g)`` — see its REGISTRY truncation Note.)
     vcov : np.ndarray or None
         Full event-study variance-covariance matrix where the RESULT
-        CONTAINER exposes one (e.g. CallawaySantAnna, SunAbraham,
-        MultiPeriodDiD, StackedDiD, and TwoStageDiD's analytical modes),
+        CONTAINER exposes one (e.g. CallawaySantAnna, SunAbraham, the
+        TwoWayFixedEffects event-study mode, StackedDiD, and TwoStageDiD's
+        analytical modes),
         ordered by ``vcov_index``. None when the producer records no matrix
         or when the stored SEs are no longer its diagonal (bootstrap and
         replicate-weight overrides clear it rather than ship an
@@ -307,7 +362,7 @@ class EventStudyResults(BaseResults):
         Chaisemartin-D'Haultfoeuille, whose effect and placebo rows share one
         design df), or a length-n array (per-row producers: StackedDiD and
         SunAbraham ``hc2_bm`` per-event Bell-McCaffrey df, LPDiD per-horizon
-        cluster df, MultiPeriodDiD ``hc2_bm`` per-period df).
+        cluster df, TwoWayFixedEffects event-study ``hc2_bm`` per-period df).
         NaN on any row means normal-theory inference, an undefined df,
         bootstrap-overridden inference, or a producer that records none;
         reference rows and rows with NaN p-values are always NaN.
@@ -395,20 +450,19 @@ class EventStudyResults(BaseResults):
     estimand: Optional[str] = None
     #: Calendar-partition provenance (M-092 pre-cut amendment #5, with row
     #: M-010): the producer's AUTHORITATIVE post-treatment period labels.
-    #: MultiPeriodDiD accepts an ARBITRARY ``post_periods`` subset (a
-    #: non-suffix split is legal), and the partition is not recoverable
+    #: The TWFE event-study mode accepts an ARBITRARY ``post_periods`` subset
+    #: (a non-suffix split is legal), and the partition is not recoverable
     #: from ``event_time``/``is_reference`` positionally - consumers that
     #: need pre/post classification on a calendar surface (HonestDiD,
     #: PreTrendsPower, the plotter) read THIS field; pre-periods derive as
     #: the complement: non-reference rows whose ``event_time`` is not in
-    #: ``post_periods``. Threaded by the calendar-surface builder (the
-    #: MultiPeriodDiD adapter and the TWFE event-study producer); None
-    #: from every other builder.
+    #: ``post_periods``. Threaded by the calendar-surface builder behind the
+    #: TWFE event-study producer; None from every other builder.
     post_periods: Optional[Tuple[Any, ...]] = None
     #: TWFE event-study design provenance (M-092 amendment #5, with row
-    #: M-010): ``"within"`` (unit + time FE) or ``"pooled"`` (the
-    #: MultiPeriodDiD design - treatment-group dummy + period dummies, no
-    #: unit FE). The two specs differ materially in SEs, so the design
+    #: M-010): ``"within"`` (unit + time FE) or ``"pooled"`` (the pre-4.0
+    #: pooled event-study design - treatment-group dummy + period dummies,
+    #: no unit FE). The two specs differ materially in SEs, so the design
     #: must be recoverable from the container. None from every builder
     #: (only the TwoWayFixedEffects event-study producer sets it).
     estimation_spec: Optional[str] = None
@@ -611,6 +665,52 @@ class EventStudyResults(BaseResults):
         base on a gapped grid, empty when the estimator omits no baseline.
         """
         return [_json_safe_label(v) for v in self.event_time[self.is_reference].tolist()]
+
+    @property
+    def period_effects(self) -> Dict[Any, _PeriodEffectView]:
+        """Deprecated calendar-keyed per-period dict (row M-016; removed in 5.0).
+
+        Compatibility view of the former ``period_effects`` dict: one
+        :class:`_PeriodEffectView` per NON-reference row, keyed by the row's
+        calendar label (the reference row is omitted, as the old dict did).
+        Only ``time_scale="calendar"`` surfaces carry it; reading it on a
+        relative-time surface raises ``AttributeError`` (so ``hasattr`` is
+        False there and nothing warns). Reading it emits ``FutureWarning``.
+        Use :meth:`to_dataframe` (one row per ``event_time``, reference row
+        included) or the columnar arrays instead.
+        """
+        if self.time_scale != "calendar":
+            raise AttributeError(_PERIOD_EFFECTS_SCALE_MSG)
+        # Iterate the array itself (not .tolist(), which turns datetime64[ns]
+        # labels into integer nanoseconds); the elements hash/compare like the
+        # calendar labels the old dict was keyed by.
+        # Uniqueness is checked over EVERY row (reference included): a label
+        # shared by a reference row and an estimated row would otherwise
+        # surface the estimate under the reference's key.
+        labels = list(self.event_time)
+        if len(set(labels)) != len(labels):
+            raise ValueError(
+                "The event-study surface carries duplicate event_time labels "
+                f"({self.event_time.tolist()}); each label must appear exactly once "
+                "for a label-keyed period_effects view."
+            )
+        warnings.warn(_PERIOD_EFFECTS_REMOVED_MSG, FutureWarning, stacklevel=2)
+        out: Dict[Any, _PeriodEffectView] = {}
+        for i, label in enumerate(self.event_time):
+            if self.is_reference[i]:
+                continue
+            p = float(self.p_value[i])
+            out[label] = _PeriodEffectView(
+                period=label,
+                effect=float(self.att[i]),
+                se=float(self.se[i]),
+                t_stat=float(self.t_stat[i]),
+                p_value=p,
+                conf_int=(float(self.conf_int_lower[i]), float(self.conf_int_upper[i])),
+                is_significant=bool(p < self.alpha),
+                significance_stars=_significance_stars(p),
+            )
+        return out
 
     # ------------------------------------------------------------------
     # Serialization contract
@@ -1139,18 +1239,15 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
 class _EventStudyCorePayload:
     """Producer-neutral output of ``DifferenceInDifferences._fit_event_study_core``.
 
-    Private hand-off between the shared event-study core and its two
-    builders: ``MultiPeriodDiD.fit`` wraps it into the legacy
-    ``MultiPeriodDiDResults`` container, and the TWFE event-study mode
-    builds the unified :class:`EventStudyResults` surface from it directly
-    (:func:`_from_event_study_payload`) - so the TWFE path no longer
-    constructs a MultiPeriodDiD container (ledger rows M-010 / M-011).
-
-    Per-period arrays are index-aligned to ``periods``, the core's SORTED
-    non-reference iteration order. The ``avg_*`` block, ``inference_df`` and
-    the count / label fields exist only for the MultiPeriodDiD container and
-    are deleted with it at the 4.0 cut (PR 4c-ii). ``eq=False``: the
-    generated ``__eq__``/``__hash__`` would raise on the ndarray fields.
+    Private hand-off between the shared event-study core and the TWFE
+    event-study mode, which builds the unified :class:`EventStudyResults`
+    surface from it (:func:`_from_event_study_payload`). Carries exactly what
+    the surface builder reads: per-period arrays index-aligned to ``periods``
+    (the core's SORTED non-reference iteration order), the partition and
+    alpha, the full-design vcov with the interaction column map (for the
+    event-study vcov sub-block) and the survey metadata (for the scalar
+    ``df_survey``). ``eq=False``: the generated ``__eq__``/``__hash__`` would
+    raise on the ndarray fields.
     """
 
     # Per-period inference (one entry per non-reference period, sorted).
@@ -1164,35 +1261,12 @@ class _EventStudyCorePayload:
     df_by_period: Dict[Any, float]
     # Partition / normalisation.
     reference_period: Any
-    pre_periods: List[Any]
     post_periods: List[Any]
     alpha: float
-    # Full-design inference (the MultiPeriodDiD container + the surface's
+    # Full-design vcov + the interaction column map (the surface's
     # event-study vcov sub-block).
-    coefficients: np.ndarray
-    coef_names: List[str]
     vcov: np.ndarray
     interaction_indices: Dict[Any, int]
-    residuals: np.ndarray
-    fitted_values: np.ndarray
-    r_squared: float
-    # MultiPeriodDiD-only: the post-period average and its contrast df
-    # (die with the class at 4c-ii).
-    avg_att: float
-    avg_se: float
-    avg_t_stat: float
-    avg_p_value: float
-    avg_conf_int: Tuple[float, float]
-    inference_df: Optional[float]
-    # MultiPeriodDiD-only counts and labels.
-    n_obs: int
-    n_treated: int
-    n_control: int
-    vcov_type: Optional[str]
-    cluster_name: Optional[str]
-    n_clusters: Optional[int]
-    conley_lag_cutoff: Optional[int]
-    df_convention: Optional[str]
     # Shared provenance (the survey df is resolved from it).
     survey_metadata: Optional[Any]
 
@@ -1221,10 +1295,10 @@ def _calendar_surface_from_arrays(
 ) -> EventStudyResults:
     """Build the calendar-keyed surface from index-aligned per-period arrays.
 
-    The one builder behind both :func:`_from_mpd` (which extracts the arrays
-    from a ``MultiPeriodDiDResults``) and :func:`_from_event_study_payload`
-    (which reads them off the core's payload), so the two paths cannot
-    drift. ``periods`` must already be SORTED (the caller supplies the
+    The builder behind :func:`_from_event_study_payload` (which reads the
+    arrays off the core's payload; through 3.x the removed class's adapter
+    shared it, so the two paths could not drift). ``periods`` must
+    already be SORTED (the caller supplies the
     non-reference labels in sorted order and the arrays aligned to them);
     an explicit raise guards that contract - a silent re-sort of the labels
     alone would pair labels with the wrong values. The reference row is
@@ -1309,44 +1383,6 @@ def _calendar_surface_from_arrays(
     )
 
 
-def _from_mpd(results: Any) -> EventStudyResults:
-    """Adapter for MultiPeriodDiD's calendar-keyed ``period_effects``.
-
-    The reference period is omitted from the native dict and recorded on
-    ``results.reference_period``; the marked row is synthesized by the
-    shared builder (``att=0.0``, NaN inference). The dict's insertion order
-    is irrelevant: the labels are sorted here and the value lists built in
-    that order before the hand-off.
-    """
-    period_effects = getattr(results, "period_effects", None)
-    if not period_effects:
-        raise _absent(results)
-
-    periods = sorted(period_effects.keys())
-    pes = [period_effects[p] for p in periods]
-    provenance = _provenance_kwargs(results)
-    return _calendar_surface_from_arrays(
-        periods=periods,
-        ref=getattr(results, "reference_period", None),
-        att=[pe.effect for pe in pes],
-        se=[pe.se for pe in pes],
-        t_stat=[pe.t_stat for pe in pes],
-        p_value=[pe.p_value for pe in pes],
-        ci_lo=[pe.conf_int[0] for pe in pes],
-        ci_hi=[pe.conf_int[1] for pe in pes],
-        full_vcov=getattr(results, "vcov", None),
-        interaction_indices=getattr(results, "interaction_indices", None),
-        df_map=getattr(results, "event_study_df", None),
-        post_periods=getattr(results, "post_periods", None),
-        alpha=getattr(results, "alpha", 0.05),
-        source=type(results).__name__,
-        df_survey=provenance["df_survey"],
-        base_period=provenance["base_period"],
-        anticipation=provenance["anticipation"],
-        reference_event_times=provenance["reference_event_times"],
-    )
-
-
 def _from_event_study_payload(
     payload: _EventStudyCorePayload,
     *,
@@ -1355,10 +1391,9 @@ def _from_event_study_payload(
 ) -> EventStudyResults:
     """Build the unified surface directly from the event-study core's payload.
 
-    The TWFE event-study producer's path: no MultiPeriodDiD container is
-    constructed. Field for field this is what ``_from_mpd`` yields for the
-    MultiPeriodDiD twin of the same fit (pinned by
-    ``tests/test_twfe_event_study_decoupling.py``).
+    The TWFE event-study producer's path, pinned field for field against the
+    committed pre-refactor capture by
+    ``tests/test_twfe_event_study_decoupling.py``.
     """
     return _calendar_surface_from_arrays(
         periods=payload.periods,
@@ -1584,17 +1619,19 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
     an absent surface raises ``ValueError`` naming the call that produces
     it (never a silent empty container).
     """
+    if isinstance(results, EventStudyResults):
+        # A surface is already the surface: never duck-sniff it (the M-016
+        # period_effects view is a warning property - hasattr would fire it).
+        return results
     # Order matters: dCDH carries both event_study_effects and the split
-    # placebo dict; HAD's columnar container and MPD's period_effects have
-    # unique attributes; LPDiD's surface is a DataFrame field. (The TWFE
-    # event-study producer never arrives here: it builds the surface
-    # natively from the core's payload via _from_event_study_payload.)
+    # placebo dict; HAD's columnar container has unique attributes; LPDiD's
+    # surface is a DataFrame field. (The TWFE event-study producer returns
+    # the surface natively, built from the core's payload via
+    # _from_event_study_payload, so it takes the passthrough above.)
     if hasattr(results, "placebo_event_study") and hasattr(results, "event_study_effects"):
         return _from_dcdh(results)
     if hasattr(results, "event_times") and hasattr(results, "n_obs_per_horizon"):
         return _from_had(results)
-    if hasattr(results, "period_effects") and hasattr(results, "interaction_indices"):
-        return _from_mpd(results)
     if hasattr(results, "pooled") and hasattr(results, "event_study"):
         return _from_lpdid(results)
     if hasattr(results, "event_study_effects"):
@@ -1605,7 +1642,8 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
         f"{type(results).__name__} does not expose an event-study surface. "
         "Supported producers: CallawaySantAnna, DMLDiD, SunAbraham, ImputationDiD, "
         "TwoStageDiD, StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, "
-        "WooldridgeDiD, TripleDifference (staggered mode), MultiPeriodDiD, LPDiD, "
+        "WooldridgeDiD, TripleDifference (staggered mode), LPDiD, "
         "ChaisemartinDHaultfoeuille, and HeterogeneousAdoptionDiD "
-        "event-study results."
+        "event-study results; the TwoWayFixedEffects event-study mode returns "
+        "the surface natively."
     )

@@ -2,8 +2,8 @@
 Difference-in-Differences estimators with sklearn-like API.
 
 This module contains the core DiD estimators:
-- DifferenceInDifferences: Basic 2x2 DiD estimator
-- MultiPeriodDiD: Event-study style DiD with period-specific treatment effects
+- DifferenceInDifferences: Basic 2x2 DiD estimator (and the shared
+  event-study core behind TwoWayFixedEffects.fit(event_study=True))
 
 Additional estimators are in separate modules:
 - TwoWayFixedEffects: See diff_diff.twfe
@@ -27,7 +27,7 @@ from diff_diff.linalg import (
     compute_r_squared,
     solve_ols,
 )
-from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
+from diff_diff.results import DiDResults
 from diff_diff.results_base import _EventStudyCorePayload
 from diff_diff.utils import (
     WildBootstrapResults,
@@ -49,28 +49,10 @@ from diff_diff.utils import (
 )
 
 # Accepted values for the `inference` selector (M-096). Exposed by exactly
-# DifferenceInDifferences, MultiPeriodDiD and TwoWayFixedEffects (the two
-# subclasses inherit this __init__); the fail-closed check lives in
-# DifferenceInDifferences.__init__ and set_params inherits it via the
-# BaseEstimator probe re-init.
+# DifferenceInDifferences and TwoWayFixedEffects (the subclass inherits this
+# __init__); the fail-closed check lives in DifferenceInDifferences.__init__
+# and set_params inherits it via the BaseEstimator probe re-init.
 _INFERENCE_METHODS = ("analytical", "wild_bootstrap")
-
-# Sentinel for _fit_event_study_core's cluster_override: "use self.cluster".
-# A plain None default cannot express that, because None is itself a legal
-# override value ("no clustering" - the resolved TWFE event-study carve-outs).
-_USE_SELF_CLUSTER: Any = object()
-
-# MultiPeriodDiD 3.9 deprecation message (row M-010; the EventStudy alias is
-# the same class object, so constructing via the alias emits this too -
-# row M-060). Pinned verbatim by tests/test_v4_merge_mpd.py and the targeted
-# pytest filter in pyproject.toml.
-_MPD_DEPRECATION_MSG = (
-    "MultiPeriodDiD is deprecated and will be removed in 4.0; use "
-    "TwoWayFixedEffects().fit(..., event_study=True) instead - "
-    "spec='pooled' reproduces the MultiPeriodDiD design; the default "
-    "spec='within' adds unit fixed effects. The EventStudy alias is "
-    "deprecated with it."
-)
 
 
 class DifferenceInDifferences(BaseEstimator):
@@ -102,9 +84,9 @@ class DifferenceInDifferences(BaseEstimator):
           entirely NaN covariance/inference, retaining point estimates.
         - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF;
           with ``cluster=``, Pustejovsky-Tipton (2018) CR2 cluster-robust.
-          ``MultiPeriodDiD(cluster=..., vcov_type="hc2_bm")`` is supported and
-          uses a cluster-aware Bell-McCaffrey contrast DOF for the
-          post-period-average ATT (see ``_compute_cr2_bm_contrast_dof`` in
+          ``TwoWayFixedEffects(cluster=..., vcov_type="hc2_bm")`` in event-study
+          mode is supported and uses cluster-aware Bell-McCaffrey per-period
+          contrast DOF (see ``_compute_cr2_bm_contrast_dof`` in
           ``linalg.py`` and the REGISTRY.md note). Weighted CR2-BM
           (``survey_design=`` paths) is a separate gate.
           Unweighted, unclustered fits share HC2's leverage-one NaN guard;
@@ -367,8 +349,7 @@ class DifferenceInDifferences(BaseEstimator):
             ``vcov_type="conley"`` — the panel block-decomposed Conley
             sandwich (matching R ``conleyreg`` with ``lag_cutoff > 0``)
             needs the unit identifier to compute the per-unit serial sum.
-            Mirrors :meth:`MultiPeriodDiD.fit(unit=...)` and
-            :meth:`TwoWayFixedEffects.fit(unit=...)`. Fit-time only — NOT
+            Mirrors :meth:`TwoWayFixedEffects.fit(unit=...)`. Fit-time only — NOT
             a constructor kwarg, so it is not part of ``get_params()`` /
             ``set_params()`` (which return constructor-arg dicts).
             Ignored when ``vcov_type`` is not ``"conley"``.
@@ -513,14 +494,14 @@ class DifferenceInDifferences(BaseEstimator):
         # Validate vcov_type="conley" wire-up. DiD.fit() accepts `unit`
         # as a fit-time arg (NOT on __init__) because cluster/unit
         # semantics on DiD are opt-in rather than auto-derived (unlike
-        # MultiPeriodDiD / TwoWayFixedEffects which have a unit declaration
-        # at fit-time anyway). The panel block-decomposed Conley sandwich
+        # TwoWayFixedEffects, which has a unit declaration at fit-time
+        # anyway). The panel block-decomposed Conley sandwich
         # (matching R conleyreg with lag_cutoff > 0) needs unit/time/coords
         # to assemble the within-period spatial and within-unit serial
-        # sums; we mirror MultiPeriodDiD's reject pattern for missing args
-        # and the survey/wild-bootstrap incompatibilities.
+        # sums; we mirror the event-study core's reject pattern for missing
+        # args and the survey/wild-bootstrap incompatibilities.
         if self.vcov_type == "conley":
-            # Shared front-door validation across DiD / MPD / TWFE entry
+            # Shared front-door validation across DiD / TWFE entry
             # points (Wave A holistic fix: replaces the inline drift that
             # accumulated across CI R1/R2/R6 — same-class validation gaps
             # mirrored across estimator surfaces).
@@ -713,7 +694,7 @@ class DifferenceInDifferences(BaseEstimator):
         # but the kernel grid uses the original space (coords) and time/unit
         # indexing. `_compute_conley_vcov` normalizes time labels to dense
         # codes 0..T-1 internally, so non-numeric `time` labels (datetime64,
-        # pd.Period, strings) still work on the MultiPeriodDiD path; DiD's
+        # pd.Period, strings) still work on the event-study path; DiD's
         # binary `time` column is integer 0/1 by convention and is unaffected
         # by the normalization.
         if _fit_vcov_type == "conley":
@@ -1332,65 +1313,50 @@ class DifferenceInDifferences(BaseEstimator):
         survey_design: Any,
         effective_inference: str,
         *,
-        include_treatment_main: bool = True,
-        warn_legacy_reference_default: bool = True,
-        cluster_override: Any = _USE_SELF_CLUSTER,
-        estimator_name: str = "MultiPeriodDiD",
-        _frame_offset: int = 0,
+        include_treatment_main: bool,
+        cluster_override: Optional[str],
+        estimator_name: str = "TwoWayFixedEffects",
+        _frame_offset: int = 2,
     ) -> _EventStudyCorePayload:
         """Shared event-study estimation core (row M-010).
 
         Returns a private :class:`~diff_diff.results_base._EventStudyCorePayload`
-        (PR 4c-i decoupling): ``MultiPeriodDiD.fit`` wraps it into the legacy
-        ``MultiPeriodDiDResults`` container via ``_mpd_results_from_payload``;
-        the TWFE event-study mode builds the unified ``EventStudyResults``
-        surface from it directly, so no MultiPeriodDiD container is
-        constructed on that path.
+        from which the TWFE event-study mode builds the unified
+        ``EventStudyResults`` surface (``results_base._from_event_study_payload``).
+        Through 3.x this was the body of the removed class's ``fit`` (row M-010)
+        (docs/v4-design.md section 4.1): validation, the pooled event-study
+        design build, OLS via ``solve_ols``, survey / Conley / hc2_bm variance
+        lanes and per-period inference. Its numbers are pinned against the
+        pre-refactor capture by ``tests/test_twfe_event_study_decoupling.py``.
 
-        The relocated body of ``MultiPeriodDiD.fit`` (verbatim through the
-        3.9 merge; docs/v4-design.md section 4.1): validation, the
-        pooled event-study design build, OLS via ``solve_ols``, survey /
-        Conley / hc2_bm variance lanes, per-period inference, and the
-        ``MultiPeriodDiDResults`` construction. Called by
-        ``MultiPeriodDiD.fit`` (all knob defaults) and by
-        ``TwoWayFixedEffects`` in event-study mode.
-
-        Parameters (knobs beyond the MPD fit surface)
-        ---------------------------------------------
+        Parameters (knobs beyond the fit surface)
+        -----------------------------------------
         include_treatment_main : bool
+            Keyword-required. True builds the pooled design (treatment main
+            effect + period dummies + interactions, ``spec="pooled"``);
             False omits the treatment main-effect column - the
             ``spec="within"`` design, where D is absorbed by the unit FE
             (omitting it avoids a spurious snap/collinearity warning).
             Interactions are unaffected (built from the raw indicator).
-        warn_legacy_reference_default : bool
-            False suppresses the M-007 legacy reference-period default
-            FutureWarning (the merged event-study mode has no legacy
-            default to warn about; MPD keeps warning until 4.0).
-        cluster_override : Any
-            The RESOLVED cluster column for this fit. The default
-            sentinel means "use ``self.cluster``" (MPD behavior). The
-            TWFE event-study branch pre-resolves its auto-cluster with
-            the Conley / survey-PSU / one-way carve-outs and passes the
-            final value; an explicit column here behaves exactly like
-            MPD's own explicit ``cluster=`` on every lane (survey PSU
-            injection included).
+        cluster_override : Optional[str]
+            Keyword-required. The RESOLVED cluster column for this fit
+            (None = no clustering). The TWFE event-study branch pre-resolves
+            its auto-cluster with the Conley / survey-PSU / one-way
+            carve-outs and passes the final value; an explicit column
+            behaves exactly like an explicit ``cluster=`` on every lane
+            (survey PSU injection included).
         estimator_name : str
-            Producer name for warnings and validation messages, so TWFE
-            event-study fits never steer users toward the deprecated
-            MultiPeriodDiD class.
+            Producer name for warnings and validation messages.
         _frame_offset : int
             Extra call frames between the user's fit call and this body
-            (1 via ``MultiPeriodDiD.fit``, 2 via the TWFE event-study
-            branch). Added to every warning stacklevel that attributed
-            to USER code before the extraction, preserving attribution
-            bit-identically; library-attributed warnings (e.g. the
-            ``solve_ols`` rank-deficiency chain) are deliberately not
-            offset - they attributed to this module before the move and
-            still do.
+            (2 via the TWFE event-study branch). Added to every warning
+            stacklevel that attributed to USER code before the extraction,
+            preserving attribution bit-identically; library-attributed
+            warnings (e.g. the ``solve_ols`` rank-deficiency chain) are
+            deliberately not offset - they attributed to this module before
+            the move and still do.
         """
-        cluster_resolved: Optional[str] = (
-            self.cluster if cluster_override is _USE_SELF_CLUSTER else cluster_override
-        )
+        cluster_resolved: Optional[str] = cluster_override
         # Validate basic inputs
         if outcome is None or treatment is None or time is None:
             raise ValueError("Must provide 'outcome', 'treatment', and 'time'")
@@ -1443,7 +1409,7 @@ class DifferenceInDifferences(BaseEstimator):
 
                 # Check for time-varying treatment (D_it instead of D_i)
                 # If any unit has a 0→1 transition, the treatment column is D_it.
-                # MultiPeriodDiD expects a time-invariant ever-treated indicator.
+                # The event-study design expects a time-invariant ever-treated indicator.
                 warnings.warn(
                     "Treatment indicator varies within units (time-varying "
                     f"treatment detected). {estimator_name}'s event-study "
@@ -1463,18 +1429,17 @@ class DifferenceInDifferences(BaseEstimator):
         if len(all_periods) < 2:
             raise ValueError("Time variable must have at least 2 unique periods")
 
-        # Determine pre and post periods
-        if post_periods is None:
-            # Default: last half of periods are post-treatment
-            mid_point = len(all_periods) // 2
-            post_periods = all_periods[mid_point:]
-            pre_periods = all_periods[:mid_point]
-        else:
-            post_periods = list(post_periods)
-            pre_periods = [p for p in all_periods if p not in post_periods]
-
-        if len(post_periods) == 0:
-            raise ValueError("Must have at least one post-treatment period")
+        # Determine pre and post periods. post_periods is REQUIRED: the
+        # treatment boundary is not observable from a time-invariant
+        # ever-treated indicator, so there is no default (the 3.x midpoint
+        # default died with the removed class at the 4.0 cut).
+        if post_periods is None or len(post_periods) == 0:
+            raise ValueError(
+                f"{estimator_name} event-study mode requires an explicit, non-empty "
+                "post_periods= (the post-treatment calendar periods)."
+            )
+        post_periods = list(post_periods)
+        pre_periods = [p for p in all_periods if p not in post_periods]
 
         if len(pre_periods) == 0:
             raise ValueError("Must have at least one pre-treatment period")
@@ -1496,21 +1461,9 @@ class DifferenceInDifferences(BaseEstimator):
 
         # Determine reference period (omitted dummy)
         if reference_period is None:
-            # Default: last pre-period (e=-1 convention, matches fixest).
-            # The M-007 transition warning is MPD-only: the merged TWFE
-            # event-study mode was born on the e=-1 convention and has no
-            # legacy default to warn about (docs/v4-design.md section 4.1).
-            if len(pre_periods) > 1 and warn_legacy_reference_default:
-                warnings.warn(
-                    f"The default reference_period has changed from the first "
-                    f"pre-period ({pre_periods[0]}) to the last pre-period "
-                    f"({pre_periods[-1]}) to match the standard e=-1 convention "
-                    f"(as used by fixest, did, etc.). "
-                    f"To silence this warning, pass "
-                    f"reference_period={pre_periods[-1]} explicitly.",
-                    FutureWarning,
-                    stacklevel=2 + _frame_offset,
-                )
+            # Default: last pre-period (e=-1 convention, matches fixest). The
+            # 3.x transition FutureWarning (row M-007) retired with the removed
+            # class at the 4.0 cut; this mode was born on e=-1.
             reference_period = pre_periods[-1]
         elif reference_period not in all_periods:
             raise ValueError(f"Reference period '{reference_period}' not found in time column")
@@ -1522,8 +1475,8 @@ class DifferenceInDifferences(BaseEstimator):
                 f"The reference period must be a pre-treatment period "
                 f"(e.g., the last pre-period {pre_periods[-1]}). "
                 f"Post-period references are not supported because the reference "
-                f"period is excluded from estimation, which would bias avg_att "
-                f"and break downstream inference."
+                f"period is excluded from estimation, which would bias the "
+                f"post-period estimates and break downstream inference."
             )
 
         # Validate fixed effects and absorb columns
@@ -1556,10 +1509,6 @@ class DifferenceInDifferences(BaseEstimator):
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
         n_absorbed_effects = 0
-
-        # Save raw treatment counts before absorb demeaning
-        n_treated_raw = int(np.sum(data[treatment].values.astype(float)))
-        n_control_raw = len(data) - n_treated_raw
 
         # Mutual-exclusion check runs ABOVE the auto-route below so that the
         # `absorb=..., fixed_effects=...` combination still rejects rather
@@ -1612,7 +1561,7 @@ class DifferenceInDifferences(BaseEstimator):
         # iterative alternating projections (demean_by_groups), the exact weighted
         # FWL projection for N > 1 dimensions on both balanced and unbalanced panels.
 
-        # MultiPeriodDiD is intrinsically a multi-period panel estimator;
+        # The event-study core is intrinsically a multi-period panel estimator;
         # Phase 2 panel block-decomposed Conley (matches R conleyreg) needs
         # `unit`, `conley_lag_cutoff`, and `conley_coords` at fit-time. The
         # validation is shared with DiD / TWFE to avoid the validation-class
@@ -1776,7 +1725,7 @@ class DifferenceInDifferences(BaseEstimator):
 
         # Add fixed effects as dummy variables.
         #
-        # MPD's design already absorbs the time dimension via non-reference
+        # The event-study design already absorbs the time dimension via non-reference
         # period dummies (the `period_<X>` columns above) and the treatment-
         # period interactions. If the caller passes the same column as a
         # fixed effect (either explicitly or via the absorb -> fixed_effects
@@ -1844,7 +1793,7 @@ class DifferenceInDifferences(BaseEstimator):
         # designs route through the TSL/replicate paths). If a future weighted
         # entry point set survey_weights here, the flag is False and the code
         # falls back to the original two-call behavior.
-        _is_mpd_cr2_path = (
+        _cr2_bypass_path = (
             _fit_vcov_type == "hc2_bm"
             and effective_cluster_ids is not None
             and not _use_survey_vcov
@@ -1885,11 +1834,12 @@ class DifferenceInDifferences(BaseEstimator):
 
         # Clustered-CR1 K_reference adjustment (variance-conventions.md D1/D2).
         # Absorb lane: the absorbed increment (non-nested rank + no intercept
-        # term — MPD's X carries an intercept). Non-absorb lanes: the built-in
-        # period dummies ARE MPD's time-FE block (a supplied time FE is
-        # skipped as redundant above), so they and any placed `_mp_fes`
-        # dummies SUBTRACT their joint rank when nested in the cluster —
-        # preserving MPD's absorb/fixed_effects equivalence. Survey lanes
+        # term — the event-study X carries an intercept). Non-absorb lanes:
+        # the built-in period dummies ARE the design's time-FE block (a
+        # supplied time FE is skipped as redundant above), so they and any
+        # placed `_mp_fes` dummies SUBTRACT their joint rank when nested in
+        # the cluster — preserving the absorb/fixed_effects equivalence.
+        # Survey lanes
         # pass 0 (survey vcov replaces CR1 wholesale).
         _cr1_k_adj_mp = 0
         if _fit_vcov_type == "hc1" and effective_cluster_ids is not None and not _use_survey_vcov:
@@ -1923,7 +1873,7 @@ class DifferenceInDifferences(BaseEstimator):
             X,
             y,
             return_fitted=True,
-            return_vcov=(not _use_survey_vcov) and not _is_mpd_cr2_path,
+            return_vcov=(not _use_survey_vcov) and not _cr2_bypass_path,
             cluster_ids=effective_cluster_ids,
             column_names=var_names,
             rank_deficient_action=self.rank_deficient_action,
@@ -2050,7 +2000,6 @@ class DifferenceInDifferences(BaseEstimator):
                     vcov = np.full((X.shape[1], X.shape[1]), np.nan)
             else:
                 vcov = compute_survey_vcov(X, residuals, resolved_survey)
-        r_squared = compute_r_squared(y, residuals)
 
         # Degrees of freedom: survey df overrides standard df
         k_effective = int(np.sum(~np.isnan(coefficients)))
@@ -2156,22 +2105,20 @@ class DifferenceInDifferences(BaseEstimator):
         # through compute_robust_vcov's classical branch (identical math), so
         # vcov above already matches the requested variance family.
 
-        # For hc2_bm with a non-survey fit, compute per-coefficient and
-        # per-contrast Bell-McCaffrey Satterthwaite DOF so period-specific
-        # effects and the post-period average use correct small-sample DOF
-        # rather than the shared n-k fallback.
+        # For hc2_bm with a non-survey fit, compute per-coefficient
+        # Bell-McCaffrey Satterthwaite DOF so period-specific effects use
+        # correct small-sample DOF rather than the shared n-k fallback.
         _bm_dof_per_coef: Optional[np.ndarray] = None
-        _bm_dof_avg: Optional[float] = None
-        # On the `_is_mpd_cr2_path` bypass, solve_ols did not compute vcov
+        # On the `_cr2_bypass_path` bypass, solve_ols did not compute vcov
         # (return_vcov=False). If every coefficient was dropped, synthesize the
         # all-NaN vcov solve_ols would have returned (linalg.py:1230/1019); the
         # BM DOF block below is skipped (no identified coefficients).
-        if _is_mpd_cr2_path and vcov is None and np.all(np.isnan(coefficients)):
+        if _cr2_bypass_path and vcov is None and np.all(np.isnan(coefficients)):
             vcov = np.full((X.shape[1], X.shape[1]), np.nan)
         if (
             self.vcov_type == "hc2_bm"
             and not _use_survey_vcov
-            and (vcov is not None or _is_mpd_cr2_path)
+            and (vcov is not None or _cr2_bypass_path)
             and not np.all(np.isnan(coefficients))
         ):
             from diff_diff.linalg import (
@@ -2189,8 +2136,16 @@ class DifferenceInDifferences(BaseEstimator):
                     X_kept * survey_weights[:, np.newaxis] if survey_weights is not None else X_kept
                 )
                 # Build the contrast matrix: one column per identified coefficient
-                # plus one column for the post-period average contrast (1/n_post
-                # on each post-period interaction column, 0 elsewhere).
+                # plus the post-period average contrast (1/n_post on each
+                # post-period interaction column, 0 elsewhere). The average's
+                # own DOF is unused since the 4.0 cut (the post-period average
+                # left with the removed container), but the column is KEPT
+                # as the anchor of the batch-relative noise-floor guard in
+                # linalg._cr2_bm_dof_inner (`scaled_max_B < 1e-10 * max`): the
+                # average column often sets that max, and dropping it changes
+                # which near-collinear per-period DOFs are NaN'd (reproduced
+                # on 20/299 near-collinear draws). See the REGISTRY Note and
+                # the TODO row on the batch-relative guard.
                 n_kept = len(_kept)
                 # Post-period contrast in full-width k dims, then subset to kept
                 post_contrast_full = np.zeros(X.shape[1])
@@ -2213,7 +2168,7 @@ class DifferenceInDifferences(BaseEstimator):
                         contrasts,
                         weights=survey_weights,
                     )
-                elif _is_mpd_cr2_path:
+                elif _cr2_bypass_path:
                     # Cluster-aware CR2 BM: vcov AND the per-coefficient +
                     # post-period-average compound contrast (Gate 6 lift) DOF
                     # from a SINGLE precompute build — the perf dedup. solve_ols
@@ -2221,7 +2176,7 @@ class DifferenceInDifferences(BaseEstimator):
                     # same (X_kept, residuals, cluster_ids, bread_kept) it would
                     # have used internally (→ byte-identical vcov), then expand
                     # with NaN for dropped columns. weights=None per the
-                    # _is_mpd_cr2_path guard (survey_weights is None here; survey
+                    # _cr2_bypass_path guard (survey_weights is None here; survey
                     # designs route through the TSL path).
                     _vcov_reduced, _dof_all = _compute_cr2_bm_vcov_and_dof(
                         X_kept,
@@ -2238,7 +2193,7 @@ class DifferenceInDifferences(BaseEstimator):
                     # non-None `survey_weights` comes from a SurveyDesign whose
                     # `needs_survey_vcov` is True — so `_use_survey_vcov` would be
                     # True and the whole hc2_bm block is skipped. Hence
-                    # `_is_mpd_cr2_path` is always satisfied here in practice (it
+                    # `_cr2_bypass_path` is always satisfied here in practice (it
                     # already requires `survey_weights is None`), and this branch
                     # only fails safe for a future weighted-cluster entry point.
                     # It mirrors the pre-refactor call EXACTLY (solve_ols's vcov is
@@ -2251,31 +2206,22 @@ class DifferenceInDifferences(BaseEstimator):
                         contrasts,
                     )
                 # Expand per-coefficient DOF back to full width (NaN for dropped).
+                # `_dof_all[-1]` (the anchor column's DOF) is not read.
                 _bm_dof_per_coef = np.full(X.shape[1], np.nan)
                 _bm_dof_per_coef[_kept] = _dof_all[:n_kept]
-                # Post-period average: last contrast column.
-                # Only meaningful if all post-period coefs are identified.
-                if np.all(_identified[[interaction_indices[p] for p in post_periods]]):
-                    _bm_dof_avg = float(_dof_all[-1])
 
         # Extract period-specific treatment effects for ALL non-reference periods
-        # (index-aligned lists over non_ref_periods; the MultiPeriodDiD
-        # wrapper zips them into PeriodEffect records, the TWFE surface
-        # builder reads them as arrays).
+        # (index-aligned lists over non_ref_periods; the TWFE surface builder
+        # reads them as arrays).
         pe_att: List[float] = []
         pe_se: List[float] = []
         pe_t: List[float] = []
         pe_p: List[float] = []
         pe_lo: List[float] = []
         pe_hi: List[float] = []
-        post_effect_values = []
-        post_effect_indices = []
         # Per-period df PROVENANCE for the unified event-study surface
         # (row M-092): the df actually handed to each period's
-        # safe_inference below. Distinct from `inference_df`, which stores
-        # the POST-AVERAGE contrast df - under hc2_bm the per-period BM
-        # DOFs differ from it, so broadcasting inference_df would
-        # misrepresent the per-period rows.
+        # safe_inference below.
         es_df_used: Dict[Any, float] = {}
 
         assert vcov is not None
@@ -2307,53 +2253,7 @@ class DifferenceInDifferences(BaseEstimator):
             pe_lo.append(conf_int[0])
             pe_hi.append(conf_int[1])
 
-            if period in post_periods:
-                post_effect_values.append(effect)
-                post_effect_indices.append(idx)
-
-        # Compute average treatment effect (post-periods only)
-        # R-style NA propagation: if ANY post-period effect is NaN, average is undefined
-        effect_arr = np.array(post_effect_values)
-
-        _avg_df = None
-        if np.any(np.isnan(effect_arr)):
-            # Some period effects are NaN (unidentified) - cannot compute valid average
-            # This follows R's default behavior where mean(c(1, 2, NA)) returns NA
-            avg_att = np.nan
-            avg_se = np.nan
-            avg_t_stat = np.nan
-            avg_p_value = np.nan
-            avg_conf_int = (np.nan, np.nan)
-        else:
-            # All effects identified - compute average normally
-            avg_att = float(np.mean(effect_arr))
-
-            # Standard error of average: need to account for covariance
-            n_post = len(post_periods)
-            sub_vcov = vcov[np.ix_(post_effect_indices, post_effect_indices)]
-            avg_var = np.sum(sub_vcov) / (n_post**2)
-
-            if np.isnan(avg_var) or avg_var < 0:
-                # Vcov has NaN (dropped columns) - propagate NaN
-                avg_se = np.nan
-                avg_t_stat = np.nan
-                avg_p_value = np.nan
-                avg_conf_int = (np.nan, np.nan)
-            else:
-                avg_se = float(np.sqrt(avg_var))
-                # Prefer the contrast-specific BM DOF for the post-period average
-                # when hc2_bm is in use; otherwise fall back to the shared df.
-                _avg_df = _bm_dof_avg if _bm_dof_avg is not None else df
-                avg_t_stat, avg_p_value, avg_conf_int = safe_inference(
-                    avg_att, avg_se, alpha=self.alpha, df=_avg_df
-                )
-
-        # Count observations (use raw counts to avoid demeaned values from absorb)
-        n_treated = n_treated_raw
-        n_control = n_control_raw
-
-        # Hand off to the builders (PR 4c-i): MultiPeriodDiD wraps this into
-        # its container; the TWFE event-study mode builds the surface from it.
+        # Hand off to the surface builder (results_base._from_event_study_payload).
         return _EventStudyCorePayload(
             periods=list(non_ref_periods),
             att=np.asarray(pe_att, dtype=float),
@@ -2364,380 +2264,12 @@ class DifferenceInDifferences(BaseEstimator):
             ci_upper=np.asarray(pe_hi, dtype=float),
             df_by_period=es_df_used,
             reference_period=reference_period,
-            pre_periods=pre_periods,
             post_periods=post_periods,
             alpha=self.alpha,
-            coefficients=coefficients,
-            coef_names=list(var_names),
             vcov=vcov,
             interaction_indices=interaction_indices,
-            residuals=residuals,
-            fitted_values=fitted,
-            r_squared=r_squared,
-            avg_att=avg_att,
-            avg_se=avg_se,
-            avg_t_stat=avg_t_stat,
-            avg_p_value=avg_p_value,
-            avg_conf_int=avg_conf_int,
-            inference_df=(
-                float(_avg_df)
-                if _avg_df is not None and np.isfinite(_avg_df) and _avg_df > 0
-                else None
-            ),
-            n_obs=len(y),
-            n_treated=n_treated,
-            n_control=n_control,
-            # Report the family that actually produced the SE; may be the
-            # remapped hc1 under a replicate-weight survey design.
-            vcov_type=_fit_vcov_type,
-            cluster_name=cluster_resolved,
-            n_clusters=(
-                len(np.unique(effective_cluster_ids)) if effective_cluster_ids is not None else None
-            ),
-            conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
-            df_convention=self.df_convention,
             survey_metadata=survey_metadata,
         )
-
-
-def _mpd_results_from_payload(p: _EventStudyCorePayload) -> MultiPeriodDiDResults:
-    """Wrap the event-study core's payload into the legacy MultiPeriodDiD
-    container (deleted with the class at the 4.0 cut, PR 4c-ii).
-
-    ``period_effects`` is built in ``p.periods`` order (the core's sorted
-    non-reference order, the same insertion order the core used before the
-    PR 4c-i decoupling); per-period scalars round-trip through float64
-    arrays (value-identical; ``np.float64`` is a ``float`` subclass).
-    """
-    period_effects = {
-        per: PeriodEffect(
-            period=per,
-            effect=p.att[i],
-            se=p.se[i],
-            t_stat=p.t_stat[i],
-            p_value=p.p_value[i],
-            conf_int=(p.ci_lower[i], p.ci_upper[i]),
-        )
-        for i, per in enumerate(p.periods)
-    }
-    return MultiPeriodDiDResults(
-        period_effects=period_effects,
-        avg_att=p.avg_att,
-        avg_se=p.avg_se,
-        avg_t_stat=p.avg_t_stat,
-        avg_p_value=p.avg_p_value,
-        avg_conf_int=p.avg_conf_int,
-        n_obs=p.n_obs,
-        n_treated=p.n_treated,
-        n_control=p.n_control,
-        pre_periods=p.pre_periods,
-        post_periods=p.post_periods,
-        alpha=p.alpha,
-        coefficients=dict(zip(p.coef_names, p.coefficients)),
-        vcov=p.vcov,
-        residuals=p.residuals,
-        fitted_values=p.fitted_values,
-        r_squared=p.r_squared,
-        reference_period=p.reference_period,
-        interaction_indices=p.interaction_indices,
-        survey_metadata=p.survey_metadata,
-        vcov_type=p.vcov_type,
-        cluster_name=p.cluster_name,
-        n_clusters=p.n_clusters,
-        conley_lag_cutoff=p.conley_lag_cutoff,
-        df_convention=p.df_convention,
-        inference_df=p.inference_df,
-        event_study_df=p.df_by_period,
-    )
-
-
-class MultiPeriodDiD(DifferenceInDifferences):
-    """
-    Multi-Period Difference-in-Differences estimator.
-
-    .. deprecated:: 3.9
-        MultiPeriodDiD is deprecated and will be removed in 4.0 (ledger
-        row M-010): use ``TwoWayFixedEffects().fit(..., event_study=True)``
-        instead. ``spec="pooled"`` reproduces this estimator's design
-        exactly (treatment-group dummy + period dummies, no unit fixed
-        effects - the only spec valid for repeated cross-sections); the
-        default ``spec="within"`` estimates the unit-FE event study. The
-        ``EventStudy`` alias is deprecated with this class.
-
-    Extends the standard DiD to handle multiple pre-treatment and
-    post-treatment time periods, providing period-specific treatment
-    effects as well as an aggregate average treatment effect.
-
-    Parameters
-    ----------
-    cluster : str, optional
-        Column name for cluster-robust standard errors. With ``vcov_type="hc1"``
-        dispatches to CR1 (Liang-Zeger). With ``vcov_type="hc2_bm"`` dispatches
-        to CR2 cluster-robust SEs with Bell-McCaffrey Satterthwaite DOF on both
-        per-period coefficients and the post-period-average ATT contrast (the
-        latter via the new ``_compute_cr2_bm_contrast_dof`` helper in
-        ``linalg.py``; matches clubSandwich's
-        ``Wald_test(test="HTZ")$df_denom`` at atol=1e-10). Weighted CR2-BM
-        (``survey_design=``) is a separate, still-gated path.
-    vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, optional
-        Variance-covariance family. Defaults to ``"hc1"``.
-
-        - ``"classical"``: non-robust OLS SEs, ``sigma_hat^2 * (X'X)^{-1}``.
-        - ``"hc1"``: heteroskedasticity-robust HC1 with ``n/(n-k)`` adjustment
-          (library default). With ``cluster=``, uses CR1 (Liang-Zeger).
-        - ``"hc2"``: leverage-corrected meat (one-way only). Errors with
-          ``cluster=``; use ``"hc2_bm"`` without cluster for Bell-McCaffrey.
-          Effective leverage ``h_ii >= 1 - 1e-8`` produces a warning and
-          entirely NaN covariance/inference, retaining point estimates.
-        - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF
-          per coefficient plus a contrast-aware DOF for the post-period-average
-          ATT. With ``cluster=``, dispatches to Pustejovsky-Tipton (2018)
-          CR2 cluster-robust with a Bell-McCaffrey Satterthwaite contrast DOF
-          on the post-period average (see ``cluster`` above for parity
-          details). Weighted CR2-BM (``survey_design=``) is still gated.
-          Unweighted, unclustered fits share HC2's leverage-one NaN guard
-          for covariance and all contrast DOFs, including the average ATT.
-        - ``"hc3"``: jackknife-style leverage correction, meat
-          ``e_i^2 / (1 - h_ii)^2`` (one-way only; errors with ``cluster=``).
-          A leverage-one observation has no defined HC3 variance and the
-          vcov fails closed (warning + NaN inference) rather than flooring
-          ``1 - h_ii``. With ``absorb=``, routes through the full-dummy
-          design like hc2.
-        - ``"conley"``: Conley 1999 spatial-HAC sandwich via the panel
-          block-decomposed form (matches R ``conleyreg`` with
-          ``lag_cutoff > 0``). Pass ``conley_coords=(lat_col, lon_col)``,
-          ``conley_cutoff_km=<float>``, and ``conley_lag_cutoff=<int>`` on
-          the constructor; ``unit=`` must be supplied at fit-time. The
-          sandwich sums within-period spatial pairs plus within-unit
-          Bartlett serial pairs (lag=0 excluded to avoid double-counting);
-          this is NOT a multiplicative product kernel. ``conley_time`` is
-          auto-derived from the ``time`` column at fit-time and normalized
-          to dense panel-period codes ``0..T-1`` so ``conley_lag_cutoff``
-          always counts panel periods (works for int / datetime64 /
-          ``pd.Period`` / string encodings). Explicit ``cluster=<col>``
-          enables the combined spatial + cluster product kernel
-          (Wave A #119; cluster must be constant within each unit across
-          periods). Restrictions: ``survey_design=`` and
-          ``inference="wild_bootstrap"`` raise on this path
-          (Phase 5 / follow-up).
-    alpha : float, default=0.05
-        Significance level for confidence intervals.
-    conley_coords, conley_cutoff_km, conley_metric, conley_kernel, conley_lag_cutoff
-        Constructor kwargs that take effect when ``vcov_type="conley"``.
-        ``conley_coords`` is a ``(lat_col, lon_col)`` tuple of column names
-        on ``data``. ``conley_lag_cutoff`` is the within-unit Bartlett lag
-        (non-negative int; 0 means within-period spatial only, no serial
-        component).
-
-    Attributes
-    ----------
-    results_ : MultiPeriodDiDResults
-        Estimation results after calling fit().
-    is_fitted_ : bool
-        Whether the model has been fitted.
-
-    Examples
-    --------
-    Basic usage with multiple time periods:
-
-    >>> import pandas as pd
-    >>> from diff_diff import MultiPeriodDiD
-    >>>
-    >>> # Create sample panel data with 6 time periods
-    >>> # Periods 0-2 are pre-treatment, periods 3-5 are post-treatment
-    >>> data = create_panel_data()  # Your data
-    >>>
-    >>> # Fit the model
-    >>> did = MultiPeriodDiD()
-    >>> results = did.fit(
-    ...     data,
-    ...     outcome='sales',
-    ...     treatment='treated',
-    ...     time='period',
-    ...     post_periods=[3, 4, 5]  # Specify which periods are post-treatment
-    ... )
-    >>>
-    >>> # View period-specific effects
-    >>> for period, effect in results.period_effects.items():
-    ...     print(f"Period {period}: {effect.effect:.3f} (SE: {effect.se:.3f})")
-    >>>
-    >>> # View average treatment effect
-    >>> print(f"Average ATT: {results.avg_att:.3f}")
-
-    Notes
-    -----
-    The model estimates:
-
-        Y_it = α + β*D_i + Σ_t γ_t*Period_t + Σ_{t≠ref} δ_t*(D_i × 1{t}) + ε_it
-
-    Where:
-    - D_i is the treatment indicator
-    - Period_t are time period dummies (all non-reference periods)
-    - D_i × 1{t} are treatment-by-period interactions (all non-reference)
-    - δ_t are the period-specific treatment effects
-    - The reference period (default: last pre-period) has δ_ref = 0 by construction
-
-    Pre-treatment δ_t test the parallel trends assumption (should be ≈ 0).
-    Post-treatment δ_t estimate dynamic treatment effects.
-    The average ATT is computed from post-treatment δ_t only.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Deprecation shim (row M-010): warn, then defer to DiD's __init__.
-
-        The forwarding ``*args/**kwargs`` keeps the constructor surface
-        identical to :class:`DifferenceInDifferences` with zero drift risk;
-        the ``__signature__`` mirror below restores introspection for
-        ``get_params``/``set_params`` (``BaseEstimator._param_names``
-        rejects VAR_* parameter kinds) and ``inspect.signature`` callers.
-        Known, accepted side effects: ``set_params`` re-emits the warning
-        (its transactional probe re-instantiates), and static type
-        checkers lose constructor-argument checking for this class during
-        the 3.9 window (waiver recorded in DEFERRED.md's decision record;
-        runtime validation is unchanged - ``super().__init__`` validates
-        eagerly).
-        """
-        warnings.warn(_MPD_DEPRECATION_MSG, FutureWarning, stacklevel=2)
-        super().__init__(*args, **kwargs)
-
-    def fit(  # type: ignore[override]
-        self,
-        data: pd.DataFrame,
-        outcome: str,
-        treatment: str,
-        time: str,
-        post_periods: Optional[List[Any]] = None,
-        covariates: Optional[List[str]] = None,
-        fixed_effects: Optional[List[str]] = None,
-        absorb: Optional[List[str]] = None,
-        reference_period: Any = None,
-        unit: Optional[str] = None,
-        survey_design=None,
-    ) -> MultiPeriodDiDResults:
-        """
-        Fit the Multi-Period Difference-in-Differences model.
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-            DataFrame containing the outcome, treatment, and time variables.
-        outcome : str
-            Name of the outcome variable column.
-        treatment : str
-            Name of the treatment group indicator column (0/1). Should be a
-            time-invariant ever-treated indicator (D_i = 1 for all periods of
-            treated units). If treatment is time-varying (D_it), pre-period
-            interaction coefficients will be unidentified.
-        time : str
-            Name of the time period column (can have multiple values).
-        post_periods : list
-            List of time period values that are post-treatment.
-            All other periods are treated as pre-treatment.
-        covariates : list, optional
-            List of covariate column names to include as linear controls.
-            Names must not collide with reserved structural terms (``const``,
-            the treatment column name, ``period_{p}`` dummies, the
-            ``{treatment}:period_{p}`` interactions, fixed-effect dummy names, or
-            internal working columns) and must be unique; a collision or
-            duplicate raises ``ValueError`` (it would otherwise silently
-            overwrite a structural coefficient).
-        fixed_effects : list, optional
-            List of categorical column names to include as fixed effects.
-        absorb : list, optional
-            List of categorical column names for high-dimensional fixed effects.
-        reference_period : any, optional
-            The reference (omitted) time period for the period dummies.
-            Defaults to the last pre-treatment period (e=-1 convention).
-        unit : str, optional
-            Name of the unit identifier column. When provided, checks whether
-            treatment timing varies across units and warns if staggered adoption
-            is detected (suggests CallawaySantAnna instead). Required when
-            ``vcov_type="conley"`` (the panel block-decomposed sandwich computes
-            a per-unit serial sum). For other ``vcov_type`` values, use the
-            ``cluster`` parameter for cluster-robust SEs.
-        survey_design : SurveyDesign, optional
-            Survey design specification for design-based inference. When provided,
-            uses Taylor Series Linearization for variance estimation and
-            applies sampling weights to the regression.
-
-        Returns
-        -------
-        MultiPeriodDiDResults
-            Object containing period-specific and average treatment effects.
-
-        Raises
-        ------
-        ValueError
-            If required parameters are missing or data validation fails, or if
-            a covariate name collides with a reserved structural term name or
-            duplicates another covariate.
-        """
-        # Fall back to analytical inference if wild bootstrap requested
-        # (must happen before _resolve_survey_for_fit which rejects bootstrap+survey).
-        # SKIP the warning on the Conley path — the Conley validator below
-        # raises NotImplementedError for wild_bootstrap + Conley, so emitting
-        # the analytical-fallback warning first would produce contradictory
-        # guidance on the same call (warn "falling back" + raise "not
-        # supported"). The Conley raise takes precedence. Codex CI R11 P3.
-        # NOTE: ``p_val_type`` is inherited from DifferenceInDifferences but is
-        # inert here — MultiPeriodDiD has no wild-bootstrap path (it falls back
-        # to analytical inference below), so the parameter has no effect.
-        effective_inference = self.inference
-        if self.inference == "wild_bootstrap" and self.vcov_type != "conley":
-            warnings.warn(
-                "Wild bootstrap inference is not yet supported for MultiPeriodDiD. "
-                "Using analytical inference instead.",
-                UserWarning,
-            )
-            effective_inference = "analytical"
-
-        payload = self._fit_event_study_core(
-            data,
-            outcome,
-            treatment,
-            time,
-            post_periods,
-            covariates,
-            fixed_effects,
-            absorb,
-            reference_period,
-            unit,
-            survey_design,
-            effective_inference,
-            _frame_offset=1,
-        )
-        self.results_ = _mpd_results_from_payload(payload)
-        self._coefficients = payload.coefficients
-        self._vcov = payload.vcov
-        self.is_fitted_ = True
-        return self.results_
-
-    def summary(self) -> str:
-        """
-        Get summary of estimation results.
-
-        Returns
-        -------
-        str
-            Formatted summary.
-        """
-        if not self.is_fitted_:
-            raise RuntimeError("Model must be fitted before calling summary()")
-        assert self.results_ is not None
-        return self.results_.summary()
-
-
-# Mirror DiD's constructor signature onto the deprecation shim so
-# introspection keeps working: BaseEstimator._param_names raises on
-# *args/**kwargs parameter kinds, and inspect.signature honors an explicit
-# __signature__ - so get_params/set_params (and the roster contract in
-# tests/test_base_estimator.py) see exactly DiD's parameter surface, with
-# zero drift risk when DifferenceInDifferences gains a constructor param.
-import inspect as _inspect  # noqa: E402
-
-MultiPeriodDiD.__init__.__signature__ = _inspect.signature(  # type: ignore[attr-defined]
-    DifferenceInDifferences.__init__
-)
 
 
 # Re-export estimators from submodules for backward compatibility
@@ -2751,7 +2283,6 @@ from diff_diff.twfe import TwoWayFixedEffects  # noqa: E402
 
 __all__ = [
     "DifferenceInDifferences",
-    "MultiPeriodDiD",
     "TwoWayFixedEffects",
     "SyntheticDiD",
     "SyntheticControl",

@@ -707,7 +707,7 @@ class StackedDiD(BaseEstimator):
         # Satterthwaite DOF for each contrast — not the normal distribution
         # that safe_inference(df=None) would otherwise default to. Mirrors
         # the SunAbraham aggregated-inference pattern from PR #472
-        # (sun_abraham.py:997-1097) and the MPD avg_att pattern from PR #465.
+        # (sun_abraham.py:997-1097) and the event-study core's contrast pattern from PR #465.
         # Computed BEFORE constructing event_study_effects / overall_*
         # inference so the DOFs can be threaded into the safe_inference calls.
         _bm_contrast_dof_per_event: Dict[int, float] = {}
@@ -715,7 +715,7 @@ class StackedDiD(BaseEstimator):
         if self.vcov_type == "hc2_bm" and not _uses_replicate_sd and not np.all(np.isnan(coef)):
             from diff_diff.linalg import _compute_cr2_bm_contrast_dof
 
-            # Mirror the MultiPeriodDiD rank-deficient pattern (PR #465,
+            # Mirror the event-study core's rank-deficient pattern (PR #465,
             # estimators.py:1860-1913): solve_ols emits NaN for dropped
             # coefficients under R-style rank handling. Subset X, bread,
             # and contrast vectors to the identified-column block BEFORE

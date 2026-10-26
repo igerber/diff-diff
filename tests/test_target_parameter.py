@@ -48,12 +48,6 @@ class TestTargetParameterPerEstimator:
         assert tp["headline_attribute"] == "att"
         assert "ATT" in tp["name"]
 
-    def test_multi_period_did_results(self):
-        tp = describe_target_parameter(_minimal_result("MultiPeriodDiDResults"))
-        assert tp["aggregation"] == "event_study"
-        assert tp["headline_attribute"] == "avg_att"
-        assert "event-study" in tp["name"].lower()
-
     def test_did_results_mentions_twfe(self):
         """``TwoWayFixedEffects.fit()`` returns ``DiDResults`` (verified in
         PR #347 R1 review), so the DiDResults branch must cover both

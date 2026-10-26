@@ -174,6 +174,11 @@ LANES: Dict[str, Lane] = {
     "pooled_hc2_bm": _pooled({"vcov_type": "hc2_bm"}),
     "within_cluster_unit": _within({"cluster": "unit"}),
     "within_hc2": _within({"vcov_type": "hc2"}),
+    # Cluster + hc2_bm: the CR2 Bell-McCaffrey bypass (`_is_mpd_cr2_path`) that
+    # no other lane reaches; captured at d45d5316 (PR 4c-ii, before the core's
+    # post-average block was removed) - see provenance.lane_additions.
+    "pooled_cluster_hc2_bm": _pooled({"vcov_type": "hc2_bm", "cluster": "unit"}),
+    "within_cluster_hc2_bm": _within({"vcov_type": "hc2_bm", "cluster": "unit"}),
     "within_conley": _within(_CONLEY_CTOR, unit="unit"),
     "within_survey_tsl": _within({}, survey_label="tsl:w/stratum/psu"),
     "within_replicate_jk1": _within({}, survey_label="jk1:w"),
