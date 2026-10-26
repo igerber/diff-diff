@@ -39,7 +39,6 @@ from diff_diff.power import (
     _ddd_fit_kwargs,
     _ddd_panel_viable_min_n,
     _extract_simple,
-    _extract_staggered,
     _factor_dgp_kwargs,
     _get_registry,
     _staggered_dgp_kwargs,
@@ -911,36 +910,6 @@ class TestEstimatorRegistry:
         assert se == 0.5
         assert p == 0.01
         assert ci == (2.0, 4.0)
-
-    def test_extract_staggered_analytical(self):
-        """_extract_staggered handles analytical result objects."""
-
-        class MockResult:
-            overall_att = 2.0
-            overall_se = 0.3
-            overall_p_value = 0.02
-            overall_conf_int = (1.4, 2.6)
-
-        att, se, p, ci = _extract_staggered(MockResult())
-        assert att == 2.0
-        assert se == 0.3
-        assert p == 0.02
-        assert ci == (1.4, 2.6)
-
-    def test_extract_staggered_bootstrap_fallback(self):
-        """_extract_staggered falls back to bootstrap attribute names."""
-
-        class MockBootstrapResult:
-            overall_att = 2.0
-            overall_att_se = 0.4
-            overall_att_p_value = 0.03
-            overall_att_ci = (1.2, 2.8)
-
-        att, se, p, ci = _extract_staggered(MockBootstrapResult())
-        assert att == 2.0
-        assert se == 0.4
-        assert p == 0.03
-        assert ci == (1.2, 2.8)
 
     def test_continuous_did_not_in_registry(self):
         """ContinuousDiD is not in registry and raises without custom data_generator."""

@@ -428,7 +428,7 @@ class TestContinuousDiDFit:
     def test_overall_parameters(self, basic_data):
         est = ContinuousDiD()
         results = est.fit(basic_data, "outcome", "unit", "period", "first_treat", "dose")
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         assert np.isfinite(results.overall_acrt)
 
     def test_group_time_effects_populated(self, basic_data):
@@ -569,7 +569,7 @@ class TestDoseAggregation:
             "dose",
         )
         assert len(results.groups) == 1
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
 
 class TestEventStudyAggregation:
@@ -690,7 +690,7 @@ class TestBootstrap:
         )
         est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        assert results.overall_att_se > 0
+        assert results.se > 0
         assert results.overall_acrt_se > 0
         # Dose-response SEs should be positive
         assert np.all(results.dose_response_att.se > 0)
@@ -705,8 +705,8 @@ class TestBootstrap:
         )
         est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        lo, hi = results.overall_att_conf_int
-        assert lo <= results.overall_att <= hi
+        lo, hi = results.conf_int
+        assert lo <= results.att <= hi
 
     def test_bootstrap_acrt_ci_centered(self, ci_params):
         """Bootstrap ACRT CI should bracket the point estimate, not zero."""
@@ -745,7 +745,7 @@ class TestBootstrap:
         )
         est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        assert 0 <= results.overall_att_p_value <= 1
+        assert 0 <= results.p_value <= 1
         assert 0 <= results.overall_acrt_p_value <= 1
 
     def test_bootstrap_dose_response_p_values(self, ci_params):
@@ -786,7 +786,7 @@ class TestAnalyticalSE:
         )
         est = ContinuousDiD(n_bootstrap=0)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        assert results.overall_att_se > 0
+        assert results.se > 0
         assert results.overall_acrt_se > 0
 
     def test_analytical_ci(self):
@@ -798,8 +798,8 @@ class TestAnalyticalSE:
         )
         est = ContinuousDiD(n_bootstrap=0)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        lo, hi = results.overall_att_conf_int
-        assert lo < results.overall_att < hi
+        lo, hi = results.conf_int
+        assert lo < results.att < hi
 
 
 class TestEdgeCases:
@@ -1208,7 +1208,7 @@ class TestAnalyticalSEParity:
             data, "outcome", "unit", "period", "first_treat", "dose"
         )
         threshold = 0.50 if n_boot < 100 else 0.30
-        ratio = results_analytic.overall_att_se / results_boot.overall_att_se
+        ratio = results_analytic.se / results_boot.se
         assert (1 - threshold) < ratio < (1 + threshold) / (1 - threshold), (
             f"Analytical/bootstrap SE ratio = {ratio:.3f}, "
             f"expected within [{1 - threshold:.2f}, {(1 + threshold) / (1 - threshold):.2f}]"
@@ -1372,7 +1372,7 @@ class TestAnticipationEventStudy:
         )
 
         assert np.isfinite(
-            results.overall_att
+            results.att
         ), "overall_att should be finite with anticipation + not_yet_treated"
         assert results.dose_response_att is not None, "dose-response curve should exist"
 
@@ -1391,7 +1391,7 @@ class TestEmptyPostTreatment:
         est = ContinuousDiD()
         with pytest.warns(UserWarning, match="[Nn]o post-treatment"):
             results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        assert np.isnan(results.overall_att)
+        assert np.isnan(results.att)
         assert np.isnan(results.overall_acrt)
 
 
@@ -1435,12 +1435,12 @@ class TestBootstrapPercentileInference:
         )
         est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        lo, hi = results.overall_att_conf_int
-        estimate = results.overall_att
+        lo, hi = results.conf_int
+        estimate = results.att
         # CI should contain estimate
         assert lo <= estimate <= hi
         # p-value should be finite and in [0, 1]
-        assert 0 <= results.overall_att_p_value <= 1
+        assert 0 <= results.p_value <= 1
         # Percentile CIs are generally asymmetric around the estimate.
         # With enough bootstrap reps, the upper and lower distances differ.
         upper_dist = hi - estimate
@@ -1594,7 +1594,7 @@ class TestCovariateAPI:
         data = _cov_data()
         est = ContinuousDiD(estimation_method="ipw")
         res = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_survey_with_covariates_raises(self):
         from diff_diff.survey import SurveyDesign
@@ -1766,7 +1766,7 @@ class TestCovariateAPI:
                 "dose",
                 covariates=["x1"],
             )
-            assert np.isfinite(es.overall_att) and np.isfinite(es.overall_att_se)
+            assert np.isfinite(es.att) and np.isfinite(es.se)
             assert len(es.aggregate("event_study").event_time) > 0
             ana = ContinuousDiD(estimation_method=method).fit(
                 data,
@@ -1786,9 +1786,9 @@ class TestCovariateAPI:
                 "dose",
                 covariates=["x1"],
             )
-            assert np.isfinite(boot.overall_att_se)
+            assert np.isfinite(boot.se)
             # bootstrap SE within ~30% of analytical (same linearized IF)
-            assert abs(boot.overall_att_se - ana.overall_att_se) / ana.overall_att_se < 0.3
+            assert abs(boot.se - ana.se) / ana.se < 0.3
 
     def test_clone_refit_idempotent(self):
         data = _cov_data()
@@ -1796,8 +1796,8 @@ class TestCovariateAPI:
         r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", covariates=["x1"])
         clone = ContinuousDiD(**est.get_params())
         r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose", covariates=["x1"])
-        assert abs(float(r1.overall_att) - float(r2.overall_att)) < 1e-12
-        assert abs(float(r1.overall_att_se) - float(r2.overall_att_se)) < 1e-12
+        assert abs(float(r1.att) - float(r2.att)) < 1e-12
+        assert abs(float(r1.se) - float(r2.se)) < 1e-12
 
     def test_no_covariate_path_unchanged(self):
         """Passing covariates=None runs the unchanged unconditional path."""
@@ -1807,8 +1807,8 @@ class TestCovariateAPI:
         alt = ContinuousDiD(estimation_method="reg", seed=1).fit(
             data, "outcome", "unit", "period", "first_treat", "dose"
         )
-        assert float(base.overall_att) == float(alt.overall_att)
-        assert float(base.overall_att_se) == float(alt.overall_att_se)
+        assert float(base.att) == float(alt.att)
+        assert float(base.se) == float(alt.se)
 
 
 # =============================================================================
@@ -2038,7 +2038,7 @@ class TestDiscreteSaturatedAPI:
         np.testing.assert_allclose(
             r_default.dose_response_att.effects, r_explicit.dose_response_att.effects
         )
-        np.testing.assert_allclose(r_default.overall_att, r_explicit.overall_att)
+        np.testing.assert_allclose(r_default.att, r_explicit.att)
 
 
 class TestLowestDoseAPI:

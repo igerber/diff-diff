@@ -165,9 +165,9 @@ class TestReplicateClassA:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
     def test_att_raises_on_terminal_missingness_replicate_path(self):
         """Replicate ATT + terminal missingness: the Class A replicate
@@ -283,7 +283,7 @@ class TestReplicateClassA:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         assert captured_psi, (
             "Spy captured no psi_obs — the fit did not route through "
             "compute_replicate_if_variance. Did the replicate "
@@ -322,7 +322,7 @@ class TestReplicateClassA:
         # from the captured psi_obs. Trivial sanity check — the fit
         # computed it from this exact psi_obs via the spy pass-through.
         var_cell_recompute, _ = original_repvar(psi_obs_actual, resolved)
-        assert float(res.overall_se) ** 2 == pytest.approx(
+        assert float(res.se) ** 2 == pytest.approx(
             var_cell_recompute,
             rel=1e-12,
         ), (
@@ -365,9 +365,9 @@ class TestReplicateClassA:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_t_stat)
-        assert np.isfinite(res.overall_p_value)
-        assert np.all(np.isfinite(res.overall_conf_int))
+        assert np.isfinite(res.t_stat)
+        assert np.isfinite(res.p_value)
+        assert np.all(np.isfinite(res.conf_int))
 
     @pytest.mark.parametrize("method", ["BRR", "JK1"])
     def test_df_survey_reflects_n_valid(self, base_panel, replicate_design, method):
@@ -415,12 +415,12 @@ class TestReplicateClassA:
             survey_design=sd_tsl,
         )
         # Same point estimate (both unweighted)
-        assert res_rep.overall_att == pytest.approx(res_tsl.overall_att, rel=1e-6)
+        assert res_rep.att == pytest.approx(res_tsl.att, rel=1e-6)
         # SEs should be within 50% of each other (broad envelope)
-        ratio = res_rep.overall_se / res_tsl.overall_se
+        ratio = res_rep.se / res_tsl.se
         assert 0.5 <= ratio <= 2.0, (
-            f"Replicate SE ({res_rep.overall_se:.4f}) and TSL SE "
-            f"({res_tsl.overall_se:.4f}) differ by more than 2x."
+            f"Replicate SE ({res_rep.se:.4f}) and TSL SE "
+            f"({res_tsl.se:.4f}) differ by more than 2x."
         )
 
     @pytest.mark.parametrize("method", ["BRR", "JK1"])
@@ -498,8 +498,8 @@ class TestReplicateClassA:
             covariates=["cov1"],
             L_max=1,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
 
 
 # ── 2. Class B replicate (heterogeneity + twowayfeweights) ──────────
@@ -594,7 +594,7 @@ class TestPSUBootstrap:
                 treatment="treatment",
                 survey_design=sd_explicit,
             )
-        assert r_auto.overall_se == pytest.approx(r_explicit.overall_se, rel=1e-10)
+        assert r_auto.se == pytest.approx(r_explicit.se, rel=1e-10)
 
     def test_coarser_psu_produces_finite_se(self):
         """Under a strictly coarser PSU, the Hall-Mammen PSU bootstrap
@@ -612,8 +612,8 @@ class TestPSUBootstrap:
                 treatment="treatment",
                 survey_design=sd,
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_no_warning_under_auto_inject(self, base_panel):
         """No UserWarning about PSU-level bootstrap should fire under
@@ -671,7 +671,7 @@ class TestPSUBootstrap:
                 treatment="treatment",
                 survey_design=sd,
             )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_multi_horizon_psu_bootstrap(self):
         """Event study bootstrap inherits PSU broadcasting."""
@@ -778,7 +778,7 @@ class TestInvariants:
             time="period",
             treatment="treatment",
         )
-        assert r1.overall_se == pytest.approx(r2.overall_se, rel=1e-10)
+        assert r1.se == pytest.approx(r2.se, rel=1e-10)
 
     def test_map_for_target_id_lookup(self):
         """`_map_for_target` builds the PSU map from group IDs via dict
@@ -1033,9 +1033,9 @@ class TestInvariants:
         # Main dCDH inference fields are NaN via the _inference_df
         # coercion (None → 0 under replicate → safe_inference NaN
         # branch).
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert not np.all(np.isfinite(res.overall_conf_int))
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert not np.all(np.isfinite(res.conf_int))
         # Event study horizon 1 is also NaN.
         if 1 in res.event_study_effects:
             info = res.event_study_effects[1]
@@ -1090,9 +1090,9 @@ class TestInvariants:
         # Verify overall inference was computed with df=final_df by
         # checking p-value against t(final_df) — would disagree if
         # df=R-1 or df=None was used.
-        t_stat = res.overall_att / res.overall_se
+        t_stat = res.att / res.se
         expected_p = 2 * _stats.t.sf(abs(t_stat), df=final_df)
-        assert res.overall_p_value == pytest.approx(expected_p, rel=1e-6)
+        assert res.p_value == pytest.approx(expected_p, rel=1e-6)
         # Same check for heterogeneity surface.
         if res.heterogeneity_effects:
             het_info = res.heterogeneity_effects[1]
@@ -1200,9 +1200,9 @@ class TestInvariants:
         )
 
         # Overall surface: p-value must use the reduced df.
-        t_stat = res.overall_att / res.overall_se
+        t_stat = res.att / res.se
         expected_p_overall = 2 * _stats.t.sf(abs(t_stat), df=expected_df)
-        assert res.overall_p_value == pytest.approx(
+        assert res.p_value == pytest.approx(
             expected_p_overall,
             rel=1e-6,
         ), (
@@ -1355,9 +1355,9 @@ class TestInvariants:
         # Final effective df is None (reduced_df = 0 < 1 guard).
         assert res.survey_metadata.df_survey is None
         # Every public inference surface must be NaN.
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert not np.all(np.isfinite(res.overall_conf_int))
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert not np.all(np.isfinite(res.conf_int))
         if res.event_study_effects:
             for info in res.event_study_effects.values():
                 assert np.isnan(info["t_stat"])
@@ -1415,10 +1415,10 @@ class TestPhase1FinalDfSync:
 
         row = res.event_study_effects[1]
         # The stored copy agrees with the refreshed overall inference...
-        assert row["t_stat"] == res.overall_t_stat
-        assert row["p_value"] == res.overall_p_value
+        assert row["t_stat"] == res.t_stat
+        assert row["p_value"] == res.p_value
         # ...and that inference is the FINAL df's, not an intermediate one.
-        t_stat = res.overall_att / res.overall_se
+        t_stat = res.att / res.se
         expected_p = 2 * _stats.t.sf(abs(t_stat), df=final_df)
         assert row["p_value"] == pytest.approx(expected_p, rel=1e-6)
 

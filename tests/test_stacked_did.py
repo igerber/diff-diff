@@ -77,9 +77,9 @@ class TestStackedDiDBasic:
             first_treat="first_treat",
         )
         assert isinstance(results, StackedDiDResults)
-        assert np.isfinite(results.overall_att)
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.att)
+        assert np.isfinite(results.se)
+        assert results.se > 0
         assert results.n_stacked_obs > 0
         assert results.n_sub_experiments > 0
 
@@ -143,7 +143,7 @@ class TestStackedDiDBasic:
             time="period",
             first_treat="first_treat",
         )
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         # The event-study surface is ALWAYS materialized on 3.9+ fits.
         assert results.event_study_effects is not None
         assert results.group_effects is None
@@ -160,8 +160,8 @@ class TestStackedDiDBasic:
         )
         # Treatment effect is 5.0; allow generous tolerance
         assert (
-            abs(results.overall_att - 5.0) < 1.5
-        ), f"Estimated ATT {results.overall_att:.2f} too far from true effect 5.0"
+            abs(results.att - 5.0) < 1.5
+        ), f"Estimated ATT {results.att:.2f} too far from true effect 5.0"
 
     def test_dynamic_effects(self, staggered_data):
         """With dynamic effects, post-treatment coefficients should increase."""
@@ -452,8 +452,8 @@ class TestClustering:
             time="period",
             first_treat="first_treat",
         )
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
     def test_unit_subexp_clustering(self, staggered_data):
         """unit_subexp clustering produces finite SEs."""
@@ -465,8 +465,8 @@ class TestClustering:
             time="period",
             first_treat="first_treat",
         )
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
 
 # =============================================================================
@@ -547,7 +547,7 @@ class TestEdgeCases:
             first_treat="first_treat",
         )
         assert results.n_sub_experiments == 1
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_anticipation_reference_period(self):
         """anticipation=1 shifts reference period to e=-2."""
@@ -583,7 +583,7 @@ class TestEdgeCases:
 
         # Post-treatment includes anticipation period (-1)
         # Overall ATT averages h in {-1, 0, 1, 2}
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_unbalanced_panel(self):
         """Works with missing observations within the window."""
@@ -609,7 +609,7 @@ class TestEdgeCases:
             first_treat="first_treat",
         )
         sd = results.stacked_data
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         assert np.all(sd["_Q_weight"] > 0)
         assert np.all(np.isfinite(sd["_Q_weight"]))
 
@@ -998,8 +998,8 @@ class TestStackedDiDVcovType:
         kwargs = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
         res_default = est_default.fit(staggered_data, **kwargs)
         res_explicit = est_explicit.fit(staggered_data, **kwargs)
-        np.testing.assert_allclose(res_default.overall_se, res_explicit.overall_se, atol=1e-15)
-        np.testing.assert_allclose(res_default.overall_att, res_explicit.overall_att, atol=1e-15)
+        np.testing.assert_allclose(res_default.se, res_explicit.se, atol=1e-15)
+        np.testing.assert_allclose(res_default.att, res_explicit.att, atol=1e-15)
 
     def test_hc1_se_bit_equal_to_pre_pr_baseline(self, baseline_panel):
         """HC1 SE matches the captured pre-PR baseline at machine precision.
@@ -1028,13 +1028,13 @@ class TestStackedDiDVcovType:
             baseline_panel, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         np.testing.assert_allclose(
-            res.overall_att,
+            res.att,
             BASELINE_OVERALL_ATT,
             atol=1e-13,
             err_msg="HC1 overall_att drifted from pre-PR baseline",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             BASELINE_OVERALL_SE,
             atol=1e-13,
             err_msg="HC1 overall_se drifted from pre-PR baseline",
@@ -1058,12 +1058,12 @@ class TestStackedDiDVcovType:
             staggered_data, **kwargs
         )
         np.testing.assert_allclose(
-            res_hc1.overall_att,
-            res_hc2bm.overall_att,
+            res_hc1.att,
+            res_hc2bm.att,
             atol=1e-13,
             err_msg="ATT must be identical across vcov_type",
         )
-        assert np.isfinite(res_hc2bm.overall_se) and res_hc2bm.overall_se > 0
+        assert np.isfinite(res_hc2bm.se) and res_hc2bm.se > 0
         # Per-event-time SE also all finite under hc2_bm
         for h, eff in res_hc2bm.event_study_effects.items():
             if h == -1:
@@ -1171,7 +1171,7 @@ class TestStackedDiDVcovType:
         res = est.fit(
             staggered_data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         assert res.vcov_type == "hc2_bm"
 
     def test_replicate_refit_smoke_with_default_hc1(self, staggered_data):
@@ -1206,7 +1206,7 @@ class TestStackedDiDVcovType:
             first_treat="first_treat",
             survey_design=design,
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_fit_clone_idempotent_on_vcov_type(self, staggered_data):
         """Per `feedback_fit_does_not_mutate_config`: fit, clone the
@@ -1219,7 +1219,7 @@ class TestStackedDiDVcovType:
         est_b = StackedDiD(**est_a.get_params())
         assert est_a.vcov_type == est_b.vcov_type == "hc2_bm"
         res_b = est_b.fit(staggered_data, **kwargs)
-        np.testing.assert_allclose(res_a.overall_se, res_b.overall_se, atol=1e-15)
+        np.testing.assert_allclose(res_a.se, res_b.se, atol=1e-15)
         # And refitting est_a doesn't mutate its config
         _ = est_a.fit(staggered_data, **kwargs)
         assert est_a.vcov_type == "hc2_bm"
@@ -1318,8 +1318,8 @@ class TestStackedDiDVcovType:
         # used elsewhere in the project.
         BASELINE_ATT = 2.0807833161293945
         BASELINE_SE = 0.14697256517699428
-        np.testing.assert_allclose(res.overall_att, BASELINE_ATT, atol=1e-13)
-        np.testing.assert_allclose(res.overall_se, BASELINE_SE, atol=1e-10)
+        np.testing.assert_allclose(res.att, BASELINE_ATT, atol=1e-13)
+        np.testing.assert_allclose(res.se, BASELINE_SE, atol=1e-10)
 
     def test_hc2_bm_uses_t_distribution_not_normal_on_well_conditioned_design(self, staggered_data):
         """Smoke-test on a well-conditioned design: hc2_bm CIs use t(BM DOF),
@@ -1362,8 +1362,8 @@ class TestStackedDiDVcovType:
             "hc2_bm CIs should use t(BM DOF), not normal — at least one "
             "post-treatment event_study CI half-width must exceed z_0.975 * SE"
         )
-        overall_half_width = res.overall_conf_int[1] - res.overall_att
-        overall_t_crit = overall_half_width / res.overall_se
+        overall_half_width = res.conf_int[1] - res.att
+        overall_t_crit = overall_half_width / res.se
         assert overall_t_crit > z_975 * 1.0001
 
     def test_hc2_bm_rank_deficient_keeps_bm_dof_on_identified_contrasts(
@@ -1457,8 +1457,8 @@ class TestStackedDiDVcovType:
                 f"delta_{h} CI must use t(BM DOF) on rank-deficient design; " f"got t_crit={t_crit}"
             )
         # Overall ATT also keeps t-distribution
-        if np.isfinite(res.overall_se) and res.overall_se > 0:
-            overall_t_crit = (res.overall_conf_int[1] - res.overall_att) / res.overall_se
+        if np.isfinite(res.se) and res.se > 0:
+            overall_t_crit = (res.conf_int[1] - res.att) / res.se
             assert overall_t_crit > z_975 * 1.0001
 
     def test_hc2_bm_nan_dof_fails_closed_with_all_nan_inference(self, staggered_data, monkeypatch):
@@ -1514,12 +1514,10 @@ class TestStackedDiDVcovType:
                 np.isnan(b) for b in eff["conf_int"]
             ), f"conf_int at h={h} must be all-NaN; got {eff['conf_int']}"
         # Overall ATT: same fail-closed expectation
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
-        assert np.isnan(
-            res.overall_t_stat
-        ), f"overall_t_stat must be NaN under NaN DOF; got {res.overall_t_stat}"
-        assert np.isnan(res.overall_p_value)
-        assert all(np.isnan(b) for b in res.overall_conf_int)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+        assert np.isnan(res.t_stat), f"overall_t_stat must be NaN under NaN DOF; got {res.t_stat}"
+        assert np.isnan(res.p_value)
+        assert all(np.isnan(b) for b in res.conf_int)
 
     def test_hc2_bm_helper_raises_fails_closed_with_all_nan_inference(
         self, staggered_data, monkeypatch
@@ -1557,8 +1555,8 @@ class TestStackedDiDVcovType:
             assert np.isnan(eff["t_stat"]) and np.isnan(
                 eff["p_value"]
             ), f"event_time h={h} inference must NaN-close, not fall back to normal"
-        assert np.isnan(res.overall_t_stat), "overall_t_stat must NaN-close on helper failure"
-        assert np.isnan(res.overall_p_value)
+        assert np.isnan(res.t_stat), "overall_t_stat must NaN-close on helper failure"
+        assert np.isnan(res.p_value)
 
     def test_anticipation_plus_hc2_bm_threads_bm_dof(self, staggered_data):
         """Per local codex R7 P1: the BM-DOF code path uses anticipation in
@@ -1594,8 +1592,8 @@ class TestStackedDiDVcovType:
         )
         # Overall ATT: includes h=-1 per anticipation extension; verify
         # the overall CI uses t(BM DOF), not normal.
-        if np.isfinite(res.overall_se) and res.overall_se > 0:
-            overall_t_crit = (res.overall_conf_int[1] - res.overall_att) / res.overall_se
+        if np.isfinite(res.se) and res.se > 0:
+            overall_t_crit = (res.conf_int[1] - res.att) / res.se
             assert overall_t_crit > z_975 * 1.0001, (
                 f"Overall ATT CI under anticipation=1 must use t(BM DOF); "
                 f"got t_crit={overall_t_crit}"
@@ -1633,11 +1631,11 @@ class TestStackedDiDVcovType:
             first_treat="first_treat",
             population="pop",
         )
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+        assert res.se > 0
         # Verify BM DOF threaded (t-distribution used)
-        if np.isfinite(res.overall_se) and res.overall_se > 0:
-            overall_t_crit = (res.overall_conf_int[1] - res.overall_att) / res.overall_se
+        if np.isfinite(res.se) and res.se > 0:
+            overall_t_crit = (res.conf_int[1] - res.att) / res.se
             assert (
                 overall_t_crit > z_975 * 1.0001
             ), "hc2_bm + weighting='population' overall CI must use t(BM DOF)"
@@ -1658,10 +1656,10 @@ class TestStackedDiDVcovType:
             time="period",
             first_treat="first_treat",
         )
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
-        assert res.overall_se > 0
-        if np.isfinite(res.overall_se) and res.overall_se > 0:
-            overall_t_crit = (res.overall_conf_int[1] - res.overall_att) / res.overall_se
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+        assert res.se > 0
+        if np.isfinite(res.se) and res.se > 0:
+            overall_t_crit = (res.conf_int[1] - res.att) / res.se
             assert (
                 overall_t_crit > z_975 * 1.0001
             ), "hc2_bm + weighting='sample_share' overall CI must use t(BM DOF)"
@@ -1683,7 +1681,7 @@ class TestStackedDiDVcovType:
             staggered_data, **kwargs
         )
         # ATT identical (vcov-only change); SE differs on event-study
-        np.testing.assert_allclose(res_hc1.overall_att, res_hc2bm.overall_att, atol=1e-13)
+        np.testing.assert_allclose(res_hc1.att, res_hc2bm.att, atol=1e-13)
         hc1_es = {
             h: e["se"] for h, e in res_hc1.event_study_effects.items() if h != -2 and e["se"] > 0
         }
@@ -1877,7 +1875,7 @@ class TestStackedDiDCovariateBalance:
         df["x2"] = 2.0 * df["x"]
         a = _cb_fit(df, balance="entropy", covariates=["x"])
         b = _cb_fit(df, balance="entropy", covariates=["x2"])
-        assert abs(a.overall_att - b.overall_att) < 1e-8
+        assert abs(a.att - b.att) < 1e-8
 
     def test_balance_on_plain_fit(self):
         # balancing works on a plain fit; since M-024 the surface (and the
@@ -1885,7 +1883,7 @@ class TestStackedDiDCovariateBalance:
         # aggregate, so this is the same code path as every _cb_fit case.
         df = _balance_panel(seed=8)
         res = _cb_fit(df, balance="entropy", covariates=["x"])
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert res.balance == "entropy"
         assert res.event_study_effects is not None
 
@@ -1907,7 +1905,7 @@ class TestStackedDiDCovariateBalance:
         dfr = df[~drop].reset_index(drop=True)
         with pytest.raises(ValueError, match="balanced event windows"):
             _cb_fit(dfr, balance="entropy", covariates=["x"])
-        assert np.isfinite(_cb_fit(dfr, balance="none").overall_att)
+        assert np.isfinite(_cb_fit(dfr, balance="none").att)
 
     def test_zero_row_eligible_control_raises(self):
         # An eligible (never-treated) control with ZERO rows in a cohort's window is
@@ -1973,23 +1971,23 @@ class TestStackedDfConvention:
         res = StackedDiD(kappa_pre=2, kappa_post=2).fit(self._panel(), **self._kw)
         dfres = res.inference_df
         assert dfres is not None and dfres > res.n_clusters
-        assert res.overall_p_value == pytest.approx(self._t_p(res.overall_t_stat, dfres), rel=1e-12)
+        assert res.p_value == pytest.approx(self._t_p(res.t_stat, dfres), rel=1e-12)
         finite = {v for v in res.event_study_df.values() if np.isfinite(v)}
         assert finite == {dfres}
 
     def test_small_n_residual_default_moves_off_z(self):
         """On a SMALL stacked design the z -> t movement is measurable."""
         res = StackedDiD(kappa_pre=1, kappa_post=1).fit(self._panel(n_units=12), **self._kw)
-        assert np.isfinite(res.overall_p_value)
-        assert res.overall_p_value != self._z_p(res.overall_t_stat)
+        assert np.isfinite(res.p_value)
+        assert res.p_value != self._z_p(res.t_stat)
 
     def test_cluster_matches_g_minus_1_effective_count(self):
         data = self._panel()
         r0 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **self._kw)
         r1 = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="cluster").fit(data, **self._kw)
         G = r1.n_clusters
-        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
-        assert r1.overall_p_value == pytest.approx(self._t_p(r1.overall_t_stat, G - 1), rel=1e-12)
+        assert r1.att == r0.att and r1.se == r0.se
+        assert r1.p_value == pytest.approx(self._t_p(r1.t_stat, G - 1), rel=1e-12)
         assert r1.inference_df == G - 1
 
     def test_cluster_g_uses_effective_count_not_raw_unique(self):
@@ -2016,8 +2014,8 @@ class TestStackedDfConvention:
         data = self._panel()
         r0 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **self._kw)
         rn = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="normal").fit(data, **self._kw)
-        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
-        assert rn.overall_p_value == pytest.approx(self._z_p(rn.overall_t_stat), rel=1e-14)
+        assert rn.att == r0.att and rn.se == r0.se
+        assert rn.p_value == pytest.approx(self._z_p(rn.t_stat), rel=1e-14)
         assert rn.inference_df is None
 
     def test_bm_dof_precedence_over_knob(self):
@@ -2026,7 +2024,7 @@ class TestStackedDfConvention:
         r_clu = StackedDiD(
             kappa_pre=2, kappa_post=2, vcov_type="hc2_bm", df_convention="cluster"
         ).fit(data, **self._kw)
-        assert r_res.overall_p_value == r_clu.overall_p_value
+        assert r_res.p_value == r_clu.p_value
 
     def test_survey_df_precedence_over_knob(self):
         """Survey design df wins under EVERY knob value: the three fits are
@@ -2048,8 +2046,8 @@ class TestStackedDfConvention:
         assert base.inference_df is not None and np.isfinite(base.inference_df)
         for conv in ("cluster", "normal"):
             r = fits[conv]
-            assert r.overall_p_value == base.overall_p_value
-            assert r.overall_conf_int == base.overall_conf_int
+            assert r.p_value == base.p_value
+            assert r.conf_int == base.conf_int
             assert r.inference_df == base.inference_df
 
     def test_validation_and_transactional_set_params(self):
@@ -2158,7 +2156,7 @@ class TestReferenceSupportGuard:
         assert res.event_study_effects is not None
         surf = res.aggregate("event_study")
         assert surf.reference_event_times == (-1,)
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
 
 class TestReferenceSupportGuardEffectiveWeights:

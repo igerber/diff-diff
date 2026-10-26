@@ -516,7 +516,6 @@ class TestBaconWarnings:
         from diff_diff.bacon import BaconDecompositionResults
 
         r = BaconDecompositionResults.__new__(BaconDecompositionResults)
-        r.overall_att = 0.5
         r.total_weight_later_vs_earlier = 0.4
         r.comparisons = []
         output = practitioner_next_steps(r, verbose=False)

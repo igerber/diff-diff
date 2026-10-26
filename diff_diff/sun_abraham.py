@@ -238,11 +238,11 @@ class SunAbrahamResults(BaseResults):
 
     def __repr__(self) -> str:
         """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
+        sig = _get_significance_stars(self.p_value)
         n_rel_periods = len(self.event_study_effects)
         return (
-            f"SunAbrahamResults(ATT={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
+            f"SunAbrahamResults(ATT={self.att:.4f}{sig}, "
+            f"SE={self.se:.4f}, "
             f"n_groups={len(self.groups)}, "
             f"n_rel_periods={n_rel_periods})"
         )
@@ -250,11 +250,11 @@ class SunAbrahamResults(BaseResults):
     @property
     def coef_var(self) -> float:
         """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
-        if not (np.isfinite(self.overall_se) and self.overall_se >= 0):
+        if not (np.isfinite(self.se) and self.se >= 0):
             return np.nan
-        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+        if not np.isfinite(self.att) or self.att == 0:
             return np.nan
-        return self.overall_se / abs(self.overall_att)
+        return self.se / abs(self.att)
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """
@@ -321,13 +321,13 @@ class SunAbrahamResults(BaseResults):
                 f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} "
                 f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
                 "-" * 85,
-                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-                f"{self.overall_t_stat:>10.3f} {self.overall_p_value:>10.4f} "
-                f"{_get_significance_stars(self.overall_p_value):>6}",
+                f"{'ATT':<15} {self.att:>12.4f} {self.se:>12.4f} "
+                f"{self.t_stat:>10.3f} {self.p_value:>10.4f} "
+                f"{_get_significance_stars(self.p_value):>6}",
                 "-" * 85,
                 "",
                 f"{conf_level}% Confidence Interval: "
-                f"[{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
+                f"[{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
             ]
         )
 
@@ -388,8 +388,8 @@ class SunAbrahamResults(BaseResults):
             "se": self.se,
             "t_stat": self.t_stat,
             "p_value": self.p_value,
-            "conf_int_lower": self.overall_conf_int[0],
-            "conf_int_upper": self.overall_conf_int[1],
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "n_obs": self.n_obs,
             "n_treated_units": self.n_treated_units,
             "n_control_units": self.n_control_units,
@@ -463,12 +463,12 @@ class SunAbrahamResults(BaseResults):
     @property
     def is_significant(self) -> bool:
         """Check if overall ATT is significant."""
-        return bool(self.overall_p_value < self.alpha)
+        return bool(self.p_value < self.alpha)
 
     @property
     def significance_stars(self) -> str:
         """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_p_value)
+        return _get_significance_stars(self.p_value)
 
 
 @dataclass

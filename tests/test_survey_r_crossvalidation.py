@@ -319,7 +319,7 @@ class TestCSWeighted:
         result, r = self._fit_scenario(r_results, key)
 
         _assert_close(
-            result.overall_att,
+            result.att,
             r["overall_att"],
             rtol=1e-3,
             atol=0.05,
@@ -333,8 +333,8 @@ class TestCSWeighted:
             pytest.skip(f"Scenario {key} not in R results")
         result, _ = self._fit_scenario(r_results, key)
 
-        assert np.isfinite(result.overall_se), "Overall SE should be finite"
-        assert result.overall_se > 0, "Overall SE should be positive"
+        assert np.isfinite(result.se), "Overall SE should be finite"
+        assert result.se > 0, "Overall SE should be positive"
 
     @pytest.mark.parametrize("key", CS_SCENARIOS)
     def test_design_se_differs_from_naive(self, r_results, key):
@@ -380,9 +380,9 @@ class TestCSWeighted:
             covariates=covariates,
         )
 
-        assert result_survey.overall_se != result_naive.overall_se, (
-            f"{key}: Design-based SE ({result_survey.overall_se:.6f}) should "
-            f"differ from naive SE ({result_naive.overall_se:.6f})"
+        assert result_survey.se != result_naive.se, (
+            f"{key}: Design-based SE ({result_survey.se:.6f}) should "
+            f"differ from naive SE ({result_naive.se:.6f})"
         )
 
 

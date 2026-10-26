@@ -87,10 +87,8 @@ class TestDrScoresOracles:
     @requires_python_backend
     def test_continuous_did_dr_matches_committed_oracle(self):
         res = estimator_tier_fit()
-        np.testing.assert_allclose(res.overall_att, ESTIMATOR_TIER_OVERALL_ATT, atol=1e-8, rtol=0)
-        np.testing.assert_allclose(
-            res.overall_att_se, ESTIMATOR_TIER_OVERALL_ATT_SE, atol=1e-8, rtol=0
-        )
+        np.testing.assert_allclose(res.att, ESTIMATOR_TIER_OVERALL_ATT, atol=1e-8, rtol=0)
+        np.testing.assert_allclose(res.se, ESTIMATOR_TIER_OVERALL_ATT_SE, atol=1e-8, rtol=0)
         np.testing.assert_allclose(res.overall_acrt, ESTIMATOR_TIER_OVERALL_ACRT, atol=1e-8, rtol=0)
         np.testing.assert_allclose(
             res.overall_acrt_se, ESTIMATOR_TIER_OVERALL_ACRT_SE, atol=1e-8, rtol=0

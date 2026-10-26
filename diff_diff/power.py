@@ -478,27 +478,6 @@ def _extract_simple(result: Any) -> Tuple[float, float, float, Tuple[float, floa
     return (result.att, result.se, result.p_value, result.conf_int)
 
 
-def _extract_staggered(
-    result: Any,
-) -> Tuple[float, float, float, Tuple[float, float]]:
-    _nan = float("nan")
-    _nan_ci = (_nan, _nan)
-
-    def _first(r: Any, *attrs: str, default: Any = _nan) -> Any:
-        for a in attrs:
-            v = getattr(r, a, None)
-            if v is not None:
-                return v
-        return default
-
-    return (
-        result.overall_att,
-        _first(result, "overall_se", "overall_att_se"),
-        _first(result, "overall_p_value", "overall_att_p_value"),
-        _first(result, "overall_conf_int", "overall_att_ci", default=_nan_ci),
-    )
-
-
 # Keys derived from simulate_power() public params — overriding these
 # via data_generator_kwargs would desync the DGP from the result object.
 _PROTECTED_DGP_KEYS = frozenset(
@@ -917,42 +896,42 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         "SunAbraham": _EstimatorProfile(
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         "ImputationDiD": _EstimatorProfile(
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         "TwoStageDiD": _EstimatorProfile(
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         "StackedDiD": _EstimatorProfile(
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         "EfficientDiD": _EstimatorProfile(
             default_dgp=generate_staggered_data,
             dgp_kwargs_builder=_staggered_dgp_kwargs,
             fit_kwargs_builder=_staggered_fit_kwargs,
-            result_extractor=_extract_staggered,
+            result_extractor=_extract_simple,
             min_n=40,
         ),
         # --- Factor model group ---

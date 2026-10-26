@@ -294,9 +294,9 @@ class TestSDR:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # ===========================================================================
@@ -331,9 +331,9 @@ class TestImputationDiDFPC:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_imputation_fpc_reduces_se(self, staggered_data):
         """FPC SE should be <= no-FPC SE (by definition)."""
@@ -368,7 +368,7 @@ class TestImputationDiDFPC:
             first_treat="first_treat",
             survey_design=sd_fpc,
         )
-        assert result_fpc.overall_se <= result_no_fpc.overall_se + 1e-10
+        assert result_fpc.se <= result_no_fpc.se + 1e-10
 
     def test_imputation_fpc_event_study(self, staggered_data):
         """FPC works with the post-fit event-study aggregation."""
@@ -449,9 +449,9 @@ class TestTwoStageDiDFPC:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_two_stage_fpc_reduces_se(self, staggered_data):
         """FPC SE should be <= no-FPC SE."""
@@ -485,7 +485,7 @@ class TestTwoStageDiDFPC:
             first_treat="first_treat",
             survey_design=sd_fpc,
         )
-        assert result_fpc.overall_se <= result_no_fpc.overall_se + 1e-10
+        assert result_fpc.se <= result_no_fpc.se + 1e-10
 
     def test_two_stage_fpc_event_study(self, staggered_data):
         """FPC works with the post-fit event-study aggregation."""
@@ -561,9 +561,9 @@ class TestUnstratifiedFPC:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_two_stage_unstratified_fpc(self, staggered_data):
         """TwoStageDiD with weights + psu + fpc (no strata) runs."""
@@ -582,9 +582,9 @@ class TestUnstratifiedFPC:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_two_stage_unstratified_fpc_event_study(self, staggered_data):
         """TwoStageDiD unstratified FPC with event study."""
@@ -651,7 +651,7 @@ class TestSinglePSUUnstratifiedFPC:
             survey_design=sd,
         )
         # Single PSU = variance unidentified → NaN SE
-        assert np.isnan(result.overall_se)
+        assert np.isnan(result.se)
 
 
 class TestPSUMeatHelper:
@@ -804,9 +804,9 @@ class TestBootstrapLonelyPSUAdjust:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_adjust_nonzero_variance(self):
         """With 'adjust', singleton strata contribute nonzero bootstrap variance."""
@@ -904,9 +904,9 @@ class TestBootstrapLonelyPSUAdjust:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 class TestSingleSingletonAdjust:
@@ -1133,7 +1133,7 @@ class TestCoefficientOfVariation:
         )
         cv = result.coef_var
         assert np.isfinite(cv)
-        assert cv == pytest.approx(result.overall_se / abs(result.overall_att))
+        assert cv == pytest.approx(result.se / abs(result.att))
 
 
 # ===========================================================================
@@ -1377,7 +1377,7 @@ class TestImputationPretrendsSurvey:
         )
         # Should produce finite results even though stratum 0 has
         # mostly treated PSUs (sparse untreated domain)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         es = result.aggregate("event_study")
         pre = es.event_time < -1
         assert pre.any()
@@ -1418,7 +1418,7 @@ class TestImputationPretrendsSurvey:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         with pytest.raises(NotImplementedError, match="replicate"):
             result.aggregate("event_study")
 

@@ -1350,8 +1350,8 @@ class TestEstimatorReplicateWeights:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_efficient_did_replicate(self):
@@ -1372,8 +1372,8 @@ class TestEstimatorReplicateWeights:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_subpopulation_preserves_replicate_metadata(self):
@@ -1487,7 +1487,7 @@ class TestEstimatorReplicateWeights:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 class TestSubpopulationMaskValidation:
@@ -1627,7 +1627,7 @@ class TestSubpopulationMaskValidation:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_invalid_replicate_scale_rejected(self):
         """Negative or zero replicate_scale should be rejected."""
@@ -1701,7 +1701,7 @@ class TestSubpopulationMaskValidation:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_two_stage_did_replicate_accepted(self):
         """TwoStageDiD now supports replicate-weight designs."""
@@ -1716,7 +1716,7 @@ class TestSubpopulationMaskValidation:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_bacon_replicate_rejected(self):
         """BaconDecomposition rejects replicate-weight designs."""
@@ -1797,8 +1797,8 @@ class TestCSReplicateMethodCoverage:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
 
@@ -1890,7 +1890,7 @@ class TestEffectiveSampleAndDfConsistency:
         assert len(weight_warnings) > 0, "Expected warning about insufficient positive-weight units"
         # Result should still be finite (from the valid cohort-3 cells)
         assert result is not None
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_triple_diff_positive_weight_gate(self):
         """TripleDifference falls back to weighted mean when n_eff < n_cols."""

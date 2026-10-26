@@ -130,8 +130,8 @@ class TestSunAbrahamSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_uniform_weights_match_unweighted(self, staggered_survey_data):
@@ -150,7 +150,7 @@ class TestSunAbrahamSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert abs(r_unw.overall_att - r_w.overall_att) < 1e-10
+        assert abs(r_unw.att - r_w.att) < 1e-10
 
     def test_survey_metadata_fields(self, staggered_survey_data):
         """survey_metadata has correct fields with full design."""
@@ -196,9 +196,9 @@ class TestSunAbrahamSurvey:
             survey_design=sd_full,
         )
         # ATTs should be the same (same weights)
-        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        assert abs(r_w.att - r_full.att) < 1e-10
         # SEs should differ due to different variance estimators
-        assert r_w.overall_se != r_full.overall_se
+        assert r_w.se != r_full.se
 
     def test_bootstrap_weights_only_uses_pairs(self, staggered_survey_data):
         """Bootstrap + weights-only survey uses pairs bootstrap (no Rao-Wu)."""
@@ -216,8 +216,8 @@ class TestSunAbrahamSurvey:
         assert result.bootstrap_results is not None
         assert result.bootstrap_results.weight_type == "pairs"
         assert result.bootstrap_results.n_bootstrap == 99
-        assert np.isfinite(result.overall_se)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.se)
+        assert np.isfinite(result.att)
 
     def test_bootstrap_survey_strata_uses_rao_wu(self, staggered_survey_data):
         """Bootstrap + survey with strata/PSU uses Rao-Wu rescaled bootstrap."""
@@ -235,8 +235,8 @@ class TestSunAbrahamSurvey:
         assert result.bootstrap_results is not None
         assert result.bootstrap_results.weight_type == "rao_wu"
         assert result.bootstrap_results.n_bootstrap == 99
-        assert np.isfinite(result.overall_se)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.se)
+        assert np.isfinite(result.att)
         # Event study effects should also have finite bootstrap SEs
         for e, eff in result.event_study_effects.items():
             assert np.isfinite(eff["se"]), f"Event study e={e} has non-finite SE"
@@ -287,8 +287,8 @@ class TestStackedDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_survey_metadata_present(self, staggered_survey_data):
@@ -322,7 +322,7 @@ class TestStackedDiDSurvey:
             survey_design=sd,
         )
         # ATT should differ (non-uniform weights)
-        assert r_unw.overall_att != r_w.overall_att
+        assert r_unw.att != r_w.att
 
     def test_summary_includes_survey(self, staggered_survey_data):
         """Summary includes survey design section."""
@@ -621,7 +621,7 @@ class TestContinuousDiDSurvey:
             "dose",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert result.survey_metadata is not None
 
     def test_bootstrap_survey_supported(self, continuous_survey_data):
@@ -638,8 +638,8 @@ class TestContinuousDiDSurvey:
             "dose",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_att_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_summary_includes_survey(self, continuous_survey_data):
         """Summary includes survey design section."""
@@ -679,8 +679,8 @@ class TestEfficientDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_bootstrap_survey_supported(self, staggered_survey_data):
@@ -696,8 +696,8 @@ class TestEfficientDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_covariates_survey_works(self, staggered_survey_data):
         """Covariates + survey should produce finite results via DR path."""
@@ -717,9 +717,9 @@ class TestEfficientDiDSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
         assert result.estimation_path == "dr"
         assert result.survey_metadata is not None
 
@@ -819,8 +819,8 @@ class TestEfficientDiDSurvey:
         )
         assert result.aggregate("event_study") is not None
         assert result.aggregate("group") is not None
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
 
 # =============================================================================
@@ -901,7 +901,7 @@ class TestEfficientDiDCovSurvey:
         )
         assert result_survey.estimation_path == "dr"
         assert result_nosurv.estimation_path == "dr"
-        np.testing.assert_allclose(result_survey.overall_att, result_nosurv.overall_att, atol=1e-8)
+        np.testing.assert_allclose(result_survey.att, result_nosurv.att, atol=1e-8)
 
     def test_scale_invariance(self, cov_survey_data):
         """Multiplying all weights by a constant doesn't change ATT."""
@@ -929,7 +929,7 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
             survey_design=sd2,
         )
-        np.testing.assert_allclose(result1.overall_att, result2.overall_att, atol=1e-8)
+        np.testing.assert_allclose(result1.att, result2.att, atol=1e-8)
 
     def test_nontrivial_weight_effect(self, cov_survey_data):
         """Heterogeneous weights produce different ATT from unweighted."""
@@ -954,7 +954,7 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
         )
         # Non-uniform weights (1.0 + 0.3*stratum) should produce different ATT
-        assert abs(result_survey.overall_att - result_nosurv.overall_att) > 1e-6
+        assert abs(result_survey.att - result_nosurv.att) > 1e-6
 
     def test_full_design_smoke(self, cov_survey_data):
         """Strata + PSU + FPC + covariates produces finite results."""
@@ -976,9 +976,9 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
         assert result.estimation_path == "dr"
 
     def test_aggregation_with_survey(self, cov_survey_data):
@@ -1020,9 +1020,9 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_analytical_se_differs_from_unweighted(self, cov_survey_data):
         """Survey analytical SE should differ from unweighted SE."""
@@ -1047,9 +1047,9 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
         )
         # Non-uniform weights (1.0 + 0.3*stratum) should produce different SEs
-        assert result_survey.overall_se != result_nosurv.overall_se
-        assert np.isfinite(result_survey.overall_se)
-        assert result_survey.overall_se > 0
+        assert result_survey.se != result_nosurv.se
+        assert np.isfinite(result_survey.se)
+        assert result_survey.se > 0
 
     def test_bootstrap_se_in_ballpark_of_analytical(self, cov_survey_data):
         """Bootstrap SE should be in same ballpark as analytical SE."""
@@ -1074,7 +1074,7 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        ratio = result_boot.overall_se / result_analytical.overall_se
+        ratio = result_boot.se / result_analytical.se
         assert 0.3 < ratio < 3.0, f"Bootstrap/analytical SE ratio {ratio:.2f} outside [0.3, 3.0]"
 
     def test_zero_weight_cohort_skipped(self, cov_survey_data):
@@ -1095,8 +1095,8 @@ class TestEfficientDiDCovSurvey:
                 covariates=["x1"],
                 survey_design=sd,
             )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_zero_weight_never_treated_raises(self, cov_survey_data):
         """Zero-weight never-treated group should raise ValueError (DR path)."""
@@ -1186,9 +1186,9 @@ class TestEfficientDiDCovSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
         es = result.aggregate("event_study")
         assert es is not None
         for att, se in zip(es.att, es.se):
@@ -1229,8 +1229,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
     def test_efficient_did_scale_invariance(self, staggered_survey_data):
         from diff_diff import EfficientDiD
@@ -1256,8 +1256,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
     def test_triple_diff_scale_invariance(self, ddd_survey_data):
         from diff_diff import TripleDifference
@@ -1310,8 +1310,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
 
 # =============================================================================
@@ -1335,7 +1335,7 @@ class TestReviewRegressions:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert result.survey_metadata is not None
 
     def test_triple_diff_survey_df(self, ddd_survey_data):
@@ -1371,9 +1371,9 @@ class TestReviewRegressions:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
-        assert r.overall_se > 0.01  # Not artificially tiny
+        assert np.isfinite(r.se)
+        assert r.se > 0
+        assert r.se > 0.01  # Not artificially tiny
 
     def test_continuous_did_eventstudy_survey(self, continuous_survey_data):
         """The post-fit event-study aggregation works with a survey design
@@ -1495,13 +1495,11 @@ class TestReviewRegressions:
         # Recompute with normal approx and verify they differ
         from diff_diff.utils import safe_inference
 
-        _, p_normal, _ = safe_inference(result.overall_att, result.overall_se, alpha=0.05, df=None)
-        _, p_survey, _ = safe_inference(
-            result.overall_att, result.overall_se, alpha=0.05, df=sm.df_survey
-        )
+        _, p_normal, _ = safe_inference(result.att, result.se, alpha=0.05, df=None)
+        _, p_survey, _ = safe_inference(result.att, result.se, alpha=0.05, df=sm.df_survey)
         # With small survey df, t-dist p-value > normal p-value
-        if np.isfinite(result.overall_p_value) and np.isfinite(p_normal):
-            assert result.overall_p_value == pytest.approx(p_survey, rel=1e-10)
+        if np.isfinite(result.p_value) and np.isfinite(p_normal):
+            assert result.p_value == pytest.approx(p_survey, rel=1e-10)
 
     def test_continuous_did_dose_response_survey_pvalue(self, continuous_survey_data):
         """DoseResponseCurve.to_dataframe() p-values should use survey df."""
@@ -1566,7 +1564,7 @@ class TestSurveyEdgeCases:
             "first_treat",
             survey_design=sd,
         )
-        assert result.overall_se == pytest.approx(0.0, abs=1e-10)
+        assert result.se == pytest.approx(0.0, abs=1e-10)
 
     def test_single_psu_lonely_remove_nan_se(self, staggered_survey_data):
         """All strata with 1 PSU + lonely_psu='remove' -> NaN SE."""
@@ -1592,7 +1590,7 @@ class TestSurveyEdgeCases:
                 survey_design=sd,
             )
         # All strata removed -> NaN SE
-        assert np.isnan(result.overall_se)
+        assert np.isnan(result.se)
 
     def test_full_design_bootstrap_continuous_did(self, staggered_survey_data):
         """Bootstrap with strata survey design works for ContinuousDiD."""
@@ -1612,8 +1610,8 @@ class TestSurveyEdgeCases:
             "dose",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_att_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_full_design_bootstrap_efficient_did(self, staggered_survey_data):
@@ -1629,6 +1627,6 @@ class TestSurveyEdgeCases:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None

@@ -136,14 +136,10 @@ class TestCallawaySantAnnaSEAccuracy:
         results, _ = cs_results
 
         # Point estimate should be close to true effect (2.0)
-        assert (
-            1.5 < results.overall_att < 2.5
-        ), f"Overall ATT {results.overall_att} not near true effect 2.0"
+        assert 1.5 < results.att < 2.5, f"Overall ATT {results.att} not near true effect 2.0"
 
         # SE should be positive and reasonable
-        assert (
-            0 < results.overall_se < 0.5
-        ), f"Overall SE {results.overall_se} out of expected range"
+        assert 0 < results.se < 0.5, f"Overall SE {results.se} out of expected range"
 
     def test_individual_att_gt_se_formula(self, benchmark_data):
         """
@@ -197,7 +193,7 @@ class TestCallawaySantAnnaSEAccuracy:
         )
 
         # Aggregated SE should be positive
-        assert results.overall_se > 0
+        assert results.se > 0
 
         # Individual SEs for comparison
         individual_ses = [data["se"] for data in results.group_time_effects.values()]
@@ -206,7 +202,7 @@ class TestCallawaySantAnnaSEAccuracy:
         # (due to averaging effect)
         avg_individual_se = np.mean(individual_ses)
         assert (
-            results.overall_se <= avg_individual_se * 1.5
+            results.se <= avg_individual_se * 1.5
         ), "Aggregated SE unexpectedly large relative to individual SEs"
 
     def test_se_difference_threshold(self, cs_results):
@@ -219,8 +215,8 @@ class TestCallawaySantAnnaSEAccuracy:
         results, _ = cs_results
 
         # SE should be positive and reasonable
-        assert results.overall_se > 0
-        assert results.overall_se < 0.5
+        assert results.se > 0
+        assert results.se < 0.5
 
     def test_se_vs_r_benchmark(self):
         """
@@ -253,11 +249,11 @@ class TestCallawaySantAnnaSEAccuracy:
         r_overall_se = 0.063460396019
 
         # ATT should match exactly (< 1e-8)
-        att_diff = abs(results.overall_att - r_overall_att)
-        assert att_diff < 1e-8, f"ATT differs from R: {results.overall_att} vs {r_overall_att}"
+        att_diff = abs(results.att - r_overall_att)
+        assert att_diff < 1e-8, f"ATT differs from R: {results.att} vs {r_overall_att}"
 
         # SE should match R exactly (< 0.01% after wif fix)
-        se_diff_pct = abs(results.overall_se - r_overall_se) / r_overall_se * 100
+        se_diff_pct = abs(results.se - r_overall_se) / r_overall_se * 100
         assert se_diff_pct < 0.01, f"SE differs from R by {se_diff_pct:.4f}%, expected <0.01%"
 
     @pytest.mark.slow
@@ -344,7 +340,7 @@ class TestCallawaySantAnnaSEAccuracy:
         )
 
         # SE ratio should be approximately sqrt(400/100) = 2
-        se_ratio = small_results.overall_se / large_results.overall_se
+        se_ratio = small_results.se / large_results.se
         expected_ratio = np.sqrt(400 / 100)
 
         # Allow 50% tolerance due to different cohort compositions

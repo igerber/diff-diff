@@ -450,12 +450,12 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
             level="simple",
             label=np.array(["overall"], dtype=object),
             target=np.array(["att"], dtype=object),
-            att=np.array([self.overall_att], dtype=float),
-            se=np.array([self.overall_se], dtype=float),
-            t_stat=np.array([self.overall_t_stat], dtype=float),
-            p_value=np.array([self.overall_p_value], dtype=float),
-            conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
-            conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
+            att=np.array([self.att], dtype=float),
+            se=np.array([self.se], dtype=float),
+            t_stat=np.array([self.t_stat], dtype=float),
+            p_value=np.array([self.p_value], dtype=float),
+            conf_int_lower=np.array([self.conf_int[0]], dtype=float),
+            conf_int_upper=np.array([self.conf_int[1]], dtype=float),
             n=np.array([kit.bookkeeping["n_treated_obs"]], dtype=float),
             df=(
                 np.nan if self.bootstrap_results is not None else kit.bookkeeping["survey_df_final"]
@@ -498,11 +498,11 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         mass = support if support > 0 else float(np.nan)
         return build_total_relay_row(
             mass=mass,
-            att=self.overall_att,
-            se=self.overall_se,
-            t_stat=self.overall_t_stat,
-            p_value=self.overall_p_value,
-            conf_int=self.overall_conf_int,
+            att=self.att,
+            se=self.se,
+            t_stat=self.t_stat,
+            p_value=self.p_value,
+            conf_int=self.conf_int,
             df=(np.nan if self.bootstrap_results is not None else bk["survey_df_final"]),
             alpha=kit.alpha,
             estimator=type(self).__name__.replace("Results", ""),
@@ -546,10 +546,10 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
 
     def __repr__(self) -> str:
         """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
+        sig = _get_significance_stars(self.p_value)
         return (
-            f"TwoStageDiDResults(ATT={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
+            f"TwoStageDiDResults(ATT={self.att:.4f}{sig}, "
+            f"SE={self.se:.4f}, "
             f"n_groups={len(self.groups)}, "
             f"n_treated_obs={self.n_treated_obs})"
         )
@@ -557,11 +557,11 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
     @property
     def coef_var(self) -> float:
         """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
-        if not (np.isfinite(self.overall_se) and self.overall_se >= 0):
+        if not (np.isfinite(self.se) and self.se >= 0):
             return np.nan
-        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+        if not np.isfinite(self.att) or self.att == 0:
             return np.nan
-        return self.overall_se / abs(self.overall_att)
+        return self.se / abs(self.att)
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """
@@ -649,24 +649,17 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
             ]
         )
 
-        t_str = (
-            f"{self.overall_t_stat:>10.3f}" if np.isfinite(self.overall_t_stat) else f"{'NaN':>10}"
-        )
-        p_str = (
-            f"{self.overall_p_value:>10.4f}"
-            if np.isfinite(self.overall_p_value)
-            else f"{'NaN':>10}"
-        )
-        sig = _get_significance_stars(self.overall_p_value)
+        t_str = f"{self.t_stat:>10.3f}" if np.isfinite(self.t_stat) else f"{'NaN':>10}"
+        p_str = f"{self.p_value:>10.4f}" if np.isfinite(self.p_value) else f"{'NaN':>10}"
+        sig = _get_significance_stars(self.p_value)
 
         lines.extend(
             [
-                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-                f"{t_str} {p_str} {sig:>6}",
+                f"{'ATT':<15} {self.att:>12.4f} {self.se:>12.4f} " f"{t_str} {p_str} {sig:>6}",
                 "-" * 85,
                 "",
                 f"{conf_level}% Confidence Interval: "
-                f"[{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
+                f"[{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
             ]
         )
 
@@ -856,12 +849,12 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
             Headline overall ATT plus inference metadata.
         """
         result: Dict[str, Any] = {
-            "att": self.overall_att,
-            "se": self.overall_se,
-            "t_stat": self.overall_t_stat,
-            "p_value": self.overall_p_value,
-            "conf_int_lower": self.overall_conf_int[0],
-            "conf_int_upper": self.overall_conf_int[1],
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "n_obs": self.n_obs,
             "n_treated_obs": self.n_treated_obs,
             "n_untreated_obs": self.n_untreated_obs,
@@ -889,9 +882,9 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
     @property
     def is_significant(self) -> bool:
         """Check if overall ATT is significant."""
-        return bool(self.overall_p_value < self.alpha)
+        return bool(self.p_value < self.alpha)
 
     @property
     def significance_stars(self) -> str:
         """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_p_value)
+        return _get_significance_stars(self.p_value)

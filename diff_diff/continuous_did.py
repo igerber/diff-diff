@@ -209,7 +209,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         adjust the dose-response *shape* (ACRT(d) would be identical to the
         unconditional fit); it raises ``NotImplementedError``. ``reg`` and ``dr``
         share the dose-response shape and ACRT(d); ``dr`` differs only in the
-        ``overall_att`` / ATT(d) level and in its doubly-robust standard errors.
+        ``att`` / ATT(d) level and in its doubly-robust standard errors.
     pscore_trim : float, default=0.01
         Propensity-score trimming bound for the ``dr`` path (scores clipped to
         ``[pscore_trim, 1 - pscore_trim]``). Must be in ``(0, 0.5)`` and
@@ -248,7 +248,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
     >>> results = est.fit(data, outcome="outcome", unit="unit",
     ...                   time="period", first_treat="first_treat",
     ...                   dose="dose")
-    >>> results.overall_att  # doctest: +SKIP
+    >>> results.att  # doctest: +SKIP
     >>> results.aggregate("dose")  # doctest: +SKIP
     """
 

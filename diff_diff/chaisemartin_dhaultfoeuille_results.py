@@ -307,7 +307,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         estimation sample described by ``overall_att`` and
         ``units``. When ``fit()`` drops groups via the ragged-panel
         or ``drop_larger_lower`` filters, ``results.twfe_*`` and
-        ``results.overall_att`` describe different samples and a
+        ``results.att`` describe different samples and a
         ``UserWarning`` is emitted; see REGISTRY.md
         ``ChaisemartinDHaultfoeuille`` ``Note (TWFE diagnostic
         sample contract)`` for the rationale. Only populated when
@@ -760,15 +760,15 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             # The delta is weighted over horizon-specific N_l - no truthful
             # scalar count exists.
             n_val, n_kind = float("nan"), None
-        ci = self.overall_conf_int if self.overall_conf_int is not None else (np.nan, np.nan)
+        ci = self.conf_int if self.conf_int is not None else (np.nan, np.nan)
         return AggregationResult(
             level="simple",
             label=np.array(["overall"], dtype=object),
             target=np.array([self._estimand_label()], dtype=object),
-            att=np.array([self.overall_att], dtype=float),
-            se=np.array([self.overall_se], dtype=float),
-            t_stat=np.array([self.overall_t_stat], dtype=float),
-            p_value=np.array([self.overall_p_value], dtype=float),
+            att=np.array([self.att], dtype=float),
+            se=np.array([self.se], dtype=float),
+            t_stat=np.array([self.t_stat], dtype=float),
+            p_value=np.array([self.p_value], dtype=float),
             conf_int_lower=np.array([ci[0]], dtype=float),
             conf_int_upper=np.array([ci[1]], dtype=float),
             n=np.array([n_val], dtype=float),
@@ -877,12 +877,12 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
 
     def __repr__(self) -> str:
         """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
+        sig = _get_significance_stars(self.p_value)
         label = self._estimand_label()
         return (
             f"ChaisemartinDHaultfoeuilleResults("
-            f"{label}={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
+            f"{label}={self.att:.4f}{sig}, "
+            f"SE={self.se:.4f}, "
             f"n_units={len(self.units)}, "
             f"n_switcher_cells={self.n_switcher_cells})"
         )
@@ -890,21 +890,21 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     @property
     def coef_var(self) -> float:
         """SE / abs(DID_M); NaN when DID_M is 0 or SE non-finite."""
-        if not (np.isfinite(self.overall_se) and self.overall_se >= 0):
+        if not (np.isfinite(self.se) and self.se >= 0):
             return np.nan
-        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+        if not np.isfinite(self.att) or self.att == 0:
             return np.nan
-        return self.overall_se / abs(self.overall_att)
+        return self.se / abs(self.att)
 
     @property
     def is_significant(self) -> bool:
         """True iff overall ``DID_M`` p-value is below ``alpha``."""
-        return bool(self.overall_p_value < self.alpha)
+        return bool(self.p_value < self.alpha)
 
     @property
     def significance_stars(self) -> str:
         """Significance stars for the overall ``DID_M``."""
-        return _get_significance_stars(self.overall_p_value)
+        return _get_significance_stars(self.p_value)
 
     # ------------------------------------------------------------------
     # Summary
@@ -1013,16 +1013,16 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
                 thin,
                 _format_inference_row(
                     overall_row_label,
-                    self.overall_att,
-                    self.overall_se,
-                    self.overall_t_stat,
-                    self.overall_p_value,
+                    self.att,
+                    self.se,
+                    self.t_stat,
+                    self.p_value,
                 ),
                 thin,
                 "",
                 f"{conf_level}% Confidence Interval: "
-                f"[{_fmt_float(self.overall_conf_int[0])}, "
-                f"{_fmt_float(self.overall_conf_int[1])}]",
+                f"[{_fmt_float(self.conf_int[0])}, "
+                f"{_fmt_float(self.conf_int[1])}]",
             ]
         )
 
@@ -1037,7 +1037,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         )
         # Footer labeling is keyed off what the displayed fields actually
         # are — with the bootstrap-contract NaN-on-invalid fix on the fit()
-        # side, ``self.overall_se`` is NaN when the bootstrap produced
+        # side, ``self.se`` is NaN when the bootstrap produced
         # non-finite output, so the "multiplier-bootstrap percentile
         # inference" claim correctly fires only when the displayed overall
         # SE / p-value / CI were actually populated from finite bootstrap
@@ -1079,7 +1079,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             np.isfinite(v.get("crit_value", np.nan)) for v in self.path_sup_t_bands.values()
         )
         any_finite_bootstrap_inference = (
-            np.isfinite(self.overall_se)
+            np.isfinite(self.se)
             or event_study_has_finite_bootstrap_se
             or joiners_has_finite_bootstrap_se
             or leavers_has_finite_bootstrap_se
@@ -1087,7 +1087,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             or path_placebo_has_finite_bootstrap_se
             or path_sup_t_has_finite_crit
         )
-        if self.bootstrap_results is not None and np.isfinite(self.overall_se) and not is_delta:
+        if self.bootstrap_results is not None and np.isfinite(self.se) and not is_delta:
             lines.append("Note: p-value and CI are multiplier-bootstrap percentile inference")
             lines.append(
                 f"      ({self.bootstrap_results.n_bootstrap} iterations, "
@@ -1648,8 +1648,8 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             "se": self.se,
             "t_stat": self.t_stat,
             "p_value": self.p_value,
-            "conf_int_lower": self.overall_conf_int[0],
-            "conf_int_upper": self.overall_conf_int[1],
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "n_obs": self.n_obs,
             "n_treated_obs": self.n_treated_obs,
             "n_switcher_cells": self.n_switcher_cells,
@@ -1749,12 +1749,12 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
                 [
                     {
                         "estimand": self._estimand_label(),
-                        "effect": self.overall_att,
-                        "se": self.overall_se,
-                        "t_stat": self.overall_t_stat,
-                        "p_value": self.overall_p_value,
-                        "conf_int_lower": self.overall_conf_int[0],
-                        "conf_int_upper": self.overall_conf_int[1],
+                        "effect": self.att,
+                        "se": self.se,
+                        "t_stat": self.t_stat,
+                        "p_value": self.p_value,
+                        "conf_int_lower": self.conf_int[0],
+                        "conf_int_upper": self.conf_int[1],
                     }
                 ]
             )
@@ -1774,12 +1774,12 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             rows = [
                 {
                     "estimand": overall_est_label,
-                    "effect": self.overall_att,
-                    "se": self.overall_se,
-                    "t_stat": self.overall_t_stat,
-                    "p_value": self.overall_p_value,
-                    "conf_int_lower": self.overall_conf_int[0],
-                    "conf_int_upper": self.overall_conf_int[1],
+                    "effect": self.att,
+                    "se": self.se,
+                    "t_stat": self.t_stat,
+                    "p_value": self.p_value,
+                    "conf_int_lower": self.conf_int[0],
+                    "conf_int_upper": self.conf_int[1],
                     "n_cells": self.n_switcher_cells,
                     "n_obs": (
                         self.n_treated_obs

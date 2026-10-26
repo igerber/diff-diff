@@ -261,7 +261,7 @@ class TestMonteCarloCoverage:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 res = DMLDiD(seed=0).fit(df, **FIT_KW, covariates=XCOLS)
-            lo, hi = res.overall_conf_int
+            lo, hi = res.conf_int
             hits += int(lo <= theta <= hi)
         coverage = hits / n_reps
         assert band[0] <= coverage <= band[1], f"coverage {coverage:.3f} outside {band}"
@@ -862,9 +862,9 @@ class TestChangS422Recovery:
     def test_theta_recovery(self, n, learner, seed, abs_bound):
         df = chang_s422_kernel_frame(n, seed=seed)
         res = _fit_s422_expecting_only_a23(DMLDiD(outcome_learner=learner, seed=0, panel=False), df)
-        err = abs(res.overall_att - CHANG_S422_THETA0)
-        assert err < 4 * res.overall_se, (res.overall_att, res.overall_se)
-        assert err < abs_bound, (res.overall_att, res.overall_se)
+        err = abs(res.att - CHANG_S422_THETA0)
+        assert err < 4 * res.se, (res.att, res.se)
+        assert err < abs_bound, (res.att, res.se)
         confounded_err = abs(_unadjusted_did(df) - CHANG_S422_THETA0)
         assert err < confounded_err, (err, confounded_err)
 

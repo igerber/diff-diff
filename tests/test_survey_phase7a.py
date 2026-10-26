@@ -68,9 +68,9 @@ class TestSmokeIPWDRSurvey:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     @pytest.mark.parametrize("method", ["ipw", "dr"])
     def test_event_study(self, staggered_data_with_covariates, survey_weights_only, method):
@@ -105,9 +105,9 @@ class TestSmokeIPWDRSurvey:
             covariates=["x1"],
             survey_design=survey_full_design,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # =============================================================================
@@ -147,7 +147,7 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        np.testing.assert_allclose(r1.overall_att, r2.overall_att, atol=1e-10)
+        np.testing.assert_allclose(r1.att, r2.att, atol=1e-10)
 
 
 # =============================================================================
@@ -188,7 +188,7 @@ class TestUniformWeightsMatchUnweighted:
         )
 
         # ATTs should be very close (not exact due to weight normalization)
-        np.testing.assert_allclose(r_no_survey.overall_att, r_survey.overall_att, rtol=1e-6)
+        np.testing.assert_allclose(r_no_survey.att, r_survey.att, rtol=1e-6)
 
 
 # =============================================================================
@@ -220,7 +220,7 @@ class TestIFCorrectionNonZero:
             survey_design=survey_weights_only,
         )
         # SEs should differ because DR has additional IF corrections
-        assert r_reg.overall_se != r_dr.overall_se
+        assert r_reg.se != r_dr.se
 
 
 # =============================================================================
@@ -242,7 +242,7 @@ class TestMethodsAgreeNoCovariates:
                 "first_treat",
                 survey_design=survey_weights_only,
             )
-            results[method] = r.overall_att
+            results[method] = r.att
 
         np.testing.assert_allclose(results["reg"], results["ipw"], atol=1e-10)
         np.testing.assert_allclose(results["reg"], results["dr"], atol=1e-10)
@@ -267,10 +267,10 @@ class TestAggregation:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         agg_result = result.aggregate(agg)
         if agg == "simple":
-            assert float(agg_result.att[0]) == pytest.approx(result.overall_att)
+            assert float(agg_result.att[0]) == pytest.approx(result.att)
         else:
             assert len(agg_result.att) > 0
             assert np.isfinite(agg_result.att).any()
@@ -295,7 +295,7 @@ class TestBootstrap:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert result.bootstrap_results is not None
 
 
@@ -328,7 +328,7 @@ class TestEdgeCases:
                 covariates=["binary_x"],
                 survey_design=sd,
             )
-            assert np.isfinite(result.overall_att)
+            assert np.isfinite(result.att)
 
     def test_not_yet_treated_control(self, staggered_data_with_covariates, survey_weights_only):
         """control_group='not_yet_treated' with DR + covariates + survey."""
@@ -341,7 +341,7 @@ class TestEdgeCases:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_universal_base_period(self, staggered_data_with_covariates, survey_weights_only):
         """base_period='universal' with DR + covariates + survey."""
@@ -354,7 +354,7 @@ class TestEdgeCases:
             covariates=["x1"],
             survey_design=survey_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 # =============================================================================
@@ -388,6 +388,6 @@ class TestNonSurveyDRIFCorrections:
             covariates=["x1"],
         )
         # SEs should differ (DR has nuisance IF corrections)
-        assert r_reg.overall_se != r_dr.overall_se
+        assert r_reg.se != r_dr.se
         # But ATTs should be similar (both consistent under correct specification)
-        assert abs(r_reg.overall_att - r_dr.overall_att) < 1.0
+        assert abs(r_reg.att - r_dr.att) < 1.0

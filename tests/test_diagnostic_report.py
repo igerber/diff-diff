@@ -904,9 +904,13 @@ class TestJointWaldAlignment:
         obj.vcov = None
         obj.interaction_indices = None
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -1195,9 +1199,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
         obj.n_treated = 40
@@ -1248,9 +1256,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
         obj.n_treated = 40
@@ -1306,9 +1318,13 @@ class TestReferenceMarkerAndNaNFiltering:
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -1390,9 +1406,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = StackedDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
         obj.n_treated_units = 100
@@ -1431,9 +1451,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 500
         obj.n_treated = 100
@@ -1480,9 +1504,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = StackedDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
         obj.n_treated_units = 100
@@ -1534,9 +1562,13 @@ class TestReferenceMarkerAndNaNFiltering:
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 50
@@ -1570,9 +1602,13 @@ class TestReferenceMarkerAndNaNFiltering:
 
         obj = StackedDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
         obj.n_treated_units = 100
@@ -1750,9 +1786,13 @@ class TestEPVDictBacked:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
         obj.n_treated = 40
@@ -1848,9 +1888,13 @@ class TestCSJointWaldViaEventStudyVCov:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
         obj.n_treated = 40
@@ -1898,9 +1942,13 @@ class TestContinuousDiDHeadline:
 
         obj = ContinuousDiDResults()
         obj.overall_att = 2.5
+        obj.att = 2.5
         obj.overall_att_se = 0.4
+        obj.se = 0.4
         obj.overall_att_p_value = 0.00001
+        obj.p_value = 0.00001
         obj.overall_att_conf_int = (1.7, 3.3)
+        obj.conf_int = (1.7, 3.3)
         obj.alpha = 0.05
 
         result = _extract_scalar_headline(obj)
@@ -2446,9 +2494,13 @@ class TestDCDHParallelTrendsViaPlaceboEventStudy:
         stub = ChaisemartinDHaultfoeuilleResults()
         stub.att = 1.0
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2528,9 +2580,13 @@ class TestHeterogeneityPostTreatmentOnly:
             2: {"effect": float("nan"), "se": 0.2, "n_groups": 5},  # non-finite
         }
         stub.overall_att = 1.5
+        stub.att = 1.5
         stub.overall_se = 0.1
+        stub.se = 0.1
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (1.3, 1.7)
+        stub.conf_int = (1.3, 1.7)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2610,9 +2666,13 @@ class TestSurveyDesignThreading:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 600
         obj.n_treated = 200

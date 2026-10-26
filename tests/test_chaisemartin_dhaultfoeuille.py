@@ -64,7 +64,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             treatment="treatment",
         )
         # CI should bracket the true effect of 2.0
-        lo, hi = results.overall_conf_int
+        lo, hi = results.conf_int
         assert lo <= 2.0 <= hi, f"95% CI [{lo:.3f}, {hi:.3f}] does not bracket true effect 2.0"
 
     def test_fit_with_joiners_only_pattern(self):
@@ -92,10 +92,10 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         assert results.leavers_available is False
         assert np.isnan(results.leavers_att)
         # CI brackets the truth (modulo conservative-CI noise)
-        lo, hi = results.overall_conf_int
+        lo, hi = results.conf_int
         assert lo <= 1.5 <= hi, (
             f"95% CI [{lo:.3f}, {hi:.3f}] does not bracket true effect 1.5; "
-            f"DID_M = {results.overall_att:.3f}"
+            f"DID_M = {results.att:.3f}"
         )
 
     def test_fit_with_leavers_only_pattern(self):
@@ -176,7 +176,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
                 treatment="treatment",
                 L_max=1,
             )
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_alias_DCDH_identity(self):
         assert DCDH is ChaisemartinDHaultfoeuille
@@ -224,7 +224,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         # Bootstrap should be None
         assert results.bootstrap_results is None
         # Main estimate should still be finite
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
 
 # =============================================================================
@@ -680,7 +680,7 @@ class TestDropLargerLower:
         # All 10 groups remain
         assert len(results.units) == 10
         # The point estimate is well-defined (not NaN)
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         # Per-period DIDs were computed (the structure of per_period_effects
         # depends on the panel's switch pattern; assert at least one entry
         # was populated rather than asserting specific counts)
@@ -735,7 +735,7 @@ class TestDropLargerLower:
         # All 4 groups present
         assert len(results.units) == 4
         # Point estimate is finite
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         # Per-period effects include the transition at t=3 (treated as
         # the successor of t=1)
         assert len(results.per_period_effects) > 0
@@ -815,9 +815,9 @@ class TestDropLargerLower:
         # Expected under SAMPLE-SIZE weighting (the bug):
         #   DID_+,2 = (100*5.5 + 1*5.0) / 101 - 0 = 5.495
         # The two differ by ~0.25, so we can detect the bug at 0.05 tolerance.
-        assert abs(results.overall_att - 5.25) < 0.05, (
+        assert abs(results.att - 5.25) < 0.05, (
             f"Expected DID_M ≈ 5.25 under cell weighting, got "
-            f"{results.overall_att:.4f}. If you see ~5.495 the estimator "
+            f"{results.att:.4f}. If you see ~5.495 the estimator "
             f"is using sample-size weighting (the bug)."
         )
         # n_switcher_cells should be 2 (one cell per joiner group at t=2),
@@ -1012,7 +1012,7 @@ class TestBootstrap:
             treatment="treatment",
         )
         assert results.bootstrap_results is None
-        assert np.isfinite(results.overall_se)
+        assert np.isfinite(results.se)
 
     def test_bootstrap_rademacher(self, data, ci_params):
         n_boot = ci_params.bootstrap(199)
@@ -1153,13 +1153,13 @@ class TestBootstrap:
         assert br is not None
 
         # Overall DID_M: top-level p-value and CI come from bootstrap
-        assert results.overall_p_value == pytest.approx(br.overall_p_value)
-        assert results.overall_conf_int == pytest.approx(br.overall_ci)
+        assert results.p_value == pytest.approx(br.overall_p_value)
+        assert results.conf_int == pytest.approx(br.overall_ci)
         # The t-stat is computed from the SE (effect / se), not from
         # a percentile distribution
-        assert np.isfinite(results.overall_t_stat)
-        expected_t = results.overall_att / results.overall_se
-        assert results.overall_t_stat == pytest.approx(expected_t)
+        assert np.isfinite(results.t_stat)
+        expected_t = results.att / results.se
+        assert results.t_stat == pytest.approx(expected_t)
 
         # Joiners
         if results.joiners_available and br.joiners_p_value is not None:
@@ -1211,7 +1211,7 @@ class TestBootstrap:
             time="period",
             treatment="treatment",
         )
-        assert r1.overall_se == r2.overall_se
+        assert r1.se == r2.se
 
 
 # =============================================================================
@@ -1306,12 +1306,12 @@ class TestResultsDataclass:
         assert results.event_study_effects is not None
         assert 1 in results.event_study_effects
         es1 = results.event_study_effects[1]
-        assert es1["effect"] == pytest.approx(results.overall_att)
-        assert es1["se"] == pytest.approx(results.overall_se)
+        assert es1["effect"] == pytest.approx(results.att)
+        assert es1["se"] == pytest.approx(results.se)
 
     def test_is_significant_property(self, results):
         # Boolean reflects whether p-value < alpha
-        expected = results.overall_p_value < results.alpha
+        expected = results.p_value < results.alpha
         assert results.is_significant is expected
 
     def test_coef_var_nan_safe_on_non_finite_se(self):
@@ -1814,10 +1814,10 @@ class TestMultiHorizon:
                 L_max=1,
             )
         es1 = r.event_study_effects[1]
-        assert r.overall_att == es1["effect"]
-        assert r.overall_se == es1["se"]
-        assert r.overall_p_value == es1["p_value"]
-        assert r.overall_conf_int == es1["conf_int"]
+        assert r.att == es1["effect"]
+        assert r.se == es1["se"]
+        assert r.p_value == es1["p_value"]
+        assert r.conf_int == es1["conf_int"]
 
     def test_L_max_1_suppresses_joiner_leaver_decomposition(self):
         """L_max=1 suppresses joiner/leaver decomposition in summary()
@@ -1893,7 +1893,7 @@ class TestMultiHorizon:
         # Per-group path produces finite estimate and SE
         assert np.isfinite(r_one.event_study_effects[1]["effect"])
         assert np.isfinite(r_one.event_study_effects[1]["se"])
-        assert np.isfinite(r_one.overall_att)
+        assert np.isfinite(r_one.att)
         # L_max=1 should have exactly 1 horizon
         assert set(r_one.event_study_effects.keys()) == {1}
 
@@ -2000,9 +2000,9 @@ class TestMultiHorizon:
             L_max=3,
         )
         assert r.cost_benefit_delta is not None
-        assert r.overall_att == pytest.approx(r.cost_benefit_delta["delta"])
+        assert r.att == pytest.approx(r.cost_benefit_delta["delta"])
         # DID_1 is still accessible
-        assert r.event_study_effects[1]["effect"] != r.overall_att or True  # may be close
+        assert r.event_study_effects[1]["effect"] != r.att or True  # may be close
 
 
 class TestMultiHorizonPlacebos:
@@ -2181,7 +2181,7 @@ class TestCostBenefitDelta:
         # Weights sum to 1
         assert sum(cb["weights"].values()) == pytest.approx(1.0, abs=1e-10)
         # delta == overall_att when L_max > 1
-        assert r.overall_att == pytest.approx(cb["delta"])
+        assert r.att == pytest.approx(cb["delta"])
 
 
 class TestSupTBands:
@@ -2334,13 +2334,13 @@ class TestCovariateAdjustment:
         )
 
         # Results should differ (covariate is confounding)
-        assert r_x.overall_att != r_plain.overall_att
+        assert r_x.att != r_plain.att
         # Covariate diagnostics should be populated
         assert r_x.covariate_residuals is not None
         assert len(r_x.covariate_residuals) > 0
         assert "theta_hat" in r_x.covariate_residuals.columns
         # SE should be finite
-        assert np.isfinite(r_x.overall_se)
+        assert np.isfinite(r_x.se)
 
     def test_multiple_covariates(self):
         """Multiple covariates are accepted and produce diagnostics."""
@@ -2410,8 +2410,8 @@ class TestCovariateAdjustment:
             covariates=["X1"],
             L_max=1,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
 
     def test_controls_with_multi_horizon(self):
         """Covariates work with L_max > 1 event study."""
@@ -2462,9 +2462,9 @@ class TestCovariateAdjustment:
                 ), f"per_period_effects should be unadjusted at period {period_key}"
 
         # overall_att should come from event_study_effects[1] (DID^X_1)
-        assert r_x.overall_att == pytest.approx(r_x.event_study_effects[1]["effect"], abs=1e-10)
+        assert r_x.att == pytest.approx(r_x.event_study_effects[1]["effect"], abs=1e-10)
         # and should differ from the raw overall_att (covariate effect)
-        assert r_x.overall_att != r_raw.overall_att
+        assert r_x.att != r_raw.att
 
 
 class TestLinearTrends:
@@ -2520,7 +2520,7 @@ class TestLinearTrends:
             trends_linear=True,
         )
         # Results should differ (group-specific trends confound unadjusted)
-        assert r_fd.overall_att != r_plain.overall_att
+        assert r_fd.att != r_plain.att
         # Event study should have horizons
         assert r_fd.event_study_effects is not None
         assert 1 in r_fd.event_study_effects
@@ -2587,7 +2587,7 @@ class TestLinearTrends:
             trends_linear=True,
         )
         # overall_att is NaN for trends + L_max>=2 (no aggregate)
-        assert np.isnan(r.overall_att)
+        assert np.isnan(r.att)
         assert r.covariate_residuals is not None
         assert r.linear_trends_effects is not None
 
@@ -2609,8 +2609,8 @@ class TestLinearTrends:
             trends_linear=True,
         )
         # overall_* should be NaN (not computed in trends mode)
-        assert np.isnan(r.overall_att)
-        assert np.isnan(r.overall_se)
+        assert np.isnan(r.att)
+        assert np.isnan(r.se)
         # cost_benefit_delta suppressed
         assert r.cost_benefit_delta is None
         # Cumulated effects still available
@@ -2713,10 +2713,10 @@ class TestStateSetTrends:
         )
         # With set-restricted controls, results may differ
         # (both should be finite and reasonable)
-        assert np.isfinite(r_plain.overall_att)
-        assert np.isfinite(r_plain.overall_se)
-        assert np.isfinite(r_set.overall_att)
-        assert np.isfinite(r_set.overall_se)
+        assert np.isfinite(r_plain.att)
+        assert np.isfinite(r_plain.se)
+        assert np.isfinite(r_set.att)
+        assert np.isfinite(r_set.se)
 
     def test_time_varying_set_raises(self):
         """Set membership that varies over time raises ValueError."""
@@ -2791,7 +2791,7 @@ class TestStateSetTrends:
             L_max=1,
             trends_nonparam="state",
         )
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         assert r.covariate_residuals is not None
 
     def test_trends_nonparam_unequal_support(self):
@@ -2846,7 +2846,7 @@ class TestStateSetTrends:
                 trends_nonparam="state",
             )
         # Should not error; State A groups contribute, State B excluded
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         assert r.event_study_effects is not None
 
 
@@ -3187,7 +3187,7 @@ class TestNonBinaryTreatment:
                 treatment="treatment",
                 L_max=2,
             )
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
 
     def test_within_cell_heterogeneity_rejected_nonbinary(self):
         """Cells with mixed non-binary values (e.g., 1 and 2) should be rejected."""
@@ -3319,9 +3319,9 @@ class TestNonBinaryTreatment:
                 L_max=1,
             )
         # overall_att should be from per-group path (includes both 0->1 and 0->2)
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         # event_study_effects[1] and overall_att should be the same estimand
-        assert r.overall_att == r.event_study_effects[1]["effect"]
+        assert r.att == r.event_study_effects[1]["effect"]
 
     def test_constant_nonbinary_treatment_raises(self):
         """Constant non-binary treatment (no switchers) should raise ValueError."""
@@ -3379,9 +3379,9 @@ class TestNonBinaryTreatment:
         assert np.isfinite(r.bootstrap_results.event_study_ses[1])
         # Top-level overall_* must match event_study_effects[1]
         es1 = r.event_study_effects[1]
-        assert r.overall_att == es1["effect"]
-        assert r.overall_se == es1["se"]
-        assert r.overall_p_value == es1["p_value"]
+        assert r.att == es1["effect"]
+        assert r.se == es1["se"]
+        assert r.p_value == es1["p_value"]
 
     def test_nonbinary_lmax1_renderer_contract(self):
         """Non-binary L_max=1: summary/to_dataframe use DID_1 label and
@@ -5155,7 +5155,7 @@ class TestByPathBootstrap:
             seed=42,
         )
         # Sanity: healthy fit has finite overall and path SEs.
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
         assert res.path_effects is not None
         any_finite_path = any(
             np.isfinite(h["se"]) for e in res.path_effects.values() for h in e["horizons"].values()
@@ -5229,15 +5229,15 @@ class TestByPathBootstrap:
                 L_max=3,
             )
 
-        assert np.isnan(res.overall_se), (
-            f"n_bootstrap=1: overall_se must be NaN (bootstrap " f"contract), got {res.overall_se}"
+        assert np.isnan(res.se), (
+            f"n_bootstrap=1: overall_se must be NaN (bootstrap " f"contract), got {res.se}"
         )
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        lo, hi = res.overall_conf_int
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        lo, hi = res.conf_int
         assert np.isnan(lo) and np.isnan(hi)
         # Point estimate stays finite across bootstrap invalidity
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
         if res.joiners_se is not None:
             assert np.isnan(res.joiners_se)
@@ -8719,7 +8719,7 @@ class TestByPathNonBinary:
                 treatment="treatment",
                 L_max=2,
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     @pytest.mark.slow
     def test_bootstrap_with_non_binary_finite_se(self):
@@ -9786,7 +9786,7 @@ class TestByPathSurveyDesignAnalytical:
                 L_max=3,
                 survey_design=sd,
             )
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
         assert res.path_effects is None
 
     # ----- Analytical SE correctness -----

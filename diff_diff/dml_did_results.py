@@ -147,7 +147,7 @@ class DMLDiDResults(CallawaySantAnnaResults):
         if self.effective_n_folds is not None:
             folds += f" (effective {self.effective_n_folds})"
         return (
-            f"DMLDiDResults(att={self.overall_att:.6g}, se={self.overall_se:.6g}, "
+            f"DMLDiDResults(att={self.att:.6g}, se={self.se:.6g}, "
             f"n_cells={len(self.group_time_effects)}, {folds}, "
             f"propensity_learner={self.propensity_learner!r}, "
             f"outcome_learner={self.outcome_learner!r})"

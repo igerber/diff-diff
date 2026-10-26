@@ -564,8 +564,8 @@ class TestGateBPrimeStaggeredOracle:
     def test_base_config_matches_oracle(self, stag):
         exp = ORACLE_STAGGERED["stag_dr_all"]
         r = _fit_new(stag, aggregate="all")
-        assert_allclose(r.overall_att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-        assert_allclose(r.overall_se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(r.overall_att_es, exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert r.n_obs == exp["n_obs"]
         assert r.n_never_enabled == exp["n_never_enabled"]
@@ -578,8 +578,8 @@ class TestGateBPrimeStaggeredOracle:
     def test_bootstrap_config_matches_oracle(self, stag):
         exp = ORACLE_STAGGERED["stag_dr_all_boot49"]
         r = _fit_new(stag, aggregate="all", ctor=dict(n_bootstrap=49, seed=7, cband=True))
-        assert_allclose(r.overall_att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-        assert_allclose(r.overall_se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(
             r.cband_crit_value, exp["cband_crit_value"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL
         )
@@ -634,8 +634,8 @@ class TestGateBPrimeStaggeredOracle:
             for m in ("dr", "ipw", "reg")
         ]
         for r in fits[1:]:
-            assert_allclose(r.overall_att, fits[0].overall_att, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-            assert_allclose(r.overall_se, fits[0].overall_se, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+            assert_allclose(r.att, fits[0].att, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+            assert_allclose(r.se, fits[0].se, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
 
     def test_survey_pweight_matches_oracle(self, stag_survey):
         exp = ORACLE_STAGGERED["stag_dr_survey_pweight"]
@@ -646,8 +646,8 @@ class TestGateBPrimeStaggeredOracle:
 
     @staticmethod
     def _assert_against(r, exp):
-        assert_allclose(r.overall_att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-        assert_allclose(r.overall_se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(r.overall_att_es, exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         got = {f"{g}|{t}": v for (g, t), v in sorted(r.group_time_effects.items())}
         assert set(got) == set(exp["group_time"])
@@ -683,9 +683,7 @@ def _assert_staggered_parity(old, new):
             assert a is b, f"{f}: {a!r} vs {b!r}"
         else:
             _eq_with_nans(a, b)
-    _eq_with_nans(
-        np.asarray(old.overall_conf_int, dtype=float), np.asarray(new.overall_conf_int, dtype=float)
-    )
+    _eq_with_nans(np.asarray(old.conf_int, dtype=float), np.asarray(new.conf_int, dtype=float))
     _eq_dicts_with_nans(old.group_time_effects, new.group_time_effects)
     for attr in ("event_study_effects", "group_effects"):
         a, b = getattr(old, attr), getattr(new, attr)
@@ -717,7 +715,7 @@ class TestGateBMergedSurfaceContracts:
             warnings.simplefilter("ignore")
             nyt = _fit_new(stag, ctor=dict(control_group="not_yet_treated"), aggregate="all")
             nev = _fit_new(stag, ctor=dict(control_group="never_treated"), aggregate="all")
-        assert nyt.overall_att != nev.overall_att, (
+        assert nyt.att != nev.att, (
             "not_yet_treated and never_treated produced identical ATTs - the "
             "comparison-group branch is not reading control_group"
         )
@@ -866,7 +864,7 @@ class TestGateDTimeSemantics:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = _fit_new(stag, aggregate="simple")
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
 
     def test_2x2x2_both_post_and_time_raises(self, cross):
         with pytest.raises(ValueError, match="pass only post="):
@@ -1091,14 +1089,14 @@ class TestGateFIntrospectionAndValidation:
         with pytest.warns(UserWarning, match="recoding to 0"):
             r = _fit_new(df, aggregate="simple")
         plain = _fit_new(stag, aggregate="simple")
-        _eq_with_nans([r.overall_att, r.overall_se], [plain.overall_att, plain.overall_se])
+        _eq_with_nans([r.att, r.se], [plain.att, plain.se])
         assert r.n_never_enabled == plain.n_never_enabled
 
     def test_valid_cohorts_are_untouched_by_the_guard(self, stag):
         """Regression pin: the guard changes no accepted fit."""
         r = _fit_new(stag, aggregate="all")
         exp = ORACLE_STAGGERED["stag_dr_all"]
-        assert_allclose(r.overall_att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
 
     def test_anticipation_guard_survives_attribute_mutation(self, stag):
         """The engine-level guard also covers the __init__/set_params bypass."""
@@ -1511,7 +1509,7 @@ class TestGateGRParity:
         # carries that suite's documented looser envelope (a weighting deviation
         # on individual values - see TestStaggeredDDDAggregation's docstring).
         assert_allclose(
-            r.overall_att,
+            r.att,
             scenario["overall_att_simple"],
             rtol=TestStaggeredDDDAggregation.AGG_RTOL,
             atol=TestStaggeredDDDAggregation.AGG_ATOL,

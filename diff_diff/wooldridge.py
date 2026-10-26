@@ -141,7 +141,7 @@ def _require_complete_cell_set(
 ) -> None:
     """Every cell the design ASKED for must come back identified.
 
-    A finite ``overall_att`` does NOT mean the reported ATT set is complete.
+    A finite ``att`` does NOT mean the reported ATT set is complete.
     When rank reduction removes some but not all treatment columns, the
     survivors are silently re-identified as whatever contrast the remaining
     design supports -- and they keep their ``ATT(g, t)`` labels.
@@ -151,7 +151,7 @@ def _require_complete_cell_set(
     indicator and the pair is collinear with the time FE. QR drops one; the
     survivor identifies ``-(effect_4 - effect_3)`` and was reported as
     ``ATT(3, 5) = -1.9393`` when the true ATT(3, 5) is ``+1.0`` -- wrong SIGN --
-    and folded into ``overall_att = +0.7703`` against a true ~1.8. Under
+    and folded into ``att = +0.7703`` against a true ~1.8. Under
     ``rank_deficient_action="silent"`` there was no warning at all.
 
     So this compares the cells the builder emitted against the coefficients that
@@ -434,7 +434,7 @@ def _find_disconnected_cells(
     observed at ``{2, 4}`` and others at ``{1, 5}`` give exactly that: ``ref=2``
     sits in the first component, and ``{1, 5}`` is a closed component whose two
     cells are collinear. Measured before this check: ``g4_t5`` silently dropped
-    and ``overall_att`` computed from the single surviving post cell.
+    and ``att`` computed from the single surviving post cell.
 
     On ``not_yet_treated`` (and the nonlinear paths) pre-treatment periods are
     not emitted at all, so a component holding any pre-period is fine -- which is
@@ -2751,7 +2751,7 @@ class WooldridgeDiD(BaseEstimator):
                     boot_atts.append(att_b)
             if boot_atts:
                 boot_se = float(np.std(boot_atts, ddof=1))
-                t_stat_b, p_b, ci_b = safe_inference(results.overall_att, boot_se, alpha=self.alpha)
+                t_stat_b, p_b, ci_b = safe_inference(results.att, boot_se, alpha=self.alpha)
                 results.overall_se = boot_se
                 results.overall_t_stat = t_stat_b
                 results.overall_p_value = p_b

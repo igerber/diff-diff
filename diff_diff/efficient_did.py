@@ -1536,8 +1536,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 df=0,
                 reject=False,
                 alpha=alpha,
-                att_all=result_all.overall_att,
-                att_post=result_post.overall_att,
+                att_all=result_all.att,
+                att_post=result_post.att,
                 recommendation="inconclusive",
                 gt_details=None,
             )
@@ -1712,8 +1712,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             df=effective_rank,
             reject=reject,
             alpha=alpha,
-            att_all=result_all.overall_att,
-            att_post=result_post.overall_att,
+            att_all=result_all.att,
+            att_post=result_post.att,
             recommendation="pt_post" if reject else "pt_all",
             gt_details=es_details,
         )

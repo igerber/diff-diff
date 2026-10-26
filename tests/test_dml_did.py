@@ -626,7 +626,7 @@ class TestDegenerateHandling:
                 "se": res.se,
                 "t_stat": res.t_stat,
                 "p_value": res.p_value,
-                "conf_int": res.overall_conf_int,
+                "conf_int": res.conf_int,
             }
         )
         assert any(
@@ -777,8 +777,8 @@ class TestAggregationBootstrap:
             assert e["effect"] == analytical.group_time_effects[k]["effect"]
         # Inference fields DIFFER: overall quartet + per-cell quartet.
         assert boot.se != analytical.se
-        assert boot.overall_conf_int != analytical.overall_conf_int
-        assert boot.overall_p_value != analytical.overall_p_value
+        assert boot.conf_int != analytical.conf_int
+        assert boot.p_value != analytical.p_value
         changed = [
             k
             for k, e in boot.group_time_effects.items()

@@ -99,8 +99,8 @@ class TestImputationDiD:
 
         assert est.is_fitted_
         assert isinstance(results, ImputationDiDResults)
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert results.n_treated_obs > 0
         assert results.n_untreated_obs > 0
         assert results.n_treated_units > 0
@@ -121,9 +121,9 @@ class TestImputationDiD:
             first_treat="first_treat",
         )
 
-        assert results.overall_att > 0
+        assert results.att > 0
         # Effect should be close to 3.0 (dynamic effects add some)
-        assert abs(results.overall_att - 3.0) < 2 * results.overall_se + 1.5
+        assert abs(results.att - 3.0) < 2 * results.se + 1.5
 
     def test_zero_treatment_effect(self):
         """Test with no treatment effect."""
@@ -138,7 +138,7 @@ class TestImputationDiD:
             first_treat="first_treat",
         )
 
-        assert abs(results.overall_att) < 3 * results.overall_se + 0.5
+        assert abs(results.att) < 3 * results.se + 0.5
 
     def test_aggregate_simple(self):
         """Test that default aggregate computes overall ATT."""
@@ -152,8 +152,8 @@ class TestImputationDiD:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert results.event_study_effects is None
         assert results.group_effects is None
 
@@ -240,8 +240,8 @@ class TestImputationDiD:
             covariates=["x1", "x2"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_anticipation(self):
         """Test anticipation parameter."""
@@ -511,8 +511,8 @@ class TestImputationDiD:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_balance_e_checks_pre_treatment_periods(self):
         """balance_e should drop cohorts missing pre-treatment observations."""
@@ -708,7 +708,7 @@ class TestImputationVariance:
             first_treat="first_treat",
         )
 
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_se_positive_event_study(self):
         """Test that event study SEs are positive."""
@@ -737,7 +737,7 @@ class TestImputationVariance:
             time="time",
             first_treat="first_treat",
         )
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_aux_partition_cohort(self):
         """Test cohort partition produces valid SEs."""
@@ -750,7 +750,7 @@ class TestImputationVariance:
             time="time",
             first_treat="first_treat",
         )
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_aux_partition_horizon(self):
         """Test horizon partition produces valid SEs."""
@@ -763,7 +763,7 @@ class TestImputationVariance:
             time="time",
             first_treat="first_treat",
         )
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_cohort_partition_coincides_on_balanced_uniform_panel(self):
         """On a BALANCED panel with uniform weights the cohort partition is an
@@ -783,9 +783,7 @@ class TestImputationVariance:
         results_coarse = ImputationDiD(aux_partition="cohort").fit(data, **kwargs)
 
         # rtol=0: numpy's default rtol=1e-7 would mask the identity pin.
-        np.testing.assert_allclose(
-            results_coarse.overall_se, results_fine.overall_se, rtol=0, atol=1e-12
-        )
+        np.testing.assert_allclose(results_coarse.se, results_fine.se, rtol=0, atol=1e-12)
 
     def test_coarser_partition_diverges_on_unbalanced_panel(self):
         """Companion to the identity test: on an unbalanced subsample the coarse
@@ -804,9 +802,9 @@ class TestImputationVariance:
         assert len(sub) < len(data)
 
         kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
-        se_fine = ImputationDiD(aux_partition="cohort_horizon").fit(sub, **kwargs).overall_se
-        se_cohort = ImputationDiD(aux_partition="cohort").fit(sub, **kwargs).overall_se
-        se_horizon = ImputationDiD(aux_partition="horizon").fit(sub, **kwargs).overall_se
+        se_fine = ImputationDiD(aux_partition="cohort_horizon").fit(sub, **kwargs).se
+        se_cohort = ImputationDiD(aux_partition="cohort").fit(sub, **kwargs).se
+        se_horizon = ImputationDiD(aux_partition="horizon").fit(sub, **kwargs).se
 
         assert se_cohort > se_fine * 1.01
         assert se_horizon > se_fine * 1.002
@@ -832,8 +830,8 @@ class TestImputationVariance:
             covariates=["x1"],
         )
 
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
     def test_sparse_solver_lsmr_fallback(self):
         """Test that the LSMR fallback produces finite SE when the sparse
@@ -860,8 +858,8 @@ class TestImputationVariance:
                 covariates=["x1"],
             )
 
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
     def test_sparse_solver_lsmr_fallback_emits_warning(self):
         """Silent-failure audit axis C: the sparse-factorization -> LSMR
@@ -929,7 +927,7 @@ class TestImputationBootstrap:
         est2 = ImputationDiD(n_bootstrap=n_boot, seed=42)
         r2 = est2.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
-        assert r1.overall_se == r2.overall_se
+        assert r1.se == r2.se
 
     def test_bootstrap_different_seeds(self, ci_params):
         """Test that different seeds give different results."""
@@ -943,7 +941,7 @@ class TestImputationBootstrap:
         r2 = est2.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
         # Results should differ (at least slightly)
-        assert r1.overall_se != r2.overall_se
+        assert r1.se != r2.se
 
     def test_bootstrap_event_study(self, ci_params):
         """A bootstrapped fit materializes the percentile event-study surface
@@ -1040,7 +1038,7 @@ class TestImputationBootstrap:
         )
 
         # Strong effect should be significant
-        assert results.overall_p_value < 0.05
+        assert results.p_value < 0.05
 
     def test_bootstrap_zero_noise_near_zero_se(self, ci_params):
         """Bootstrap SE ~ 0 when influence function is zero (constant effect, no noise)."""
@@ -1063,7 +1061,7 @@ class TestImputationBootstrap:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert abs(results.overall_att - true_effect) < 1e-8
+        assert abs(results.att - true_effect) < 1e-8
         assert results.bootstrap_results is not None
         # With zero noise, influence function sums are ~0, so SE should be ~0
         assert results.bootstrap_results.overall_att_se < 0.01
@@ -1225,8 +1223,8 @@ class TestImputationVsOtherEstimators:
         )
 
         # Point estimates should be reasonably close
-        cs_att = cs_results.overall_att
-        imp_att = imp_results.overall_att
+        cs_att = cs_results.att
+        imp_att = imp_results.att
         assert abs(imp_att - cs_att) < 1.0
 
     def test_similar_point_estimates_vs_sa(self):
@@ -1254,7 +1252,7 @@ class TestImputationVsOtherEstimators:
         )
 
         # Point estimates should be reasonably close
-        assert abs(imp_results.overall_att - sa_results.overall_att) < 1.0
+        assert abs(imp_results.att - sa_results.att) < 1.0
 
     def test_shorter_cis_under_homogeneous_effects(self):
         """Monte Carlo: imputation CIs shorter than CS and SA under homogeneous effects.
@@ -1300,9 +1298,9 @@ class TestImputationVsOtherEstimators:
                 first_treat="first_treat",
             )
 
-            imp_w = imp_r.overall_conf_int[1] - imp_r.overall_conf_int[0]
-            cs_w = cs_r.overall_conf_int[1] - cs_r.overall_conf_int[0]
-            sa_w = sa_r.overall_conf_int[1] - sa_r.overall_conf_int[0]
+            imp_w = imp_r.conf_int[1] - imp_r.conf_int[0]
+            cs_w = cs_r.conf_int[1] - cs_r.conf_int[0]
+            sa_w = sa_r.conf_int[1] - sa_r.conf_int[0]
 
             imp_vs_cs_ratios.append(imp_w / cs_w)
             imp_vs_sa_ratios.append(imp_w / sa_w)
@@ -1372,8 +1370,8 @@ class TestImputationEdgeCases:
         )
 
         assert len(results.groups) == 1
-        assert results.overall_se > 0
-        assert abs(results.overall_att - 2.0) < 1.0
+        assert results.se > 0
+        assert abs(results.att - 2.0) < 1.0
 
     def test_no_never_treated(self):
         """Test with no never-treated units (Proposition 5)."""
@@ -1392,8 +1390,8 @@ class TestImputationEdgeCases:
             effects = es_dict(results)
 
         # Should still estimate
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
         # Proposition 5: long-run horizons should be NaN
         prop5_nans = [
@@ -1449,7 +1447,7 @@ class TestImputationEdgeCases:
             first_treat="first_treat",
         )
 
-        assert abs(results.overall_att - 3.0) < 1.0
+        assert abs(results.att - 3.0) < 1.0
 
     def test_rank_deficiency_warn(self):
         """Test rank_deficient_action='warn' doesn't error."""
@@ -1462,7 +1460,7 @@ class TestImputationEdgeCases:
             time="time",
             first_treat="first_treat",
         )
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_rank_deficiency_error(self):
         """Test rank_deficient_action='error' works."""
@@ -1476,7 +1474,7 @@ class TestImputationEdgeCases:
             time="time",
             first_treat="first_treat",
         )
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_invalid_rank_deficient_action(self):
         """Test invalid rank_deficient_action raises ValueError."""
@@ -1773,9 +1771,9 @@ class TestImputationEdgeCases:
 
         # Partial NaN case: SE should be finite (computed from finite-only weights)
         assert np.isfinite(
-            results.overall_se
+            results.se
         ), f"overall_se should be finite with {n_finite} finite and {n_nan} NaN tau_hat"
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_covariate_delta_matches_full_dummy_ols(self):
         """Step-A/B covariate coefficients match explicit unit+time dummy OLS.
@@ -1923,7 +1921,7 @@ class TestImputationEdgeCases:
 
         # Behavioral assertion: estimator still produces results (warns, doesn't crash)
         assert isinstance(results, ImputationDiDResults)
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
         # Behavioral assertion: coercion applied — first_treat is now constant per unit
         fit_df = est._fit_data["df"]
@@ -1996,8 +1994,8 @@ class TestImputationEdgeCases:
         )
 
         # SE should be finite (not blown up by singular design matrix)
-        assert np.isfinite(results.overall_se), "SE should be finite with rank-deficient covariates"
-        assert results.overall_se > 0
+        assert np.isfinite(results.se), "SE should be finite with rank-deficient covariates"
+        assert results.se > 0
 
         # Verify kept_cov_mask is stored and has one True + one False
         mask = est._fit_data["kept_cov_mask"]
@@ -2033,7 +2031,7 @@ class TestImputationEdgeCases:
         # Behavioral assertion: bootstrap_results is None
         assert results.bootstrap_results is None
         # Analytical SE still present
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_event_study_empty_after_filtering(self):
         """Warn when balance_e/horizon_max filter out all treated horizons."""
@@ -2364,8 +2362,8 @@ class TestImputationDiDVcovType:
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
         self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 2: cluster path bit-equal --------------------------------
@@ -2381,8 +2379,8 @@ class TestImputationDiDVcovType:
         )
         r_default = ImputationDiD(cluster="state").fit(**common)
         r_explicit = ImputationDiD(cluster="state", vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
         self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 3: TSL-survey path bit-equal -----------------------------
@@ -2405,8 +2403,8 @@ class TestImputationDiDVcovType:
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
         self._assert_levels_bit_equal(r_default, r_explicit)
 
     # ---- Surface 4: replicate-survey path bit-equal -----------------------
@@ -2430,8 +2428,8 @@ class TestImputationDiDVcovType:
         )
         r_default = ImputationDiD().fit(**common)
         r_explicit = ImputationDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
         # Per-horizon / per-group SE override branches must also agree under
         # the replicate-weight variance path (post-fit replicate replay).
         a_default = r_default.aggregate(level)
@@ -2822,7 +2820,7 @@ class TestImputationDiDVcovType:
             time="time",
             first_treat="first_treat",
         )
-        assert r1.overall_se == r2.overall_se
+        assert r1.se == r2.se
         assert r1.vcov_type == r2.vcov_type
 
 
@@ -2874,8 +2872,8 @@ class TestZeroWeightGroups:
         messages = [str(w.message) for w in rec]
         assert not any("replicate refits failed" in m for m in messages)
         assert not any("did not converge" in m for m in messages)
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se) and r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se) and r.se > 0
 
     def test_main_fit_zero_weight_treated_unit_covariates(self):
         """Main fit with a zero-weight treated unit + covariates.
@@ -2927,7 +2925,7 @@ class TestZeroWeightGroups:
             groups = group_dict(r)
         from tests.conftest import assert_nan_inference
 
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         # Cohort 2 contains only the zero-weight unit: NaN across ALL fields.
         assert_nan_inference(groups[2])
         assert np.isnan(groups[2]["effect"])
@@ -3101,7 +3099,7 @@ class TestLSMRFallbackParity:
                     data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
                 )
         assert calls, "fallback path did not route through the LSMR solver"
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert any("sparse LSMR" in str(x.message) for x in w)
 
     def test_unconverged_lsmr_fails_closed_to_nan(self, monkeypatch):
@@ -3142,11 +3140,11 @@ class TestLSMRFallbackParity:
                 res = ImputationDiD().fit(
                     data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
                 )
-        assert np.isfinite(res.overall_att)  # point estimate unaffected
-        assert np.isnan(res.overall_se)
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.all(np.isnan(np.asarray(res.overall_conf_int, dtype=float)))
+        assert np.isfinite(res.att)  # point estimate unaffected
+        assert np.isnan(res.se)
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.all(np.isnan(np.asarray(res.conf_int, dtype=float)))
 
     def test_machine_precision_istop_accepted(self, monkeypatch):
         """CI-review P1 regression: istop 4/5 (machine-precision analogues of

@@ -301,9 +301,7 @@ class TestDoublyRobustEstimator:
 
         # Should recover approximately 2.5 treatment effect
         # Allow wider tolerance due to dynamic effects and noise
-        assert (
-            abs(results.overall_att - 2.5) < 1.0
-        ), f"DR should recover ~2.5 effect, got {results.overall_att}"
+        assert abs(results.att - 2.5) < 1.0, f"DR should recover ~2.5 effect, got {results.att}"
 
     def test_estimation_methods_produce_similar_results(self):
         """
@@ -324,7 +322,7 @@ class TestDoublyRobustEstimator:
             )
 
         # All methods should produce similar overall ATT
-        atts = [results[m].overall_att for m in ["reg", "ipw", "dr"]]
+        atts = [results[m].att for m in ["reg", "ipw", "dr"]]
         max_diff = max(atts) - min(atts)
         assert (
             max_diff < 0.5
@@ -409,8 +407,8 @@ class TestDRNoCovariateSEUniformity:
         reg = self._fit(data, "reg")
         dr = self._fit(data, "dr")
 
-        np.testing.assert_allclose(dr.overall_att, reg.overall_att, rtol=0, atol=1e-12)
-        np.testing.assert_allclose(dr.overall_se, reg.overall_se, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(dr.att, reg.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(dr.se, reg.se, rtol=0, atol=1e-12)
 
         reg_es_all = es_dict(reg)
         dr_es_all = es_dict(dr)
@@ -452,8 +450,8 @@ class TestDRNoCovariateSEUniformity:
         assert compared >= 3, f"expected several finite cells to compare, got {compared}"
 
         # Aggregated surfaces inherit the identity (same IF feeds aggregation).
-        np.testing.assert_allclose(ipw.overall_att, reg.overall_att, rtol=0, atol=1e-12)
-        np.testing.assert_allclose(ipw.overall_se, reg.overall_se, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(ipw.att, reg.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(ipw.se, reg.se, rtol=0, atol=1e-12)
 
 
 # =============================================================================
@@ -590,8 +588,8 @@ class TestRBenchmarkCallaway:
         # Compare overall ATT - use 20% tolerance for aggregation differences
         # The discrepancy is primarily in aggregation weights, not ATT(g,t) values
         assert np.isclose(
-            py_results.overall_att, r_results["overall_att"], rtol=0.20
-        ), f"ATT mismatch: Python={py_results.overall_att}, R={r_results['overall_att']}"
+            py_results.att, r_results["overall_att"], rtol=0.20
+        ), f"ATT mismatch: Python={py_results.att}, R={r_results['overall_att']}"
 
     def test_overall_att_matches_r_reg(self, require_r, benchmark_data):
         """Test overall ATT matches R with outcome regression.
@@ -609,8 +607,8 @@ class TestRBenchmarkCallaway:
         r_results = self._run_r_estimation(csv_path, estimation_method="reg")
 
         assert np.isclose(
-            py_results.overall_att, r_results["overall_att"], rtol=0.20
-        ), f"ATT mismatch: Python={py_results.overall_att}, R={r_results['overall_att']}"
+            py_results.att, r_results["overall_att"], rtol=0.20
+        ), f"ATT mismatch: Python={py_results.att}, R={r_results['overall_att']}"
 
     def test_group_time_effects_match_r(self, require_r, benchmark_data):
         """Test individual ATT(g,t) values match R for post-treatment periods.
@@ -687,8 +685,8 @@ class TestCallawaySantAnnaEdgeCases:
         )
 
         # Should produce valid results
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
+        assert results.att is not None
+        assert np.isfinite(results.att)
 
     def test_no_post_treatment_returns_nan_with_warning(self):
         """
@@ -734,10 +732,10 @@ class TestCallawaySantAnnaEdgeCases:
             ), f"Expected post-treatment warning, got: {warning_messages}"
 
         # All overall inference fields should be NaN
-        assert np.isnan(results.overall_att), "overall_att should be NaN"
-        assert np.isnan(results.overall_se), "overall_se should be NaN"
-        assert np.isnan(results.overall_t_stat), "overall_t_stat should be NaN"
-        assert np.isnan(results.overall_p_value), "overall_p_value should be NaN"
+        assert np.isnan(results.att), "overall_att should be NaN"
+        assert np.isnan(results.se), "overall_se should be NaN"
+        assert np.isnan(results.t_stat), "overall_t_stat should be NaN"
+        assert np.isnan(results.p_value), "overall_p_value should be NaN"
 
     def test_nonfinite_se_produces_nan_tstat(self):
         """
@@ -788,7 +786,7 @@ class TestCallawaySantAnnaEdgeCases:
         # With anticipation=1, period 4 (= g-1 = 5-1) should be post-treatment
         # Check that ATT(5, 4) is included in overall aggregation
         # (This is implicit in the overall_att calculation including t=4)
-        assert results.overall_att is not None
+        assert results.att is not None
 
     def test_not_yet_treated_excludes_cohort_g(self):
         """
@@ -813,8 +811,8 @@ class TestCallawaySantAnnaEdgeCases:
         )
 
         # Both should produce valid results
-        assert results_nyt.overall_att is not None
-        assert results_nt.overall_att is not None
+        assert results_nyt.att is not None
+        assert results_nt.att is not None
 
         # Control group setting should be recorded
         assert results_nyt.control_group == "not_yet_treated"
@@ -933,14 +931,12 @@ class TestSEFormulas:
 
         # Check overall ATT SE (wider tolerance when min_n cap reduces
         # bootstrap iterations in pure Python mode)
-        if results_boot.overall_se > 0:
-            rel_diff = (
-                abs(results_anal.overall_se - results_boot.overall_se) / results_boot.overall_se
-            )
+        if results_boot.se > 0:
+            rel_diff = abs(results_anal.se - results_boot.se) / results_boot.se
             threshold = 0.40 if n_boot < 100 else 0.25
             assert rel_diff < threshold, (
-                f"Analytical SE ({results_anal.overall_se}) differs from bootstrap SE "
-                f"({results_boot.overall_se}) by {rel_diff*100:.1f}%"
+                f"Analytical SE ({results_anal.se}) differs from bootstrap SE "
+                f"({results_boot.se}) by {rel_diff*100:.1f}%"
             )
 
     def test_bootstrap_weight_moments_rademacher(self):
@@ -1017,9 +1013,9 @@ class TestSEFormulas:
         assert results.bootstrap_results is not None
 
         # Overall statistics should be valid
-        assert np.isfinite(results.overall_se)
-        assert 0 <= results.overall_p_value <= 1
-        assert results.overall_conf_int[0] < results.overall_conf_int[1]
+        assert np.isfinite(results.se)
+        assert 0 <= results.p_value <= 1
+        assert results.conf_int[0] < results.conf_int[1]
 
         # Group-time p-values should be in [0, 1]
         for effect in results.group_time_effects.values():
@@ -1045,8 +1041,8 @@ class TestAggregationMethods:
         )
 
         # Overall ATT should be weighted average of post-treatment effects
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
+        assert results.att is not None
+        assert np.isfinite(results.att)
 
     def test_event_study_aggregation_by_relative_time(self):
         """
@@ -1188,7 +1184,7 @@ class TestResultsObject:
 
         assert "Callaway-Sant'Anna" in summary
         assert "ATT" in summary
-        assert str(round(results.overall_att, 3))[:4] in summary or "ATT" in summary
+        assert str(round(results.att, 3))[:4] in summary or "ATT" in summary
 
     def test_results_to_dataframe_group_time(self):
         """Test to_dataframe with level='group_time'."""
@@ -1362,8 +1358,8 @@ class TestEventStudySEWithWIF:
             data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
 
-        se_a = results_a.overall_se
-        se_b = results_b.overall_se
+        se_a = results_a.se
+        se_b = results_b.se
 
         threshold = 0.40 if n_boot < 100 else 0.20
         if np.isfinite(se_a) and se_a > 0 and np.isfinite(se_b) and se_b > 0:
@@ -1793,11 +1789,9 @@ class TestMPDTARComparison:
         )
 
         # Compare overall ATT - strict 1% tolerance for MPDTA
-        rel_diff = abs(py_results.overall_att - r_results["overall_att"]) / abs(
-            r_results["overall_att"]
-        )
+        rel_diff = abs(py_results.att - r_results["overall_att"]) / abs(r_results["overall_att"])
         assert rel_diff < 0.01, (
-            f"MPDTA ATT mismatch: Python={py_results.overall_att:.6f}, "
+            f"MPDTA ATT mismatch: Python={py_results.att:.6f}, "
             f"R={r_results['overall_att']:.6f}, diff={rel_diff*100:.2f}%"
         )
 
@@ -1814,9 +1808,9 @@ class TestMPDTARComparison:
         )
 
         # Compare overall SE - strict 1% tolerance for MPDTA
-        rel_diff = abs(py_results.overall_se - r_results["overall_se"]) / r_results["overall_se"]
+        rel_diff = abs(py_results.se - r_results["overall_se"]) / r_results["overall_se"]
         assert rel_diff < 0.01, (
-            f"MPDTA SE mismatch: Python={py_results.overall_se:.6f}, "
+            f"MPDTA SE mismatch: Python={py_results.se:.6f}, "
             f"R={r_results['overall_se']:.6f}, diff={rel_diff*100:.2f}%"
         )
 
@@ -2030,8 +2024,8 @@ class TestCSCovariateScaleEquilibration:
         # New (equilibrated SVD) is invariant to ~1e-11; the prior normal-
         # equations path drifted ~3.8e-6 at this offset, so 1e-7 cleanly
         # separates the two.
-        assert base.overall_att == pytest.approx(shifted.overall_att, abs=1e-7)
-        assert base.overall_se == pytest.approx(shifted.overall_se, abs=1e-6)
+        assert base.att == pytest.approx(shifted.att, abs=1e-7)
+        assert base.se == pytest.approx(shifted.se, abs=1e-6)
         for gt, eff in base.group_time_effects.items():
             if np.isfinite(eff["effect"]) and gt in shifted.group_time_effects:
                 assert eff["effect"] == pytest.approx(
@@ -2230,7 +2224,7 @@ class TestDRDIDPanelIFParity:
         cell = res.group_time_effects[(2, 2)]
         assert cell["effect"] == pytest.approx(att, rel=1e-9)
         assert cell["se"] == pytest.approx(se, rel=1e-9)
-        assert res.overall_se == pytest.approx(se, rel=1e-9)
+        assert res.se == pytest.approx(se, rel=1e-9)
 
     def test_reg_if_crosscheck_not_yet_treated(self):
         """not_yet_treated forces the per-pair (non-hoisted) bread branch of
@@ -2272,7 +2266,7 @@ class TestDRDIDPanelIFParity:
         cell = res.group_time_effects[(2, 2)]
         assert cell["effect"] == pytest.approx(att, rel=1e-8)
         assert cell["se"] == pytest.approx(se, rel=1e-8)
-        assert res.overall_se == pytest.approx(se, rel=1e-8)
+        assert res.se == pytest.approx(se, rel=1e-8)
 
     def test_ipw_if_crosscheck_survey(self):
         """Survey-weighted ipw+cov: the survey branch already carried the PS

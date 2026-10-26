@@ -755,11 +755,11 @@ class WooldridgeDiDResults(BaseResults):
         lines.append(
             _fmt_row(
                 "ATT (simple)",
-                self.overall_att,
-                self.overall_se,
-                self.overall_t_stat,
-                self.overall_p_value,
-                self.overall_conf_int,
+                self.att,
+                self.se,
+                self.t_stat,
+                self.p_value,
+                self.conf_int,
             )
         )
 
@@ -782,8 +782,8 @@ class WooldridgeDiDResults(BaseResults):
             "se": self.se,
             "t_stat": self.t_stat,
             "p_value": self.p_value,
-            "conf_int_lower": self.overall_conf_int[0],
-            "conf_int_upper": self.overall_conf_int[1],
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "method": self.method,
             "control_group": self.control_group,
             "unsupported_period_action": self.unsupported_period_action,
@@ -837,12 +837,12 @@ class WooldridgeDiDResults(BaseResults):
             "simple": [
                 {
                     "label": "ATT",
-                    "att": self.overall_att,
-                    "se": self.overall_se,
-                    "t_stat": self.overall_t_stat,
-                    "p_value": self.overall_p_value,
-                    "conf_int_lo": self.overall_conf_int[0],
-                    "conf_int_hi": self.overall_conf_int[1],
+                    "att": self.att,
+                    "se": self.se,
+                    "t_stat": self.t_stat,
+                    "p_value": self.p_value,
+                    "conf_int_lo": self.conf_int[0],
+                    "conf_int_hi": self.conf_int[1],
                     "cohort_trends": self.cohort_trends,
                     "aggregation_weights": active_weights,
                 }
@@ -958,9 +958,9 @@ class WooldridgeDiDResults(BaseResults):
 
     def __repr__(self) -> str:
         n_gt = len(self.group_time_effects)
-        att_str = f"{self.overall_att:.4f}" if not np.isnan(self.overall_att) else "NaN"
-        se_str = f"{self.overall_se:.4f}" if not np.isnan(self.overall_se) else "NaN"
-        p_str = f"{self.overall_p_value:.4f}" if not np.isnan(self.overall_p_value) else "NaN"
+        att_str = f"{self.att:.4f}" if not np.isnan(self.att) else "NaN"
+        se_str = f"{self.se:.4f}" if not np.isnan(self.se) else "NaN"
+        p_str = f"{self.p_value:.4f}" if not np.isnan(self.p_value) else "NaN"
         # Surface the active simple aggregation scheme (the one that
         # produced the printed ``overall_*`` values) + cohort_trends
         # flag so repr is self-describing for downstream consumers.

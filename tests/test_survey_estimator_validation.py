@@ -191,9 +191,9 @@ class TestSurveyEstimatorValidation:
             covariates=["x1", "x2"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att), "ImputationDiD ATT should be finite"
-        assert np.isfinite(result.overall_se), "ImputationDiD SE should be finite"
-        assert result.overall_se > 0, "ImputationDiD SE should be positive"
+        assert np.isfinite(result.att), "ImputationDiD ATT should be finite"
+        assert np.isfinite(result.se), "ImputationDiD SE should be finite"
+        assert result.se > 0, "ImputationDiD SE should be positive"
 
     # ------------------------------------------------------------------
     # S2: StackedDiD — stacked WLS with Q-weight x survey weight
@@ -220,8 +220,8 @@ class TestSurveyEstimatorValidation:
             survey_design=sd,
         )
 
-        _assert_close(result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S2 ATT")
-        _assert_close(result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S2 SE")
+        _assert_close(result.att, r["att"], COEF_RTOL, COEF_ATOL, "S2 ATT")
+        _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "S2 SE")
 
         # Compare individual event-study coefficients and SEs
         if "event_study" in r:
@@ -265,8 +265,8 @@ class TestSurveyEstimatorValidation:
         )
 
         # Compare overall IW-aggregated ATT
-        _assert_close(result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S3 ATT")
-        _assert_close(result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S3 SE")
+        _assert_close(result.att, r["att"], COEF_RTOL, COEF_ATOL, "S3 ATT")
+        _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "S3 SE")
 
         # Compare individual cohort x rel-time effects and SEs (post-treatment only)
         if "cohort_effects" in r:

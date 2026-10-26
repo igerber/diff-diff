@@ -416,7 +416,7 @@ class TestNoCovOmegaGram:
                 r_loop = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         finally:
             ed_mod._omega_star_nocov_gram = orig
-        assert r_gram.overall_att == pytest.approx(r_loop.overall_att, rel=1e-10)
+        assert r_gram.att == pytest.approx(r_loop.att, rel=1e-10)
         for k in r_loop.group_time_effects:
             np.testing.assert_allclose(
                 (
@@ -1118,8 +1118,8 @@ class TestCovariateSieveOutcomeRegression:
         # anticipation=1, last_g=7 -> effective last cohort at 6 -> time_periods 1..5
         assert max(res.time_periods) == 5
         assert 7 not in res.groups  # last cohort reclassified as pseudo-control
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
     @pytest.mark.slow
     def test_covariate_path_beats_forced_linear_under_nonlinear_nuisance(self, ci_params):
@@ -1154,12 +1154,12 @@ class TestCovariateSieveOutcomeRegression:
                 a_sieve = (
                     EfficientDiD(pt_assumption="all")
                     .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
-                    .overall_att
+                    .att
                 )
                 a_linear = (
                     EfficientDiD(pt_assumption="all", sieve_k_max=1)
                     .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
-                    .overall_att
+                    .att
                 )
             if np.isfinite(a_sieve):
                 err_sieve.append(abs(a_sieve - tau))
@@ -1396,16 +1396,14 @@ class TestSurveyZeroWeightInvariance:
         # single-date fixture is just-identified (H=1 per cell), so
         # ``compute_per_unit_weights`` short-circuits to 1 and the kernel/bandwidth
         # path is NOT exercised here — the overidentified test below covers that.
-        np.testing.assert_allclose(
-            r_padded.overall_att, r_filtered.overall_att, atol=1e-9, rtol=0.0
-        )
+        np.testing.assert_allclose(r_padded.att, r_filtered.att, atol=1e-9, rtol=0.0)
         # The SE is invariant up to a tiny finite-sample DOF correction: the shared
         # survey sandwich (compute_survey_vcov / _compute_stratified_psu_meat) counts
         # zero-weight units as PSUs in its n_psu/(n_psu-1)-style correction. The
         # weighted scores themselves are zero for zero-weight rows, so this is a
         # second-order (~2e-4 relative) cross-cutting survey-infra effect, NOT the
         # sieve selection (tracked in TODO.md).
-        np.testing.assert_allclose(r_padded.overall_se, r_filtered.overall_se, rtol=2e-3, atol=0.0)
+        np.testing.assert_allclose(r_padded.se, r_filtered.se, rtol=2e-3, atol=0.0)
 
     def _overid_panel(self, seed=0):
         """Staggered panel (cohorts 2 & 3 + never-treated, 4 periods) whose PT-All
@@ -1478,8 +1476,6 @@ class TestSurveyZeroWeightInvariance:
             np.testing.assert_allclose(
                 r_padded.group_time_effects[k]["effect"], info["effect"], atol=1e-9, rtol=0.0
             )
-        np.testing.assert_allclose(
-            r_padded.overall_att, r_filtered.overall_att, atol=1e-9, rtol=0.0
-        )
+        np.testing.assert_allclose(r_padded.att, r_filtered.att, atol=1e-9, rtol=0.0)
         # SE invariant up to the same second-order survey-vcov DOF correction.
-        np.testing.assert_allclose(r_padded.overall_se, r_filtered.overall_se, rtol=2e-3, atol=0.0)
+        np.testing.assert_allclose(r_padded.se, r_filtered.se, rtol=2e-3, atol=0.0)

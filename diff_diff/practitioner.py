@@ -340,8 +340,8 @@ def _covariates_step() -> Dict[str, Any]:
             "# Re-estimate without covariates and compare:\n"
             "result_no_cov = estimator.fit(data, ..., covariates=None)\n"
             "# Compare ATT with and without covariates.\n"
-            "# Use .att (basic DiD; also a read-only flat-alias on staggered\n"
-            "# classes) or .overall_att (canonical name on staggered results)."
+            "# Read .att on every estimator result (the canonical headline name;\n"
+            "# staggered results expose the same value under the 3.x overall_att)."
         ),
         priority="medium",
         step_name="robustness",
@@ -871,7 +871,7 @@ def _handle_synthetic(results: Any):
                 "from diff_diff import CallawaySantAnna\n"
                 "cs = CallawaySantAnna()\n"
                 "cs_result = cs.fit(data, ...)\n"
-                "print(f'SDiD ATT: {results.att:.4f}, CS ATT: {cs_result.overall_att:.4f}')"
+                "print(f'SDiD ATT: {results.att:.4f}, CS ATT: {cs_result.att:.4f}')"
             ),
             step_name="robustness",
         ),
@@ -2511,10 +2511,10 @@ def _check_nan_att(results: Any) -> List[str]:
     too: any future estimator returning ndarray ``att`` without a
     dedicated handler gets the same all-NaN warning shape.
     """
-    # Check .att (DiDResults), .overall_att (staggered)
+    # Every estimator result exposes the canonical ``att`` (the staggered
+    # containers' 3.x ``overall_att`` storage is read through it); results
+    # without a scalar headline (BaconDecompositionResults) take the None path.
     att = getattr(results, "att", None)
-    if att is None:
-        att = getattr(results, "overall_att", None)
     if att is None:
         return []
     try:

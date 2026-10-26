@@ -150,9 +150,7 @@ class TestDCDHDynRParity:
         # omitted because the SE depends on the same cohort-vs-period design
         # choice and is fundamentally apples-to-oranges between the two
         # implementations on mixed-direction panels.
-        assert results.overall_att == pytest.approx(
-            r_results["overall_att"], rel=self.MIXED_POINT_RTOL
-        )
+        assert results.att == pytest.approx(r_results["overall_att"], rel=self.MIXED_POINT_RTOL)
 
     PURE_DIRECTION_SE_RTOL = 0.05  # 5% rtol on pure-direction scenarios after the full IF fix
 
@@ -166,14 +164,12 @@ class TestDCDHDynRParity:
         # Pure-direction scenario: tight point-estimate parity expected
         # (cell counts and the full IF formula produce identical answers
         # to R DIDmultiplegtDYN under pure-direction conditions).
-        assert results.overall_att == pytest.approx(r_results["overall_att"], rel=self.POINT_RTOL)
+        assert results.att == pytest.approx(r_results["overall_att"], rel=self.POINT_RTOL)
         # SE parity: looser 5% rtol because Python's cohort-recentered
         # plug-in formula and R's may use slightly different small-sample
         # corrections. The full Lambda^G_{g,l=1} influence function fix
         # narrowed this gap from ~18% to ~3% on the test scenarios.
-        assert results.overall_se == pytest.approx(
-            r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
-        )
+        assert results.se == pytest.approx(r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL)
         # Phase-1 placebo DID_M^pl point estimate: backward-difference x
         # switch_direction convention (matches the multi-horizon placebo path
         # and R). On pure-direction panels this equals R to working precision.
@@ -187,10 +183,8 @@ class TestDCDHDynRParity:
         results = _fit_dcdh_l1(df)
         r_results = scenario["results"]
         # Pure-direction scenario: tight point-estimate + 5% SE parity
-        assert results.overall_att == pytest.approx(r_results["overall_att"], rel=self.POINT_RTOL)
-        assert results.overall_se == pytest.approx(
-            r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
-        )
+        assert results.att == pytest.approx(r_results["overall_att"], rel=self.POINT_RTOL)
+        assert results.se == pytest.approx(r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL)
         # Phase-1 placebo point estimate matches R on pure-direction panels
         # (leavers side: switch_direction = -1). Guards the sign convention.
         assert results.placebo_effect == pytest.approx(r_results["placebo_effect"], abs=1e-8)
@@ -203,9 +197,7 @@ class TestDCDHDynRParity:
         results = _fit_dcdh_l1(df)
         r_results = scenario["results"]
         # Mixed scenario: see class docstring re. cohort vs. period control sets.
-        assert results.overall_att == pytest.approx(
-            r_results["overall_att"], rel=self.MIXED_POINT_RTOL
-        )
+        assert results.att == pytest.approx(r_results["overall_att"], rel=self.MIXED_POINT_RTOL)
 
     def test_parity_hand_calculable_worked_example(self, golden_values):
         """
@@ -222,7 +214,7 @@ class TestDCDHDynRParity:
         results = _fit_dcdh_l1(df)
         r_results = scenario["results"]
         # Tight tolerance for this exact-arithmetic case
-        assert results.overall_att == pytest.approx(r_results["overall_att"], abs=1e-6)
+        assert results.att == pytest.approx(r_results["overall_att"], abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

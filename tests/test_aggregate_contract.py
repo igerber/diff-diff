@@ -240,11 +240,11 @@ def _assert_group_matches_oracle(agg, orow, *, rtol, atol, p_atol=None, name="")
 def _assert_overall_matches_oracle(res, o, *, rtol, atol, p_atol=None, name=""):
     """The stored overall quintet against an oracle ``overall`` record."""
     p_atol = atol if p_atol is None else p_atol
-    _close(res.overall_att, o["att"], rtol=rtol, atol=atol, what=f"{name}.overall_att")
-    _close(res.overall_se, o["se"], rtol=rtol, atol=atol, what=f"{name}.overall_se")
-    _close(res.overall_t_stat, o["t_stat"], rtol=_t_rtol(rtol), atol=atol, what=f"{name}.overall_t")
-    _close(res.overall_p_value, o["p_value"], rtol=rtol, atol=p_atol, what=f"{name}.overall_p")
-    ci = res.overall_conf_int
+    _close(res.att, o["att"], rtol=rtol, atol=atol, what=f"{name}.att")
+    _close(res.se, o["se"], rtol=rtol, atol=atol, what=f"{name}.se")
+    _close(res.t_stat, o["t_stat"], rtol=_t_rtol(rtol), atol=atol, what=f"{name}.overall_t")
+    _close(res.p_value, o["p_value"], rtol=rtol, atol=p_atol, what=f"{name}.overall_p")
+    ci = res.conf_int
     ci_rtol = max(rtol, CI_RTOL)
     _close(ci[0], o["ci_lo"], rtol=ci_rtol, atol=atol, what=f"{name}.overall_ci_lo")
     _close(ci[1], o["ci_hi"], rtol=ci_rtol, atol=atol, what=f"{name}.overall_ci_hi")
@@ -254,12 +254,12 @@ def _assert_simple_relays_stored_overall(res):
     """(ii) aggregate('simple') is a view of the stored overall quintet."""
     s = res.aggregate("simple")
     for got, want in (
-        (s.att[0], res.overall_att),
-        (s.se[0], res.overall_se),
-        (s.t_stat[0], res.overall_t_stat),
-        (s.p_value[0], res.overall_p_value),
-        (s.conf_int_lower[0], res.overall_conf_int[0]),
-        (s.conf_int_upper[0], res.overall_conf_int[1]),
+        (s.att[0], res.att),
+        (s.se[0], res.se),
+        (s.t_stat[0], res.t_stat),
+        (s.p_value[0], res.p_value),
+        (s.conf_int_lower[0], res.conf_int[0]),
+        (s.conf_int_upper[0], res.conf_int[1]),
     ):
         assert (float(got) == float(want)) or (np.isnan(got) and np.isnan(want))
     return s
@@ -640,13 +640,13 @@ def _assert_bootstrap_simple_relay(res, n_expected=None):
     percentile se/p/CI beside the finite ``safe_inference`` t - and only the
     df COLUMN is NaN (no df governs percentile inference)."""
     agg = res.aggregate("simple")
-    assert float(agg.att[0]) == res.overall_att
-    assert float(agg.se[0]) == res.overall_se
-    assert float(agg.t_stat[0]) == res.overall_t_stat
+    assert float(agg.att[0]) == res.att
+    assert float(agg.se[0]) == res.se
+    assert float(agg.t_stat[0]) == res.t_stat
     assert np.isfinite(agg.t_stat[0])
-    assert float(agg.p_value[0]) == res.overall_p_value
-    assert float(agg.conf_int_lower[0]) == res.overall_conf_int[0]
-    assert float(agg.conf_int_upper[0]) == res.overall_conf_int[1]
+    assert float(agg.p_value[0]) == res.p_value
+    assert float(agg.conf_int_lower[0]) == res.conf_int[0]
+    assert float(agg.conf_int_upper[0]) == res.conf_int[1]
     assert np.isnan(agg.df[0])
     if n_expected is not None:
         assert float(agg.n[0]) == float(n_expected)
@@ -946,12 +946,12 @@ class TestBootstrapReplay:
                 )
         data = pd.DataFrame(rows)
         plain = _boot_fit(data, n_bootstrap=25, seed=1)
-        assert np.isnan(plain.overall_att)
+        assert np.isnan(plain.att)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             agg = plain.aggregate("group")
         assert len(agg.to_dataframe()) == 0
-        assert np.isnan(plain.overall_att)  # unchanged by the replay
+        assert np.isnan(plain.att)  # unchanged by the replay
         assert plain.group_effects is None  # nothing is stored at fit any more
 
 
@@ -1229,7 +1229,7 @@ class TestFitRemoval:
             kw = CallawaySantAnna().fit(d, survey_design=_survey_design(), **FIT_KW)
         assert res.survey_metadata is not None
         assert res.survey_metadata.df_survey == kw.survey_metadata.df_survey
-        assert res.overall_att == kw.overall_att
+        assert res.att == kw.att
         assert isinstance(_survey_design(), SurveyDesign)
 
 
@@ -1811,12 +1811,12 @@ class TestDcdhAggregate:
         assert agg.level == "simple"
         assert list(agg.label) == ["overall"]
         assert list(agg.target) == ["DID_M"]
-        assert float(agg.att[0]) == dcdh_fitted.overall_att
-        assert float(agg.se[0]) == dcdh_fitted.overall_se
-        assert float(agg.t_stat[0]) == dcdh_fitted.overall_t_stat
-        assert float(agg.p_value[0]) == dcdh_fitted.overall_p_value
-        assert float(agg.conf_int_lower[0]) == dcdh_fitted.overall_conf_int[0]
-        assert float(agg.conf_int_upper[0]) == dcdh_fitted.overall_conf_int[1]
+        assert float(agg.att[0]) == dcdh_fitted.att
+        assert float(agg.se[0]) == dcdh_fitted.se
+        assert float(agg.t_stat[0]) == dcdh_fitted.t_stat
+        assert float(agg.p_value[0]) == dcdh_fitted.p_value
+        assert float(agg.conf_int_lower[0]) == dcdh_fitted.conf_int[0]
+        assert float(agg.conf_int_upper[0]) == dcdh_fitted.conf_int[1]
         assert float(agg.n[0]) == float(dcdh_fitted.n_switcher_cells)
         assert agg.n_kind == "switcher_cells"
         # Non-survey analytical inference is z-based: no df.
@@ -1837,7 +1837,7 @@ class TestDcdhAggregate:
         # The delta averages horizon-specific N_l: no truthful scalar count.
         assert np.isnan(agg.n[0])
         assert agg.n_kind is None
-        assert float(agg.att[0]) == res.overall_att
+        assert float(agg.att[0]) == res.att
 
     def test_simple_view_trends_linear_all_nan_relay(self, dcdh_panel):
         # trends_linear + L_max>=2 suppresses the delta by design: every
@@ -1857,8 +1857,8 @@ class TestDcdhAggregate:
         # stored percentile-bootstrap inference; df is NaN (no df used).
         res = _fit_dcdh(dcdh_panel, est_kw=dict(n_bootstrap=49, seed=3))
         agg = res.aggregate("simple")
-        assert float(agg.att[0]) == res.overall_att
-        assert float(agg.se[0]) == res.overall_se
+        assert float(agg.att[0]) == res.att
+        assert float(agg.se[0]) == res.se
         assert np.isnan(agg.df[0])
 
     def test_event_study_container_threads_survey_df(self):
@@ -1900,7 +1900,7 @@ class TestDcdhAggregate:
         sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
         res = _fit_dcdh(df, L_max=2, survey_design=sd, est_kw=dict(n_bootstrap=49, seed=3))
         assert res.event_study_df is None  # cleared under bootstrap
-        assert np.isfinite(res.overall_p_value)  # delta stayed analytical
+        assert np.isfinite(res.p_value)  # delta stayed analytical
         agg = res.aggregate("simple")
         assert res.survey_metadata is not None
         assert float(agg.df[0]) == float(res.survey_metadata.df_survey)
@@ -2047,8 +2047,8 @@ class TestStackedRemoval:
             keyword = StackedDiD(kappa_pre=2, kappa_post=2, weighting="population").fit(
                 panel, population="pop", **STACKED_KW
             )
-        assert positional.overall_att == keyword.overall_att
-        assert positional.overall_se == keyword.overall_se
+        assert positional.att == keyword.att
+        assert positional.se == keyword.se
         # The surface is always computed - with or without a population column.
         assert positional.event_study_effects is not None
         assert stacked_fitted.event_study_effects is not None
@@ -2094,12 +2094,12 @@ class TestStackedAggregate:
         # target is "att": overall_att is the equally-weighted post-period
         # average, NOT the per-event trimmed aggregate ATT (M-024 Note).
         assert list(agg.target) == ["att"]
-        assert float(agg.att[0]) == stacked_fitted.overall_att
-        assert float(agg.se[0]) == stacked_fitted.overall_se
-        assert float(agg.t_stat[0]) == stacked_fitted.overall_t_stat
-        assert float(agg.p_value[0]) == stacked_fitted.overall_p_value
+        assert float(agg.att[0]) == stacked_fitted.att
+        assert float(agg.se[0]) == stacked_fitted.se
+        assert float(agg.t_stat[0]) == stacked_fitted.t_stat
+        assert float(agg.p_value[0]) == stacked_fitted.p_value
         assert (float(agg.conf_int_lower[0]), float(agg.conf_int_upper[0])) == tuple(
-            stacked_fitted.overall_conf_int
+            stacked_fitted.conf_int
         )
         # Treated-unit count: control units OVERLAP treated across
         # sub-experiments, so no disjoint total exists (M-024 Note).
@@ -2181,7 +2181,7 @@ class TestStackedAggregate:
             survey_design=SurveyDesign(weights="w", strata="strata", psu="psu"),
         )
         agg = res.aggregate("simple")
-        assert float(agg.att[0]) == res.overall_att
+        assert float(agg.att[0]) == res.att
         # The stored overall inference used the survey df; the relay
         # carries exactly that provenance.
         assert float(agg.df[0]) == float(res.inference_df)
@@ -2251,15 +2251,13 @@ class TestStackedAggregate:
             )[0]
         )
         np.testing.assert_allclose(res.inference_df, overall_dof_m1, rtol=1e-14)
-        t, p, ci = safe_inference(
-            res.overall_att, res.overall_se, alpha=res.alpha, df=overall_dof_m1
-        )
+        t, p, ci = safe_inference(res.att, res.se, alpha=res.alpha, df=overall_dof_m1)
         np.testing.assert_allclose(
             [t, ci[0], ci[1]],
             [
-                res.overall_t_stat,
-                res.overall_conf_int[0],
-                res.overall_conf_int[1],
+                res.t_stat,
+                res.conf_int[0],
+                res.conf_int[1],
             ],
             rtol=1e-14,
         )
@@ -2268,7 +2266,7 @@ class TestStackedAggregate:
         # x86 OpenBLAS), and the deep tail amplifies that relative noise by
         # ~t^2 (d ln p ~ -t dt; t ~ 29 here => ~1e3x), so p carries ~1e-13
         # relative noise while t/CI stay at 1e-14.
-        np.testing.assert_allclose(p, res.overall_p_value, rtol=1e-12)
+        np.testing.assert_allclose(p, res.p_value, rtol=1e-12)
 
     def test_legacy_pickle_absent_surface_hint(self, stacked_fitted):
         import dataclasses
@@ -2423,7 +2421,7 @@ class TestEfficientRemoval:
             positional = EfficientDiD().fit(d, "outcome", "unit", "period", "first_treat", None, sd)
             keyword = EfficientDiD().fit(d, survey_design=sd, **EFFICIENT_KW)
         assert positional.survey_metadata is not None
-        assert positional.overall_se == keyword.overall_se
+        assert positional.se == keyword.se
 
 
 class TestEfficientAggregate:
@@ -2988,8 +2986,8 @@ class TestEfficientBootstrapReplay:
         s_before = res.aggregate("simple")
         res.aggregate("event_study")
         s_after = res.aggregate("simple")
-        assert float(s_before.att[0]) == float(s_after.att[0]) == res.overall_att
-        assert float(s_before.se[0]) == float(s_after.se[0]) == res.overall_se
+        assert float(s_before.att[0]) == float(s_after.att[0]) == res.att
+        assert float(s_before.se[0]) == float(s_after.se[0]) == res.se
 
     def test_legacy_kit_without_spec_fails_closed(self, efficient_panel):
         res = _efficient_boot_fit(efficient_panel)
@@ -3559,7 +3557,7 @@ class TestImputationRemoval:
             )
             keyword = ImputationDiD().fit(d, survey_design=sd, **IMPUTATION_KW)
         assert positional.survey_metadata is not None
-        assert positional.overall_se == keyword.overall_se
+        assert positional.se == keyword.se
 
 
 class TestImputationAggregate:
@@ -3675,7 +3673,7 @@ class TestImputationAggregate:
             name=f"imp/rep/{tag}",
         )
         sm = plain.aggregate("simple")
-        np.testing.assert_allclose(sm.se[0], plain.overall_se, rtol=0, atol=0, equal_nan=True)
+        np.testing.assert_allclose(sm.se[0], plain.se, rtol=0, atol=0, equal_nan=True)
         # (iv) the degenerate="undefined" arm's df=0 sentinel NaNs t/p beside
         # finite effects - a valid NaN-consistent state.
         _assert_analytic_inference_contract(plain.aggregate("event_study"), alpha=plain.alpha)
@@ -3706,7 +3704,7 @@ class TestImputationAggregate:
         sd = _imputation_survey_design(rep_cols)
         plain = _fit_imputation(d, survey_design=sd)
         orow = _im_oracle("replicate_cohort_zero_group")
-        assert plain.overall_se != oracle_value(orow["overall"]["se"])
+        assert plain.se != oracle_value(orow["overall"]["se"])
         _assert_group_matches_oracle(
             plain.aggregate("group"), orow, **ANALYTIC_TOL, name="imp/delta"
         )
@@ -3718,7 +3716,7 @@ class TestImputationAggregate:
         dh, rep_h = _imputation_survey_panel(replicate=True)
         healthy = _fit_imputation(dh, survey_design=_imputation_survey_design(rep_h))
         np.testing.assert_allclose(
-            healthy.overall_se,
+            healthy.se,
             oracle_value(_im_oracle("replicate_none_group")["overall"]["se"]),
             rtol=1e-12,
         )
@@ -3910,7 +3908,7 @@ class TestImputationAggregate:
         assert res.bootstrap_results is None
         assert res.event_study_effects is None and res.group_effects is None  # storage rule
         analytic = _fit_imputation(imputation_panel)
-        assert res.overall_se == analytic.overall_se  # analytical overall
+        assert res.se == analytic.se  # analytical overall
         # ...and aggregate() RECOMPUTES analytically (no raise).
         _frame_equal(
             res.aggregate("event_study").to_dataframe(),
@@ -3947,7 +3945,7 @@ class TestImputationAggregate:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = self._boot_est().fit(pd.DataFrame(rows), **IMPUTATION_KW)
-        assert np.isnan(res.overall_att)
+        assert np.isnan(res.att)
         assert res.bootstrap_results is None
         assert res.event_study_effects is None and res.group_effects is None
         assert not any("could not be materialized" in str(w.message) for w in caught)
@@ -3970,7 +3968,7 @@ class TestImputationAggregate:
             )
         assert res.bootstrap_results is not None
         assert res.event_study_effects is None and res.group_effects is None
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
         with pytest.raises(ValueError, match="could not be materialized"):
             res.aggregate("event_study")
 
@@ -4205,7 +4203,7 @@ class TestTwoStageRemoval:
             positional = TwoStageDiD().fit(d, "outcome", "unit", "period", "first_treat", None, sd)
             keyword = TwoStageDiD().fit(d, survey_design=sd, **TWOSTAGE_KW)
         assert positional.survey_metadata is not None
-        assert positional.overall_se == keyword.overall_se
+        assert positional.se == keyword.se
 
 
 class TestTwoStageAggregate:
@@ -4442,7 +4440,7 @@ class TestTwoStageAggregate:
         sd = _twostage_survey_design(rep_cols)
         plain = _fit_twostage(d, survey_design=sd)
         orow = _ts_oracle("replicate_cohort_zero_group")
-        assert plain.overall_se != oracle_value(orow["overall"]["se"])
+        assert plain.se != oracle_value(orow["overall"]["se"])
         _assert_group_matches_oracle(
             plain.aggregate("group"), orow, **ANALYTIC_TOL, name="ts/delta"
         )
@@ -4450,7 +4448,7 @@ class TestTwoStageAggregate:
         healthy = _fit_twostage(dh, survey_design=_twostage_survey_design(rep_h))
         # Same BLAS-shape caveat as the Imputation twin above.
         np.testing.assert_allclose(
-            healthy.overall_se,
+            healthy.se,
             oracle_value(_ts_oracle("replicate_none_group")["overall"]["se"]),
             rtol=1e-12,
         )
@@ -4657,7 +4655,7 @@ class TestTwoStageAggregate:
         assert res.bootstrap_results is None
         assert res.event_study_effects is None and res.group_effects is None
         analytic = _fit_twostage(twostage_panel)
-        assert res.overall_se == analytic.overall_se
+        assert res.se == analytic.se
         _frame_equal(
             res.aggregate("event_study").to_dataframe(),
             analytic.aggregate("event_study").to_dataframe(),
@@ -4679,7 +4677,7 @@ class TestTwoStageAggregate:
         assert res.bootstrap_results is None
         assert res.event_study_effects is None and res.group_effects is None
         analytic = _fit_twostage(twostage_panel)
-        assert res.overall_se == analytic.overall_se
+        assert res.se == analytic.se
         _frame_equal(
             res.aggregate("event_study").to_dataframe(),
             analytic.aggregate("event_study").to_dataframe(),
@@ -4899,18 +4897,18 @@ def _co_boot_oracle(arm):
 def _assert_cont_overall_matches_oracle(res, orow, *, p_atol=_CO_P_ATOL):
     """ContinuousDiD overall ATT quintet + the ACRT scalars the capture kept."""
     o = orow["overall"]
-    _close(res.overall_att, o["att"], **BOOT_TOL, what="cont.overall_att")
-    _close(res.overall_att_se, o["se"], **BOOT_TOL, what="cont.overall_att_se")
+    _close(res.att, o["att"], **BOOT_TOL, what="cont.att")
+    _close(res.se, o["se"], **BOOT_TOL, what="cont.se")
     _close(
-        res.overall_att_t_stat,
+        res.t_stat,
         o["t_stat"],
         rtol=_t_rtol(BOOT_TOL["rtol"]),
         atol=BOOT_TOL["atol"],
         what="cont.overall_att_t",
     )
-    _close(res.overall_att_p_value, o["p_value"], rtol=1e-13, atol=p_atol, what="cont.overall_p")
-    _close(res.overall_att_conf_int[0], o["ci_lo"], **BOOT_TOL, what="cont.ci_lo")
-    _close(res.overall_att_conf_int[1], o["ci_hi"], **BOOT_TOL, what="cont.ci_hi")
+    _close(res.p_value, o["p_value"], rtol=1e-13, atol=p_atol, what="cont.overall_p")
+    _close(res.conf_int[0], o["ci_lo"], **BOOT_TOL, what="cont.ci_lo")
+    _close(res.conf_int[1], o["ci_hi"], **BOOT_TOL, what="cont.ci_hi")
     _close(res.overall_acrt, orow["overall_acrt"], **BOOT_TOL, what="cont.acrt")
     _close(res.overall_acrt_se, orow["overall_acrt_se"], **BOOT_TOL, what="cont.acrt_se")
 
@@ -4950,7 +4948,7 @@ class TestContinuousRemoval:
             )
             keyword = ContinuousDiD().fit(d, survey_design=sd, **CONT_KW)
         assert positional.survey_metadata is not None
-        assert positional.overall_att_se == keyword.overall_att_se
+        assert positional.se == keyword.se
 
 
 class TestContinuousAggregate:
@@ -5147,13 +5145,13 @@ class TestContinuousAggregate:
         s = cont_fitted.aggregate("simple")
         assert list(s.label) == ["overall", "overall"]
         assert list(s.target) == ["att", "acrt"]
-        assert s.att[0] == cont_fitted.overall_att
+        assert s.att[0] == cont_fitted.att
         assert s.att[1] == cont_fitted.overall_acrt
-        assert s.se[0] == cont_fitted.overall_att_se
+        assert s.se[0] == cont_fitted.se
         assert s.se[1] == cont_fitted.overall_acrt_se
-        assert s.t_stat[0] == cont_fitted.overall_att_t_stat
+        assert s.t_stat[0] == cont_fitted.t_stat
         assert s.p_value[1] == cont_fitted.overall_acrt_p_value
-        assert s.conf_int_lower[0] == cont_fitted.overall_att_conf_int[0]
+        assert s.conf_int_lower[0] == cont_fitted.conf_int[0]
         assert s.conf_int_upper[1] == cont_fitted.overall_acrt_conf_int[1]
         # Disjoint treated/control unit sets -> the CS total convention.
         assert s.n_kind == "units"
@@ -5166,9 +5164,9 @@ class TestContinuousAggregate:
         p/CI on bootstrap fits - the relay carries it through verbatim
         (bit-exact relay, NOT NaN); only the df column is NaN."""
         s = cont_bootstrap.aggregate("simple")
-        assert s.t_stat[0] == cont_bootstrap.overall_att_t_stat
+        assert s.t_stat[0] == cont_bootstrap.t_stat
         assert np.isfinite(s.t_stat[0])
-        assert s.p_value[0] == cont_bootstrap.overall_att_p_value
+        assert s.p_value[0] == cont_bootstrap.p_value
         assert np.isnan(s.df).all()
 
     def test_simple_view_survey_df(self):
@@ -5295,7 +5293,7 @@ class TestContinuousAggregate:
             res = ContinuousDiD(**_CO_BOOT_KW).fit(_cont_empty_post_panel(), **CONT_KW)
         assert any("No post-treatment" in str(w.message) for w in caught)
         assert not any("could not be materialized" in str(w.message) for w in caught)
-        assert np.isnan(res.overall_att)
+        assert np.isnan(res.att)
         assert res.event_study_effects is None
         with pytest.raises(ValueError, match="carries no stored event_study surface"):
             res.aggregate("event_study")

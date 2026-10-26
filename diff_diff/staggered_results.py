@@ -328,10 +328,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
 
     def __repr__(self) -> str:
         """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
+        sig = _get_significance_stars(self.p_value)
         return (
-            f"CallawaySantAnnaResults(ATT={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
+            f"CallawaySantAnnaResults(ATT={self.att:.4f}{sig}, "
+            f"SE={self.se:.4f}, "
             f"n_groups={len(self.groups)}, "
             f"n_periods={len(self.time_periods)})"
         )
@@ -339,11 +339,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     @property
     def coef_var(self) -> float:
         """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
-        if not (np.isfinite(self.overall_se) and self.overall_se >= 0):
+        if not (np.isfinite(self.se) and self.se >= 0):
             return np.nan
-        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+        if not np.isfinite(self.att) or self.att == 0:
             return np.nan
-        return self.overall_se / abs(self.overall_att)
+        return self.se / abs(self.att)
 
     # ------------------------------------------------------------------ #
     # Post-fit aggregation (spec section 6; ledger rows M-020 / M-117)
@@ -527,15 +527,15 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         # the shared vocabulary forbids.
         is_panel = kit.bookkeeping.get("is_panel", True)
         n_kind = "units" if is_panel else "obs"
-        ci = self.overall_conf_int or (np.nan, np.nan)
+        ci = self.conf_int or (np.nan, np.nan)
         return AggregationResult(
             level="simple",
             label=np.array(["overall"], dtype=object),
             target=np.array(["att"], dtype=object),
-            att=np.array([self.overall_att], dtype=float),
-            se=np.array([self.overall_se], dtype=float),
-            t_stat=np.array([self.overall_t_stat], dtype=float),
-            p_value=np.array([self.overall_p_value], dtype=float),
+            att=np.array([self.att], dtype=float),
+            se=np.array([self.se], dtype=float),
+            t_stat=np.array([self.t_stat], dtype=float),
+            p_value=np.array([self.p_value], dtype=float),
             conf_int_lower=np.array([ci[0]], dtype=float),
             conf_int_upper=np.array([ci[1]], dtype=float),
             n=np.array([float(self.n_treated_units + self.n_control_units)], dtype=float),
@@ -601,13 +601,13 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 "DEFERRED.md. For an unweighted clustered fit, cluster= "
                 "(without survey_design) supports totals."
             )
-        ci = self.overall_conf_int or (np.nan, np.nan)
+        ci = self.conf_int or (np.nan, np.nan)
         return build_total_relay_row(
             mass=self._cs_total_mass(kit),
-            att=self.overall_att,
-            se=self.overall_se,
-            t_stat=self.overall_t_stat,
-            p_value=self.overall_p_value,
+            att=self.att,
+            se=self.se,
+            t_stat=self.t_stat,
+            p_value=self.p_value,
             conf_int=ci,
             df=(np.nan if self.bootstrap_results is not None else resolve_inference_df(self)),
             alpha=self.alpha,
@@ -763,12 +763,12 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 "-" * 85,
                 f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
                 "-" * 85,
-                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-                f"{self.overall_t_stat:>10.3f} {self.overall_p_value:>10.4f} "
-                f"{_get_significance_stars(self.overall_p_value):>6}",
+                f"{'ATT':<15} {self.att:>12.4f} {self.se:>12.4f} "
+                f"{self.t_stat:>10.3f} {self.p_value:>10.4f} "
+                f"{_get_significance_stars(self.p_value):>6}",
                 "-" * 85,
                 "",
-                f"{conf_level}% Confidence Interval: [{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
+                f"{conf_level}% Confidence Interval: [{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
             ]
         )
 
@@ -914,8 +914,8 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             "se": self.se,
             "t_stat": self.t_stat,
             "p_value": self.p_value,
-            "conf_int_lower": self.overall_conf_int[0],
-            "conf_int_upper": self.overall_conf_int[1],
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "n_obs": self.n_obs,
             "n_treated_units": self.n_treated_units,
             "n_control_units": self.n_control_units,
@@ -1022,9 +1022,9 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     @property
     def is_significant(self) -> bool:
         """Check if overall ATT is significant."""
-        return bool(self.overall_p_value < self.alpha)
+        return bool(self.p_value < self.alpha)
 
     @property
     def significance_stars(self) -> str:
         """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_p_value)
+        return _get_significance_stars(self.p_value)
