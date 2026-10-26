@@ -136,8 +136,8 @@ class TestBasicFit:
         result = edid.fit(df, "y", "unit", "time", "first_treat")
 
         assert isinstance(result, EfficientDiDResults)
-        assert isinstance(result.overall_att, float)
-        assert isinstance(result.overall_se, float)
+        assert isinstance(result.att, float)
+        assert isinstance(result.se, float)
         assert len(result.group_time_effects) > 0
         assert result.n_obs == len(df)
         assert result.pt_assumption == "all"
@@ -146,13 +146,13 @@ class TestBasicFit:
         df = _make_simple_panel(effect=0.0)
         result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         # ATT should be near 0
-        assert abs(result.overall_att) < 0.5
+        assert abs(result.att) < 0.5
 
     def test_positive_effect(self):
         df = _make_simple_panel(effect=2.0, n_units=200)
         result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         # Recover ~2.0 within 2 SE
-        assert abs(result.overall_att - 2.0) < 2 * result.overall_se + 0.5
+        assert abs(result.att - 2.0) < 2 * result.se + 0.5
 
     def test_single_pre_period(self):
         """When g=2 (only 1 pre-period), weights are trivially [1.0]."""
@@ -598,7 +598,7 @@ class TestOmegaRidge:
         df = _make_staggered_panel(n_per_group=80, n_control=100)
         res_r = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         res_l = EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
-        assert res_r.overall_att == pytest.approx(res_l.overall_att, rel=1e-4)
+        assert res_r.att == pytest.approx(res_l.att, rel=1e-4)
         diffs = [
             abs(res_r.group_time_effects[k]["effect"] - res_l.group_time_effects[k]["effect"])
             for k in res_r.group_time_effects
@@ -652,7 +652,7 @@ class TestFusedConditionalPath:
         gt = {k: (v["effect"], v["se"]) for k, v in res.group_time_effects.items()}
         # post-fit container (the fit-time surface is gone since 4.0)
         es = {k: (v["effect"], v["se"]) for k, v in es_dict(res).items()}
-        return gt, es, (res.overall_att, res.overall_se)
+        return gt, es, (res.att, res.se)
 
     @classmethod
     def _assert_close_surfaces(cls, r1, r2, rtol, atol=1e-12):
@@ -1432,7 +1432,7 @@ class TestClusterRobustSE:
         """cluster parameter should not raise NotImplementedError."""
         df = self._make_clustered_panel()
         result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_single_unit_clusters_match_unclustered(self):
         """With one unit per cluster, clustered SE should match unclustered."""
@@ -1443,11 +1443,9 @@ class TestClusterRobustSE:
         result_clustered = EfficientDiD(cluster="cluster_id").fit(
             df, "y", "unit", "time", "first_treat"
         )
-        assert result_clustered.overall_att == pytest.approx(
-            result_unclustered.overall_att, abs=1e-10
-        )
+        assert result_clustered.att == pytest.approx(result_unclustered.att, abs=1e-10)
         # SEs should be very close (centering correction is negligible)
-        assert result_clustered.overall_se == pytest.approx(result_unclustered.overall_se, rel=0.05)
+        assert result_clustered.se == pytest.approx(result_unclustered.se, rel=0.05)
 
     def test_clustered_se_at_least_as_large(self):
         """Clustered SE >= unclustered SE with positive intracluster correlation."""
@@ -1457,8 +1455,8 @@ class TestClusterRobustSE:
             df, "y", "unit", "time", "first_treat"
         )
         # Both SEs should be finite and positive
-        assert result_clustered.overall_se > 0
-        assert result_unclustered.overall_se > 0
+        assert result_clustered.se > 0
+        assert result_unclustered.se > 0
 
     def test_clustered_aggregate_event_study(self):
         """Clustered SE: the post-fit event-study aggregation should produce finite results."""
@@ -1485,8 +1483,8 @@ class TestClusterRobustSE:
         result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_few_clusters_warns(self):
         """Fewer than 50 clusters should warn."""
@@ -1590,7 +1588,7 @@ class TestSmallCohortWarning:
         with pytest.warns(UserWarning, match="only 1 unit"):
             result = EfficientDiD().fit(combined, "y", "unit", "time", "first_treat")
         # Estimation should still succeed
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_small_share_cohort_warns(self):
         """Cohort with < 1% share triggers precision warning."""
@@ -1604,7 +1602,7 @@ class TestSmallCohortWarning:
 
         with pytest.warns(UserWarning, match="< 1%"):
             result = EfficientDiD().fit(combined, "y", "unit", "time", "first_treat")
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_normal_cohorts_no_warning(self):
         """Normal-sized cohorts should not warn about cohort size."""
@@ -1660,7 +1658,7 @@ class TestLastCohortControl:
             df, "y", "unit", "time", "first_treat"
         )
         # Last cohort (7) becomes pseudo-control, only groups 3 and 5 remain
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert result.control_group == "last_cohort"
         assert 7 not in result.groups
 
@@ -1675,7 +1673,7 @@ class TestLastCohortControl:
         result = EfficientDiD(pt_assumption="post", control_group="last_cohort").fit(
             df, "y", "unit", "time", "first_treat"
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_last_cohort_reasonable_att(self):
         """Last-cohort ATT should be close to true effect."""
@@ -1691,7 +1689,7 @@ class TestLastCohortControl:
             df, "y", "unit", "time", "first_treat"
         )
         # ATT should be in the ballpark of the true effects (1.5-2.0 range)
-        assert 0.5 < result.overall_att < 3.5
+        assert 0.5 < result.att < 3.5
 
     def test_last_cohort_single_cohort_raises(self):
         """Single treatment cohort with last_cohort should raise."""
@@ -1709,7 +1707,7 @@ class TestLastCohortControl:
         assert 5 not in result.groups
         assert 3 in result.groups
         assert result.control_group == "last_cohort"
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_control_group_get_params(self):
         """control_group should appear in get_params and round-trip via set_params."""
@@ -1760,8 +1758,8 @@ class TestLastCohortControl:
         assert max(result_a0.time_periods) == 6
         assert max(result_a1.time_periods) == 5
         assert len(result_a1.time_periods) == len(result_a0.time_periods) - 1
-        assert np.isfinite(result_a0.overall_att)
-        assert np.isfinite(result_a1.overall_att)
+        assert np.isfinite(result_a0.att)
+        assert np.isfinite(result_a1.att)
         assert 7 not in result_a0.groups
         assert 7 not in result_a1.groups
 
@@ -1813,8 +1811,8 @@ class TestLastCohortControl:
         result = EfficientDiD(control_group="last_cohort", n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.se)
+        assert result.se > 0
         assert 7 not in result.groups
 
 
@@ -1895,8 +1893,8 @@ class TestBootstrap:
             df, "y", "unit", "time", "first_treat"
         )
         assert result.bootstrap_results is not None
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.se)
+        assert result.se > 0
         for gt, d in result.group_time_effects.items():
             if np.isfinite(d["effect"]):
                 assert np.isfinite(d["se"])
@@ -1945,7 +1943,7 @@ class TestBootstrap:
         result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        ci = result.overall_conf_int
+        ci = result.conf_int
         # True effect is 2.0 — should be within CI for this seed
         if np.isfinite(ci[0]) and np.isfinite(ci[1]):
             # Just check CI is reasonable (not testing exact coverage)
@@ -2049,13 +2047,13 @@ class TestSimulationValidation:
 
         # Analytical SE
         res_anal = EfficientDiD(n_bootstrap=0).fit(df, "y", "unit", "time", "first_treat")
-        anal_se = res_anal.overall_se
+        anal_se = res_anal.se
 
         # Bootstrap SE
         res_boot = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        boot_se = res_boot.overall_se
+        boot_se = res_boot.se
 
         if np.isfinite(anal_se) and np.isfinite(boot_se) and boot_se > 0:
             rel_diff = abs(anal_se - boot_se) / boot_se
@@ -2148,13 +2146,13 @@ class TestWIFCorrection:
 
         # Analytical SE (with WIF)
         res_anal = EfficientDiD(n_bootstrap=0).fit(df, "y", "unit", "time", "first_treat")
-        anal_se = res_anal.overall_se
+        anal_se = res_anal.se
 
         # Bootstrap SE
         res_boot = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        boot_se = res_boot.overall_se
+        boot_se = res_boot.se
 
         if np.isfinite(anal_se) and np.isfinite(boot_se) and boot_se > 0:
             rel_diff = abs(anal_se - boot_se) / boot_se
@@ -2262,9 +2260,7 @@ class TestBootstrapNanResilience:
         result = EfficientDiD(pt_assumption="all", n_bootstrap=n_boot, seed=42).fit(
             df, "y", "unit", "time", "first_treat"
         )
-        assert np.isfinite(
-            result.overall_se
-        ), f"Overall SE should be finite, got {result.overall_se}"
+        assert np.isfinite(result.se), f"Overall SE should be finite, got {result.se}"
         assert result.bootstrap_results is not None
 
 
@@ -2324,8 +2320,8 @@ class TestCovariatesBasic:
         )
         assert isinstance(result, EfficientDiDResults)
         assert result.estimation_path == "dr"
-        assert np.isfinite(result.overall_att)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert result.se > 0
         assert len(result.group_time_effects) > 0
         for (g, t), eff in result.group_time_effects.items():
             assert np.isfinite(eff["effect"])
@@ -2343,8 +2339,8 @@ class TestCovariatesBasic:
         )
         # ATT should be close (not identical due to nuisance estimation noise)
         assert (
-            abs(r_cov.overall_att - r_nocov.overall_att) < 0.3
-        ), f"DR ATT {r_cov.overall_att:.4f} too far from nocov {r_nocov.overall_att:.4f}"
+            abs(r_cov.att - r_nocov.att) < 0.3
+        ), f"DR ATT {r_cov.att:.4f} too far from nocov {r_nocov.att:.4f}"
 
     def test_covariates_produce_valid_se(self):
         """DR path with covariates explaining variance produces valid SE."""
@@ -2353,11 +2349,11 @@ class TestCovariatesBasic:
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
         # DR SE should be positive and finite
-        assert r_cov.overall_se > 0
-        assert np.isfinite(r_cov.overall_se)
+        assert r_cov.se > 0
+        assert np.isfinite(r_cov.se)
         # ATT should be close to the nocov estimate (no confounding)
         r_nocov = EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
-        assert abs(r_cov.overall_att - r_nocov.overall_att) < 0.2
+        assert abs(r_cov.att - r_nocov.att) < 0.2
 
     def test_covariates_recover_effect_under_confounding(self):
         """DGP with confounding: DR should recover true ATT closer to truth than nocov.
@@ -2379,11 +2375,11 @@ class TestCovariatesBasic:
         r_cov = EfficientDiD(pt_assumption="post").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
-        assert np.isfinite(r_nocov.overall_att)
-        assert np.isfinite(r_cov.overall_att)
+        assert np.isfinite(r_nocov.att)
+        assert np.isfinite(r_cov.att)
         # DR should be closer to the true ATT than nocov
-        bias_nocov = abs(r_nocov.overall_att - true_att)
-        bias_cov = abs(r_cov.overall_att - true_att)
+        bias_nocov = abs(r_nocov.att - true_att)
+        bias_cov = abs(r_cov.att - true_att)
         assert (
             bias_cov < bias_nocov
         ), f"DR bias ({bias_cov:.4f}) should be smaller than nocov bias ({bias_nocov:.4f})"
@@ -2474,7 +2470,7 @@ class TestCovariatesPTAssumptions:
         )
         assert isinstance(result, EfficientDiDResults)
         assert result.estimation_path == "dr"
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_covariates_pt_all(self):
         df = _make_covariate_panel()
@@ -2483,7 +2479,7 @@ class TestCovariatesPTAssumptions:
         )
         assert isinstance(result, EfficientDiDResults)
         assert result.estimation_path == "dr"
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_covariates_aggregate_event_study(self):
         df = _make_covariate_panel()
@@ -2526,7 +2522,7 @@ class TestCovariatesPTAssumptions:
         )
         assert result.aggregate("event_study") is not None
         assert result.aggregate("group") is not None
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 class TestCovariatesEdgeCases:
@@ -2537,14 +2533,14 @@ class TestCovariatesEdgeCases:
         result = EfficientDiD(pt_assumption="post").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_binary_covariate(self):
         df = _make_covariate_panel()
         result = EfficientDiD(pt_assumption="post").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x2"]
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_many_covariates(self):
         """Multiple covariates including derived ones."""
@@ -2559,7 +2555,7 @@ class TestCovariatesEdgeCases:
         result = EfficientDiD(pt_assumption="post").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x1", "x2", "x3"]
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_sieve_ratio_produces_valid_results(self):
         """Sieve ratio estimation produces finite ATT with valid ratios."""
@@ -2567,8 +2563,8 @@ class TestCovariatesEdgeCases:
         result = EfficientDiD(pt_assumption="post", sieve_k_max=3, sieve_criterion="bic").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
-        assert np.isfinite(result.overall_att)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert result.se > 0
 
     def test_shuffled_units_match_ordered(self):
         """Shuffled unit ordering must produce same ATT as original ordering.
@@ -2592,9 +2588,8 @@ class TestCovariatesEdgeCases:
         r_shuffled = EfficientDiD(pt_assumption="post").fit(
             df_shuffled, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
-        assert abs(r_ordered.overall_att - r_shuffled.overall_att) < 1e-10, (
-            f"ATT mismatch: ordered={r_ordered.overall_att:.6f} "
-            f"vs shuffled={r_shuffled.overall_att:.6f}"
+        assert abs(r_ordered.att - r_shuffled.att) < 1e-10, (
+            f"ATT mismatch: ordered={r_ordered.att:.6f} " f"vs shuffled={r_shuffled.att:.6f}"
         )
 
     def test_extreme_covariates_warns_overlap(self):
@@ -2615,8 +2610,8 @@ class TestCovariatesEdgeCases:
             result = EfficientDiD(pt_assumption="post").fit(
                 df, "y", "unit", "time", "first_treat", covariates=["x_sep"]
             )
-        assert np.isfinite(result.overall_att)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert result.se > 0
 
     def test_eif_mean_approximately_zero(self):
         """EIF with per-unit weights should have sample mean ≈ 0."""
@@ -2643,11 +2638,11 @@ class TestCovariatesBootstrap:
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
         assert result.bootstrap_results is not None
-        assert np.isfinite(result.overall_att)
-        assert result.overall_se > 0
-        ci = result.overall_conf_int
+        assert np.isfinite(result.att)
+        assert result.se > 0
+        ci = result.conf_int
         assert ci[0] < ci[1], "CI lower must be less than upper"
-        assert np.isfinite(result.overall_p_value)
+        assert np.isfinite(result.p_value)
 
     def test_covariates_pt_all_bootstrap(self):
         """PT-All + bootstrap + covariates end-to-end."""
@@ -2663,8 +2658,8 @@ class TestCovariatesBootstrap:
         assert result.bootstrap_results is not None
         assert result.aggregate("event_study") is not None
         assert result.aggregate("group") is not None
-        assert np.isfinite(result.overall_att)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert result.se > 0
 
 
 class TestSieveFallbacks:
@@ -2984,8 +2979,8 @@ class TestEfficientDiDVcovType:
         )
         r_default = EfficientDiD().fit(**common)
         r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
 
     # ---- Surface 2: cluster path bit-equal --------------------------------
 
@@ -3000,8 +2995,8 @@ class TestEfficientDiDVcovType:
         )
         r_default = EfficientDiD(cluster="state").fit(**common)
         r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
 
     # ---- Surface 3: TSL-survey path bit-equal -----------------------------
 
@@ -3018,8 +3013,8 @@ class TestEfficientDiDVcovType:
         )
         r_default = EfficientDiD().fit(**common)
         r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
 
     # ---- Surface 4: replicate-survey path bit-equal -----------------------
 
@@ -3041,8 +3036,8 @@ class TestEfficientDiDVcovType:
         )
         r_default = EfficientDiD().fit(**common)
         r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
         # Per-horizon / per-group SE override branches must also agree under
         # the replicate-weight variance path (post-fit containers).
         es_d, es_e = r_default.aggregate("event_study"), r_explicit.aggregate("event_study")
@@ -3203,8 +3198,8 @@ class TestEfficientDiDVcovType:
         r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.estimation_path == "dr"
         assert r_explicit.estimation_path == "dr"
-        assert r_default.overall_att == r_explicit.overall_att
-        assert r_default.overall_se == r_explicit.overall_se
+        assert r_default.att == r_explicit.att
+        assert r_default.se == r_explicit.se
 
     # ---- Input rejection: methodology-rooted messages ---------------------
 
@@ -3389,8 +3384,8 @@ class TestEfficientDiDVcovType:
         r1 = ed1.fit(data, outcome="y", unit="unit", time="time", first_treat="first_treat")
         ed2 = EfficientDiD(**ed1.get_params())
         r2 = ed2.fit(data, outcome="y", unit="unit", time="time", first_treat="first_treat")
-        assert r1.overall_att == r2.overall_att
-        assert r1.overall_se == r2.overall_se
+        assert r1.att == r2.att
+        assert r1.se == r2.se
         assert r1.vcov_type == r2.vcov_type
 
 
@@ -3513,7 +3508,7 @@ class TestSieveBasisCache:
             result = EfficientDiD(pt_assumption="post").fit(
                 df, "y", "unit", "time", "first_treat", covariates=["x1", "x2"]
             )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         # The path was exercised through the cache.
         assert request_keys, "covariate DR path did not run the sieve helpers"
         # Each distinct (X, degree) was built exactly once (perfect dedup)...

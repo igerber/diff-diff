@@ -155,7 +155,7 @@ class TestB2024Theorem2Imputation:
         res = ImputationDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert abs(res.overall_att - 2.0) < 0.05
+        assert abs(res.att - 2.0) < 0.05
 
     def test_recovers_heterogeneous_event_study(self) -> None:
         """Horizon-specific effects tau_K = 1 + 0.5*K are recovered per horizon."""
@@ -200,7 +200,7 @@ class TestB2024Theorem2Imputation:
             perturbed, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
         # Only the perturbed obs's own tau_hat changes (weight 1/N_1).
-        assert abs((pert.overall_att - base.overall_att) - delta / n_1) < 1e-6
+        assert abs((pert.att - base.att) - delta / n_1) < 1e-6
 
 
 # =============================================================================
@@ -220,7 +220,7 @@ class TestB2024Theorem3Variance:
         res = ImputationDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_event_study_ses_finite(self) -> None:
         rng = np.random.default_rng(_BASE_SEED_THM3 + 2)
@@ -280,7 +280,7 @@ class TestB2024Theorem3Variance:
         # Factorize-once: the build-time singular warning fires a single time for
         # this single-target (overall-only) fit, not once per (g,t).
         assert len(fallback_warnings) == 1
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
 
 # =============================================================================
@@ -470,7 +470,7 @@ class TestImputationVarianceFactorizationCache:
         est = ImputationDiD()
         r1 = est.fit(panel, **base, covariates=["x1", "x2"])
         r2 = est.fit(panel, **base, covariates=["x1", "x2"])
-        assert r1.overall_se == r2.overall_se
+        assert r1.se == r2.se
         es1, es2 = r1.aggregate("event_study"), r2.aggregate("event_study")
         assert len(es1.se) > 0
         assert np.array_equal(es1.event_time, es2.event_time)
@@ -581,9 +581,9 @@ class TestB2024Eq8AuxiliaryAggregator:
         res = ImputationDiD(aux_partition="cohort").fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         # Regression pin (value produced by the unit-clustered Eq. 8 code path).
-        assert res.overall_se == pytest.approx(_EQ8_COHORT_SE_PIN, abs=1e-8)
+        assert res.se == pytest.approx(_EQ8_COHORT_SE_PIN, abs=1e-8)
 
 
 # Pin value for test_public_se_regression_pin_cohort_partition, produced by the
@@ -711,15 +711,15 @@ class TestB2024AppendixA9LeaveOneOut:
         )
         r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
         r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
-        np.testing.assert_allclose(r1.overall_att, r0.overall_att, rtol=0, atol=1e-12)
-        assert r1.overall_se > r0.overall_se
+        np.testing.assert_allclose(r1.att, r0.att, rtol=0, atol=1e-12)
+        assert r1.se > r0.se
 
     def test_loo_false_is_byte_identical_to_default(self):
         """leave_one_out=False changes nothing on the default path."""
         rng = np.random.default_rng(_BASE_SEED_EQ8 + 12)
         panel = _make_staggered_panel(rng, cohorts=[3], n_per_cohort=50, n_periods=5)
-        se_default = ImputationDiD().fit(panel, **self._COMMON).overall_se
-        se_loo_false = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON).overall_se
+        se_default = ImputationDiD().fit(panel, **self._COMMON).se
+        se_loo_false = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON).se
         assert se_default == se_loo_false
 
     def test_loo_single_unit_group_warns_and_returns_finite(self):
@@ -753,7 +753,7 @@ class TestB2024AppendixA9LeaveOneOut:
         panel = pd.DataFrame(rows)
         with pytest.warns(UserWarning, match="single positive-weight unit"):
             res = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_loo_param_validation_and_roundtrip(self):
         """leave_one_out is in get/set_params; a non-bool is rejected (TypeError)
@@ -773,8 +773,8 @@ class TestB2024AppendixA9LeaveOneOut:
         rng = np.random.default_rng(_BASE_SEED_EQ8 + 15)
         panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=25, n_periods=6)
         est = ImputationDiD(leave_one_out=True)
-        se_a = est.fit(panel, **self._COMMON).overall_se
-        se_b = est.fit(panel, **self._COMMON).overall_se
+        se_a = est.fit(panel, **self._COMMON).se
+        se_b = est.fit(panel, **self._COMMON).se
         assert se_a == se_b
         assert est.leave_one_out is True
 
@@ -786,7 +786,7 @@ class TestB2024AppendixA9LeaveOneOut:
         panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=30, n_periods=6)
         panel["state"] = panel["unit"] % 5  # coarser cluster
         se_cluster = (
-            ImputationDiD(leave_one_out=True, cluster="state").fit(panel, **self._COMMON).overall_se
+            ImputationDiD(leave_one_out=True, cluster="state").fit(panel, **self._COMMON).se
         )
         assert np.isfinite(se_cluster)
         with warnings.catch_warnings():
@@ -794,7 +794,7 @@ class TestB2024AppendixA9LeaveOneOut:
             se_boot = (
                 ImputationDiD(leave_one_out=True, n_bootstrap=49, seed=7)
                 .fit(panel, **self._COMMON)
-                .overall_se
+                .se
             )
         assert np.isfinite(se_boot)
 
@@ -861,8 +861,8 @@ class TestB2024AppendixA9LeaveOneOut:
         )
         r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
         r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
-        np.testing.assert_allclose(r1.overall_att, r0.overall_att, rtol=0, atol=1e-12)
-        assert r1.overall_se > r0.overall_se
+        np.testing.assert_allclose(r1.att, r0.att, rtol=0, atol=1e-12)
+        assert r1.se > r0.se
         self._assert_inference_consistent(es_dict(r1))
         self._assert_inference_consistent(group_dict(r1))
 
@@ -874,7 +874,7 @@ class TestB2024AppendixA9LeaveOneOut:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ImputationDiD(leave_one_out=True, n_bootstrap=99, seed=3).fit(panel, **self._COMMON)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.se)
         self._assert_inference_consistent(r.event_study_effects)
         self._assert_inference_consistent(r.group_effects)
         self._assert_inference_consistent(es_dict(r))
@@ -895,7 +895,7 @@ class TestB2024AppendixA9LeaveOneOut:
             warnings.simplefilter("ignore")
             r = ImputationDiD(leave_one_out=True).fit(panel, survey_design=design, **self._COMMON)
             effects, groups = es_dict(r), group_dict(r)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.se)
         self._assert_inference_consistent(effects)
         self._assert_inference_consistent(groups)
 
@@ -921,8 +921,8 @@ class TestB2024AppendixA9LeaveOneOut:
                 warnings.simplefilter("ignore")
                 r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
             for r, hit in ((r0, "cov0"), (r1, "cov1")):
-                lo = r.overall_att - 1.96 * r.overall_se
-                hi = r.overall_att + 1.96 * r.overall_se
+                lo = r.att - 1.96 * r.se
+                hi = r.att + 1.96 * r.se
                 if lo <= true_att <= hi:
                     if hit == "cov0":
                         cov0 += 1
@@ -1038,7 +1038,7 @@ class TestB2024Proposition9Test1:
         common = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         base = ImputationDiD().fit(panel, **common)
         with_pre = ImputationDiD(pretrends=True).fit(panel, **common)
-        assert with_pre.overall_att == pytest.approx(base.overall_att, abs=1e-10)
+        assert with_pre.att == pytest.approx(base.att, abs=1e-10)
 
 
 # =============================================================================
@@ -1073,7 +1073,7 @@ class TestB2024LibraryDeviations:
         common = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         for partition in ("cohort_horizon", "cohort", "horizon"):
             res = ImputationDiD(aux_partition=partition).fit(panel, **common)
-            assert np.isfinite(res.overall_se), partition
+            assert np.isfinite(res.se), partition
 
 
 # =============================================================================
@@ -1121,13 +1121,13 @@ class TestImputationDiDParityR:
         res = ImputationDiD().fit(
             panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        assert res.overall_att == pytest.approx(golden["overall"]["att"], abs=1e-6)
+        assert res.att == pytest.approx(golden["overall"]["att"], abs=1e-6)
 
     def test_overall_se_matches_r(self, golden: dict, panel: pd.DataFrame) -> None:
         res = ImputationDiD().fit(
             panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        assert res.overall_se == pytest.approx(golden["overall"]["se"], abs=1e-7)
+        assert res.se == pytest.approx(golden["overall"]["se"], abs=1e-7)
 
     def test_event_study_atts_match_r(self, golden: dict, panel: pd.DataFrame) -> None:
         res = ImputationDiD().fit(
@@ -1215,11 +1215,11 @@ class TestImputationDiDCovariateParityR:
 
     def test_overall_att_matches_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
         res = self._fit(covariate_panel)
-        assert res.overall_att == pytest.approx(golden["covariate"]["overall"]["att"], abs=1e-6)
+        assert res.att == pytest.approx(golden["covariate"]["overall"]["att"], abs=1e-6)
 
     def test_overall_se_matches_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
         res = self._fit(covariate_panel)
-        assert res.overall_se == pytest.approx(golden["covariate"]["overall"]["se"], abs=1e-7)
+        assert res.se == pytest.approx(golden["covariate"]["overall"]["se"], abs=1e-7)
 
     def test_event_study_atts_match_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
         effects = es_dict(self._fit(covariate_panel))

@@ -1071,7 +1071,7 @@ class TestAbsorbedFeRank:
         assert (
             captured and captured[-1] == 54
         ), f"SA df_ {captured} != 54 (the old sum(levels-1) count gives 53)"
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.se)
 
     def test_nan_group_key_raises_actionable_error(self):
         """A NaN absorb key must name the offending column, not surface as

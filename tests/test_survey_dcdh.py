@@ -56,8 +56,8 @@ class TestBackwardCompat:
             treatment="treatment",
             survey_design=None,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) or result.overall_se != result.overall_se
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) or result.se != result.se
         assert result.survey_metadata is None
 
 
@@ -88,7 +88,7 @@ class TestUniformWeights:
             survey_design=sd,
         )
         # Point estimates should match exactly (uniform weights = unweighted mean)
-        assert result_plain.overall_att == pytest.approx(result_survey.overall_att, abs=1e-10)
+        assert result_plain.att == pytest.approx(result_survey.att, abs=1e-10)
 
 
 # ── Test: Non-uniform weights change estimate ───────────────────────
@@ -144,7 +144,7 @@ class TestNonUniformWeights:
         # weight). The ATTs should match. This confirms the equal-cell
         # contract: survey weights don't change the cross-group aggregation.
         # The SE will differ because the survey variance accounts for design.
-        assert result_plain.overall_att == pytest.approx(result_survey.overall_att, abs=1e-8)
+        assert result_plain.att == pytest.approx(result_survey.att, abs=1e-8)
         # But the SEs should differ when strata/PSU are present
         # (tested separately in TestSurveySE)
 
@@ -177,8 +177,8 @@ class TestScaleInvariance:
             treatment="treatment",
             survey_design=sd2,
         )
-        assert r1.overall_att == pytest.approx(r2.overall_att, abs=1e-10)
-        assert r1.overall_se == pytest.approx(r2.overall_se, rel=1e-6)
+        assert r1.att == pytest.approx(r2.att, abs=1e-10)
+        assert r1.se == pytest.approx(r2.se, rel=1e-6)
 
 
 # ── Test: Survey SE differs from analytical SE ──────────────────────
@@ -208,10 +208,10 @@ class TestSurveySE:
             survey_design=sd_full,
         )
         # Point estimates should match (same weights)
-        assert r_w.overall_att == pytest.approx(r_full.overall_att, abs=1e-10)
+        assert r_w.att == pytest.approx(r_full.att, abs=1e-10)
         # SEs should differ (strata/PSU affects variance)
-        if np.isfinite(r_w.overall_se) and np.isfinite(r_full.overall_se):
-            assert r_w.overall_se != pytest.approx(r_full.overall_se, rel=0.01)
+        if np.isfinite(r_w.se) and np.isfinite(r_full.se):
+            assert r_w.se != pytest.approx(r_full.se, rel=0.01)
 
     def test_survey_metadata_populated(self, data_with_survey):
         sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
@@ -279,7 +279,7 @@ class TestValidation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_varying_weights_change_att(self, base_data):
         """With multi-obs cells and varying weights, ATT differs from unweighted.
@@ -314,7 +314,7 @@ class TestValidation:
         )
         # Weighted cell means with time-varying noise produce different
         # first differences -> different ATT
-        assert result_plain.overall_att != pytest.approx(result_survey.overall_att, abs=0.01)
+        assert result_plain.att != pytest.approx(result_survey.att, abs=0.01)
 
     def test_rejects_replicate_weights_with_bootstrap(self, base_data):
         """Replicate weights combined with n_bootstrap > 0 is rejected.
@@ -440,10 +440,10 @@ class TestSEScalePinning:
         # With PSU=group and uniform weights, survey SE should be
         # close to plug-in SE (both assume group-level independence).
         # Small-sample corrections (n/(n-1)) cause minor differences.
-        if np.isfinite(r_plain.overall_se) and np.isfinite(r_survey.overall_se):
-            assert r_plain.overall_se == pytest.approx(r_survey.overall_se, rel=0.15), (
-                f"Survey SE ({r_survey.overall_se:.6f}) should be close to "
-                f"plug-in SE ({r_plain.overall_se:.6f}) with uniform weights "
+        if np.isfinite(r_plain.se) and np.isfinite(r_survey.se):
+            assert r_plain.se == pytest.approx(r_survey.se, rel=0.15), (
+                f"Survey SE ({r_survey.se:.6f}) should be close to "
+                f"plug-in SE ({r_plain.se:.6f}) with uniform weights "
                 f"and PSU=group"
             )
 
@@ -473,7 +473,7 @@ class TestZeroWeightCells:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 # ── Test: Delta overall surface threads survey df ───────────────────
@@ -497,17 +497,17 @@ class TestSurveyDeltaInference:
             L_max=2,
             survey_design=sd,
         )
-        if not (np.isfinite(r.overall_se) and r.overall_se > 0):
+        if not (np.isfinite(r.se) and r.se > 0):
             pytest.skip("delta not estimable on this fixture")
 
         assert r.survey_metadata is not None
         df_s = r.survey_metadata.df_survey
         assert df_s is not None and df_s > 0, f"expected positive df_survey, got {df_s}"
 
-        t_stat = r.overall_att / r.overall_se
+        t_stat = r.att / r.se
         p_t = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=df_s))
         # Reported p-value must match t-based (proving _df_survey was threaded)
-        assert r.overall_p_value == pytest.approx(p_t, abs=1e-10)
+        assert r.p_value == pytest.approx(p_t, abs=1e-10)
 
     def test_survey_delta_t_differs_from_z(self, base_data):
         """With a small-df design (df~4), survey-t p-value must differ
@@ -533,7 +533,7 @@ class TestSurveyDeltaInference:
             L_max=2,
             survey_design=sd,
         )
-        if not (np.isfinite(r.overall_se) and r.overall_se > 0):
+        if not (np.isfinite(r.se) and r.se > 0):
             pytest.skip("delta not estimable on this fixture")
         assert r.survey_metadata is not None
         df_s = r.survey_metadata.df_survey
@@ -541,13 +541,13 @@ class TestSurveyDeltaInference:
             df_s is not None and df_s < 30
         ), f"expected small df_survey for t-vs-z gap, got {df_s}"
 
-        t_stat = r.overall_att / r.overall_se
+        t_stat = r.att / r.se
         p_t = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=df_s))
         p_z = 2.0 * (1.0 - stats.norm.cdf(abs(t_stat)))
         # Threaded p-value must match t, not z
-        assert r.overall_p_value == pytest.approx(p_t, abs=1e-10)
+        assert r.p_value == pytest.approx(p_t, abs=1e-10)
         assert (
-            abs(r.overall_p_value - p_z) > 1e-6
+            abs(r.p_value - p_z) > 1e-6
         ), "overall_p_value must differ from z-inference when df_survey is small"
 
 
@@ -573,7 +573,7 @@ class TestSurveyControls:
             L_max=1,
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         assert r.survey_metadata is not None
 
 
@@ -906,7 +906,7 @@ class TestZeroWeightSubpopulation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_zero_weight_row_with_nan_outcome(self, base_data):
         """A zero-weight row with NaN outcome must not trip the outcome
@@ -927,7 +927,7 @@ class TestZeroWeightSubpopulation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_zero_weight_row_with_nan_group_id(self, base_data):
         """A zero-weight row with NaN group id must not crash the SE
@@ -950,7 +950,7 @@ class TestZeroWeightSubpopulation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_zero_weight_row_with_nan_control(self, base_data):
         """A zero-weight row with NaN in a control column must not abort
@@ -976,7 +976,7 @@ class TestZeroWeightSubpopulation:
             covariates=["x"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_zero_weight_row_with_nan_heterogeneity(self, base_data):
         """A zero-weight row with NaN in the heterogeneity column must
@@ -1157,8 +1157,8 @@ class TestSurveyWithinGroupValidation:
             survey_design=sd,
             L_max=2,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         # And the SE differs from a within-group-constant-PSU baseline,
         # because the cell allocator now honors the extra PSU structure.
         df_const = base_data.copy()
@@ -1175,7 +1175,7 @@ class TestSurveyWithinGroupValidation:
             survey_design=sd_const,
             L_max=2,
         )
-        assert result.overall_se != r_const.overall_se, (
+        assert result.se != r_const.se, (
             "Cell-period allocator must produce a different SE when PSU "
             "actually varies across cells vs. constant-within-group."
         )
@@ -1202,8 +1202,8 @@ class TestSurveyWithinGroupValidation:
             survey_design=sd,
             L_max=2,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_heterogeneity_with_varying_psu_succeeds(self, base_data):
         """heterogeneity= is supported under within-group-varying PSU
@@ -1317,10 +1317,10 @@ class TestSurveyWithinGroupValidation:
             survey_design=sd_explicit,
             L_max=2,
         )
-        assert np.isfinite(r_auto.overall_att)
-        assert np.isfinite(r_auto.overall_se)
-        if np.isfinite(r_auto.overall_se) and np.isfinite(r_explicit.overall_se):
-            assert r_auto.overall_se == pytest.approx(r_explicit.overall_se, rel=1e-6)
+        assert np.isfinite(r_auto.att)
+        assert np.isfinite(r_auto.se)
+        if np.isfinite(r_auto.se) and np.isfinite(r_explicit.se):
+            assert r_auto.se == pytest.approx(r_explicit.se, rel=1e-6)
         assert r_auto.survey_metadata is not None
         assert r_explicit.survey_metadata is not None
         assert r_auto.survey_metadata.df_survey == r_explicit.survey_metadata.df_survey
@@ -1471,7 +1471,7 @@ class TestSurveyWithinGroupValidation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_auto_inject_psu_matches_explicit_group_psu(self, base_data):
         """SurveyDesign(weights='pw') (no PSU) must yield the same SE and
@@ -1495,9 +1495,9 @@ class TestSurveyWithinGroupValidation:
             treatment="treatment",
             survey_design=SurveyDesign(weights="pw", psu="group"),
         )
-        assert r_no_psu.overall_att == pytest.approx(r_explicit.overall_att, abs=1e-10)
-        if np.isfinite(r_no_psu.overall_se) and np.isfinite(r_explicit.overall_se):
-            assert r_no_psu.overall_se == pytest.approx(r_explicit.overall_se, rel=1e-6)
+        assert r_no_psu.att == pytest.approx(r_explicit.att, abs=1e-10)
+        if np.isfinite(r_no_psu.se) and np.isfinite(r_explicit.se):
+            assert r_no_psu.se == pytest.approx(r_explicit.se, rel=1e-6)
         assert r_no_psu.survey_metadata is not None
         assert r_explicit.survey_metadata is not None
         assert r_no_psu.survey_metadata.df_survey == r_explicit.survey_metadata.df_survey
@@ -1542,8 +1542,8 @@ class TestSurveyWithinGroupValidation:
             )
 
         # overall_se must be NaN on degenerate cohorts (not 0.0)
-        assert np.isnan(result.overall_se), (
-            f"Degenerate-cohort survey overall_se must be NaN, " f"got {result.overall_se}"
+        assert np.isnan(result.se), (
+            f"Degenerate-cohort survey overall_se must be NaN, " f"got {result.se}"
         )
         # Degenerate-cohort warning must fire
         assert any(
@@ -1628,10 +1628,10 @@ class TestSurveyWithinGroupValidation:
             L_max=2,
             survey_design=sd,
         )
-        if np.isfinite(r_base.overall_se) and np.isfinite(r_dup.overall_se):
-            assert r_base.overall_se == pytest.approx(r_dup.overall_se, rel=1e-6), (
-                f"Row duplication changed SE ({r_base.overall_se} vs "
-                f"{r_dup.overall_se}) — auto-inject psu=group is not active."
+        if np.isfinite(r_base.se) and np.isfinite(r_dup.se):
+            assert r_base.se == pytest.approx(r_dup.se, rel=1e-6), (
+                f"Row duplication changed SE ({r_base.se} vs "
+                f"{r_dup.se}) — auto-inject psu=group is not active."
             )
 
     def test_cell_allocator_row_sum_identity(self):
@@ -1746,7 +1746,7 @@ class TestSurveyWithinGroupValidation:
             treatment="treatment",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 class TestHeterogeneityCellPeriod:
@@ -2425,11 +2425,11 @@ class TestBootstrapCellPeriod:
                     survey_design=sd,
                     L_max=1,
                 )
-            assert np.isfinite(res.overall_att), (
+            assert np.isfinite(res.att), (
                 f"n_bootstrap={n_boot}: overall_att must be finite "
                 f"under PSU=group + terminal missingness."
             )
-            assert np.isfinite(res.overall_se) and res.overall_se >= 0.0, (
+            assert np.isfinite(res.se) and res.se >= 0.0, (
                 f"n_bootstrap={n_boot}: overall_se must be finite "
                 f"under PSU=group + terminal missingness."
             )

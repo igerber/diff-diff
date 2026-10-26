@@ -240,7 +240,7 @@ class TestCSRawScale:
             "time",
             "first_treat",
         )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert res.survey_metadata is None
         rc = _make_rc_data()
         rc["cluster_col"] = rc["unit"] // 20
@@ -252,7 +252,7 @@ class TestCSRawScale:
             "time",
             "first_treat",
         )
-        assert np.isfinite(res_rc.overall_att)
+        assert np.isfinite(res_rc.att)
         assert res_rc.survey_metadata is None
 
 
@@ -313,8 +313,8 @@ class TestEmptyStringWeightColumn:
             )
 
         a, b = fit(""), fit("weight")
-        assert a.overall_att == b.overall_att
-        assert a.overall_se == b.overall_se
+        assert a.att == b.att
+        assert a.se == b.se
         for e in a.event_study_effects:
             assert a.event_study_effects[e]["effect"] == b.event_study_effects[e]["effect"]
             assert a.event_study_effects[e]["se"] == b.event_study_effects[e]["se"]
@@ -359,7 +359,7 @@ class TestEmptyStringWeightColumn:
                     "first_treat",
                     survey_design=SurveyDesign(weights=col),
                 )
-                return ("fit", r.overall_att, r.overall_se)
+                return ("fit", r.att, r.se)
             except (ValueError, NotImplementedError) as exc:
                 # Normalize only the quoted column name, so messages that
                 # embed it still compare equal across the two aliases.
@@ -533,7 +533,7 @@ class TestContinuousDiDRawScale:
             "dose",
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isnan(res.overall_att)
+        assert np.isnan(res.att)
         _assert_raw_scale(res.survey_metadata, df.groupby("unit")["weight"].first())
 
     def test_weight_column_aliasing_dose_reports_original_values(self):
@@ -600,8 +600,8 @@ class TestContinuousDiDRawScale:
             )
 
         r_alias, r_dup = fit_with("dose"), fit_with("w_dup")
-        assert r_alias.overall_att == r_dup.overall_att
-        assert r_alias.overall_att_se == r_dup.overall_att_se
+        assert r_alias.att == r_dup.att
+        assert r_alias.se == r_dup.se
         ma, md_ = r_alias.survey_metadata, r_dup.survey_metadata
         for field in (
             "sum_weights",

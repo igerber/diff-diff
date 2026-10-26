@@ -225,8 +225,8 @@ class TestSunAbrahamRParity:
         )
 
         # Overall ATT contrast DOF.
-        t_all = res.overall_att / res.overall_se
-        df_all = _dof_from_p(t_all, res.overall_p_value)
+        t_all = res.att / res.se
+        df_all = _dof_from_p(t_all, res.p_value)
         r_df_all = sa_golden["dof_bm_contrast_overall_unit"]
         assert np.isclose(df_all, r_df_all, atol=1e-6), (
             f"SA overall ATT inferred BM DOF {df_all:.6f} does not match "

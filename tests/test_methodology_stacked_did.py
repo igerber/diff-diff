@@ -230,7 +230,7 @@ class TestStackedDiDParityR:
             ),
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             rtol=1e-10,
@@ -270,7 +270,7 @@ class TestStackedDiDParityR:
             err_msg="StackedDiD hc2_bm event-study SE must match clubSandwich CR2 at atol=1e-10",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             rtol=1e-10,
@@ -321,7 +321,7 @@ class TestStackedDiDParityR:
         the post-period-average contrast was missing from the prior fixture)."""
         r_dof_overall = float(goldens["unit"]["dof_bm_overall"])
         res = _fit(panel, vcov_type="hc2_bm", cluster="unit")
-        att, se, ci_hi = res.overall_att, res.overall_se, res.overall_conf_int[1]
+        att, se, ci_hi = res.att, res.se, res.conf_int[1]
         df_python = _recover_dof_from_ci(att, se, ci_hi, res.alpha)
         np.testing.assert_allclose(
             df_python,
@@ -353,7 +353,7 @@ class TestStackedDiDParityR:
             ),
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             rtol=1e-10,
@@ -367,7 +367,7 @@ class TestStackedDiDParityR:
         """Symmetric overall ATT DOF parity at the alternate cluster level."""
         r_dof_overall = float(goldens["unit_subexp"]["dof_bm_overall"])
         res = _fit(panel, vcov_type="hc2_bm", cluster="unit_subexp")
-        att, se, ci_hi = res.overall_att, res.overall_se, res.overall_conf_int[1]
+        att, se, ci_hi = res.att, res.se, res.conf_int[1]
         df_python = _recover_dof_from_ci(att, se, ci_hi, res.alpha)
         np.testing.assert_allclose(
             df_python,
@@ -440,7 +440,7 @@ class TestStackedDiDParityRVariants:
             err_msg="StackedDiD weighting='population' hc1 event-study SE must match R CR1S",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="StackedDiD weighting='population' hc1 overall_se must match R",
@@ -470,7 +470,7 @@ class TestStackedDiDParityRVariants:
             err_msg="StackedDiD weighting='population' hc2_bm event-study SE must match R CR2",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="StackedDiD weighting='population' hc2_bm overall_se must match R",
@@ -490,9 +490,7 @@ class TestStackedDiDParityRVariants:
                 rtol=1e-6,
                 err_msg=f"population hc2_bm BM DOF at h={h} must match R",
             )
-        df_overall = _recover_dof_from_ci(
-            res.overall_att, res.overall_se, res.overall_conf_int[1], res.alpha
-        )
+        df_overall = _recover_dof_from_ci(res.att, res.se, res.conf_int[1], res.alpha)
         np.testing.assert_allclose(
             df_overall,
             r_dof_overall,
@@ -527,7 +525,7 @@ class TestStackedDiDParityRVariants:
             err_msg="StackedDiD anticipation=1 hc1 event-study SE must match R CR1S",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="StackedDiD anticipation=1 hc1 overall_se must match R",
@@ -556,7 +554,7 @@ class TestStackedDiDParityRVariants:
             err_msg="StackedDiD anticipation=1 hc2_bm event-study SE must match R CR2",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="StackedDiD anticipation=1 hc2_bm overall_se must match R",
@@ -577,9 +575,7 @@ class TestStackedDiDParityRVariants:
                 rtol=1e-6,
                 err_msg=f"anticipation1 hc2_bm BM DOF at h={h} must match R",
             )
-        df_overall = _recover_dof_from_ci(
-            res.overall_att, res.overall_se, res.overall_conf_int[1], res.alpha
-        )
+        df_overall = _recover_dof_from_ci(res.att, res.se, res.conf_int[1], res.alpha)
         np.testing.assert_allclose(
             df_overall,
             r_dof_overall,
@@ -614,7 +610,7 @@ class TestStackedDiDParityRVariants:
             err_msg="sample_share hc1 event-study SE must match R CR1S",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="sample_share hc1 overall_se must match R",
@@ -646,7 +642,7 @@ class TestStackedDiDParityRVariants:
             err_msg="sample_share hc2_bm event-study SE must match R CR2",
         )
         np.testing.assert_allclose(
-            res.overall_se,
+            res.se,
             r_overall_se,
             atol=1e-10,
             err_msg="sample_share hc2_bm overall_se must match R",
@@ -663,9 +659,7 @@ class TestStackedDiDParityRVariants:
                 rtol=1e-6,
                 err_msg=f"sample_share hc2_bm BM DOF at h={h} must match R",
             )
-        df_overall = _recover_dof_from_ci(
-            res.overall_att, res.overall_se, res.overall_conf_int[1], res.alpha
-        )
+        df_overall = _recover_dof_from_ci(res.att, res.se, res.conf_int[1], res.alpha)
         np.testing.assert_allclose(
             df_overall,
             r_dof_overall,
@@ -801,8 +795,8 @@ class TestCBWSDIDCovariateBalance:
         treated_x_mean = units.loc[np.isfinite(units["ft"]), "x"].mean()
         true_att = 2.0 + 1.0 * treated_x_mean  # treated-average ATT
 
-        cb = self._fit(df, balance="entropy").overall_att
-        plain = self._fit(df, balance="none").overall_att
+        cb = self._fit(df, balance="entropy").att
+        plain = self._fit(df, balance="none").att
 
         assert abs(cb - true_att) < 0.15, f"CBWSDID should recover {true_att:.3f}, got {cb:.3f}"
         assert abs(plain - true_att) > 0.3, f"plain StackedDiD should be biased, got {plain:.3f}"
@@ -828,8 +822,8 @@ class TestCBWSDIDCovariateBalance:
                     )
                     rows.append((uid, t, ft if np.isfinite(ft) else 0, x, y))
         df = pd.DataFrame(rows, columns=["unit", "time", "first_treat", "x", "y"])
-        cb = self._fit(df, balance="entropy").overall_att
-        plain = self._fit(df, balance="none").overall_att
+        cb = self._fit(df, balance="entropy").att
+        plain = self._fit(df, balance="none").att
         assert abs(cb - plain) < 0.05
         assert abs(cb - 2.0) < 0.1
 

@@ -431,9 +431,8 @@ class TestW2025Theorem31MundlakTWFEEquivalence:
         weights = {k: res._gt_weights.get(k, 0) for k in gt}
         total_w = sum(weights.values())
         manual_avg = sum(weights[k] * gt[k]["att"] for k in gt) / total_w
-        assert res.overall_att == pytest.approx(manual_avg, abs=1e-12), (
-            f"overall_att={res.overall_att:.6f} != manual cell-count-weighted "
-            f"avg={manual_avg:.6f}"
+        assert res.att == pytest.approx(manual_avg, abs=1e-12), (
+            f"overall_att={res.att:.6f} != manual cell-count-weighted " f"avg={manual_avg:.6f}"
         )
 
     def test_constant_outcome_panel_returns_nan_inference(self) -> None:
@@ -596,7 +595,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         # Surface-level invariants: fit completed cleanly + the result
         # object is well-formed.
         assert isinstance(res, WooldridgeDiDResults)
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert res.control_group == "never_treated"
         treated_finite_atts = [
             eff["att"]
@@ -621,12 +620,12 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        before_att = res.overall_att
-        before_se = res.overall_se
+        before_att = res.att
+        before_se = res.se
         res.aggregate("simple")
         # Simple aggregation is a no-op for these fields
-        assert res.overall_att == pytest.approx(before_att, abs=1e-15)
-        assert res.overall_se == pytest.approx(before_se, abs=1e-15)
+        assert res.att == pytest.approx(before_att, abs=1e-15)
+        assert res.se == pytest.approx(before_se, abs=1e-15)
 
 
 # =============================================================================
@@ -786,7 +785,7 @@ class TestW2025Section7AggregationPaths:
         cell_w = {k: res._gt_weights.get(k, 0) for k in gt}
         total_w = sum(cell_w.values())
         manual_cell_count_att = sum(cell_w[k] * gt[k]["att"] for k in gt) / total_w
-        assert res.overall_att == pytest.approx(manual_cell_count_att, abs=1e-12)
+        assert res.att == pytest.approx(manual_cell_count_att, abs=1e-12)
 
     def test_aggregate_simple_weights_cohort_share_matches_paper_eq74(self) -> None:
         """``aggregate("simple", weights="cohort_share")`` matches paper Eq. 7.4 hand-calc.
@@ -829,8 +828,8 @@ class TestW2025Section7AggregationPaths:
             + n_g[3] * gt[(3, 4)]["att"]
         ) / (n_g[2] * 3 + n_g[3] * 2)
         res.aggregate("simple", weights="cohort_share")
-        assert res.overall_att == pytest.approx(manual_cohort_share_att, abs=1e-12), (
-            f"cohort_share overall={res.overall_att:.6f} != "
+        assert res.att == pytest.approx(manual_cohort_share_att, abs=1e-12), (
+            f"cohort_share overall={res.att:.6f} != "
             f"manual paper Eq. 7.4 ATT={manual_cohort_share_att:.6f}"
         )
 
@@ -905,9 +904,9 @@ class TestW2025Section7AggregationPaths:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        cell_att = res.overall_att
+        cell_att = res.att
         res.aggregate("simple", weights="cohort_share")
-        cohort_share_att = res.overall_att
+        cohort_share_att = res.att
         assert cell_att == pytest.approx(cohort_share_att, abs=1e-12), (
             f"balanced panel: cell ATT={cell_att:.6f} should equal "
             f"cohort_share ATT={cohort_share_att:.6f} per paper Section 7.5"
@@ -1057,12 +1056,12 @@ class TestW2025Section7AggregationPaths:
         # simple aggregation
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("simple", weights="cohort_share")
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.isnan(res.overall_conf_int[0])
-        assert np.isnan(res.overall_conf_int[1])
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.isnan(res.conf_int[0])
+        assert np.isnan(res.conf_int[1])
         # event aggregation: k >= 0 only
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("event_study", weights="cohort_share")
@@ -1125,12 +1124,12 @@ class TestW2025Section7AggregationPaths:
         # simple aggregation
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("simple", weights="cohort_share")
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.isnan(res.overall_conf_int[0])
-        assert np.isnan(res.overall_conf_int[1])
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.isnan(res.conf_int[0])
+        assert np.isnan(res.conf_int[1])
         # event aggregation: k >= 0 only
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("event_study", weights="cohort_share")
@@ -1179,12 +1178,12 @@ class TestW2025Section7AggregationPaths:
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("simple", weights="cohort_share")
         # Point estimate + SE retained for reference; inference fail-closed.
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.isnan(res.overall_conf_int[0])
-        assert np.isnan(res.overall_conf_int[1])
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.isnan(res.conf_int[0])
+        assert np.isnan(res.conf_int[1])
 
     def test_aggregate_simple_weights_cell_idempotent_with_fit_time_overall_att(self) -> None:
         """``aggregate("simple", weights="cell")`` reproduces the fit-time overall_att.
@@ -1211,11 +1210,11 @@ class TestW2025Section7AggregationPaths:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        fit_time_att = res.overall_att
-        fit_time_se = res.overall_se
+        fit_time_att = res.att
+        fit_time_se = res.se
         res.aggregate("simple")  # default weights="cell"
-        assert res.overall_att == pytest.approx(fit_time_att, abs=1e-12)
-        assert res.overall_se == pytest.approx(fit_time_se, abs=1e-12)
+        assert res.att == pytest.approx(fit_time_att, abs=1e-12)
+        assert res.se == pytest.approx(fit_time_se, abs=1e-12)
 
     def test_aggregate_group_calendar_use_cell_count_weights(self) -> None:
         """``aggregate('group'/'calendar')`` use cell-count weights (the only supported scheme).
@@ -1306,8 +1305,8 @@ class TestW2025Section8HeterogeneousTrends:
         # Bit-equal across both invocations (tolerance handles sub-ULP
         # float-aggregation-order noise from the Python-level
         # ``_cell_weight`` helper closure).
-        assert res_default.overall_att == pytest.approx(res_explicit_off.overall_att, abs=1e-14)
-        assert res_default.overall_se == pytest.approx(res_explicit_off.overall_se, abs=1e-14)
+        assert res_default.att == pytest.approx(res_explicit_off.att, abs=1e-14)
+        assert res_default.se == pytest.approx(res_explicit_off.se, abs=1e-14)
         for k in res_default.group_time_effects:
             assert res_default.group_time_effects[k]["att"] == pytest.approx(
                 res_explicit_off.group_time_effects[k]["att"], abs=1e-14
@@ -1482,8 +1481,8 @@ class TestW2025Section8HeterogeneousTrends:
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("simple", weights="cohort_share")
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_cohort_trends_true_rejects_never_treated_control_group(self) -> None:
         """CI R9 P1 fix: ``cohort_trends=True`` + ``control_group="never_treated"`` raises.
@@ -1901,9 +1900,9 @@ class TestW2025Section8HeterogeneousTrends:
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res._bootstrap_used is True
-        boot_se = res.overall_se
+        boot_se = res.se
         res.aggregate("simple", weights="cell")
-        assert res.overall_se == boot_se
+        assert res.se == boot_se
         with pytest.raises(ValueError, match=r"cohort_share.*not supported on bootstrapped fits"):
             res.aggregate("simple", weights="cohort_share")
 
@@ -2067,7 +2066,7 @@ class TestW2025Section10UnbalancedPanels:
             )
         # Sanity: at least one treated cell estimated; overall_att finite.
         assert any(g > 0 for (g, _t) in res.group_time_effects)
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_unbalanced_panel_recovers_constant_tau_approximately(self) -> None:
         """Under constant-TE DGP with random missingness, ETWFE recovers ``tau`` at MC band.
@@ -2361,8 +2360,8 @@ class TestW2025LibraryDeviations:
         manual_post_only_att = (
             sum(post_weights[k] * post_cells[k]["att"] for k in post_cells) / total_w
         )
-        assert res.overall_att == pytest.approx(manual_post_only_att, abs=1e-12), (
-            f"overall_att={res.overall_att:.6f} != manual post-only "
+        assert res.att == pytest.approx(manual_post_only_att, abs=1e-12), (
+            f"overall_att={res.att:.6f} != manual post-only "
             f"({manual_post_only_att:.6f}); REGISTRY Deviation #9 says "
             f"anticipation leads must be excluded from overall_att."
         )
@@ -2394,16 +2393,16 @@ class TestW2025LibraryDeviations:
         )
         # _bootstrap_used was set
         assert res._bootstrap_used is True
-        boot_se = res.overall_se
-        boot_t = res.overall_t_stat
-        boot_p = res.overall_p_value
-        boot_ci = res.overall_conf_int
+        boot_se = res.se
+        boot_t = res.t_stat
+        boot_p = res.p_value
+        boot_ci = res.conf_int
         # aggregate("simple", weights="cell") is a no-op on bootstrap fits
         res.aggregate("simple", weights="cell")
-        assert res.overall_se == boot_se
-        assert res.overall_t_stat == boot_t
-        assert res.overall_p_value == boot_p
-        assert res.overall_conf_int == boot_ci
+        assert res.se == boot_se
+        assert res.t_stat == boot_t
+        assert res.p_value == boot_p
+        assert res.conf_int == boot_ci
 
     def test_bootstrap_rejects_aggregate_simple_weights_cohort_share(self) -> None:
         """R1 P1 fix: ``aggregate("simple", weights="cohort_share")`` raises on bootstrap fits.
@@ -2533,7 +2532,7 @@ class TestWooldridgeParityR:
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_se = golden["hc2_bm"]["overall_att_se"]
-        assert res.overall_se == pytest.approx(r_se, abs=1e-10)
+        assert res.se == pytest.approx(r_se, abs=1e-10)
 
     def test_hc2_bm_overall_att_contrast_dof_matches_wald_test_htz(
         self, golden: dict, panel: pd.DataFrame
@@ -2548,9 +2547,7 @@ class TestWooldridgeParityR:
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        py_dof = _recover_dof_from_ci(
-            res.overall_att, res.overall_se, res.overall_conf_int[1], res.alpha
-        )
+        py_dof = _recover_dof_from_ci(res.att, res.se, res.conf_int[1], res.alpha)
         r_dof = golden["hc2_bm"]["overall_att_contrast_dof"]
         # brentq inversion tolerance + scipy stats roundtrip: 1e-6 is comfortable
         # for a DOF in the 1.5..1000 range. The underlying clubSandwich CR2
@@ -2567,7 +2564,7 @@ class TestWooldridgeParityR:
         for i, (g, t) in enumerate(r_keys):
             py_se = res.group_time_effects[(g, t)]["se"]
             assert py_se == pytest.approx(r_ses[i], abs=1e-10)
-        assert res.overall_se == pytest.approx(golden["classical"]["overall_att_se"], abs=1e-10)
+        assert res.se == pytest.approx(golden["classical"]["overall_att_se"], abs=1e-10)
 
     def test_hc2_se_matches_sandwich_vcovhc(self, golden: dict, panel: pd.DataFrame) -> None:
         """`vcov_type='hc2'` (drops auto-cluster) matches `sandwich::vcovHC(type="HC2")` SE."""
@@ -2579,7 +2576,7 @@ class TestWooldridgeParityR:
         for i, (g, t) in enumerate(r_keys):
             py_se = res.group_time_effects[(g, t)]["se"]
             assert py_se == pytest.approx(r_ses[i], abs=1e-10)
-        assert res.overall_se == pytest.approx(golden["hc2"]["overall_att_se"], abs=1e-10)
+        assert res.se == pytest.approx(golden["hc2"]["overall_att_se"], abs=1e-10)
 
     def test_classical_per_cell_inference_uses_residual_df(
         self, golden: dict, panel: pd.DataFrame
@@ -2751,7 +2748,7 @@ class TestWooldridgeParityRPoisson:
             if k[0] > 0 and k[1] >= k[0] and np.isfinite(res.group_time_effects[k]["att"])
         ]
         assert len(finite_atts) >= 1, "Poisson path returned no finite treated-cell ATTs"
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_etwfe_poisson_golden_present_and_well_formed(
         self, golden: dict, panel: pd.DataFrame

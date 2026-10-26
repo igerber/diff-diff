@@ -2208,7 +2208,7 @@ class TestAbsorbedFEFullKParity:
         r_cl = SunAbraham(vcov_type="hc1", cluster="unit").fit(
             df, outcome="y", first_treat="first_treat", time="time", unit="unit"
         )
-        np.testing.assert_allclose(r_def.overall_se, r_cl.overall_se, rtol=1e-12)
+        np.testing.assert_allclose(r_def.se, r_cl.se, rtol=1e-12)
 
     def test_absorbed_fe_vcov_scale_fail_closed(self):
         """The rescale helper is fail-closed on non-positive full-K residual dof."""

@@ -151,7 +151,7 @@ class TestGardner2022Section3TwoStageProcedure:
         res = TwoStageDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert abs(res.overall_att - 2.0) < 0.05
+        assert abs(res.att - 2.0) < 0.05
 
     def test_recovers_heterogeneous_event_study_eq6(self) -> None:
         """Horizon-specific effects tau_K = 1 + 0.5*K are recovered per horizon
@@ -199,7 +199,7 @@ class TestGardner2022Section3TwoStageProcedure:
             perturbed, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
         # Only the perturbed obs's own residual changes (Stage-2 weight 1/N_treated).
-        assert abs((pert.overall_att - base.overall_att) - delta / n_treated) < 1e-6
+        assert abs((pert.att - base.att) - delta / n_treated) < 1e-6
 
     def test_coincides_with_imputation_estimand(self) -> None:
         """Gardner's two-stage estimator coincides in point estimates with the
@@ -216,7 +216,7 @@ class TestGardner2022Section3TwoStageProcedure:
         imp = ImputationDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert ts.overall_att == pytest.approx(imp.overall_att, abs=1e-10)
+        assert ts.att == pytest.approx(imp.att, abs=1e-10)
 
     def test_covariates_residualized_in_both_stages(self) -> None:
         """The live ``covariates=`` path (fn. 9 in-both-stages): a time-varying
@@ -252,7 +252,7 @@ class TestGardner2022Section3TwoStageProcedure:
         att_no_cov = (
             TwoStageDiD()
             .fit(panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
-            .overall_att
+            .att
         )
         att_cov = (
             TwoStageDiD()
@@ -264,7 +264,7 @@ class TestGardner2022Section3TwoStageProcedure:
                 first_treat="first_treat",
                 covariates=["x"],
             )
-            .overall_att
+            .att
         )
         # Without adjustment, the confounded covariate biases the ATT well away
         # from tau; with adjustment, the true ATT is recovered.
@@ -290,7 +290,7 @@ class TestGardner2022Section33GMMVariance:
         res = TwoStageDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_event_study_ses_finite(self) -> None:
         rng = np.random.default_rng(_BASE_SEED_VAR + 2)
@@ -333,7 +333,7 @@ class TestGardner2022Section33GMMVariance:
         res = TwoStageDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        gmm_se = res.overall_se
+        gmm_se = res.se
 
         # Naive benchmark: y_tilde for the treated obs is exposed as `tau_hat`;
         # the overall ATT is its (unweighted) mean. The SE of that mean IGNORING
@@ -361,8 +361,8 @@ class TestGardner2022Section33GMMVariance:
         res = TwoStageDiD().fit(
             panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        assert res.overall_se == pytest.approx(_SE_PIN, abs=1e-8)
+        assert np.isfinite(res.se) and res.se > 0
+        assert res.se == pytest.approx(_SE_PIN, abs=1e-8)
 
     def test_pretrends_event_study_ses_finite(self) -> None:
         """With pretrends=True the Stage-2 design adds pre-period leads; their GMM
@@ -390,7 +390,7 @@ class TestGardner2022Section33GMMVariance:
             if np.isfinite(att):
                 assert np.isfinite(se), f"lead h={h} SE non-finite"
         # Overall ATT is unchanged by requesting pre-period leads.
-        assert res.overall_att == pytest.approx(base.overall_att, abs=1e-8)
+        assert res.att == pytest.approx(base.att, abs=1e-8)
 
     def test_unit_clustered_default(self) -> None:
         """cluster=None clusters the meat at the unit level (Appendix B
@@ -433,7 +433,7 @@ class TestGardner2022Section33GMMVariance:
         assert any(
             "falling back to sparse LSMR" in str(w.message) for w in caught
         ), "expected the sparse-LSMR fallback warning under a singular Omega_0"
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_bootstrap_scores_use_exact_residuals(self) -> None:
         """The multiplier bootstrap builds its per-cluster GMM scores from the SAME
@@ -479,7 +479,7 @@ class TestGardner2022Section33GMMVariance:
         )
         v_boot = bread @ (S.T @ S) @ bread
         # Identical to the analytical exact SE (would be ~1% off with iterative residuals).
-        assert np.sqrt(v_boot[0, 0]) == pytest.approx(res.overall_se, abs=1e-9)
+        assert np.sqrt(v_boot[0, 0]) == pytest.approx(res.se, abs=1e-9)
 
     def test_bootstrap_event_study_scores_use_exact_residuals(self) -> None:
         """Multi-column (event-study) bootstrap GMM scores also use the shared
@@ -582,7 +582,7 @@ class TestGardner2022Identification:
         # The 5 always-treated units are dropped, so the treated-unit count falls
         # by exactly 5, and their obs do not enter Stage 2.
         assert res.n_treated_units == n_treated_orig - 5
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_no_never_treated_horizons_nan(self) -> None:
         """Proposition 5 (Borusyak et al. 2024): with no never-treated units and
@@ -762,13 +762,13 @@ class TestTwoStageDiDParityR:
         res = TwoStageDiD().fit(
             panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        assert res.overall_att == pytest.approx(golden["overall"]["att"], abs=1e-6)
+        assert res.att == pytest.approx(golden["overall"]["att"], abs=1e-6)
 
     def test_overall_se_matches_r(self, golden: dict, panel: pd.DataFrame) -> None:
         res = TwoStageDiD().fit(
             panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        assert res.overall_se == pytest.approx(golden["overall"]["se"], abs=1e-7)
+        assert res.se == pytest.approx(golden["overall"]["se"], abs=1e-7)
 
     def test_event_study_atts_match_r(self, golden: dict, panel: pd.DataFrame) -> None:
         res = TwoStageDiD().fit(

@@ -190,9 +190,7 @@ class TestCSDIDCoreEstimation:
             first_treat="first_treat",
             covariates=["X"],
         )
-        assert (
-            abs(results.overall_att - 1.0) < 0.5
-        ), f"Simple ATT = {results.overall_att:.3f}, expected ≈ 1.0"
+        assert abs(results.att - 1.0) < 0.5, f"Simple ATT = {results.att:.3f}, expected ≈ 1.0"
         # 4.0: the fit stores no aggregation surface; both levels are post-fit
         assert results.event_study_effects is None and results.group_effects is None
         # Event study: post-treatment effect ≈ 1
@@ -1453,8 +1451,8 @@ class TestCSDIDGoldenValues:
             covariates=["X"],
         )
         r = scenario["results"]
-        assert abs(results.overall_att - r["simple"]["att"]) < 1e-8
-        assert abs(results.overall_se - r["simple"]["se"]) < 1e-8
+        assert abs(results.att - r["simple"]["att"]) < 1e-8
+        assert abs(results.se - r["simple"]["se"]) < 1e-8
         g_att = np.atleast_1d(r["group"]["att"])[0]
         g_se = np.atleast_1d(r["group"]["se"])[0]
         grp = group_dict(results)[2]
@@ -1520,8 +1518,8 @@ class TestCSDIDGoldenValues:
             covariates=["X"],
         )
         # R did 2.5.1: aggte(type="simple", bstrap=FALSE, cband=FALSE)
-        assert abs(results.overall_att - r_results["simple"]["att"]) < 1e-6
-        assert abs(results.overall_se - r_results["simple"]["se"]) < 1e-6
+        assert abs(results.att - r_results["simple"]["att"]) < 1e-6
+        assert abs(results.se - r_results["simple"]["se"]) < 1e-6
         # aggte(type="dynamic"): (att.egt, se.egt) per event time
         r_dyn = r_results["dynamic"]
         assert len(r_dyn["egt"]) > 0
@@ -2119,8 +2117,8 @@ class TestAllowUnbalancedPanel:
         s = unbalanced_golden["simple"]
         n_units = unbalanced_golden["meta"]["n_units"]
         fac = np.sqrt(n_units / (n_units - 1))
-        assert res.overall_att == pytest.approx(s["overall_att"], abs=1e-9)
-        assert res.overall_se == pytest.approx(s["overall_se"] * fac, abs=1e-8)
+        assert res.att == pytest.approx(s["overall_att"], abs=1e-9)
+        assert res.se == pytest.approx(s["overall_se"] * fac, abs=1e-8)
 
     def test_group_effects_match_r(self, unbalanced_golden):
         """Group (cohort) effects match R `aggte(type="group")` att.egt / se.egt."""
@@ -2310,7 +2308,7 @@ class TestAllowUnbalancedPanel:
         assert es_res and set(es_res) == set(es_ref)
         for e, v in es_res.items():
             assert v["effect"] == pytest.approx(es_ref[e]["effect"], abs=1e-12)
-        assert res.overall_att == pytest.approx(ref.overall_att, abs=1e-12)
+        assert res.att == pytest.approx(ref.att, abs=1e-12)
 
     def test_complete_case_rectangular_stays_inert(self):
         """When a WHOLE unit and a WHOLE period are dropped by non-finite

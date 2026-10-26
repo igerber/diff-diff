@@ -234,7 +234,7 @@ class TestDCDHRenames:
             )
             r_pos = ChaisemartinDHaultfoeuille().fit(dcdh_panel, "y", "g", "t", "d")
         _assert_no_future_warning(record)
-        assert r_kw.overall_att == r_pos.overall_att
+        assert r_kw.att == r_pos.att
 
     def test_group_raises_typeerror(self, dcdh_panel):
         from diff_diff import ChaisemartinDHaultfoeuille
@@ -256,7 +256,7 @@ class TestDCDHRenames:
             r_new = ChaisemartinDHaultfoeuille().fit(
                 df, "y", "g", "t", "d", L_max=1, covariates=["x"]
             )
-        assert np.isfinite(r_new.overall_att)
+        assert np.isfinite(r_new.att)
         with pytest.raises(TypeError, match=_unexpected("controls")):
             ChaisemartinDHaultfoeuille().fit(df, "y", "g", "t", "d", L_max=1, controls=["x"])
 

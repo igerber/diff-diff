@@ -3125,8 +3125,8 @@ class TestConleySunAbraham:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
         assert res.vcov_type == "conley"
         assert res.conley_lag_cutoff == 1
         assert "Conley" in res.summary()
@@ -3141,7 +3141,7 @@ class TestConleySunAbraham:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=0,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         assert res.conley_lag_cutoff == 0
 
     def test_fwl_composability_vs_full_dummy(self):
@@ -3156,8 +3156,8 @@ class TestConleySunAbraham:
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         ref_coef, ref_se = _full_dummy_conley_treatment(df, 2500.0, 1)
-        assert res.overall_att == pytest.approx(ref_coef, abs=1e-8)
-        assert res.overall_se == pytest.approx(ref_se, abs=1e-7)
+        assert res.att == pytest.approx(ref_coef, abs=1e-8)
+        assert res.se == pytest.approx(ref_se, abs=1e-7)
 
     def test_att_bit_identical_across_vcov(self):
         """conley is additive: ATT must be bit-identical to the hc1 fit."""
@@ -3172,7 +3172,7 @@ class TestConleySunAbraham:
             conley_lag_cutoff=1,
         ).fit(df, **kw)
         r_hc1 = SunAbraham(vcov_type="hc1").fit(df, **kw)
-        assert r_conley.overall_att == pytest.approx(r_hc1.overall_att, abs=1e-12)
+        assert r_conley.att == pytest.approx(r_hc1.att, abs=1e-12)
 
     def test_conley_plus_cluster_product_kernel(self):
         from diff_diff import SunAbraham
@@ -3192,8 +3192,8 @@ class TestConleySunAbraham:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, **kw)
-        assert np.isfinite(clustered.overall_se) and clustered.overall_se > 0
-        assert clustered.overall_se != plain.overall_se
+        assert np.isfinite(clustered.se) and clustered.se > 0
+        assert clustered.se != plain.se
         assert "cluster" in clustered.summary().lower()
 
     def test_reject_survey_design(self):
@@ -3256,7 +3256,7 @@ class TestConleySunAbraham:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_get_set_params_carry_conley(self):
         from diff_diff import SunAbraham
@@ -3290,7 +3290,7 @@ class TestConleySunAbraham:
             conley_cutoff_km=3000.0,
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         assert len(res.event_study_effects) >= 2  # genuinely multi-period
         for e, eff in res.event_study_effects.items():
             assert np.isfinite(eff["se"]), (e, eff)
@@ -3309,8 +3309,8 @@ class TestConleyWooldridge:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
         assert res.vcov_type == "conley"
         assert res.conley_lag_cutoff == 1
         assert "Conley" in res.summary()
@@ -3325,7 +3325,7 @@ class TestConleyWooldridge:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=0,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
         assert res.conley_lag_cutoff == 0
 
     def test_fwl_composability_vs_full_dummy(self):
@@ -3340,8 +3340,8 @@ class TestConleyWooldridge:
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         ref_coef, ref_se = _full_dummy_conley_treatment(df, 2500.0, 1)
-        assert res.overall_att == pytest.approx(ref_coef, abs=1e-8)
-        assert res.overall_se == pytest.approx(ref_se, abs=1e-7)
+        assert res.att == pytest.approx(ref_coef, abs=1e-8)
+        assert res.se == pytest.approx(ref_se, abs=1e-7)
 
     def test_att_bit_identical_across_vcov(self):
         from diff_diff import WooldridgeDiD
@@ -3355,7 +3355,7 @@ class TestConleyWooldridge:
             conley_lag_cutoff=1,
         ).fit(df, **kw)
         r_hc1 = WooldridgeDiD(vcov_type="hc1").fit(df, **kw)
-        assert r_conley.overall_att == pytest.approx(r_hc1.overall_att, abs=1e-12)
+        assert r_conley.att == pytest.approx(r_hc1.att, abs=1e-12)
 
     def test_conley_plus_cluster_product_kernel(self):
         from diff_diff import WooldridgeDiD
@@ -3375,8 +3375,8 @@ class TestConleyWooldridge:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, **kw)
-        assert np.isfinite(clustered.overall_se) and clustered.overall_se > 0
-        assert clustered.overall_se != plain.overall_se
+        assert np.isfinite(clustered.se) and clustered.se > 0
+        assert clustered.se != plain.se
         assert "cluster" in clustered.summary().lower()
 
     def test_reject_survey_design(self):
@@ -3440,7 +3440,7 @@ class TestConleyWooldridge:
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
         ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_atomic_set_params_round_trip(self):
         from diff_diff import WooldridgeDiD
@@ -3470,11 +3470,11 @@ class TestConleyWooldridge:
         ck = dict(conley_coords=("lat", "lon"), conley_cutoff_km=3000.0, conley_lag_cutoff=1)
         r_conley = WooldridgeDiD(vcov_type="conley", cohort_trends=True, **ck).fit(df, **kw)
         r_hc1 = WooldridgeDiD(vcov_type="hc1", cohort_trends=True).fit(df, **kw)
-        assert np.isfinite(r_conley.overall_se) and r_conley.overall_se > 0
+        assert np.isfinite(r_conley.se) and r_conley.se > 0
         assert r_conley.vcov_type == "conley"
         # conley actually engaged on the full-dummy path (SE differs from hc1)
-        assert r_conley.overall_se != r_hc1.overall_se
-        assert r_conley.overall_att == pytest.approx(r_hc1.overall_att, abs=1e-9)
+        assert r_conley.se != r_hc1.se
+        assert r_conley.att == pytest.approx(r_hc1.att, abs=1e-9)
 
     def test_conley_aggregations_finite(self):
         """conley vcov flows through aggregate('group'|'calendar'|'event') —
@@ -3491,7 +3491,7 @@ class TestConleyWooldridge:
             # aggregate() mutates in place, so re-fit per aggregation type.
             res = WooldridgeDiD(vcov_type="conley", **ck).fit(_staggered_panel(seed=52), **kw)
             res.aggregate(agg)
-            assert np.isfinite(res.overall_se) and res.overall_se > 0, agg
+            assert np.isfinite(res.se) and res.se > 0, agg
             effects = getattr(res, field)
             assert effects, (agg, "no effects populated")
             for key, eff in effects.items():
@@ -3514,7 +3514,7 @@ class TestConleyWooldridge:
                 _staggered_panel(seed=53), **kw
             )
             res.aggregate(agg)
-            assert np.isfinite(res.overall_se) and res.overall_se > 0, agg
+            assert np.isfinite(res.se) and res.se > 0, agg
             effects = getattr(res, field)
             assert effects, (agg, "no effects populated")
             for key, eff in effects.items():
@@ -3533,8 +3533,8 @@ class TestConleyWooldridge:
             df, **kw
         )
         r_hc1 = WooldridgeDiD(vcov_type="hc1", control_group="never_treated").fit(df, **kw)
-        assert np.isfinite(r_conley.overall_se) and r_conley.overall_se > 0
-        assert r_conley.overall_att == pytest.approx(r_hc1.overall_att, abs=1e-9)
+        assert np.isfinite(r_conley.se) and r_conley.se > 0
+        assert r_conley.att == pytest.approx(r_hc1.att, abs=1e-9)
 
 
 def _staggered_panel(seed=51, n_units=36, n_periods=6):

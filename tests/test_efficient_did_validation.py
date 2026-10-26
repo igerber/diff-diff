@@ -118,9 +118,9 @@ def _run_mc_simulation(n_sims, rho, seed=1000, also_cs=False):
             first_treat="first_treat",
         )
         edid_estimates.append(_compute_es_avg(res))
-        edid_overall_att.append(res.overall_att)
-        edid_overall_se.append(res.overall_se)
-        edid_overall_ci.append(res.overall_conf_int)
+        edid_overall_att.append(res.att)
+        edid_overall_se.append(res.se)
+        edid_overall_ci.append(res.conf_int)
 
         if also_cs:
             cs = CallawaySantAnna(control_group="never_treated")

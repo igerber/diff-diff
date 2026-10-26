@@ -56,9 +56,9 @@ class TestBasicFit:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_all_methods(self, rc_data, method):
@@ -69,9 +69,9 @@ class TestBasicFit:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_panel_param_in_get_params(self):
         cs = CallawaySantAnna(panel=False)
@@ -97,7 +97,7 @@ class TestMethodsAgreeNoCovariates:
                 "period",
                 "first_treat",
             )
-            results[method] = r.overall_att
+            results[method] = r.att
 
         np.testing.assert_allclose(results["reg"], results["ipw"], atol=1e-10)
         np.testing.assert_allclose(results["reg"], results["dr"], atol=1e-10)
@@ -120,8 +120,8 @@ class TestTreatmentEffectRecovery:
             "first_treat",
         )
         # DGP has treatment_effect=2.0 by default
-        assert result.overall_att > 0
-        assert abs(result.overall_att - 2.0) < 2.0  # within 2 SE roughly
+        assert result.att > 0
+        assert abs(result.att - 2.0) < 2.0  # within 2 SE roughly
 
 
 # =============================================================================
@@ -140,7 +140,7 @@ class TestAggregation:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         # the fit never populates the fit-time surface; aggregation is post-fit
         assert result.event_study_effects is None
         assert result.group_effects is None
@@ -171,9 +171,9 @@ class TestCovariates:
             "first_treat",
             covariates=["x1"],
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # =============================================================================
@@ -194,8 +194,8 @@ class TestSurveyWeights:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_survey_covariates_dr(self, rc_data_with_survey):
@@ -210,9 +210,9 @@ class TestSurveyWeights:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # =============================================================================
@@ -233,7 +233,7 @@ class TestControlGroup:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_never_treated(self, rc_data):
         result = CallawaySantAnna(
@@ -245,7 +245,7 @@ class TestControlGroup:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 # =============================================================================
@@ -266,7 +266,7 @@ class TestBasePeriod:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_varying(self, rc_data):
         result = CallawaySantAnna(estimation_method="reg", panel=False, base_period="varying").fit(
@@ -276,7 +276,7 @@ class TestBasePeriod:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 # =============================================================================
@@ -298,7 +298,7 @@ class TestBootstrap:
             "first_treat",
         )
         assert result.bootstrap_results is not None
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
 
 # =============================================================================
@@ -379,7 +379,7 @@ class TestIFCorrections:
             covariates=["x1"],
         )
         # SEs should differ (DR has nuisance IF corrections)
-        assert r_reg.overall_se != r_dr.overall_se
+        assert r_reg.se != r_dr.se
 
     def test_panel_field_on_results(self, rc_data):
         """panel=False should be reflected on CallawaySantAnnaResults."""
@@ -435,12 +435,12 @@ class TestAnalyticalBootstrapConvergence:
             covariates=["x1"],
         )
         # ATTs should match (bootstrap doesn't change point estimate)
-        np.testing.assert_allclose(r_analytical.overall_att, r_bootstrap.overall_att, atol=1e-10)
+        np.testing.assert_allclose(r_analytical.att, r_bootstrap.att, atol=1e-10)
         # SEs should be within 10% (proves IF scaling is correct)
-        ratio = r_analytical.overall_se / r_bootstrap.overall_se
+        ratio = r_analytical.se / r_bootstrap.se
         assert 0.9 < ratio < 1.1, (
             f"Analytical/bootstrap SE ratio {ratio:.3f} outside [0.9, 1.1] — "
-            f"analytical={r_analytical.overall_se:.4f}, bootstrap={r_bootstrap.overall_se:.4f}"
+            f"analytical={r_analytical.se:.4f}, bootstrap={r_bootstrap.se:.4f}"
         )
 
 
@@ -487,9 +487,9 @@ class TestUnequalCohortCounts:
             "period",
             "first_treat",
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_dr_covariates_unequal(self, unequal_rc_data):
         """DR with covariates under unequal cohort counts."""
@@ -503,8 +503,8 @@ class TestUnequalCohortCounts:
             "first_treat",
             covariates=["x1"],
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_bootstrap_unequal(self, unequal_rc_data):
         """Bootstrap with unequal cohort counts."""
@@ -518,4 +518,4 @@ class TestUnequalCohortCounts:
             "first_treat",
         )
         assert result.bootstrap_results is not None
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)

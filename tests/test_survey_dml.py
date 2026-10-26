@@ -270,8 +270,8 @@ class TestInvariants:
         # numerical route than the unweighted one).
         res_w = _fit(df, panel=panel, survey=SurveyDesign(weights="w1"))
         base = panel_plain if panel else rcs_plain
-        np.testing.assert_allclose(res_w.overall_att, base.overall_att, rtol=0, atol=1e-12)
-        np.testing.assert_allclose(res_w.overall_se, base.overall_se, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(res_w.att, base.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(res_w.se, base.se, rtol=0, atol=1e-12)
 
     @pytest.mark.parametrize("panel", [True, False])
     def test_weight_scale_invariance(self, panel, panel_df, rcs_df):
@@ -279,21 +279,21 @@ class TestInvariants:
         df["w3"] = df["w"] * 3.0
         r1 = _fit(df, panel=panel, survey=_DESIGN)
         r3 = _fit(df, panel=panel, survey=SurveyDesign(weights="w3", strata="stratum", psu="psu"))
-        np.testing.assert_allclose(r3.overall_att, r1.overall_att, rtol=1e-10)
-        np.testing.assert_allclose(r3.overall_se, r1.overall_se, rtol=1e-10)
+        np.testing.assert_allclose(r3.att, r1.att, rtol=1e-10)
+        np.testing.assert_allclose(r3.se, r1.se, rtol=1e-10)
 
     @pytest.mark.parametrize("panel", [True, False])
     def test_weights_move_the_point_estimate(
         self, panel, panel_survey, rcs_survey, panel_plain, rcs_plain
     ):
         res, base = (panel_survey, panel_plain) if panel else (rcs_survey, rcs_plain)
-        assert np.isfinite(res.overall_att)
-        assert res.overall_att != base.overall_att
+        assert np.isfinite(res.att)
+        assert res.att != base.att
 
     @pytest.mark.parametrize("panel", [True, False])
     def test_full_design_smoke(self, panel, panel_survey, rcs_survey):
         res = panel_survey if panel else rcs_survey
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
         assert res.survey_metadata is not None
         assert res.survey_metadata.n_strata == 2
         assert res.survey_metadata.n_psu == 20
@@ -308,7 +308,7 @@ class TestInvariants:
         df["fpc"] = 11
         r_nofpc = _fit(df, survey=_DESIGN)
         r_fpc = _fit(df, survey=SurveyDesign(weights="w", strata="stratum", psu="psu", fpc="fpc"))
-        assert r_fpc.overall_se < r_nofpc.overall_se
+        assert r_fpc.se < r_nofpc.se
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,7 @@ class TestPerCellSE:
         df["one_psu"] = 0
         with pytest.warns(UserWarning, match="PSU"):
             res = _fit(df, survey=SurveyDesign(weights="w", psu="one_psu"), ignore_warnings=False)
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         found = False
         for data in res.group_time_effects.values():
             if data.get("is_reference") or data.get("skip_reason") is not None:
@@ -413,20 +413,20 @@ class TestClusterWiring:
     def test_bare_cluster_matches_explicit_psu_design(self, panel_df):
         r_cluster = _fit(panel_df, cluster="psu")
         r_design = _fit(panel_df, survey=SurveyDesign(psu="psu"))
-        np.testing.assert_allclose(r_cluster.overall_att, r_design.overall_att, rtol=1e-12)
-        np.testing.assert_allclose(r_cluster.overall_se, r_design.overall_se, rtol=1e-12)
+        np.testing.assert_allclose(r_cluster.att, r_design.att, rtol=1e-12)
+        np.testing.assert_allclose(r_cluster.se, r_design.se, rtol=1e-12)
 
     def test_identity_psu_bare_cluster_bit_identical_on_complete_panel(self, panel_df, panel_plain):
         # Identity PSU (cluster == unit) on a fully complete panel: folds
         # stay stratified (predicate's coarser-than-unit conjunct), kernels
         # stay unweighted, aggregation masses coincide -> bit-identical.
         res = _fit(panel_df, cluster="unit")
-        assert res.overall_att == panel_plain.overall_att
+        assert res.att == panel_plain.att
         # The SE deliberately moves: identity-PSU CR1 carries the
         # per-PSU centering + Bessel factor the plain sqrt(sum(if^2))
         # does not (that IS the clustering request).
-        assert res.overall_se != panel_plain.overall_se
-        assert np.isfinite(res.overall_se)
+        assert res.se != panel_plain.se
+        assert np.isfinite(res.se)
 
     def test_incomplete_panel_bare_cluster_moves_overall_att(self):
         # CS-parity divergence (staggered_results.py bare-cluster note): the
@@ -436,12 +436,12 @@ class TestClusterWiring:
         df = _make_panel(drop_one=True)
         base = _fit(df)
         res = _fit(df, cluster="unit")
-        assert np.isfinite(res.overall_att)
-        assert res.overall_att != base.overall_att
+        assert np.isfinite(res.att)
+        assert res.att != base.att
 
     def test_xy_only_learner_works_under_bare_cluster(self, panel_df):
         res = _fit(panel_df, cluster="psu", outcome_learner=_XYOnlyRegressor())
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_design_psu_wins_over_cluster_with_warning(self, panel_df):
         df = panel_df.copy()
@@ -603,8 +603,8 @@ class TestFolds:
                 n_folds=5,
                 ignore_warnings=False,
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         diags = [d for d in res.cross_fit_diagnostics.values() if d.get("propensity")]
         assert diags and all(d["psu_folds"] is True for d in diags)
         # Effective fold count == n_psu (3), visible in the per-fold counts.
@@ -623,8 +623,8 @@ class TestFolds:
         df = (panel_df if panel else rcs_df).copy()
         df["psu3"] = df["unit"] % 3
         res = _fit(df, panel=panel, survey=SurveyDesign(weights="w", psu="psu3"), n_folds=3)
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         diags = [d for d in res.cross_fit_diagnostics.values() if d.get("propensity")]
         assert diags and all(d["psu_folds"] is True for d in diags)
         assert all(len(d["propensity"]["n_fit_per_fold"]) == 3 for d in diags)
@@ -747,8 +747,8 @@ class TestSurveyBootstrap:
     def test_survey_bootstrap_smoke(self, panel, panel_df, rcs_df, ci_params):
         df = panel_df if panel else rcs_df
         res = _fit(df, panel=panel, survey=_DESIGN, n_bootstrap=ci_params.bootstrap(49))
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
     def test_single_psu_bootstrap_nan_with_dml_label(self, panel_df, ci_params):
         df = panel_df.copy()
@@ -760,7 +760,7 @@ class TestSurveyBootstrap:
                 n_bootstrap=ci_params.bootstrap(29),
                 ignore_warnings=False,
             )
-        assert np.isnan(res.overall_se)
+        assert np.isnan(res.se)
 
     def test_replay_label_and_legacy_kit_fallback(self, panel_df, ci_params):
         df = panel_df.copy()
@@ -784,7 +784,7 @@ class TestSurveyBootstrap:
     def test_survey_bootstrap_replay_matches_fit(self, panel_df, ci_params):
         res = _fit(panel_df, survey=_DESIGN, n_bootstrap=ci_params.bootstrap(49))
         agg = res.aggregate("simple")
-        np.testing.assert_allclose(float(agg.att[0]), res.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(float(agg.att[0]), res.att, rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -836,9 +836,9 @@ class TestRejections:
 
     def test_weighted_and_kwargs_learners_accepted_under_survey(self, panel_df):
         r1 = _fit(panel_df, survey=_DESIGN, outcome_learner=_WeightedRegressor())
-        assert np.isfinite(r1.overall_att)
+        assert np.isfinite(r1.att)
         r2 = _fit(panel_df, survey=_DESIGN, outcome_learner=_KwargsRegressor())
-        assert np.isfinite(r2.overall_att)
+        assert np.isfinite(r2.att)
 
 
 # ---------------------------------------------------------------------------
@@ -958,7 +958,7 @@ class TestReplicateDesigns:
     @pytest.mark.parametrize("fixture", ["panel_replicate", "rcs_replicate"])
     def test_acceptance_both_lanes(self, fixture, request):
         res = request.getfixturevalue(fixture)
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
         assert res.survey_metadata is not None
         # Full-rank JK1 over 20 PSUs: QR-rank df = R - 1.
         assert res.survey_metadata.df_survey == 19
@@ -976,7 +976,7 @@ class TestReplicateDesigns:
             df,
             survey=SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="BRR"),
         )
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
         assert res.survey_metadata is not None
 
     def test_combined_weights_false_branch(self, panel_replicate_df, panel_replicate):
@@ -986,9 +986,9 @@ class TestReplicateDesigns:
         # routed it through the combined branch would reproduce it exactly).
         df, rep_cols = panel_replicate_df
         res = _fit(df, survey=_jk1_design(rep_cols, combined_weights=False))
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
-        np.testing.assert_allclose(res.overall_att, panel_replicate.overall_att, rtol=1e-12)
-        assert not np.isclose(res.overall_se, panel_replicate.overall_se, rtol=1e-6)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+        np.testing.assert_allclose(res.att, panel_replicate.att, rtol=1e-12)
+        assert not np.isclose(res.se, panel_replicate.se, rtol=1e-6)
 
     @pytest.mark.parametrize("fixture", ["panel_replicate", "rcs_replicate"])
     def test_per_cell_se_matches_compute_replicate_if_variance(self, fixture, request):
@@ -1018,8 +1018,8 @@ class TestReplicateDesigns:
         for c in ["w"] + rep_cols:
             df_s[c] = df_s[c] * 100.0
         scaled = _fit(df_s, survey=_jk1_design(rep_cols), outcome_learner=learner)
-        np.testing.assert_allclose(scaled.overall_att, base.overall_att, rtol=1e-14)
-        np.testing.assert_allclose(scaled.overall_se, base.overall_se, rtol=1e-14)
+        np.testing.assert_allclose(scaled.att, base.att, rtol=1e-14)
+        np.testing.assert_allclose(scaled.se, base.se, rtol=1e-14)
 
     def test_ridge_scale_dependence_bounded(self, panel_replicate_df):
         # RidgeLearner is weight-SCALE-sensitive by documented solve_ridge
@@ -1033,8 +1033,8 @@ class TestReplicateDesigns:
         for c in ["w"] + rep_cols:
             df_s[c] = df_s[c] * 100.0
         scaled = _fit(df_s, survey=_jk1_design(rep_cols), outcome_learner=RidgeLearner(alpha=1.0))
-        assert np.isfinite(scaled.overall_att)
-        assert abs(scaled.overall_att - base.overall_att) < 1e-2
+        assert np.isfinite(scaled.att)
+        assert abs(scaled.att - base.att) < 1e-2
 
     def test_df_tightening_spy_reaches_all_surfaces(self, panel_replicate_df, monkeypatch):
         # dCDH two-pass convention: reduce n_valid on EVERY call; the
@@ -1057,8 +1057,8 @@ class TestReplicateDesigns:
         expected_df = reduced_n_valid - 1
         assert res.survey_metadata.df_survey == expected_df
         # Overall: min-cap picked the reduced value (19 -> 6).
-        t_overall = res.overall_att / res.overall_se
-        assert res.overall_p_value == pytest.approx(
+        t_overall = res.att / res.se
+        assert res.p_value == pytest.approx(
             2 * _stats.t.sf(abs(t_overall), df=expected_df), rel=1e-10
         )
         # Per-cell: every finite cell's p-value uses the reduced df.
@@ -1105,10 +1105,8 @@ class TestReplicateDesigns:
         monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_n_valid)
         res = _fit(df, survey=design)
         assert res.survey_metadata.df_survey == 4
-        t_overall = res.overall_att / res.overall_se
-        assert res.overall_p_value == pytest.approx(
-            2 * _stats.t.sf(abs(t_overall), df=4), rel=1e-10
-        )
+        t_overall = res.att / res.se
+        assert res.p_value == pytest.approx(2 * _stats.t.sf(abs(t_overall), df=4), rel=1e-10)
 
     def test_rank_one_replicate_matrix_nan_inference(self, panel_df):
         # All replicate columns identical to the full weights: QR rank 1 ->
@@ -1134,10 +1132,10 @@ class TestReplicateDesigns:
         assert checked > 0
         assert_nan_inference(
             {
-                "se": res.overall_se,
-                "t_stat": res.overall_t_stat,
-                "p_value": res.overall_p_value,
-                "conf_int": res.overall_conf_int,
+                "se": res.se,
+                "t_stat": res.t_stat,
+                "p_value": res.p_value,
+                "conf_int": res.conf_int,
             }
         )
 

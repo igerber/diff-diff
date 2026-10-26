@@ -93,8 +93,8 @@ class TestSunAbraham:
 
         assert sa.is_fitted_
         assert isinstance(results, SunAbrahamResults)
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert len(results.event_study_effects) > 0
 
     def test_positive_treatment_effect(self):
@@ -111,9 +111,9 @@ class TestSunAbraham:
         )
 
         # Should detect positive effect
-        assert results.overall_att > 0
+        assert results.att > 0
         # Effect should be roughly correct (within reasonable bounds)
-        assert abs(results.overall_att - 3.0) < 2 * results.overall_se + 1.5
+        assert abs(results.att - 3.0) < 2 * results.se + 1.5
 
     def test_zero_treatment_effect(self):
         """Test with no treatment effect."""
@@ -129,7 +129,7 @@ class TestSunAbraham:
         )
 
         # Effect should be close to zero
-        assert abs(results.overall_att) < 3 * results.overall_se + 0.5
+        assert abs(results.att) < 3 * results.se + 0.5
 
     def test_event_study_effects(self):
         """Test event study effects structure."""
@@ -206,8 +206,8 @@ class TestSunAbraham:
         assert results2.control_group == "not_yet_treated"
         # Results may be different
         # (they don't have to be for this test to pass)
-        assert results1.overall_att is not None
-        assert results2.overall_att is not None
+        assert results1.att is not None
+        assert results2.att is not None
 
     def test_summary_output(self):
         """Test summary output formatting."""
@@ -363,8 +363,8 @@ class TestSunAbrahamBootstrap:
         assert results.bootstrap_results is not None
         assert results.bootstrap_results.n_bootstrap == n_boot
         assert results.bootstrap_results.weight_type == "pairs"
-        assert results.overall_se > 0
-        assert results.overall_conf_int[0] < results.overall_att < results.overall_conf_int[1]
+        assert results.se > 0
+        assert results.conf_int[0] < results.att < results.conf_int[1]
 
     def test_bootstrap_reproducibility(self, ci_params):
         """Test that bootstrap is reproducible with same seed."""
@@ -390,8 +390,8 @@ class TestSunAbrahamBootstrap:
         )
 
         # Results should be identical with same seed
-        assert results1.overall_se == results2.overall_se
-        assert results1.overall_conf_int == results2.overall_conf_int
+        assert results1.se == results2.se
+        assert results1.conf_int == results2.conf_int
 
     def test_bootstrap_different_seeds(self, ci_params):
         """Test that different seeds give different results."""
@@ -417,7 +417,7 @@ class TestSunAbrahamBootstrap:
         )
 
         # Results should differ with different seeds
-        assert results1.overall_se != results2.overall_se
+        assert results1.se != results2.se
 
     def test_bootstrap_p_value_significance(self, ci_params):
         """Test that strong effect has significant p-value with bootstrap."""
@@ -434,7 +434,7 @@ class TestSunAbrahamBootstrap:
         )
 
         # Strong effect should be significant
-        assert results.overall_p_value < 0.05
+        assert results.p_value < 0.05
         assert results.is_significant
 
     def test_bootstrap_distribution_stored(self, ci_params):
@@ -524,12 +524,12 @@ class TestSunAbrahamVsCallawaySantAnna:
         )
 
         # Both should detect positive effect
-        assert sa_results.overall_att > 0
-        assert cs_results.overall_att > 0
+        assert sa_results.att > 0
+        assert cs_results.att > 0
 
         # Both should be reasonably close to true effect
-        assert abs(sa_results.overall_att - 3.0) < 2.0
-        assert abs(cs_results.overall_att - 3.0) < 2.0
+        assert abs(sa_results.att - 3.0) < 2.0
+        assert abs(cs_results.att - 3.0) < 2.0
 
     def test_pre_period_difference_expected_between_cs_sa(self):
         """Pre-periods differ between CS (varying) and SA; post-periods match.
@@ -688,11 +688,10 @@ class TestSunAbrahamVsCallawaySantAnna:
 
         # Under homogeneous effects, SA and CS should give similar results
         # Allow for some sampling variation
-        diff = abs(sa_results.overall_att - cs_results.overall_att)
-        max_se = max(sa_results.overall_se, cs_results.overall_se)
+        diff = abs(sa_results.att - cs_results.att)
+        max_se = max(sa_results.se, cs_results.se)
         assert diff < 3 * max_se, (
-            f"SA ATT={sa_results.overall_att:.3f}, "
-            f"CS ATT={cs_results.overall_att:.3f}, diff={diff:.3f}"
+            f"SA ATT={sa_results.att:.3f}, " f"CS ATT={cs_results.att:.3f}, diff={diff:.3f}"
         )
 
 
@@ -736,7 +735,7 @@ class TestSunAbrahamEdgeCases:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
+        assert results.att is not None
         assert len(results.groups) == 1
 
     def test_many_cohorts(self):
@@ -752,7 +751,7 @@ class TestSunAbrahamEdgeCases:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
+        assert results.att is not None
         assert len(results.groups) > 1
 
     def test_unbalanced_panel(self):
@@ -773,7 +772,7 @@ class TestSunAbrahamEdgeCases:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
+        assert results.att is not None
 
     def test_anticipation_periods(self):
         """Test with anticipation periods."""
@@ -788,7 +787,7 @@ class TestSunAbrahamEdgeCases:
             first_treat="first_treat",
         )
 
-        assert results.overall_att is not None
+        assert results.att is not None
         assert sa.anticipation == 1
 
     def test_with_covariates(self):
@@ -810,8 +809,8 @@ class TestSunAbrahamEdgeCases:
             covariates=["covariate1", "covariate2"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_cohort_level_dataframe(self):
         """Test cohort-level DataFrame output."""
@@ -887,7 +886,7 @@ class TestSunAbrahamEdgeCases:
 
         # Should still get valid results
         assert results is not None
-        assert results.overall_att is not None
+        assert results.att is not None
 
 
 class TestSunAbrahamTStatNaN:
@@ -945,21 +944,21 @@ class TestSunAbrahamTStatNaN:
             first_treat="first_treat",
         )
 
-        se = results.overall_se
-        t_stat = results.overall_t_stat
+        se = results.se
+        t_stat = results.t_stat
 
         if not np.isfinite(se) or se == 0:
             assert np.isnan(t_stat), f"overall_t_stat should be NaN when SE={se}, got {t_stat}"
-            assert np.isnan(results.overall_p_value), (
+            assert np.isnan(results.p_value), (
                 f"overall_p_value should be NaN when SE={se} (analytical inference), "
-                f"got {results.overall_p_value}"
+                f"got {results.p_value}"
             )
-            ci = results.overall_conf_int
+            ci = results.conf_int
             assert np.isnan(ci[0]) and np.isnan(
                 ci[1]
             ), f"overall_conf_int should be (NaN, NaN) when SE={se}, got {ci}"
         else:
-            expected = results.overall_att / se
+            expected = results.att / se
             assert np.isclose(
                 t_stat, expected
             ), f"overall_t_stat should be ATT/SE, expected {expected}, got {t_stat}"
@@ -985,8 +984,8 @@ class TestSunAbrahamTStatNaN:
         )
 
         # Check overall
-        se = results.overall_se
-        t_stat = results.overall_t_stat
+        se = results.se
+        t_stat = results.t_stat
 
         if not np.isfinite(se) or se == 0:
             assert np.isnan(
@@ -1104,18 +1103,14 @@ class TestSunAbrahamMethodology:
         )
 
         # Overall ATT and SE should be NaN
-        assert np.isnan(results.overall_att), f"Expected NaN overall_att, got {results.overall_att}"
-        assert np.isnan(results.overall_se), f"Expected NaN overall_se, got {results.overall_se}"
+        assert np.isnan(results.att), f"Expected NaN overall_att, got {results.att}"
+        assert np.isnan(results.se), f"Expected NaN overall_se, got {results.se}"
         # Downstream inference should propagate NaN
-        assert np.isnan(
-            results.overall_t_stat
-        ), f"Expected NaN overall_t_stat, got {results.overall_t_stat}"
-        assert np.isnan(
-            results.overall_p_value
-        ), f"Expected NaN overall_p_value, got {results.overall_p_value}"
-        assert np.isnan(results.overall_conf_int[0]) and np.isnan(
-            results.overall_conf_int[1]
-        ), f"Expected (NaN, NaN) overall_conf_int, got {results.overall_conf_int}"
+        assert np.isnan(results.t_stat), f"Expected NaN overall_t_stat, got {results.t_stat}"
+        assert np.isnan(results.p_value), f"Expected NaN overall_p_value, got {results.p_value}"
+        assert np.isnan(results.conf_int[0]) and np.isnan(
+            results.conf_int[1]
+        ), f"Expected (NaN, NaN) overall_conf_int, got {results.conf_int}"
 
     def test_no_post_effects_bootstrap_returns_nan(self, ci_params):
         """Test that no post-treatment effects returns NaN even with bootstrap.
@@ -1160,17 +1155,15 @@ class TestSunAbrahamMethodology:
             )
 
         # All overall inference fields should be NaN
-        assert np.isnan(results.overall_att), f"Expected NaN overall_att, got {results.overall_att}"
-        assert np.isnan(results.overall_se), f"Expected NaN overall_se, got {results.overall_se}"
+        assert np.isnan(results.att), f"Expected NaN overall_att, got {results.att}"
+        assert np.isnan(results.se), f"Expected NaN overall_se, got {results.se}"
+        assert np.isnan(results.t_stat), f"Expected NaN overall_t_stat, got {results.t_stat}"
         assert np.isnan(
-            results.overall_t_stat
-        ), f"Expected NaN overall_t_stat, got {results.overall_t_stat}"
-        assert np.isnan(
-            results.overall_p_value
-        ), f"Expected NaN overall_p_value with bootstrap, got {results.overall_p_value}"
-        assert np.isnan(results.overall_conf_int[0]) and np.isnan(
-            results.overall_conf_int[1]
-        ), f"Expected (NaN, NaN) overall_conf_int, got {results.overall_conf_int}"
+            results.p_value
+        ), f"Expected NaN overall_p_value with bootstrap, got {results.p_value}"
+        assert np.isnan(results.conf_int[0]) and np.isnan(
+            results.conf_int[1]
+        ), f"Expected (NaN, NaN) overall_conf_int, got {results.conf_int}"
 
     def test_event_time_no_truncation(self):
         """Test that event times beyond ±20 are estimated (Step 5d).
@@ -1318,9 +1311,7 @@ class TestSunAbrahamMethodology:
                 ), "Expected warning about simplified variance fallback"
 
         # The result should still have a positive SE (simplified variance)
-        assert (
-            results.overall_se > 0
-        ), f"Expected positive SE from fallback, got {results.overall_se}"
+        assert results.se > 0, f"Expected positive SE from fallback, got {results.se}"
 
     def test_iw_weights_match_cohort_shares(self):
         """Test that IW weights match event-time sample shares.
@@ -1437,11 +1428,11 @@ class TestSunAbrahamMethodology:
 
         # Results should be identical to first_treat=0 encoding
         assert np.isclose(
-            results_inf.overall_att, results_zero.overall_att
-        ), f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
+            results_inf.att, results_zero.att
+        ), f"ATT differs: inf={results_inf.att}, zero={results_zero.att}"
         assert np.isclose(
-            results_inf.overall_se, results_zero.overall_se
-        ), f"SE differs: inf={results_inf.overall_se}, zero={results_zero.overall_se}"
+            results_inf.se, results_zero.se
+        ), f"SE differs: inf={results_inf.se}, zero={results_zero.se}"
 
     def test_removed_params_raise_typeerror(self):
         """Removed min_pre_periods/min_post_periods raise TypeError."""
@@ -1494,21 +1485,21 @@ class TestSunAbrahamVcovType:
         res_explicit = SunAbraham(vcov_type="hc1").fit(data, **kwargs)
         # Both paths execute the same code under the hood (default vcov_type
         # is "hc1"); any divergence is float64 representation noise.
-        assert np.isclose(res_default.overall_att, res_explicit.overall_att, atol=1e-14)
-        assert np.isclose(res_default.overall_se, res_explicit.overall_se, atol=1e-14)
-        assert np.isclose(res_default.overall_p_value, res_explicit.overall_p_value, atol=1e-12)
+        assert np.isclose(res_default.att, res_explicit.att, atol=1e-14)
+        assert np.isclose(res_default.se, res_explicit.se, atol=1e-14)
+        assert np.isclose(res_default.p_value, res_explicit.p_value, atol=1e-12)
 
     def test_classical_finite(self):
         """SA(vcov_type='classical') produces finite ATT/SE; drops auto-cluster."""
         data = self._panel()
         kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         res = SunAbraham(vcov_type="classical").fit(data, **kwargs)
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert np.isfinite(res.overall_p_value)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert np.isfinite(res.p_value)
         # Classical differs from HC1 cluster-at-unit in heteroscedastic / panel data
         res_hc1 = SunAbraham(vcov_type="hc1").fit(data, **kwargs)
-        assert res.overall_se != res_hc1.overall_se
+        assert res.se != res_hc1.se
 
     def test_hc2_finite_no_auto_cluster(self):
         """SA(vcov_type='hc2') runs without explicit cluster (linalg validator
@@ -1516,22 +1507,22 @@ class TestSunAbrahamVcovType:
         data = self._panel()
         kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         res = SunAbraham(vcov_type="hc2").fit(data, **kwargs)
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         # HC2 differs from cluster-at-unit HC1 on this panel
         res_hc1 = SunAbraham(vcov_type="hc1").fit(data, **kwargs)
-        assert res.overall_se != res_hc1.overall_se
+        assert res.se != res_hc1.se
 
     def test_hc2_bm_finite_with_auto_cluster(self):
         """SA(vcov_type='hc2_bm') auto-clusters at unit by default; routes to CR2-BM."""
         data = self._panel()
         kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         res = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         # HC2-BM applies BM Satterthwaite DOF; should differ from cluster-at-unit HC1
         res_hc1 = SunAbraham(vcov_type="hc1").fit(data, **kwargs)
-        assert res.overall_se != res_hc1.overall_se
+        assert res.se != res_hc1.se
 
     def test_hc2_bm_nan_contrast_dof_regression_pin(self, monkeypatch):
         """NaN BM contrast DOF -> all-NaN row inference + NaN df provenance.
@@ -1604,11 +1595,11 @@ class TestSunAbrahamVcovType:
         data["firm"] = (data["unit"] // 5).astype(int)
         kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         res = SunAbraham(cluster="firm", vcov_type="hc2_bm").fit(data, **kwargs)
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         # Differs from cluster-at-unit (different cluster grouping)
         res_unit = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
-        assert res.overall_se != res_unit.overall_se
+        assert res.se != res_unit.se
 
     def test_hc2_rejects_explicit_cluster(self):
         """SA(cluster=..., vcov_type='hc2') is rejected by the linalg validator."""
@@ -1676,9 +1667,9 @@ class TestSunAbrahamVcovType:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         # Replicate path → bootstrap-style SE; should be finite
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_get_params_includes_vcov_type(self):
         """get_params() returns dict with the new 'vcov_type' key."""
@@ -1713,8 +1704,8 @@ class TestSunAbrahamVcovType:
         sa2 = SunAbraham()
         sa2.set_params(**sa1.get_params())
         res2 = sa2.fit(data, **kwargs)
-        assert res1.overall_att == res2.overall_att
-        assert res1.overall_se == res2.overall_se
+        assert res1.att == res2.att
+        assert res1.se == res2.se
         assert sa2.vcov_type == "hc2_bm"
         assert sa2._vcov_type_explicit is True
 
@@ -1781,8 +1772,8 @@ class TestSunAbrahamVcovType:
             first_treat="first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         # Survey metadata should record unit-level PSUs (n_psu == n_units),
         # NOT per-observation PSUs (n_psu == n_obs). On the panel: 40
         # units × 8 periods = 320 obs.
@@ -1831,8 +1822,8 @@ class TestSunAbrahamVcovType:
         res_hc2 = SunAbraham(vcov_type="hc2").fit(data, **kwargs)
         res_hc2_bm = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
         # ATT should match across all vcov families (FWL)
-        assert np.isclose(res_hc1.overall_att, res_hc2.overall_att, atol=1e-12)
-        assert np.isclose(res_hc1.overall_att, res_hc2_bm.overall_att, atol=1e-12)
+        assert np.isclose(res_hc1.att, res_hc2.att, atol=1e-12)
+        assert np.isclose(res_hc1.att, res_hc2_bm.att, atol=1e-12)
 
     def test_hc2_robustness_value_differs_from_within_transform(self):
         """Confirms hc2 routes through full-dummy: the SE differs from a manual
@@ -1905,9 +1896,9 @@ class TestSunAbrahamVcovType:
             results[vt] = SunAbraham(vcov_type=vt).fit(data, **kwargs)
         # Overall ATT and event_study effects should match across vcov_type
         for vt in ("classical", "hc2", "hc2_bm"):
-            assert np.isclose(results["hc1"].overall_att, results[vt].overall_att, atol=1e-10), (
-                f"overall_att diverges between hc1 ({results['hc1'].overall_att}) "
-                f"and {vt} ({results[vt].overall_att}); covariate threading "
+            assert np.isclose(results["hc1"].att, results[vt].att, atol=1e-10), (
+                f"overall_att diverges between hc1 ({results['hc1'].att}) "
+                f"and {vt} ({results[vt].att}); covariate threading "
                 "regression in the full-dummy design-builder."
             )
             for e in results["hc1"].event_study_effects:
@@ -1934,9 +1925,9 @@ class TestSunAbrahamVcovType:
                 data, **kwargs
             )
         for vt in ("classical", "hc2", "hc2_bm"):
-            assert np.isclose(results["hc1"].overall_att, results[vt].overall_att, atol=1e-10), (
-                f"overall_att diverges between hc1 ({results['hc1'].overall_att}) "
-                f"and {vt} ({results[vt].overall_att}) under "
+            assert np.isclose(results["hc1"].att, results[vt].att, atol=1e-10), (
+                f"overall_att diverges between hc1 ({results['hc1'].att}) "
+                f"and {vt} ({results[vt].att}) under "
                 "control_group='not_yet_treated'; sample-composition regression "
                 "in the full-dummy branch."
             )
@@ -2019,17 +2010,15 @@ class TestSunAbrahamVcovType:
             results[vt] = SunAbraham(vcov_type=vt, n_bootstrap=n_boot, seed=42).fit(data, **kwargs)
             # Bootstrap outputs must be finite for each family
             assert np.isfinite(
-                results[vt].overall_att
+                results[vt].att
             ), f"overall_att non-finite for vcov_type={vt} under bootstrap"
-            assert np.isfinite(
-                results[vt].overall_se
-            ), f"bootstrap SE non-finite for vcov_type={vt}"
+            assert np.isfinite(results[vt].se), f"bootstrap SE non-finite for vcov_type={vt}"
         # Point estimates must match across vcov_type (FWL preserves them
         # across within-transform vs full-dummy refits).
         for vt in ("classical", "hc2", "hc2_bm"):
-            assert np.isclose(results["hc1"].overall_att, results[vt].overall_att, atol=1e-10), (
-                f"Bootstrap overall_att diverges: hc1={results['hc1'].overall_att}, "
-                f"{vt}={results[vt].overall_att}. Bootstrap refits in the new "
+            assert np.isclose(results["hc1"].att, results[vt].att, atol=1e-10), (
+                f"Bootstrap overall_att diverges: hc1={results['hc1'].att}, "
+                f"{vt}={results[vt].att}. Bootstrap refits in the new "
                 "full-dummy branch are not FWL-invariant."
             )
 
@@ -2108,13 +2097,11 @@ class TestSunAbrahamDfConvention:
     def test_residual_default_is_t_not_z(self):
         """The D4/defect fix: aggregates use t(saturated residual df), not z."""
         res = SunAbraham().fit(self._panel(), **self._kw)
-        p_z = 2 * stats.norm.sf(abs(res.overall_t_stat))
-        assert res.overall_p_value != p_z
+        p_z = 2 * stats.norm.sf(abs(res.t_stat))
+        assert res.p_value != p_z
         dfres = res.inference_df
         assert dfres is not None and dfres > 0
-        assert res.overall_p_value == pytest.approx(
-            2 * stats.t.sf(abs(res.overall_t_stat), dfres), rel=1e-12
-        )
+        assert res.p_value == pytest.approx(2 * stats.t.sf(abs(res.t_stat), dfres), rel=1e-12)
         # every ES row shares the same finite residual df (one df source)
         assert set(res.event_study_df.values()) == {dfres}
 
@@ -2123,15 +2110,13 @@ class TestSunAbrahamDfConvention:
         r0 = SunAbraham().fit(data, **self._kw)
         r1 = SunAbraham(df_convention="cluster").fit(data, **self._kw)
         G = data["unit"].nunique()
-        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
-        assert r1.overall_t_stat == r0.overall_t_stat
-        assert r1.overall_p_value == pytest.approx(
-            2 * stats.t.sf(abs(r1.overall_t_stat), G - 1), rel=1e-12
-        )
-        lo, hi = r1.overall_conf_int
+        assert r1.att == r0.att and r1.se == r0.se
+        assert r1.t_stat == r0.t_stat
+        assert r1.p_value == pytest.approx(2 * stats.t.sf(abs(r1.t_stat), G - 1), rel=1e-12)
+        lo, hi = r1.conf_int
         crit = stats.t.ppf(0.975, G - 1)
-        assert lo == pytest.approx(r1.overall_att - crit * r1.overall_se, rel=1e-12)
-        assert hi == pytest.approx(r1.overall_att + crit * r1.overall_se, rel=1e-12)
+        assert lo == pytest.approx(r1.att - crit * r1.se, rel=1e-12)
+        assert hi == pytest.approx(r1.att + crit * r1.se, rel=1e-12)
         assert r1.inference_df == G - 1
         assert set(r1.event_study_df.values()) == {float(G - 1)}
 
@@ -2140,10 +2125,8 @@ class TestSunAbrahamDfConvention:
         data = self._panel()
         r0 = SunAbraham().fit(data, **self._kw)
         rn = SunAbraham(df_convention="normal").fit(data, **self._kw)
-        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
-        assert rn.overall_p_value == pytest.approx(
-            2 * stats.norm.sf(abs(rn.overall_t_stat)), rel=1e-14
-        )
+        assert rn.att == r0.att and rn.se == r0.se
+        assert rn.p_value == pytest.approx(2 * stats.norm.sf(abs(rn.t_stat)), rel=1e-14)
         assert rn.inference_df is None
         # provenance: z rows record NaN
         assert all(np.isnan(v) for v in rn.event_study_df.values())
@@ -2153,8 +2136,8 @@ class TestSunAbrahamDfConvention:
         data = self._panel()
         r_res = SunAbraham(vcov_type="hc2_bm").fit(data, **self._kw)
         r_clu = SunAbraham(vcov_type="hc2_bm", df_convention="cluster").fit(data, **self._kw)
-        assert r_res.overall_p_value == r_clu.overall_p_value
-        assert r_res.overall_conf_int == r_clu.overall_conf_int
+        assert r_res.p_value == r_clu.p_value
+        assert r_res.conf_int == r_clu.conf_int
 
     def test_survey_df_precedence_over_knob(self):
         """Survey design df wins under EVERY knob value: the three fits are
@@ -2174,8 +2157,8 @@ class TestSunAbrahamDfConvention:
         assert base.inference_df is not None and np.isfinite(base.inference_df)
         for conv in ("cluster", "normal"):
             r = fits[conv]
-            assert r.overall_p_value == base.overall_p_value
-            assert r.overall_conf_int == base.overall_conf_int
+            assert r.p_value == base.p_value
+            assert r.conf_int == base.conf_int
             assert r.inference_df == base.inference_df
             assert r.event_study_df == base.event_study_df
 
@@ -2205,9 +2188,9 @@ class TestSunAbrahamDfConvention:
         clone = SunAbraham(**est.get_params())
         data = self._panel()
         r1 = clone.fit(data, **self._kw)
-        p1, d1 = r1.overall_p_value, r1.inference_df
+        p1, d1 = r1.p_value, r1.inference_df
         r2 = clone.fit(data, **self._kw)
-        assert r2.overall_p_value == p1 and r2.inference_df == d1
+        assert r2.p_value == p1 and r2.inference_df == d1
         assert clone.df_convention == "cluster"
 
 

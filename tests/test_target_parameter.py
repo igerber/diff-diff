@@ -474,9 +474,13 @@ class TestTargetParameterCrossSurfaceParity:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
         stub.n_treated = 100
@@ -501,9 +505,13 @@ class TestTargetParameterProseRendering:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
         stub.n_treated = 100
@@ -581,7 +589,7 @@ class TestTargetParameterRealFitIntegration:
         assert "TWFE" in tp["name"] or "TWFE" in tp["definition"]
 
     def test_stacked_did_fit_headline_attribute_matches_real_estimand(self):
-        """``StackedDiDResults.overall_att`` is the average of
+        """``StackedDiDResults.att`` is the average of
         post-treatment event-study coefficients ``delta_h`` with
         delta-method SE (``stacked_did.py`` around line 541). Real-fit
         regression against the reviewer's R1 P1 wording catch.
@@ -630,7 +638,7 @@ class TestTargetParameterRealFitIntegration:
         return pd.DataFrame(rows)
 
     def test_dcdh_did_m_fit_headline_attribute_is_overall_att(self):
-        """``ChaisemartinDHaultfoeuilleResults.overall_att`` holds the
+        """``ChaisemartinDHaultfoeuilleResults.att`` holds the
         DID_M headline scalar (``chaisemartin_dhaultfoeuille_results.py``
         line ~357). R1 P1: previously ``headline_attribute="att"``
         pointed at a non-existent attribute.
@@ -683,7 +691,7 @@ class TestTargetParameterRealFitIntegration:
         assert tp["aggregation"] == "DID_1"
         assert "DID_1" in tp["name"]
         assert tp["headline_attribute"] == "overall_att"
-        assert hasattr(fit, "overall_att")
+        assert hasattr(fit, "att")
 
     def test_dcdh_delta_fit_real(self):
         """Real ``L_max >= 2`` fit: headline is the cost-benefit
@@ -707,7 +715,7 @@ class TestTargetParameterRealFitIntegration:
         assert tp["aggregation"] == "delta"
         assert "delta" in tp["name"]
         assert tp["headline_attribute"] == "overall_att"
-        assert hasattr(fit, "overall_att")
+        assert hasattr(fit, "att")
 
     def test_dcdh_trends_linear_no_scalar_propagates_through_br(self):
         """PR #347 R4 P1 end-to-end: on the dCDH no-scalar
@@ -1232,7 +1240,7 @@ class TestTargetParameterRealFitIntegration:
             trends_linear=True,
         )
         # Real fit must intentionally produce NaN overall_att.
-        assert math.isnan(fit.overall_att), (
+        assert math.isnan(fit.att), (
             "trends_linear + L_max>=2 must suppress overall_att (NaN by "
             "design). If this test fails, the library contract changed — "
             "update the ``no_scalar_headline`` branch of "

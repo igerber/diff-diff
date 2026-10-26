@@ -248,11 +248,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         return self.overall_att_t_stat
 
     def __repr__(self) -> str:
-        sig_att = _get_significance_stars(self.overall_att_p_value)
+        sig_att = _get_significance_stars(self.p_value)
         sig_acrt = _get_significance_stars(self.overall_acrt_p_value)
         return (
             f"ContinuousDiDResults("
-            f"ATT_glob={self.overall_att:.4f}{sig_att}, "
+            f"ATT_glob={self.att:.4f}{sig_att}, "
             f"ACRT_glob={self.overall_acrt:.4f}{sig_acrt}, "
             f"n_groups={len(self.groups)}, "
             f"n_periods={len(self.time_periods)})"
@@ -261,11 +261,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     @property
     def coef_var(self) -> float:
         """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
-        if not (np.isfinite(self.overall_att_se) and self.overall_att_se >= 0):
+        if not (np.isfinite(self.se) and self.se >= 0):
             return np.nan
-        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+        if not np.isfinite(self.att) or self.att == 0:
             return np.nan
-        return self.overall_att_se / abs(self.overall_att)
+        return self.se / abs(self.att)
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """Generate formatted summary.
@@ -332,10 +332,10 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         for label, est, se, t, p in [
             (
                 "ATT_glob",
-                self.overall_att,
-                self.overall_att_se,
-                self.overall_att_t_stat,
-                self.overall_att_p_value,
+                self.att,
+                self.se,
+                self.t_stat,
+                self.p_value,
             ),
             (
                 "ACRT_glob",
@@ -354,7 +354,7 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
                 "-" * w,
                 "",
                 f"{conf_level}% CI for ATT_glob: "
-                f"[{self.overall_att_conf_int[0]:.4f}, {self.overall_att_conf_int[1]:.4f}]",
+                f"[{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
                 f"{conf_level}% CI for ACRT_glob: "
                 f"[{self.overall_acrt_conf_int[0]:.4f}, {self.overall_acrt_conf_int[1]:.4f}]",
             ]
@@ -443,8 +443,8 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
             "se": self.se,
             "t_stat": self.t_stat,
             "p_value": self.p_value,
-            "conf_int_lower": self.overall_att_conf_int[0],
-            "conf_int_upper": self.overall_att_conf_int[1],
+            "conf_int_lower": self.conf_int[0],
+            "conf_int_upper": self.conf_int[1],
             "acrt": self.overall_acrt,
             "acrt_se": self.overall_acrt_se,
             "acrt_t_stat": self.overall_acrt_t_stat,
@@ -536,12 +536,12 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     @property
     def is_significant(self) -> bool:
         """Check if overall ATT is significant."""
-        return bool(self.overall_att_p_value < self.alpha)
+        return bool(self.p_value < self.alpha)
 
     @property
     def significance_stars(self) -> str:
         """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_att_p_value)
+        return _get_significance_stars(self.p_value)
 
     # ------------------------------------------------------------------
     # Post-fit aggregation (row M-025, on the M-122 contract).
@@ -586,7 +586,7 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
             # bit-exact - on bootstrap fits the stored quintet includes a
             # FINITE safe_inference t beside the percentile p/CI and it
             # relays through unchanged; only the df column is NaN there.
-            att_ci = self.overall_att_conf_int
+            att_ci = self.conf_int
             acrt_ci = self.overall_acrt_conf_int
             n_total = float(self.n_treated_units + self.n_control_units)
             df_val = self._stored_inference_df()
@@ -594,11 +594,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
                 level="simple",
                 label=np.array(["overall", "overall"], dtype=object),
                 target=np.array(["att", "acrt"], dtype=object),
-                att=np.array([self.overall_att, self.overall_acrt], dtype=float),
-                se=np.array([self.overall_att_se, self.overall_acrt_se], dtype=float),
-                t_stat=np.array([self.overall_att_t_stat, self.overall_acrt_t_stat], dtype=float),
+                att=np.array([self.att, self.overall_acrt], dtype=float),
+                se=np.array([self.se, self.overall_acrt_se], dtype=float),
+                t_stat=np.array([self.t_stat, self.overall_acrt_t_stat], dtype=float),
                 p_value=np.array(
-                    [self.overall_att_p_value, self.overall_acrt_p_value],
+                    [self.p_value, self.overall_acrt_p_value],
                     dtype=float,
                 ),
                 conf_int_lower=np.array([att_ci[0], acrt_ci[0]], dtype=float),

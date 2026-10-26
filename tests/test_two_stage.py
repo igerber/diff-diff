@@ -112,7 +112,7 @@ class TestTwoStageDiDBasic:
         )
 
         # Should recover ~2.0 with reasonable tolerance
-        assert abs(results.overall_att - 2.0) < 0.3
+        assert abs(results.att - 2.0) < 0.3
 
     def test_se_positive_finite(self):
         """Test that SEs are positive and finite."""
@@ -121,8 +121,8 @@ class TestTwoStageDiDBasic:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert results.overall_se > 0
-        assert np.isfinite(results.overall_se)
+        assert results.se > 0
+        assert np.isfinite(results.se)
 
     def test_ci_contains_point_estimate(self):
         """Test that confidence interval contains the point estimate."""
@@ -131,8 +131,8 @@ class TestTwoStageDiDBasic:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert results.overall_conf_int[0] <= results.overall_att
-        assert results.overall_att <= results.overall_conf_int[1]
+        assert results.conf_int[0] <= results.att
+        assert results.att <= results.conf_int[1]
 
     def test_t_stat_and_p_value(self):
         """Test that t-stat and p-value are consistent."""
@@ -141,12 +141,12 @@ class TestTwoStageDiDBasic:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert np.isfinite(results.overall_t_stat)
-        assert 0 <= results.overall_p_value <= 1
+        assert np.isfinite(results.t_stat)
+        assert 0 <= results.p_value <= 1
 
         # t-stat should equal ATT / SE
-        expected_t = results.overall_att / results.overall_se
-        assert abs(results.overall_t_stat - expected_t) < 1e-10
+        expected_t = results.att / results.se
+        assert abs(results.t_stat - expected_t) < 1e-10
 
     def test_event_study(self):
         """Test event study specification."""
@@ -378,7 +378,7 @@ class TestTwoStageDiDEquivalence:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert abs(ts_results.overall_att - imp_results.overall_att) < 1e-10
+        assert abs(ts_results.att - imp_results.att) < 1e-10
 
     def test_event_study_effects_match_imputation(self):
         """Event study point estimates should match ImputationDiD."""
@@ -461,7 +461,7 @@ class TestTwoStageDiDEquivalence:
         )
 
         # SEs should differ (different variance estimators)
-        assert abs(ts_results.overall_se - imp_results.overall_se) > 1e-6
+        assert abs(ts_results.se - imp_results.se) > 1e-6
 
 
 # =============================================================================
@@ -480,8 +480,8 @@ class TestTwoStageDiDVariance:
         )
 
         # The GMM SE accounts for first-stage estimation uncertainty
-        assert results.overall_se > 0
-        assert np.isfinite(results.overall_se)
+        assert results.se > 0
+        assert np.isfinite(results.se)
 
     def test_event_study_se_positive(self):
         """Event study SEs should all be positive."""
@@ -528,8 +528,8 @@ class TestTwoStageDiDVariance:
                 )
 
         # LSMR fallback must still produce a usable SE.
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
     def test_lsmr_fallback_matches_dense_lstsq_oracle(self):
         """Consumer-level parity on a genuinely singular Stage-1 Gram: any
@@ -587,7 +587,7 @@ class TestTwoStageDiDVariance:
                         time="time",
                         first_treat="first_treat",
                     )
-        assert np.isfinite(results.overall_se)
+        assert np.isfinite(results.se)
 
     def test_uncertified_lsmr_fails_closed_to_nan(self):
         """A finite-but-uncertified LSMR result (istop outside {0,1,2,4,5}
@@ -615,8 +615,8 @@ class TestTwoStageDiDVariance:
                         time="time",
                         first_treat="first_treat",
                     )
-        assert np.isnan(results.overall_se)
-        assert np.isnan(results.overall_p_value)
+        assert np.isnan(results.se)
+        assert np.isnan(results.p_value)
 
     def test_weighted_survey_lsmr_fallback_no_densify(self):
         """The weighted/survey GMM-sandwich site (X'_10 W X_10) takes the
@@ -655,7 +655,7 @@ class TestTwoStageDiDVariance:
                         first_treat="first_treat",
                         survey_design=SurveyDesign(weights="w"),
                     )
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_forced_fallback_fit_level_lsmr_vs_dense_oracle(self):
         """Fit-level parity on the FORCED fallback path (the fixture itself
@@ -702,8 +702,8 @@ class TestTwoStageDiDVariance:
                     warnings.simplefilter("ignore")
                     res_dense = _fit()
 
-        np.testing.assert_allclose(res_lsmr.overall_att, res_dense.overall_att, rtol=1e-8)
-        np.testing.assert_allclose(res_lsmr.overall_se, res_dense.overall_se, rtol=1e-6)
+        np.testing.assert_allclose(res_lsmr.att, res_dense.att, rtol=1e-8)
+        np.testing.assert_allclose(res_lsmr.se, res_dense.se, rtol=1e-6)
 
     def test_sparse_factorized_bootstrap_dense_fallback_emits_warning(self):
         """Silent-failure audit axis C: the TwoStage bootstrap path has the
@@ -731,8 +731,8 @@ class TestTwoStageDiDVariance:
                 )
 
         # Bootstrap LSMR fallback must still produce a usable SE.
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
 
 # =============================================================================
@@ -783,8 +783,8 @@ class TestTwoStageDiDEdgeCases:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert results.overall_att > 0
-        assert results.overall_se > 0
+        assert results.att > 0
+        assert results.se > 0
 
     def test_single_cohort(self):
         """Should work with a single treatment cohort."""
@@ -812,7 +812,7 @@ class TestTwoStageDiDEdgeCases:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        assert abs(results.overall_att - 2.0) < 0.5
+        assert abs(results.att - 2.0) < 0.5
         assert len(results.groups) == 1
 
     def test_anticipation_shifts_timing(self):
@@ -828,7 +828,7 @@ class TestTwoStageDiDEdgeCases:
 
         # With anticipation, more obs are treated -> different ATT
         assert results_with_ant.n_treated_obs > results_no_ant.n_treated_obs
-        assert abs(results_no_ant.overall_att - results_with_ant.overall_att) > 0.01
+        assert abs(results_no_ant.att - results_with_ant.att) > 0.01
 
     def test_rank_deficiency_warning(self):
         """Rank deficiency should emit warning in 'warn' mode."""
@@ -918,8 +918,8 @@ class TestTwoStageDiDEdgeCases:
         assert nan_horizons_found > 0, "Should have at least one Prop 5 NaN horizon"
 
         # Normal results should have finite values
-        assert np.isfinite(results.overall_t_stat)
-        assert np.isfinite(results.overall_p_value)
+        assert np.isfinite(results.t_stat)
+        assert np.isfinite(results.p_value)
 
     def test_covariates(self):
         """Estimation with covariates should work."""
@@ -937,9 +937,9 @@ class TestTwoStageDiDEdgeCases:
             covariates=["x1", "x2"],
         )
 
-        assert results.overall_att > 0
-        assert results.overall_se > 0
-        assert np.isfinite(results.overall_se)
+        assert results.att > 0
+        assert results.se > 0
+        assert np.isfinite(results.se)
 
     def test_missing_column_error(self):
         """Missing required columns should raise ValueError."""
@@ -1034,8 +1034,8 @@ class TestTwoStageDiDEdgeCases:
             first_treat="first_treat",
         )
 
-        assert np.isfinite(results.overall_att)
-        assert results.overall_se > 0
+        assert np.isfinite(results.att)
+        assert results.se > 0
 
     def test_balance_e_empty_cohorts_warns(self):
         """Unreasonably large balance_e should warn when no cohorts qualify."""
@@ -1202,9 +1202,9 @@ class TestTwoStageDiDParameters:
         )
 
         # Point estimates should be the same
-        assert abs(results_unit.overall_att - results_cluster.overall_att) < 1e-10
+        assert abs(results_unit.att - results_cluster.att) < 1e-10
         # SEs should differ
-        assert abs(results_unit.overall_se - results_cluster.overall_se) > 1e-6
+        assert abs(results_unit.se - results_cluster.se) > 1e-6
 
     def test_horizon_max_limits_horizons(self):
         """horizon_max should limit event study horizons."""
@@ -1278,9 +1278,9 @@ class TestTwoStageDiDBootstrap:
         )
 
         # Point estimates should match
-        assert abs(results_analytical.overall_att - results_bootstrap.overall_att) < 1e-10
+        assert abs(results_analytical.att - results_bootstrap.att) < 1e-10
         # SEs should differ (analytical GMM vs bootstrap)
-        assert abs(results_analytical.overall_se - results_bootstrap.overall_se) > 1e-6
+        assert abs(results_analytical.se - results_bootstrap.se) > 1e-6
 
     def test_bootstrap_event_study(self, ci_params):
         """Bootstrap should work with event study specification."""
@@ -1425,8 +1425,8 @@ class TestTwoStageDiDConvenience:
         finally:
             ts_mod._SPARSE_DENSE_THRESHOLD = orig
 
-        np.testing.assert_allclose(result_dense.overall_att, result_sparse.overall_att, rtol=1e-10)
-        np.testing.assert_allclose(result_dense.overall_se, result_sparse.overall_se, rtol=1e-10)
+        np.testing.assert_allclose(result_dense.att, result_sparse.att, rtol=1e-10)
+        np.testing.assert_allclose(result_dense.se, result_sparse.se, rtol=1e-10)
 
 
 class TestSilentWarningAudit:
@@ -1650,7 +1650,7 @@ class TestTwoStageStage2BreadWarning:
         assert "rank-reducing" in msg
         assert "X_2'WX_2" in msg
         # rank-reduced bread must still produce a finite SE.
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.se)
 
     def test_bootstrap_bread_rank_reduces_and_warns(self):
         """Same contract for the multiplier-bootstrap bread path (the
@@ -1904,8 +1904,8 @@ class TestTwoStageDiDWaveE3ParityAlwaysTreated:
         assert result.survey_metadata.n_psu == n_psu_data
         assert result.survey_metadata.df_survey == n_psu_data - n_strata_data
         # ATT + SE finite
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_b_full_domain_df_survey_under_always_treated_drop(self):
         """Wave E.3 parity contract: when the always-treated drop removes a
@@ -2125,12 +2125,8 @@ class TestTwoStageDiDWaveE3ParityAlwaysTreated:
         # Always-treated drop equivalence on the unweighted path: fitting
         # with the always-treated unit (which gets dropped internally) is
         # equivalent to fitting on the pre-filtered dataset.
-        np.testing.assert_allclose(
-            result_with_at.overall_att, result_without_at.overall_att, rtol=1e-10
-        )
-        np.testing.assert_allclose(
-            result_with_at.overall_se, result_without_at.overall_se, rtol=1e-10
-        )
+        np.testing.assert_allclose(result_with_at.att, result_without_at.att, rtol=1e-10)
+        np.testing.assert_allclose(result_with_at.se, result_without_at.se, rtol=1e-10)
 
     def test_h_psu_entirely_always_treated_unidentified_gate(self):
         """Optional sharper case: a PSU containing ONLY always-treated units
@@ -2154,7 +2150,7 @@ class TestTwoStageDiDWaveE3ParityAlwaysTreated:
                 first_treat="g",
                 survey_design=design,
             )
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
         assert result.survey_metadata.n_psu == 6
 
@@ -2218,8 +2214,8 @@ def _assert_results_bit_equal(r0, r1):
     def _eq(a, b):
         return a == b or (np.isnan(a) and np.isnan(b))
 
-    assert _eq(r0.overall_att, r1.overall_att)
-    assert _eq(r0.overall_se, r1.overall_se)
+    assert _eq(r0.att, r1.att)
+    assert _eq(r0.se, r1.se)
     assert (r0.bootstrap_results is None) == (r1.bootstrap_results is None)
     if r0.bootstrap_results is not None:
         for attr in ("event_study_effects", "group_effects"):
@@ -2254,10 +2250,10 @@ def _assert_full_bootstrap_nan(r):
     inference field is NaN, not just the SE (REGISTRY NaN-inference contract).
     """
     # Overall inference fields
-    assert np.isnan(r.overall_se)
-    assert np.isnan(r.overall_t_stat)
-    assert np.isnan(r.overall_p_value)
-    assert all(np.isnan(x) for x in r.overall_conf_int)
+    assert np.isnan(r.se)
+    assert np.isnan(r.t_stat)
+    assert np.isnan(r.p_value)
+    assert all(np.isnan(x) for x in r.conf_int)
     assert np.isnan(r.coef_var)
     # Bootstrap payload
     b = r.bootstrap_results
@@ -2326,8 +2322,8 @@ class TestTwoStageDiDVcovType:
         clone = TwoStageDiD(**est.get_params())
         r2 = _fit_ts(clone, data)
         assert clone.vcov_type == "hc1"
-        assert r1.overall_att == pytest.approx(r2.overall_att)
-        assert r1.overall_se == pytest.approx(r2.overall_se)
+        assert r1.att == pytest.approx(r2.att)
+        assert r1.se == pytest.approx(r2.se)
 
     # ---- rejections ----
 
@@ -2584,8 +2580,8 @@ class TestZeroWeightGroups:
         # Main-fit weights are all positive here, and the per-replicate
         # nan-ytilde warning is suppressed (warn_nan=False): zero copies.
         assert not any("non-finite imputed outcomes" in m for m in messages)
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se) and r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se) and r.se > 0
 
     def test_main_fit_zero_weight_unit_warns_once_and_fits(self):
         """Main-fit zero-weight treated unit: nan-ytilde warning UNCHANGED.
@@ -2615,8 +2611,8 @@ class TestZeroWeightGroups:
             m for m in (str(w.message) for w in rec) if "non-finite imputed outcomes" in m
         ]
         assert len(nan_ytilde) >= 1  # main-fit warning still fires
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se) and r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se) and r.se > 0
 
 
 class TestEventStudyVcovPersistence:

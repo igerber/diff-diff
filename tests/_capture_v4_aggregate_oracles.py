@@ -109,10 +109,10 @@ def _dict_surface(surface: Optional[Dict[Any, Dict[str, Any]]]) -> Optional[Dict
 def _overall(r: Any) -> Dict[str, Optional[float]]:
     ci = getattr(r, "overall_conf_int", None) or (np.nan, np.nan)
     return {
-        "att": _f(r.overall_att),
-        "se": _f(r.overall_se),
+        "att": _f(r.att),
+        "se": _f(r.se),
         "t_stat": _f(getattr(r, "overall_t_stat", np.nan)),
-        "p_value": _f(r.overall_p_value),
+        "p_value": _f(r.p_value),
         "ci_lo": _f(ci[0]),
         "ci_hi": _f(ci[1]),
     }

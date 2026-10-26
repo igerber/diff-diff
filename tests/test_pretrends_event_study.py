@@ -167,8 +167,8 @@ class TestImputationPretrends:
             first_treat="first_treat",
         )
 
-        assert results_default.overall_att == results_false.overall_att
-        assert results_default.overall_se == results_false.overall_se
+        assert results_default.att == results_false.att
+        assert results_default.se == results_false.se
         assert set(es_dict(results_default)) == set(es_dict(results_false))
 
     def test_post_treatment_invariance(self):
@@ -191,8 +191,8 @@ class TestImputationPretrends:
         )
 
         # Overall ATT unchanged
-        assert results_on.overall_att == results_off.overall_att
-        assert results_on.overall_se == results_off.overall_se
+        assert results_on.att == results_off.att
+        assert results_on.se == results_off.se
 
         # Post-treatment event study effects unchanged
         es_off, es_on = es_dict(results_off), es_dict(results_on)
@@ -359,8 +359,8 @@ class TestTwoStagePretrends:
         )
 
         # Overall ATT unchanged
-        assert results_on.overall_att == results_off.overall_att
-        assert results_on.overall_se == results_off.overall_se
+        assert results_on.att == results_off.att
+        assert results_on.se == results_off.se
 
         # Post-treatment event study effects unchanged
         es_off, es_on = es_dict(results_off), es_dict(results_on)
@@ -483,9 +483,9 @@ class TestPretrends_Regressions:
             survey_design=sd,
         )
 
-        assert np.isfinite(results.overall_att)
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
+        assert np.isfinite(results.att)
+        assert np.isfinite(results.se)
+        assert results.se > 0
 
     def test_imputation_survey_weighted_event_study(self):
         """ImputationDiD with survey weights and event study aggregation."""
@@ -725,7 +725,7 @@ class TestPretrends_Regressions:
             survey_design=sd,
         )
         assert result.aggregate("event_study") is not None
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_imputation_pretrends_balance_e(self):
         """balance_e restricts pre-period lead regression to balanced cohorts."""

@@ -233,8 +233,8 @@ class TestImputationDiDSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_uniform_weights_match_unweighted(self, staggered_survey_data):
@@ -253,7 +253,7 @@ class TestImputationDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert abs(r_unw.overall_att - r_w.overall_att) < 1e-10
+        assert abs(r_unw.att - r_w.att) < 1e-10
 
     def test_survey_metadata_fields(self, staggered_survey_data, survey_design_full):
         """survey_metadata has correct fields with full design."""
@@ -295,14 +295,14 @@ class TestImputationDiDSurvey:
             survey_design=sd_full,
         )
         # ATTs should be the same (same weights)
-        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        assert abs(r_w.att - r_full.att) < 1e-10
         # Full design should carry survey df (strata/PSU structure)
         assert r_full.survey_metadata is not None
         assert r_full.survey_metadata.n_strata is not None
         assert r_full.survey_metadata.n_psu is not None
         # P-values should differ due to t-distribution with survey df
-        if np.isfinite(r_w.overall_p_value) and np.isfinite(r_full.overall_p_value):
-            assert r_w.overall_p_value != r_full.overall_p_value
+        if np.isfinite(r_w.p_value) and np.isfinite(r_full.p_value):
+            assert r_w.p_value != r_full.p_value
 
     def test_weighted_att_differs(self, staggered_survey_data, survey_design_weights_only):
         """Non-uniform survey weights should change the overall ATT."""
@@ -318,7 +318,7 @@ class TestImputationDiDSurvey:
             survey_design=survey_design_weights_only,
         )
         # ATT should differ because non-uniform weights change aggregation
-        assert r_unw.overall_att != r_w.overall_att
+        assert r_unw.att != r_w.att
 
     def test_event_study_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """Event study effects exist when using survey design."""
@@ -348,8 +348,8 @@ class TestImputationDiDSurvey:
         )
         assert result.bootstrap_results is not None
         assert result.bootstrap_results.n_bootstrap == 99
-        assert np.isfinite(result.overall_se)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.se)
+        assert np.isfinite(result.att)
 
     def test_bootstrap_survey_full_design(self, staggered_survey_data, survey_design_full):
         """Bootstrap + full survey (strata+PSU) uses survey-aware multiplier weights."""
@@ -362,8 +362,8 @@ class TestImputationDiDSurvey:
             survey_design=survey_design_full,
         )
         assert result.bootstrap_results is not None
-        assert np.isfinite(result.overall_se)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.se)
+        assert np.isfinite(result.att)
 
     def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
         """Summary output should include survey design section."""
@@ -401,10 +401,10 @@ class TestImputationDiDSurvey:
             "first_treat",
             survey_design=sd2,
         )
-        assert np.isclose(r1.overall_att, r2.overall_att, atol=1e-8)
+        assert np.isclose(r1.att, r2.att, atol=1e-8)
         assert np.isclose(
-            r1.overall_se, r2.overall_se, atol=1e-8
-        ), f"SE not scale-invariant (FE-only): {r1.overall_se} vs {r2.overall_se}"
+            r1.se, r2.se, atol=1e-8
+        ), f"SE not scale-invariant (FE-only): {r1.se} vs {r2.se}"
 
     def test_se_scale_invariance_with_covariates(self, staggered_survey_data):
         """SE must be invariant to weight rescaling (with covariates)."""
@@ -431,10 +431,10 @@ class TestImputationDiDSurvey:
             covariates=["x1"],
             survey_design=sd2,
         )
-        assert np.isclose(r1.overall_att, r2.overall_att, atol=1e-8)
+        assert np.isclose(r1.att, r2.att, atol=1e-8)
         assert np.isclose(
-            r1.overall_se, r2.overall_se, atol=1e-8
-        ), f"SE not scale-invariant (covariates): {r1.overall_se} vs {r2.overall_se}"
+            r1.se, r2.se, atol=1e-8
+        ), f"SE not scale-invariant (covariates): {r1.se} vs {r2.se}"
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """Post-fit group aggregation works with survey design."""
@@ -460,7 +460,7 @@ class TestImputationDiDSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert len(result.aggregate("event_study").event_time) > 0
         assert len(result.aggregate("group").label) > 0
 
@@ -488,9 +488,9 @@ class TestImputationDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # =============================================================================
@@ -511,8 +511,8 @@ class TestTwoStageDiDSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_uniform_weights_match_unweighted(self, staggered_survey_data):
@@ -529,7 +529,7 @@ class TestTwoStageDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert abs(r_unw.overall_att - r_w.overall_att) < 1e-10
+        assert abs(r_unw.att - r_w.att) < 1e-10
 
     def test_survey_metadata_fields(self, staggered_survey_data, survey_design_full):
         """survey_metadata has correct fields with full design."""
@@ -571,14 +571,14 @@ class TestTwoStageDiDSurvey:
             survey_design=sd_full,
         )
         # ATTs should be the same (same weights)
-        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        assert abs(r_w.att - r_full.att) < 1e-10
         # Full design should carry survey df (strata/PSU structure)
         assert r_full.survey_metadata is not None
         assert r_full.survey_metadata.n_strata is not None
         assert r_full.survey_metadata.n_psu is not None
         # P-values should differ due to t-distribution with survey df
-        if np.isfinite(r_w.overall_p_value) and np.isfinite(r_full.overall_p_value):
-            assert r_w.overall_p_value != r_full.overall_p_value
+        if np.isfinite(r_w.p_value) and np.isfinite(r_full.p_value):
+            assert r_w.p_value != r_full.p_value
 
     def test_weighted_gmm_variance(self, staggered_survey_data, survey_design_weights_only):
         """GMM SE should differ from unweighted (weights affect sandwich)."""
@@ -592,7 +592,7 @@ class TestTwoStageDiDSurvey:
             survey_design=survey_design_weights_only,
         )
         # SE magnitude should differ (not just sign)
-        assert abs(r_unw.overall_se - r_w.overall_se) > 1e-6
+        assert abs(r_unw.se - r_w.se) > 1e-6
 
     def test_bootstrap_survey_works(self, staggered_survey_data, survey_design_weights_only):
         """Bootstrap + survey should succeed via PSU-level multiplier bootstrap."""
@@ -605,9 +605,9 @@ class TestTwoStageDiDSurvey:
             survey_design=survey_design_weights_only,
         )
         assert result is not None
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
         """Summary output should include survey design section."""
@@ -646,7 +646,7 @@ class TestTwoStageDiDSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert len(result.aggregate("event_study").event_time) > 0
         assert len(result.aggregate("group").label) > 0
 
@@ -668,8 +668,8 @@ class TestTwoStageDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_aweight_raises(self, staggered_survey_data):
@@ -696,9 +696,9 @@ class TestTwoStageDiDSurvey:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
 
 # =============================================================================
@@ -734,8 +734,8 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_smoke_ipw_weights_only(self, staggered_survey_data, survey_design_weights_only):
@@ -748,8 +748,8 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_smoke_dr_weights_only(self, staggered_survey_data, survey_design_weights_only):
@@ -762,8 +762,8 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_uniform_weights_match_unweighted(self, staggered_survey_data):
@@ -783,7 +783,7 @@ class TestCallawaySantAnnaSurvey:
                 "first_treat",
                 survey_design=sd,
             )
-            assert abs(r_unw.overall_att - r_w.overall_att) < 1e-8, f"method={method}: ATT mismatch"
+            assert abs(r_unw.att - r_w.att) < 1e-8, f"method={method}: ATT mismatch"
 
     def test_survey_metadata_fields(self, staggered_survey_data, survey_design_weights_only):
         """survey_metadata has correct fields with weights-only design."""
@@ -812,8 +812,8 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=sd_full,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
@@ -855,7 +855,7 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         assert len(result.aggregate("event_study").event_time) > 0
         assert len(result.aggregate("group").label) > 0
 
@@ -869,8 +869,8 @@ class TestCallawaySantAnnaSurvey:
             "first_treat",
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_ipw_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
         """IPW + covariates + survey works (Phase 7a: nuisance IF corrections)."""
@@ -885,9 +885,9 @@ class TestCallawaySantAnnaSurvey:
             covariates=["x1"],
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_dr_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
         """DR + covariates + survey works (Phase 7a: nuisance IF corrections)."""
@@ -902,9 +902,9 @@ class TestCallawaySantAnnaSurvey:
             covariates=["x1"],
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
-        assert result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
 
     def test_reg_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
         """Regression + covariates + survey should work (has nuisance IF correction)."""
@@ -919,7 +919,7 @@ class TestCallawaySantAnnaSurvey:
             covariates=["x1"],
             survey_design=survey_design_weights_only,
         )
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
 
     def test_reg_covariates_rank_deficient_survey(self, staggered_survey_data):
         """Collinear covariates with survey should produce finite results."""
@@ -940,8 +940,8 @@ class TestCallawaySantAnnaSurvey:
                 covariates=["x1", "x2"],
                 survey_design=sd,
             )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
     def test_reg_covariates_survey_se_scale_invariance(self, staggered_survey_data):
         """SE for reg + covariates + survey must be invariant to weight rescaling."""
@@ -969,12 +969,10 @@ class TestCallawaySantAnnaSurvey:
             covariates=["x1"],
             survey_design=sd2,
         )
+        assert np.isclose(r1.att, r2.att, atol=1e-8), "ATT not scale-invariant for reg+cov+survey"
         assert np.isclose(
-            r1.overall_att, r2.overall_att, atol=1e-8
-        ), "ATT not scale-invariant for reg+cov+survey"
-        assert np.isclose(
-            r1.overall_se, r2.overall_se, atol=1e-8
-        ), f"SE not scale-invariant for reg+cov+survey: {r1.overall_se} vs {r2.overall_se}"
+            r1.se, r2.se, atol=1e-8
+        ), f"SE not scale-invariant for reg+cov+survey: {r1.se} vs {r2.se}"
 
     def test_weighted_logit(self, staggered_survey_data, survey_design_weights_only):
         """Propensity scores should change with survey weights (IPW path)."""
@@ -991,7 +989,7 @@ class TestCallawaySantAnnaSurvey:
         )
         # Non-uniform weights should produce different ATT
         # (propensity scores change with survey weights)
-        assert r_unw.overall_att != r_w.overall_att
+        assert r_unw.att != r_w.att
 
     def test_ipw_survey_weight_composition(self, staggered_survey_data, survey_design_weights_only):
         """w_survey x w_ipw should compose — ATT differs from unweighted IPW."""
@@ -1007,7 +1005,7 @@ class TestCallawaySantAnnaSurvey:
             survey_design=survey_design_weights_only,
         )
         # Weighted IPW should produce different ATT than unweighted
-        assert abs(r_unw.overall_att - r_w.overall_att) > 1e-6
+        assert abs(r_unw.att - r_w.att) > 1e-6
 
     def test_aggregation_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """Simple aggregation should use survey weights."""
@@ -1027,7 +1025,7 @@ class TestCallawaySantAnnaSurvey:
             survey_design=survey_design_weights_only,
         )
         # Event study ATTs should differ with non-uniform weights
-        assert r_unw.overall_att != r_w.overall_att
+        assert r_unw.att != r_w.att
         # Event study effects should exist on the post-fit route
         es_w = r_w.aggregate("event_study")
         assert len(es_w.event_time) > 0
@@ -1282,12 +1280,10 @@ class TestCallawaySantAnnaSurveyInference:
                 "first_treat",
                 survey_design=sd2,
             )
+        assert np.isclose(r1.att, r2.att, atol=1e-8), "ATT not scale-invariant on unbalanced panel"
         assert np.isclose(
-            r1.overall_att, r2.overall_att, atol=1e-8
-        ), "ATT not scale-invariant on unbalanced panel"
-        assert np.isclose(
-            r1.overall_se, r2.overall_se, atol=1e-8
-        ), f"SE not scale-invariant on unbalanced panel: {r1.overall_se} vs {r2.overall_se}"
+            r1.se, r2.se, atol=1e-8
+        ), f"SE not scale-invariant on unbalanced panel: {r1.se} vs {r2.se}"
 
     def test_se_scale_invariance_all_methods(self, staggered_survey_data):
         """SE should be invariant under weight rescaling for all methods."""
@@ -1315,12 +1311,8 @@ class TestCallawaySantAnnaSurveyInference:
                 first_treat="first_treat",
                 survey_design=sd2,
             )
-            assert np.isclose(
-                r1.overall_att, r2.overall_att, atol=1e-8
-            ), f"{method}: ATT not scale-invariant"
-            assert np.isclose(
-                r1.overall_se, r2.overall_se, atol=1e-8
-            ), f"{method}: SE not scale-invariant"
+            assert np.isclose(r1.att, r2.att, atol=1e-8), f"{method}: ATT not scale-invariant"
+            assert np.isclose(r1.se, r2.se, atol=1e-8), f"{method}: SE not scale-invariant"
 
     def test_survey_weights_change_per_cell_att(self, staggered_survey_data):
         """Non-uniform survey weights should change per-cell ATT(g,t)."""
@@ -1360,8 +1352,8 @@ class TestCallawaySantAnnaSurveyInference:
             "first_treat",
             survey_design=sd_full,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
 
 
 # =============================================================================
@@ -1395,8 +1387,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
     def test_weight_scale_invariance_two_stage(self, staggered_survey_data):
         """TwoStageDiD: 2*w gives same ATT as w."""
@@ -1421,8 +1413,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
     def test_weight_scale_invariance_callaway_santanna(self, staggered_survey_data):
         """CallawaySantAnna: 2*w gives same ATT as w."""
@@ -1447,8 +1439,8 @@ class TestScaleInvariance:
             survey_design=sd2,
         )
 
-        assert abs(r1.overall_att - r2.overall_att) < 1e-10
-        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
 
 class TestCallawaySantAnnaFullDesignBootstrap:
@@ -1474,7 +1466,7 @@ class TestCallawaySantAnnaFullDesignBootstrap:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
         assert result.survey_metadata is not None
         assert result.survey_metadata.n_strata is not None

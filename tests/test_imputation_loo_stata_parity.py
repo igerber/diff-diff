@@ -130,7 +130,7 @@ def r_golden() -> dict:
 def library_fit() -> dict:
     """Fit the LOO and non-LOO paths once each; return per-horizon + overall + warnings.
 
-    The fit stores scalar ``res.overall_att`` / ``res.overall_se``; the per-horizon
+    The fit stores scalar ``res.att`` / ``res.se``; the per-horizon
     surface is the post-fit ``res.aggregate("event_study")`` container, read here
     through the legacy dict shape (``es_dict``: ``{h: {"effect", "se", ...}}``).
     The LOO warnings of both stages (fit + event-study recompute) are recorded.
@@ -161,9 +161,9 @@ def library_fit() -> dict:
         return {h: es[h] for h in HORIZONS}
 
     return {
-        "loo_overall": (float(loo.overall_att), float(loo.overall_se)),
+        "loo_overall": (float(loo.att), float(loo.se)),
         "loo_es": {h: (float(v["effect"]), float(v["se"])) for h, v in by_h(loo_es).items()},
-        "nonloo_overall_se": float(nonloo.overall_se),
+        "nonloo_overall_se": float(nonloo.se),
         "nonloo_es_se": {h: float(v["se"]) for h, v in by_h(nonloo_es).items()},
         "loo_warnings": loo_msgs,
     }
@@ -212,8 +212,8 @@ def library_fit_variants() -> dict:
                 out["loo_warnings"] += msgs
             mode = "loo" if loo else "nonloo"
             out[f"{part}_{mode}"] = {
-                "att": float(res.overall_att),
-                "se": float(res.overall_se),
+                "att": float(res.att),
+                "se": float(res.se),
                 "es": {h: (float(es[h]["effect"]), float(es[h]["se"])) for h in HORIZONS},
             }
     return out
@@ -243,7 +243,7 @@ def library_fit_unbalanced() -> dict:
             if loo:
                 out["loo_warnings"] += [str(w.message) for w in caught]
             mode = "loo" if loo else "nonloo"
-            out[f"{part}_{mode}"] = (float(res.overall_att), float(res.overall_se))
+            out[f"{part}_{mode}"] = (float(res.att), float(res.se))
     return out
 
 

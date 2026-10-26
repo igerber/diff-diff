@@ -65,8 +65,8 @@ class TestCallawaySantAnna:
 
         assert cs.is_fitted_
         assert isinstance(results, CallawaySantAnnaResults)
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert len(results.group_time_effects) > 0
 
     def test_positive_treatment_effect(self):
@@ -79,9 +79,9 @@ class TestCallawaySantAnna:
         )
 
         # Should detect positive effect
-        assert results.overall_att > 0
+        assert results.att > 0
         # Effect should be roughly correct (within 2 SE)
-        assert abs(results.overall_att - 3.0) < 2 * results.overall_se + 1.0
+        assert abs(results.att - 3.0) < 2 * results.se + 1.0
 
     def test_zero_treatment_effect(self):
         """Test with no treatment effect."""
@@ -93,7 +93,7 @@ class TestCallawaySantAnna:
         )
 
         # Effect should be close to zero
-        assert abs(results.overall_att) < 3 * results.overall_se
+        assert abs(results.att) < 3 * results.se
 
     def test_never_treated_inf_encoding(self):
         """Test that first_treat=np.inf is handled as never-treated, not as a cohort."""
@@ -115,8 +115,8 @@ class TestCallawaySantAnna:
 
         # Results should be identical
         assert np.isclose(
-            results_inf.overall_att, results_zero.overall_att
-        ), f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
+            results_inf.att, results_zero.att
+        ), f"ATT differs: inf={results_inf.att}, zero={results_zero.att}"
 
     def test_event_study_aggregation(self):
         """Test post-fit event study aggregation."""
@@ -192,7 +192,7 @@ class TestCallawaySantAnna:
         assert results1.control_group == "never_treated"
         assert results2.control_group == "not_yet_treated"
         # Results should be different
-        assert results1.overall_att != results2.overall_att
+        assert results1.att != results2.att
 
     def test_estimation_methods(self):
         """Test different estimation methods."""
@@ -209,7 +209,7 @@ class TestCallawaySantAnna:
 
         # All methods should produce results
         for method, res in results.items():
-            assert res.overall_att is not None
+            assert res.att is not None
 
     def test_summary_output(self):
         """Test summary output formatting."""
@@ -441,13 +441,13 @@ class TestCallawaySantAnnaCovariates:
         )
 
         # Both should produce valid results
-        assert results1.overall_att is not None
-        assert results2.overall_att is not None
+        assert results1.att is not None
+        assert results2.att is not None
 
         # Results may differ when using covariates
         # (they don't have to differ significantly for this test)
-        assert results1.overall_se > 0
-        assert results2.overall_se > 0
+        assert results1.se > 0
+        assert results2.se > 0
 
     def test_outcome_regression_with_covariates(self):
         """Test outcome regression method with covariates."""
@@ -463,8 +463,8 @@ class TestCallawaySantAnnaCovariates:
             covariates=["x1", "x2"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert len(results.group_time_effects) > 0
 
     def test_ipw_with_covariates(self):
@@ -481,8 +481,8 @@ class TestCallawaySantAnnaCovariates:
             covariates=["x1", "x2"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert len(results.group_time_effects) > 0
 
     def test_doubly_robust_with_covariates(self):
@@ -499,8 +499,8 @@ class TestCallawaySantAnnaCovariates:
             covariates=["x1", "x2"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
         assert len(results.group_time_effects) > 0
 
     def test_all_methods_with_covariates(self):
@@ -523,8 +523,8 @@ class TestCallawaySantAnnaCovariates:
 
         # All methods should produce valid results
         for method, res in results.items():
-            assert res.overall_att is not None, f"{method} failed to produce ATT"
-            assert res.overall_se > 0, f"{method} failed to produce valid SE"
+            assert res.att is not None, f"{method} failed to produce ATT"
+            assert res.se > 0, f"{method} failed to produce valid SE"
 
     def test_event_study_with_covariates(self):
         """Test event study aggregation with covariates."""
@@ -572,8 +572,8 @@ class TestCallawaySantAnnaCovariates:
             covariates=["x1"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_treatment_effect_recovery_with_covariates(self):
         """Test that we recover approximately correct treatment effect."""
@@ -597,8 +597,8 @@ class TestCallawaySantAnnaCovariates:
 
         # Effect should be roughly correct (within reasonable bounds)
         # Note: we use a generous bound due to finite sample variance
-        assert results.overall_att > 0, "ATT should be positive"
-        assert abs(results.overall_att - 3.0) < 2.0, f"ATT={results.overall_att} too far from 3.0"
+        assert results.att > 0, "ATT should be positive"
+        assert abs(results.att - 3.0) < 2.0, f"ATT={results.att} too far from 3.0"
 
     def test_extreme_propensity_scores(self):
         """Test handling of covariates that strongly predict treatment.
@@ -651,9 +651,9 @@ class TestCallawaySantAnnaCovariates:
         )
 
         # Should produce valid results (not NaN or inf)
-        assert np.isfinite(results.overall_att), "ATT should be finite"
-        assert np.isfinite(results.overall_se), "SE should be finite"
-        assert results.overall_se > 0, "SE should be positive"
+        assert np.isfinite(results.att), "ATT should be finite"
+        assert np.isfinite(results.se), "SE should be finite"
+        assert results.se > 0, "SE should be positive"
 
     def test_extreme_weights_warning(self, ci_params):
         """Test that extreme weights produce warnings and methodology-aligned behavior.
@@ -697,10 +697,10 @@ class TestCallawaySantAnnaCovariates:
         )
 
         # ATT point estimate should be finite
-        assert np.isfinite(results.overall_att), "ATT should be finite"
+        assert np.isfinite(results.att), "ATT should be finite"
         # SE is either finite (valid) or NaN (signals invalid inference) - not biased
-        assert np.isfinite(results.overall_se) or np.isnan(
-            results.overall_se
+        assert np.isfinite(results.se) or np.isnan(
+            results.se
         ), "SE should be finite or NaN (not inf)"
 
         # Test with bootstrap - should drop invalid samples with warning
@@ -716,16 +716,16 @@ class TestCallawaySantAnnaCovariates:
         warning_messages = [str(warning.message) for warning in w]
 
         # ATT should be finite
-        assert np.isfinite(boot_results.overall_att), "ATT should be finite"
+        assert np.isfinite(boot_results.att), "ATT should be finite"
 
         # Bootstrap SE based on valid samples - may be finite or NaN
         assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
-        assert np.isfinite(boot_results.overall_se) or np.isnan(
-            boot_results.overall_se
+        assert np.isfinite(boot_results.se) or np.isnan(
+            boot_results.se
         ), "Bootstrap SE should be finite or NaN (not inf)"
 
         # If SE is NaN, verify it's due to validity threshold (should have warning)
-        if np.isnan(boot_results.overall_se):
+        if np.isnan(boot_results.se):
             assert any(
                 "valid" in msg.lower() or "nan" in msg.lower() for msg in warning_messages
             ), "NaN SE should be accompanied by warning about validity"
@@ -782,8 +782,8 @@ class TestCallawaySantAnnaCovariates:
         assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
 
         # SE constraints: finite or NaN (never inf)
-        assert np.isfinite(boot_results.overall_se) or np.isnan(
-            boot_results.overall_se
+        assert np.isfinite(boot_results.se) or np.isnan(
+            boot_results.se
         ), "Bootstrap SE should be finite or NaN (not inf)"
 
     def test_near_collinear_covariates(self):
@@ -808,8 +808,8 @@ class TestCallawaySantAnnaCovariates:
         )
 
         # Should still produce valid results (noise is above tolerance)
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
+        assert results.att is not None
+        assert np.isfinite(results.att)
 
     def test_missing_values_in_covariates_warning(self):
         """Test that missing values trigger fallback warning."""
@@ -832,8 +832,8 @@ class TestCallawaySantAnnaCovariates:
             )
 
         # Should still produce valid results (using unconditional estimation)
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_dr_covariates_not_yet_treated(self):
         """Regression test: DR + covariates with not_yet_treated control group.
@@ -857,10 +857,8 @@ class TestCallawaySantAnnaCovariates:
                 covariates=["x1", "x2"],
             )
 
-            assert np.isfinite(
-                results.overall_att
-            ), f"{method}/not_yet_treated: ATT should be finite"
-            assert results.overall_se > 0, f"{method}/not_yet_treated: SE should be positive"
+            assert np.isfinite(results.att), f"{method}/not_yet_treated: ATT should be finite"
+            assert results.se > 0, f"{method}/not_yet_treated: SE should be positive"
             assert (
                 len(results.group_time_effects) > 0
             ), f"{method}/not_yet_treated: should have group-time effects"
@@ -929,7 +927,7 @@ class TestCallawaySantAnnaCovariates:
 
         # Should still get valid results
         assert results is not None
-        assert results.overall_att is not None
+        assert results.att is not None
 
     def test_rank_deficient_action_warn_emits_warning(self):
         """Test that rank_deficient_action='warn' emits rank-deficiency warning on batched path."""
@@ -969,8 +967,8 @@ class TestCallawaySantAnnaCovariates:
 
         # Should still produce valid results (lstsq fallback)
         assert results is not None
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_empty_covariates_list_behaves_like_none(self):
         """covariates=[] should behave identically to covariates=None."""
@@ -996,8 +994,8 @@ class TestCallawaySantAnnaCovariates:
             covariates=[],
         )
 
-        assert results_none.overall_att == results_empty.overall_att
-        assert results_none.overall_se == results_empty.overall_se
+        assert results_none.att == results_empty.att
+        assert results_none.se == results_empty.se
         assert len(results_none.group_time_effects) == len(results_empty.group_time_effects)
 
     def test_nan_cell_preserved_not_dropped(self):
@@ -1070,7 +1068,7 @@ class TestCallawaySantAnnaCovariates:
             ), f"NaN cell ({g},{t}) must carry skip_reason='non_finite_regression'"
 
         # Overall ATT should still be finite (NaN cells excluded from aggregation)
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_nan_cell_bootstrap_aggregation_excludes_nan(self, ci_params):
         """Bootstrap aggregation paths must exclude NaN ATT(g,t) cells."""
@@ -1135,10 +1133,10 @@ class TestCallawaySantAnnaCovariates:
         ), "Poisoned cell must be post-treatment to exercise overall ATT bootstrap filtering"
 
         # Overall ATT bootstrap inference should be finite (NaN cells excluded)
-        assert np.isfinite(results.overall_att), "overall_att should be finite"
-        assert np.isfinite(results.overall_se), "overall_se should be finite"
-        assert np.isfinite(results.overall_p_value), "overall_p_value should be finite"
-        assert all(np.isfinite(x) for x in results.overall_conf_int), "overall CI should be finite"
+        assert np.isfinite(results.att), "overall_att should be finite"
+        assert np.isfinite(results.se), "overall_se should be finite"
+        assert np.isfinite(results.p_value), "overall_p_value should be finite"
+        assert all(np.isfinite(x) for x in results.conf_int), "overall CI should be finite"
 
         # Event study: valid relative times should have finite bootstrap inference
         assert es
@@ -1403,8 +1401,8 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         # Non-empty dict mixing NaN + finite cells fits without raising, and the
         # NaN cells are excluded from aggregation (the aggregation invariant).
         assert n_finite > 0, "expected some estimable cells"
-        assert np.isfinite(results.overall_att), "NaN cells must be excluded from aggregation"
-        assert np.isfinite(results.overall_se)
+        assert np.isfinite(results.att), "NaN cells must be excluded from aggregation"
+        assert np.isfinite(results.se)
 
     def test_estimable_cells_have_skip_reason_none(self):
         """A well-posed fit carries skip_reason=None on every cell."""
@@ -1475,7 +1473,7 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         assert not np.isinf(cell["effect"])
         assert cell["skip_reason"] == "non_finite_regression"
         # Excluded from aggregation -> overall ATT still finite.
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_no_covariate_path_nonfinite_att_materialized_as_nan(self):
         """No-covariate vectorized path: an inf outcome (passes the NaN-only valid
@@ -1505,7 +1503,7 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         for _, v in nf:
             assert np.isnan(v["effect"]) and not np.isinf(v["effect"])
             assert np.isnan(v["se"]) and np.isnan(v["t_stat"]) and np.isnan(v["p_value"])
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_event_study_omits_all_nonestimable_relative_time(self):
         """An event-time bucket whose cells are ALL non-estimable is omitted from
@@ -1598,11 +1596,11 @@ class TestRankGuardedAnalyticalSE:
             )
 
         # Regression guard: previously ~1e13, now finite and modest.
-        assert np.isfinite(with_const.overall_se)
-        assert with_const.overall_se < 1.0
+        assert np.isfinite(with_const.se)
+        assert with_const.se < 1.0
         # Dropping the redundant covariate is equivalent to never adding it.
-        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
-        np.testing.assert_allclose(with_const.overall_att, drop_one.overall_att, rtol=1e-9)
+        np.testing.assert_allclose(with_const.se, drop_one.se, rtol=1e-9)
+        np.testing.assert_allclose(with_const.att, drop_one.att, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_constant_covariate_emits_single_rank_guard_warning(self, method):
@@ -1630,7 +1628,7 @@ class TestRankGuardedAnalyticalSE:
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
             )
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_clustered_constant_covariate_finite_se(self):
         # The clustered SE path reuses the same per-cell influence functions, so
@@ -1643,8 +1641,8 @@ class TestRankGuardedAnalyticalSE:
             res = CallawaySantAnna(estimation_method="dr", cluster="cl").fit(
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1", "xc"]
             )
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se < 1.0
+        assert np.isfinite(res.se)
+        assert res.se < 1.0
 
     @pytest.mark.parametrize("method", ["ipw", "dr"])
     def test_rank0_bread_propagates_nan_not_zero(self, monkeypatch, method):
@@ -1678,7 +1676,7 @@ class TestRankGuardedAnalyticalSE:
             assert np.isfinite(cell["effect"]), "point estimate is bread-independent"
             assert np.isnan(cell["se"]), "rank-0 bread must give NaN SE, not 0.0"
             assert_nan_inference(cell)
-        assert np.isnan(res.overall_se)
+        assert np.isnan(res.se)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_rcs_panel_false_constant_covariate_finite_se(self, method):
@@ -1719,9 +1717,9 @@ class TestRankGuardedAnalyticalSE:
                 "first_treat",
                 covariates=["x1", "xc"],
             )
-        assert np.isfinite(with_const.overall_se)
-        assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        assert np.isfinite(with_const.se)
+        assert with_const.se < 1.0
+        np.testing.assert_allclose(with_const.se, drop_one.se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "dr"])
     def test_control_cell_aliasing_close_to_drop_one(self, method):
@@ -1751,8 +1749,8 @@ class TestRankGuardedAnalyticalSE:
                 "first_treat",
                 covariates=["x1", "x2_deg"],
             )
-        assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
-        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
+        assert np.isfinite(with_deg.se) and with_deg.se > 0
+        np.testing.assert_allclose(with_deg.se, drop_one.se, rtol=5e-2)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_survey_weighted_constant_covariate_finite_se(self, method):
@@ -1789,9 +1787,9 @@ class TestRankGuardedAnalyticalSE:
                 covariates=["x1", "xc"],
                 survey_design=sd,
             )
-        assert np.isfinite(with_const.overall_se)
-        assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        assert np.isfinite(with_const.se)
+        assert with_const.se < 1.0
+        np.testing.assert_allclose(with_const.se, drop_one.se, rtol=1e-9)
 
     def test_aggregated_se_wif_contract(self, monkeypatch):
         # Locks the _compute_aggregated_se_with_wif arity + fail-closed contract
@@ -1877,15 +1875,15 @@ class TestRankGuardedAnalyticalSE:
                 d, "outcome", "unit", "time", "first_treat", covariates=["xbig", "x1"]
             )
         # Well-scaled exact duplicate == dropping it (clean column-drop).
-        np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-9)
+        np.testing.assert_allclose(well.se, drop_one.se, rtol=1e-9)
         # Mixed-scale exact duplicate: finite for every method.
-        assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
-        assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
+        assert np.isfinite(big_ab.se) and big_ab.se > 0
+        assert np.isfinite(big_ba.se) and big_ba.se > 0
         # Order-invariance holds for ALL methods now: ipw/dr via the equilibrated
         # rank-guarded inverse, and reg via the equilibrated point-estimate OR
         # solve (post OR scale-equilibration change) — mixed-scale exact-duplicate
         # columns become identical after equilibration, so the SE is order-invariant.
-        np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-9)
+        np.testing.assert_allclose(big_ab.se, big_ba.se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_exact_duplicate_covariate_survey_weighted(self, method):
@@ -1945,14 +1943,14 @@ class TestRankGuardedAnalyticalSE:
                 survey_design=sd,
             )
         # Well-scaled exact duplicate == dropping it, under survey weighting.
-        np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-7)
+        np.testing.assert_allclose(well.se, drop_one.se, rtol=1e-7)
         # Mixed-scale exact duplicate under survey weighting: finite + order-invariant
         # for ALL methods. reg's point-estimate OR fit now routes through the
         # equilibrated solve_ols (post OR scale-equilibration change), so its SE is
         # order-invariant like ipw/dr — see test_exact_duplicate_covariate.
-        assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
-        assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
-        np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-7)
+        assert np.isfinite(big_ab.se) and big_ab.se > 0
+        assert np.isfinite(big_ba.se) and big_ba.se > 0
+        np.testing.assert_allclose(big_ab.se, big_ba.se, rtol=1e-7)
 
 
 class TestRegIpwIFBehavior:
@@ -2082,7 +2080,7 @@ class TestRegIpwIFBehavior:
                 assert np.isfinite(cell["se"]), f"cell ({g},{t})"
         # The reference period is now materialized as a zero cell.
         assert any(c.get("is_reference") for c in res.group_time_effects.values())
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     def test_reg_constant_only_covariate_matches_no_covariate(self):
         """A constant as the ONLY reg covariate makes the CENTERED
@@ -2100,9 +2098,9 @@ class TestRegIpwIFBehavior:
             const_only = CallawaySantAnna(estimation_method="reg").fit(
                 data, "outcome", "unit", "time", "first_treat", covariates=["xc"]
             )
-        assert np.isfinite(const_only.overall_se)
-        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
-        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
+        assert np.isfinite(const_only.se)
+        np.testing.assert_allclose(const_only.att, no_cov.att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.se, no_cov.se, rtol=1e-9)
         for key, cell in const_only.group_time_effects.items():
             ref = no_cov.group_time_effects[key]
             np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
@@ -2144,9 +2142,9 @@ class TestRegIpwIFBehavior:
                 covariates=["xc"],
                 survey_design=SurveyDesign(weights="weight"),
             )
-        assert np.isfinite(const_only.overall_se)
-        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
-        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
+        assert np.isfinite(const_only.se)
+        np.testing.assert_allclose(const_only.att, no_cov.att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.se, no_cov.se, rtol=1e-9)
         for key, cell in const_only.group_time_effects.items():
             ref = no_cov.group_time_effects[key]
             np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
@@ -2223,7 +2221,7 @@ class TestCallawaySantAnnaRankDeficiencyPaths:
             ), "Expected at least one rank-deficiency warning from DR path"
 
         assert results is not None
-        assert results.overall_att is not None
+        assert results.att is not None
 
     def test_reg_nyt_rank_deficient_action_warn(self):
         """Test that reg+not_yet_treated emits rank-deficiency warning with collinear covariates."""
@@ -2259,8 +2257,8 @@ class TestCallawaySantAnnaRankDeficiencyPaths:
             ), "Expected at least one rank-deficiency warning from reg nyt path"
 
         assert results is not None
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_ipw_rank_deficient_action_error_raises(self):
         """IPW path raises ValueError with rank_deficient_action='error' and collinear covariates."""
@@ -2336,7 +2334,7 @@ class TestCallawaySantAnnaRankDeficiencyPaths:
         results.aggregate("group")
 
         assert results is not None
-        assert results.overall_att is not None
+        assert results.att is not None
         # Single-unit cohort (g=5) effects should exist and have finite ATT
         g5_effects = {(g, t): eff for (g, t), eff in results.group_time_effects.items() if g == 5}
         assert len(g5_effects) > 0, "Expected group-time effects for cohort g=5"
@@ -2360,8 +2358,8 @@ class TestCallawaySantAnnaBootstrap:
         assert results.bootstrap_results is not None
         assert results.bootstrap_results.n_bootstrap == n_boot
         assert results.bootstrap_results.weight_type == "rademacher"
-        assert results.overall_se > 0
-        assert results.overall_conf_int[0] < results.overall_att < results.overall_conf_int[1]
+        assert results.se > 0
+        assert results.conf_int[0] < results.att < results.conf_int[1]
 
     def test_bootstrap_weight_types(self, ci_params):
         """Test different bootstrap weight types."""
@@ -2378,7 +2376,7 @@ class TestCallawaySantAnnaBootstrap:
 
             assert results.bootstrap_results is not None
             assert results.bootstrap_results.weight_type == wt
-            assert results.overall_se > 0
+            assert results.se > 0
 
     def test_bootstrap_event_study(self, ci_params):
         """Test bootstrap with event study aggregation."""
@@ -2463,8 +2461,8 @@ class TestCallawaySantAnnaBootstrap:
         )
 
         # Results should be identical with same seed
-        assert results1.overall_se == results2.overall_se
-        assert results1.overall_conf_int == results2.overall_conf_int
+        assert results1.se == results2.se
+        assert results1.conf_int == results2.conf_int
 
     def test_bootstrap_different_seeds(self, ci_params):
         """Test that different seeds give different results."""
@@ -2482,7 +2480,7 @@ class TestCallawaySantAnnaBootstrap:
         )
 
         # Results should differ with different seeds
-        assert results1.overall_se != results2.overall_se
+        assert results1.se != results2.se
 
     def test_bootstrap_p_value_significance(self, ci_params):
         """Test that strong effect has significant p-value with bootstrap."""
@@ -2495,7 +2493,7 @@ class TestCallawaySantAnnaBootstrap:
         )
 
         # Strong effect should be significant
-        assert results.overall_p_value < 0.05
+        assert results.p_value < 0.05
         assert results.is_significant
 
     def test_bootstrap_zero_effect_not_significant(self, ci_params):
@@ -2510,7 +2508,7 @@ class TestCallawaySantAnnaBootstrap:
 
         # Zero effect should not be significant at 0.01 level
         # (using 0.01 to be more conservative with finite sample)
-        assert results.overall_p_value > 0.01 or abs(results.overall_att) < 2 * results.overall_se
+        assert results.p_value > 0.01 or abs(results.att) < 2 * results.se
 
     def test_bootstrap_distribution_stored(self, ci_params):
         """Test that bootstrap distribution is stored in results."""
@@ -2541,7 +2539,7 @@ class TestCallawaySantAnnaBootstrap:
         )
 
         assert results.bootstrap_results is not None
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_bootstrap_group_time_effects(self, ci_params):
         """Test that bootstrap updates group-time effect SEs."""
@@ -2595,7 +2593,7 @@ class TestCallawaySantAnnaBootstrap:
         )
 
         assert results.bootstrap_results is not None
-        assert results.overall_se > 0
+        assert results.se > 0
 
     def test_bootstrap_estimation_methods(self, ci_params):
         """Test bootstrap with different estimation methods."""
@@ -2611,7 +2609,7 @@ class TestCallawaySantAnnaBootstrap:
             )
 
             assert results.bootstrap_results is not None
-            assert results.overall_se > 0, f"Failed for method {method}"
+            assert results.se > 0, f"Failed for method {method}"
 
     def test_bootstrap_with_balanced_event_study(self, ci_params):
         """Test bootstrap with balanced event study aggregation."""
@@ -2763,9 +2761,9 @@ class TestCallawaySantAnnaSingleCohort:
         results = cs.fit(df, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
         # Should produce valid results
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert np.isfinite(results.att)
+        assert results.se > 0
 
         # Should have effects for single group only
         groups = set(g for g, t in results.group_time_effects.keys())
@@ -2773,7 +2771,7 @@ class TestCallawaySantAnnaSingleCohort:
         assert treatment_period in groups
 
         # ATT should be roughly correct
-        assert abs(results.overall_att - 2.5) < 1.5
+        assert abs(results.att - 2.5) < 1.5
 
     def test_single_cohort_event_study(self):
         """Test event study aggregation with single cohort."""
@@ -2927,12 +2925,12 @@ class TestCallawaySantAnnaSingleCohort:
         )
 
         # Both should produce valid results
-        assert np.isfinite(results_never.overall_att)
-        assert np.isfinite(results_not_yet.overall_att)
+        assert np.isfinite(results_never.att)
+        assert np.isfinite(results_not_yet.att)
 
         # Results may differ slightly due to different comparison groups
         # but should be in similar range
-        assert abs(results_never.overall_att - results_not_yet.overall_att) < 1.0
+        assert abs(results_never.att - results_not_yet.att) < 1.0
 
 
 class TestCallawaySantAnnaAnalyticalSE:
@@ -2964,18 +2962,15 @@ class TestCallawaySantAnnaAnalyticalSE:
         )
 
         # Point estimates should match exactly
-        assert abs(results_analytical.overall_att - results_bootstrap.overall_att) < 1e-10
+        assert abs(results_analytical.att - results_bootstrap.att) < 1e-10
 
         # SEs should be similar (within 15% with enough bootstrap iterations,
         # wider tolerance when min_n cap reduces iterations in pure Python mode)
-        rel_diff = (
-            abs(results_analytical.overall_se - results_bootstrap.overall_se)
-            / results_bootstrap.overall_se
-        )
+        rel_diff = abs(results_analytical.se - results_bootstrap.se) / results_bootstrap.se
         threshold = 0.40 if n_boot < 100 else 0.15
         assert rel_diff < threshold, (
-            f"Analytical SE ({results_analytical.overall_se:.4f}) differs from "
-            f"bootstrap SE ({results_bootstrap.overall_se:.4f}) by {rel_diff:.1%}"
+            f"Analytical SE ({results_analytical.se:.4f}) differs from "
+            f"bootstrap SE ({results_bootstrap.se:.4f}) by {rel_diff:.1%}"
         )
 
     def test_analytical_se_accounts_for_covariance(self):
@@ -3001,7 +2996,7 @@ class TestCallawaySantAnnaAnalyticalSE:
         )
 
         # The SE should be non-zero and positive
-        assert results.overall_se > 0
+        assert results.se > 0
 
         # Compute what the "independence" SE would be (sum of weighted variances)
         gt_effects = results.group_time_effects
@@ -3023,7 +3018,7 @@ class TestCallawaySantAnnaAnalyticalSE:
         # because covariances from shared control units are typically positive
         # Note: May not always be true but should be for typical staggered designs
         # We test that both are positive and finite
-        assert np.isfinite(results.overall_se)
+        assert np.isfinite(results.se)
         assert np.isfinite(independence_se)
 
     def test_analytical_se_single_gt_pair(self):
@@ -3067,7 +3062,7 @@ class TestCallawaySantAnnaAnalyticalSE:
             gt_key = list(results.group_time_effects.keys())[0]
             individual_se = results.group_time_effects[gt_key]["se"]
             # Should be close (may not be exact due to normalization)
-            assert abs(results.overall_se - individual_se) < individual_se * 0.01
+            assert abs(results.se - individual_se) < individual_se * 0.01
 
     def test_event_study_analytical_se(self, ci_params):
         """Event study SEs should also use influence function aggregation."""
@@ -3178,11 +3173,11 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             data, outcome="y", unit="id", time="period", first_treat="treatment_cohort"
         )
 
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert np.isfinite(results.att)
+        assert results.se > 0
         # Treatment effect should be approximately 2.5
-        assert abs(results.overall_att - 2.5) < 1.5
+        assert abs(results.att - 2.5) < 1.5
 
     def test_non_standard_all_column_names(self):
         """Test with all non-standard column names."""
@@ -3202,9 +3197,9 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             first_treat="treatment_timing",
         )
 
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert np.isfinite(results.att)
+        assert results.se > 0
 
     def test_non_standard_names_with_bootstrap(self, ci_params):
         """Test non-standard column names with bootstrap inference."""
@@ -3217,8 +3212,8 @@ class TestCallawaySantAnnaNonStandardColumnNames:
         results = cs.fit(data, outcome="y", unit="id", time="period", first_treat="g")
 
         assert results.bootstrap_results is not None
-        assert results.overall_se > 0
-        assert results.overall_conf_int[0] < results.overall_att < results.overall_conf_int[1]
+        assert results.se > 0
+        assert results.conf_int[0] < results.att < results.conf_int[1]
 
     def test_non_standard_names_with_event_study(self):
         """Test non-standard column names with event study aggregation."""
@@ -3253,8 +3248,8 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             covariates=["covariate_x", "covariate_z"],
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_non_standard_names_with_not_yet_treated(self):
         """Test non-standard column names with not_yet_treated control group."""
@@ -3263,7 +3258,7 @@ class TestCallawaySantAnnaNonStandardColumnNames:
         cs = CallawaySantAnna(control_group="not_yet_treated")
         results = cs.fit(data, outcome="y", unit="id", time="period", first_treat="adoption_period")
 
-        assert results.overall_att is not None
+        assert results.att is not None
         assert results.control_group == "not_yet_treated"
 
     def test_non_standard_names_matches_standard_names(self):
@@ -3293,8 +3288,8 @@ class TestCallawaySantAnnaNonStandardColumnNames:
         results2 = cs2.fit(data_custom, outcome="y", unit="entity", time="t", first_treat="g")
 
         # Results should be identical
-        assert abs(results1.overall_att - results2.overall_att) < 1e-10
-        assert abs(results1.overall_se - results2.overall_se) < 1e-10
+        assert abs(results1.att - results2.att) < 1e-10
+        assert abs(results1.se - results2.se) < 1e-10
 
     def test_column_name_with_spaces(self):
         """Test column names containing spaces."""
@@ -3315,8 +3310,8 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             first_treat="treatment period",
         )
 
-        assert results.overall_att is not None
-        assert results.overall_se > 0
+        assert results.att is not None
+        assert results.se > 0
 
     def test_column_name_with_special_characters(self):
         """Test column names with underscores and numbers."""
@@ -3332,7 +3327,7 @@ class TestCallawaySantAnnaNonStandardColumnNames:
             data, outcome="y", unit="id", time="period", first_treat="first_treat_2024"
         )
 
-        assert results.overall_att is not None
+        assert results.att is not None
 
 
 class TestCallawaySantAnnaPreTreatment:
@@ -3577,20 +3572,14 @@ class TestCallawaySantAnnaPreTreatment:
             ), f"Expected warning about no post-treatment effects, got: {warning_messages}"
 
         # Overall ATT should be NaN
-        assert np.isnan(results.overall_att), (
+        assert np.isnan(results.att), (
             f"Expected NaN for overall_att when no post-treatment effects exist, "
-            f"got {results.overall_att}"
+            f"got {results.att}"
         )
         # All inference fields should also be NaN
-        assert np.isnan(
-            results.overall_se
-        ), f"Expected NaN for overall_se, got {results.overall_se}"
-        assert np.isnan(
-            results.overall_t_stat
-        ), f"Expected NaN for overall_t_stat, got {results.overall_t_stat}"
-        assert np.isnan(
-            results.overall_p_value
-        ), f"Expected NaN for overall_p_value, got {results.overall_p_value}"
+        assert np.isnan(results.se), f"Expected NaN for overall_se, got {results.se}"
+        assert np.isnan(results.t_stat), f"Expected NaN for overall_t_stat, got {results.t_stat}"
+        assert np.isnan(results.p_value), f"Expected NaN for overall_p_value, got {results.p_value}"
 
     def test_no_post_treatment_effects_bootstrap_returns_nan(self, ci_params):
         """Bootstrap returns NaN inference when no post-treatment effects exist."""
@@ -3628,12 +3617,12 @@ class TestCallawaySantAnnaPreTreatment:
             assert has_warning, f"Expected warning, got: {warning_messages}"
 
         # All overall inference fields should be NaN
-        assert np.isnan(results.overall_att), "overall_att should be NaN"
-        assert np.isnan(results.overall_se), "overall_se should be NaN"
-        assert np.isnan(results.overall_t_stat), "overall_t_stat should be NaN"
-        assert np.isnan(results.overall_p_value), "overall_p_value should be NaN"
-        assert np.isnan(results.overall_conf_int[0]), "CI lower should be NaN"
-        assert np.isnan(results.overall_conf_int[1]), "CI upper should be NaN"
+        assert np.isnan(results.att), "overall_att should be NaN"
+        assert np.isnan(results.se), "overall_se should be NaN"
+        assert np.isnan(results.t_stat), "overall_t_stat should be NaN"
+        assert np.isnan(results.p_value), "overall_p_value should be NaN"
+        assert np.isnan(results.conf_int[0]), "CI lower should be NaN"
+        assert np.isnan(results.conf_int[1]), "CI upper should be NaN"
 
         # Bootstrap results should also have NaN
         assert results.bootstrap_results is not None
@@ -3684,8 +3673,8 @@ class TestCallawaySantAnnaPreTreatment:
             assert has_warning, "Expected warning about no post-treatment effects"
 
         # Verify overall ATT is NaN
-        assert np.isnan(results.overall_att), "overall_att should be NaN"
-        assert np.isnan(results.overall_se), "overall_se should be NaN"
+        assert np.isnan(results.att), "overall_att should be NaN"
+        assert np.isnan(results.se), "overall_se should be NaN"
 
         # Verify we have pre-treatment effects
         pre_treatment_effects = [(g, t) for (g, t) in results.group_time_effects.keys() if t < g]
@@ -3952,10 +3941,8 @@ class TestCallawaySantAnnaTStatNaN:
             )
 
         # Overall t_stat should be NaN when SE is invalid
-        if np.isnan(results.overall_se) or results.overall_se == 0:
-            assert np.isnan(
-                results.overall_t_stat
-            ), "overall_t_stat should be NaN when SE is invalid"
+        if np.isnan(results.se) or results.se == 0:
+            assert np.isnan(results.t_stat), "overall_t_stat should be NaN when SE is invalid"
 
     def test_per_effect_tstat_consistency(self, ci_params):
         """Per-effect t_stat uses same NaN logic as overall t_stat.
@@ -4394,7 +4381,7 @@ class TestPscoreTrimParameter:
             first_treat="first_treat",
             covariates=["x"],
         )
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         assert results.pscore_trim == 0.1
 
     def test_nondefault_pscore_trim_dr(self):
@@ -4428,7 +4415,7 @@ class TestPscoreTrimParameter:
             first_treat="first_treat",
             covariates=["x"],
         )
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
         assert results.pscore_trim == 0.1
 
 
@@ -4491,8 +4478,8 @@ class TestIRLSPropensityScore:
         ]
         assert len(pscore_warns) > 0, "Expected propensity score warnings"
         # ATT should still be reasonable (not wildly inflated)
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
+        assert results.att is not None
+        assert np.isfinite(results.att)
 
     def test_near_separation_att_not_inflated(self):
         """IRLS produces reasonable ATT even with near-separation covariates.
@@ -4548,10 +4535,10 @@ class TestIRLSPropensityScore:
             )
 
         # ATT should be in a reasonable range around the true effect
-        assert results.overall_att is not None
+        assert results.att is not None
         assert (
-            abs(results.overall_att - true_effect) < 3.0
-        ), f"ATT={results.overall_att} too far from true effect {true_effect}"
+            abs(results.att - true_effect) < 3.0
+        ), f"ATT={results.att} too far from true effect {true_effect}"
 
     def test_dr_fallback_warning(self):
         """DR path emits warning when propensity estimation fails."""
@@ -4577,7 +4564,7 @@ class TestIRLSPropensityScore:
 
             fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
             assert len(fallback_warns) > 0, "Expected fallback warning in DR path"
-            assert results.overall_att is not None
+            assert results.att is not None
 
     def test_large_scale_covariate_stability(self):
         """IRLS handles large-scale covariates without wild ATT inflation.
@@ -4630,12 +4617,12 @@ class TestIRLSPropensityScore:
                 covariates=["x_large"],
             )
 
-        assert results.overall_att is not None
-        assert np.isfinite(results.overall_att)
+        assert results.att is not None
+        assert np.isfinite(results.att)
         # ATT should be in a plausible range
         assert (
-            abs(results.overall_att - true_effect) < 5.0
-        ), f"ATT={results.overall_att} too far from true effect {true_effect}"
+            abs(results.att - true_effect) < 5.0
+        ), f"ATT={results.att} too far from true effect {true_effect}"
 
 
 class TestEPVDiagnostics:
@@ -4770,7 +4757,7 @@ class TestEPVDiagnostics:
                 )
             fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
             assert len(fallback_warns) > 0
-            assert results.overall_att is not None
+            assert results.att is not None
 
     def test_cs_diagnose_propensity(self):
         """diagnose_propensity() returns DataFrame with EPV per cohort."""
@@ -4936,7 +4923,7 @@ class TestEPVDiagnostics:
             assert np.isfinite(
                 eff["effect"]
             ), f"ATT({g},{t}) is {eff['effect']} — NaN cache poisoning"
-        assert np.isfinite(results.overall_att)
+        assert np.isfinite(results.att)
 
     def test_cs_strict_mode_not_swallowed_by_unconditional_fallback(self):
         """rank_deficient_action='error' raises even with pscore_fallback='unconditional'.
@@ -5380,12 +5367,12 @@ class TestCallawaySantAnnaClusterWiring:
             first_treat="first_treat",
         )
 
-        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
-        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
-        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
-            f"cluster=state SE ({res_cluster.overall_se:.6f}) is "
+        assert np.isfinite(res_unit.se) and res_unit.se > 0
+        assert np.isfinite(res_cluster.se) and res_cluster.se > 0
+        assert abs(res_unit.se - res_cluster.se) > 1e-6, (
+            f"cluster=state SE ({res_cluster.se:.6f}) is "
             f"effectively identical to cluster=None SE "
-            f"({res_unit.overall_se:.6f}) — the cluster= parameter "
+            f"({res_unit.se:.6f}) — the cluster= parameter "
             "may not be wired through to the variance machinery."
         )
 
@@ -5474,7 +5461,7 @@ class TestCallawaySantAnnaClusterWiring:
         assert res.cluster_name is None
         assert res.n_clusters is None
         assert res.vcov_type == "hc1"
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_invalid_cluster_column_raises(self):
         """cluster=<nonexistent_col> raises ValueError with column name."""
@@ -5556,9 +5543,9 @@ class TestCallawaySantAnnaClusterWiring:
             time="time",
             first_treat="first_treat",
         )
-        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
-        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
-        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
+        assert np.isfinite(res_unit.se) and res_unit.se > 0
+        assert np.isfinite(res_cluster.se) and res_cluster.se > 0
+        assert abs(res_unit.se - res_cluster.se) > 1e-6, (
             "RCS path: cluster=state SE not measurably different from "
             "cluster=None SE — cluster wiring may not reach the RCS code path."
         )
@@ -5640,7 +5627,7 @@ class TestCallawaySantAnnaVcovTypeNarrowContract:
             time="time",
             first_treat="first_treat",
         )
-        assert res1.overall_se == pytest.approx(res2.overall_se, rel=0, abs=0)
+        assert res1.se == pytest.approx(res2.se, rel=0, abs=0)
         assert res1.vcov_type == res2.vcov_type == "hc1"
         assert res1.cluster_name == res2.cluster_name == "state"
 
@@ -5878,12 +5865,12 @@ class TestCallawaySantAnnaClusterSafetyGates:
             time="time",
             first_treat="first_treat",
         )
-        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
-        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
-        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
-            f"Bootstrap path: cluster=state SE ({res_cluster.overall_se:.6f}) "
+        assert np.isfinite(res_unit.se) and res_unit.se > 0
+        assert np.isfinite(res_cluster.se) and res_cluster.se > 0
+        assert abs(res_unit.se - res_cluster.se) > 1e-6, (
+            f"Bootstrap path: cluster=state SE ({res_cluster.se:.6f}) "
             f"is effectively identical to cluster=None SE "
-            f"({res_unit.overall_se:.6f}) — the cluster= parameter may "
+            f"({res_unit.se:.6f}) — the cluster= parameter may "
             "not be reaching the bootstrap multiplier-weights routing."
         )
 
@@ -6113,12 +6100,12 @@ class TestCallawaySantAnnaClusterSafetyGates:
             es = es_dict(res)
 
         # Overall bootstrap inference must be NaN-consistent
-        assert not np.isfinite(res.overall_se), (
-            f"Bootstrap overall_se should be NaN under G=1 cluster, " f"got {res.overall_se}."
+        assert not np.isfinite(res.se), (
+            f"Bootstrap overall_se should be NaN under G=1 cluster, " f"got {res.se}."
         )
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.isnan(res.overall_conf_int[0]) and np.isnan(res.overall_conf_int[1])
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.isnan(res.conf_int[0]) and np.isnan(res.conf_int[1])
 
         # At least one (g, t) cell must have NaN inference (undefined
         # clustered variance propagating through either the bootstrap or
@@ -6273,10 +6260,10 @@ class TestCallawaySantAnnaClusterSafetyGates:
         )
         # PSU wins under bootstrap too — SE must match the reference
         # (explicit-PSU-only) fit at the same seed
-        assert res_conflict.overall_se == pytest.approx(res_ref.overall_se, rel=0, abs=0), (
+        assert res_conflict.se == pytest.approx(res_ref.se, rel=0, abs=0), (
             f"Bootstrap precedence: with seed={cs_conflict.seed}, conflict "
-            f"fit SE ({res_conflict.overall_se}) must match explicit-PSU-only "
-            f"reference SE ({res_ref.overall_se}) — both bootstraps must "
+            f"fit SE ({res_conflict.se}) must match explicit-PSU-only "
+            f"reference SE ({res_ref.se}) — both bootstraps must "
             "draw at the same effective PSU level."
         )
 

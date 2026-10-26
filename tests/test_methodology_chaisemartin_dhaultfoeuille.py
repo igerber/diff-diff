@@ -68,7 +68,7 @@ class TestMethodologyWorkedExample:
                 treatment="treatment",
             )
         # Exact integer/half-integer arithmetic from the plan's worked example
-        assert results.overall_att == 2.5
+        assert results.att == 2.5
         assert results.joiners_att == 2.0
         assert results.leavers_att == 3.0
 
@@ -103,14 +103,14 @@ class TestMethodologyWorkedExample:
                 treatment="treatment",
             )
         # Point estimate is still exact
-        assert results.overall_att == 2.5
+        assert results.att == 2.5
         # SE is NaN, not 0.0, on the degenerate panel
-        assert np.isnan(results.overall_se)
+        assert np.isnan(results.se)
         # NaN propagates through inference fields
-        assert np.isnan(results.overall_t_stat)
-        assert np.isnan(results.overall_p_value)
-        assert np.isnan(results.overall_conf_int[0])
-        assert np.isnan(results.overall_conf_int[1])
+        assert np.isnan(results.t_stat)
+        assert np.isnan(results.p_value)
+        assert np.isnan(results.conf_int[0])
+        assert np.isnan(results.conf_int[1])
         # The degenerate-cohort warning fired
         assert any(
             "variance is unidentified" in str(wi.message) for wi in w
@@ -200,7 +200,7 @@ class TestMethodologyWorkedExample:
         )
         # Under constant trends with no treatment effect, both DID_M
         # and the placebo should be exactly zero.
-        assert results.overall_att == 0.0
+        assert results.att == 0.0
         if results.placebo_available:
             assert results.placebo_effect == 0.0
 
@@ -302,7 +302,7 @@ class TestCohortRecenteringCritical:
                 time="period",
                 treatment="treatment",
             )
-        cohort_se = results.overall_se
+        cohort_se = results.se
         assert np.isfinite(cohort_se) and cohort_se > 0
 
         # Reach into the IF helpers and compute the GRAND-MEAN version on
@@ -405,10 +405,10 @@ class TestCohortRecenteringCritical:
                 time="period",
                 treatment="treatment",
             )
-        assert np.isfinite(results.overall_se)
-        assert results.overall_se > 0
-        assert np.isfinite(results.overall_t_stat)
-        assert np.isfinite(results.overall_p_value)
+        assert np.isfinite(results.se)
+        assert results.se > 0
+        assert np.isfinite(results.t_stat)
+        assert np.isfinite(results.p_value)
 
 
 # =============================================================================
@@ -541,7 +541,7 @@ class TestLargeNRecovery:
                 treatment="treatment",
             )
         # With n=200 and homogeneous effect=2.5, the CI should bracket truth
-        lo, hi = results.overall_conf_int
+        lo, hi = results.conf_int
         assert lo <= 2.5 <= hi
 
     @pytest.mark.slow
@@ -566,7 +566,7 @@ class TestLargeNRecovery:
         # Use a point-estimate proximity assertion rather than CI
         # coverage, which is stochastic and can fail on specific seeds
         # or architectures (the arm64 CI runner hit this with seed 43).
-        assert abs(results.overall_att - 1.5) < 0.5, (
-            f"Large-N recovery failed: overall_att={results.overall_att:.4f}, "
+        assert abs(results.att - 1.5) < 0.5, (
+            f"Large-N recovery failed: overall_att={results.att:.4f}, "
             f"expected ~1.5 (tolerance 0.5)"
         )

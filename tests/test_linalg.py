@@ -1956,8 +1956,8 @@ class TestEstimatorIntegration:
         result = sa.fit(data, outcome="y", unit="unit", time="time", first_treat="first_treat")
 
         # Should produce valid results
-        assert result.overall_se > 0
-        assert np.isfinite(result.overall_att)
+        assert result.se > 0
+        assert np.isfinite(result.att)
         assert len(result.event_study_effects) > 0
 
 

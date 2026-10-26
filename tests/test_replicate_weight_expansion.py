@@ -318,8 +318,8 @@ class TestSunAbrahamReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
         assert result.survey_metadata is not None
         result.summary()
 
@@ -353,8 +353,8 @@ class TestStackedDiDReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
         assert result.survey_metadata is not None
         result.summary()
 
@@ -370,8 +370,8 @@ class TestStackedDiDReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
 
 
 class TestImputationDiDReplicate:
@@ -389,8 +389,8 @@ class TestImputationDiDReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
         assert result.survey_metadata is not None
         result.summary()
 
@@ -408,7 +408,7 @@ class TestImputationDiDReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.se) and result.se > 0
         es = es_dict(result)
         # At least some identified periods should have finite SE
         finite_ses = [
@@ -466,8 +466,8 @@ class TestTwoStageDiDReplicate:
             "first_treat",
             survey_design=sd,
         )
-        assert np.isfinite(result.overall_att)
-        assert np.isfinite(result.overall_se) and result.overall_se > 0
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
         assert result.survey_metadata is not None
         result.summary()
 
@@ -540,21 +540,21 @@ class TestTwoStageDiDReplicate:
             survey_design=sd,
         )
         # ATT comes from the main fit (always finite once always-treated drop runs)
-        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.att)
         # SE comes from the replicate refit variance: requires the refit
         # callback to align replicate weights with the post-drop sample.
         # Pre-Wave-E.3-parity-fix, replicate refits raised ValueError on
         # length mismatch, `compute_replicate_refit_variance` swallowed
         # them, and `overall_se` came out NaN with all replicate-based
         # inference fields NaN.
-        assert np.isfinite(result.overall_se), (
+        assert np.isfinite(result.se), (
             "Replicate SE must be finite under always-treated drop. "
             "If NaN, the replicate refit callback is failing to align "
             "weights with the post-drop sample — Wave E.3 parity bug."
         )
-        assert np.isfinite(result.overall_p_value)
-        assert result.overall_conf_int is not None
-        assert np.all(np.isfinite(result.overall_conf_int))
+        assert np.isfinite(result.p_value)
+        assert result.conf_int is not None
+        assert np.all(np.isfinite(result.conf_int))
 
     def test_two_stage_always_treated_event_study_and_group_replicate(self):
         """Replicate refit covers event-study + group surfaces under
@@ -997,8 +997,8 @@ class TestTrueBRRHalfSample:
             "first_treat",
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        self._assert_point_invariance(res.overall_att, base.overall_att)
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
 
     def test_stacked_true_brr(self):
         data = _make_staggered_panel()
@@ -1014,8 +1014,8 @@ class TestTrueBRRHalfSample:
             "first_treat",
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        self._assert_point_invariance(res.overall_att, base.overall_att)
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
 
     def test_imputation_true_brr(self):
         data = _make_staggered_panel()
@@ -1031,8 +1031,8 @@ class TestTrueBRRHalfSample:
             "first_treat",
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        self._assert_point_invariance(res.overall_att, base.overall_att)
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
 
     def test_two_stage_true_brr(self):
         data = _make_staggered_panel()
@@ -1048,5 +1048,5 @@ class TestTrueBRRHalfSample:
             "first_treat",
             survey_design=SurveyDesign(weights="weight"),
         )
-        assert np.isfinite(res.overall_se) and res.overall_se > 0
-        self._assert_point_invariance(res.overall_att, base.overall_att)
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)

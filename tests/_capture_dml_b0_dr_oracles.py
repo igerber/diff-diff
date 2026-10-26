@@ -74,8 +74,8 @@ def main():
 
     res = estimator_tier_fit()
     print("# Estimator tier: ContinuousDiD DR covariate path")
-    print(f"ESTIMATOR_TIER_OVERALL_ATT = {res.overall_att!r}")
-    print(f"ESTIMATOR_TIER_OVERALL_ATT_SE = {res.overall_att_se!r}")
+    print(f"ESTIMATOR_TIER_OVERALL_ATT = {res.att!r}")
+    print(f"ESTIMATOR_TIER_OVERALL_ATT_SE = {res.se!r}")
     print(f"ESTIMATOR_TIER_OVERALL_ACRT = {res.overall_acrt!r}")
     print(f"ESTIMATOR_TIER_OVERALL_ACRT_SE = {res.overall_acrt_se!r}")
 

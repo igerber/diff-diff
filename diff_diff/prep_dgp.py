@@ -206,7 +206,7 @@ def generate_staggered_data(
     >>> cs = CallawaySantAnna()
     >>> results = cs.fit(data, outcome='outcome', unit='unit',
     ...                  time='period', first_treat='first_treat')
-    >>> results.overall_att > 0
+    >>> results.att > 0
     True
     """
     rng = np.random.default_rng(seed)

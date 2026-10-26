@@ -456,7 +456,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         on the post-filter estimation sample used by ``DID_M``. When
         the ragged-panel filter or ``drop_larger_lower`` drops groups,
         the fitted ``results.twfe_*`` values describe a LARGER sample
-        (pre-filter) than ``results.overall_att`` and a ``UserWarning``
+        (pre-filter) than ``results.att`` and a ``UserWarning``
         is emitted to make the divergence explicit. See REGISTRY.md
         ``ChaisemartinDHaultfoeuille`` ``Note (TWFE diagnostic sample
         contract)`` for the full rationale.
@@ -724,7 +724,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     ...     data, outcome="outcome", unit="group",
     ...     time="period", treatment="treatment",
     ... )
-    >>> abs(results.overall_att - 2.0) < 1.0  # close to the true effect
+    >>> abs(results.att - 2.0) < 1.0  # close to the true effect
     True
     """
 
@@ -1567,7 +1567,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
                 f"switch group(s). The fitted results.twfe_* values (if "
                 f"the diagnostic succeeded) were computed on the FULL "
                 f"pre-filter cell sample, so they describe a LARGER "
-                f"sample (pre-filter) than overall_att. The standalone "
+                f"sample (pre-filter) than att. The standalone "
                 f"twowayfeweights() function also uses the pre-filter "
                 f"sample. This is the documented Phase 1 contract — see "
                 f"REGISTRY.md ChaisemartinDHaultfoeuille `Note (TWFE "

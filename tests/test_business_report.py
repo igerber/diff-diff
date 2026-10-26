@@ -872,9 +872,13 @@ class TestSCMBusinessReport:
 
         obj = StaggeredTripleDiffResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 40
@@ -907,9 +911,13 @@ class TestSCMBusinessReport:
 
         obj = ImputationDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 40
@@ -953,9 +961,13 @@ class TestSCMBusinessReport:
 
         obj = TwoStageDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.1
+        obj.se = 0.1
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.8, 1.2)
+        obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
         obj.n_treated = 40
@@ -1007,9 +1019,13 @@ class TestEfficientDiDAssumptionPtAllPtPost:
 
         stub = EfficientDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -1537,9 +1553,13 @@ class TestInconclusivePTProvenancePreservedOnBRSchema:
 
         obj = StackedDiDResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
         obj.n_treated_units = 100
@@ -1585,9 +1605,13 @@ class TestStaggeredTripleDiffNeverTreatedFixedComparison:
 
         stub = StaggeredTripleDiffResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 800
         stub.n_treated = 100
@@ -1817,9 +1841,13 @@ class TestStackedDiDAssumptionBlock:
 
         stub = StackedDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 400
         stub.n_treated = 50
@@ -1995,9 +2023,13 @@ class TestAnticipationStripsStrictNoAnticipationClause:
         stub_cls = type(class_name, (), {})
         stub = stub_cls()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 400
         stub.n_treated = 100
@@ -2081,9 +2113,13 @@ class TestAnticipationAwareAssumptionBlock:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2107,9 +2143,13 @@ class TestAnticipationAwareAssumptionBlock:
 
         stub = EfficientDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2134,9 +2174,13 @@ class TestAnticipationAwareAssumptionBlock:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2167,9 +2211,13 @@ class TestContinuousDiDDynamicControlSample:
 
         stub = ContinuousDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_att_se = 0.2
+        stub.se = 0.2
         stub.overall_att_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_att_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 120
         stub.n_treated = 50
@@ -2206,9 +2254,13 @@ class TestStaggeredTripleDiffDynamicControlSample:
 
         stub = StaggeredTripleDiffResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 200
         stub.n_treated = 80
@@ -2254,9 +2306,13 @@ class TestWooldridgeSampleNotYetTreatedSemantics:
 
         stub = WooldridgeDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2305,9 +2361,13 @@ class TestWooldridgeResultsRouting:
 
         stub = WooldridgeDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2388,9 +2448,13 @@ class TestAnticipationAwareHorizonClassification:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2498,9 +2562,13 @@ class TestDiagFallbackDowngradeAppliedCentrally:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -2877,9 +2945,13 @@ class TestEfficientDiDHausmanStepTaggedAsParallelTrends:
 
         stub = EfficientDiDResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.3
+        stub.se = 0.3
         stub.overall_p_value = 0.01
+        stub.p_value = 0.01
         stub.overall_conf_int = (0.4, 1.6)
+        stub.conf_int = (0.4, 1.6)
         stub.alpha = 0.05
         stub.n_obs = 500
         stub.n_treated = 200
@@ -2927,9 +2999,13 @@ class TestSpecificationComparisonStepTagPersistsAfterSensitivityRuns:
         stub_cls = type(class_name, (), {})
         stub = stub_cls()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 400
         stub.n_treated = 100
@@ -3006,9 +3082,13 @@ class TestCSRepeatedCrossSectionCountLabels:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 1000
         stub.n_treated_units = 200
@@ -3060,7 +3140,9 @@ class TestTROPApplicableChecksExcludesParallelTrends:
 
         stub = TROPResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.alpha = 0.05
         stub.n_obs = 100
 
@@ -3235,9 +3317,13 @@ class TestTROPInTimePlaceboStepTaggedAsPlacebo:
 
         stub = TROPResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 400
         stub.n_treated = 40
@@ -3473,7 +3559,9 @@ class TestSDiDTROPRejectPrecomputedPretrendsPower:
 
         stub = TROPResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.alpha = 0.05
         stub.n_obs = 100
         with pytest.raises(ValueError, match="estimator_native_diagnostics"):
@@ -3539,9 +3627,13 @@ class TestDesignEffectBandLabel:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
         stub.n_treated = 100
@@ -3602,9 +3694,13 @@ class TestDesignEffectBandLabel:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.overall_p_value = 0.001
+        stub.p_value = 0.001
         stub.overall_conf_int = (0.6, 1.4)
+        stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
         stub.n_treated = 100
@@ -3697,7 +3793,9 @@ class TestSDiDTROPRejectIncompatiblePrecomputedInputs:
 
         stub = TROPResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.alpha = 0.05
         stub.n_obs = 100
         with pytest.raises(ValueError, match="estimator_native_diagnostics"):
@@ -3711,7 +3809,9 @@ class TestSDiDTROPRejectIncompatiblePrecomputedInputs:
 
         stub = TROPResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.2
+        stub.se = 0.2
         stub.alpha = 0.05
         stub.n_obs = 100
         with pytest.raises(ValueError, match="estimator_native_diagnostics"):
@@ -4075,9 +4175,13 @@ class TestCSVaryingBaseSensitivitySkipped:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.3
+        stub.se = 0.3
         stub.overall_p_value = 0.01
+        stub.p_value = 0.01
         stub.overall_conf_int = (0.4, 1.6)
+        stub.conf_int = (0.4, 1.6)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -4124,9 +4228,13 @@ class TestCSVaryingBaseSensitivityRejectsPrecomputed:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 1.0
+        stub.att = 1.0
         stub.overall_se = 0.3
+        stub.se = 0.3
         stub.overall_p_value = 0.01
+        stub.p_value = 0.01
         stub.overall_conf_int = (0.4, 1.6)
+        stub.conf_int = (0.4, 1.6)
         stub.alpha = 0.05
         stub.n_obs = 100
         stub.n_treated = 40
@@ -4222,9 +4330,13 @@ class TestCanonicalValidationSurfaceFixes:
 
         stub = CallawaySantAnnaResults()
         stub.overall_att = 0.5608
+        stub.att = 0.5608
         stub.overall_se = 0.1216
+        stub.se = 0.1216
         stub.overall_p_value = 0.0
+        stub.p_value = 0.0
         stub.overall_conf_int = (0.323, 0.799)
+        stub.conf_int = (0.323, 0.799)
         stub.alpha = 0.05
         stub.n_obs = 539
         stub.n_treated = 22
@@ -4632,9 +4744,13 @@ class TestBusinessReportSurveyDesignPassthrough:
 
         obj = CallawaySantAnnaResults()
         obj.overall_att = 1.0
+        obj.att = 1.0
         obj.overall_se = 0.2
+        obj.se = 0.2
         obj.overall_p_value = 0.001
+        obj.p_value = 0.001
         obj.overall_conf_int = (0.6, 1.4)
+        obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 600
         obj.n_treated = 200

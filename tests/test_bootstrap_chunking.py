@@ -355,13 +355,13 @@ class TestCSBootstrapChunkInvariance:
         tiny, tiny_es, tiny_grp = self._fit()
 
         # Continuous bootstrap statistics match to within BLAS reassociation.
-        assert tiny.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiny.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         assert tiny_es.cband_crit_value == pytest.approx(
             base_es.cband_crit_value, rel=1e-10, abs=1e-12
         )
         # p-values are discrete proportions over draws; a borderline draw can
         # flip under reassociation, shifting a p-value by O(1/n_bootstrap).
-        assert tiny.overall_p_value == pytest.approx(base.overall_p_value, abs=0.02)
+        assert tiny.p_value == pytest.approx(base.p_value, abs=0.02)
 
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiny.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
@@ -402,7 +402,7 @@ class TestCSBootstrapChunkInvariance:
         monkeypatch.setattr("diff_diff.bootstrap_chunking.compute_block_size", lambda *a, **k: 7)
         monkeypatch.setattr("diff_diff.staggered_bootstrap.compute_block_size", lambda *a, **k: 7)
         tiny = fit()
-        assert tiny.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiny.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
 
     @staticmethod
     def _clustered_panel():
@@ -448,7 +448,7 @@ class TestCSBootstrapChunkInvariance:
         monkeypatch.setattr("diff_diff.staggered_bootstrap.compute_block_size", lambda *a, **k: 7)
         tiny, _, _ = self._fit_clustered()
 
-        assert tiny.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiny.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiny.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
@@ -479,11 +479,11 @@ class TestCSBootstrapTileInvariance:
         self._force_one_column_tiles(monkeypatch)
         tiled, tiled_es, tiled_grp = fit()
 
-        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiled.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         assert tiled_es.cband_crit_value == pytest.approx(
             base_es.cband_crit_value, rel=1e-10, abs=1e-12
         )
-        assert tiled.overall_p_value == pytest.approx(base.overall_p_value, abs=0.02)
+        assert tiled.p_value == pytest.approx(base.p_value, abs=0.02)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
@@ -504,7 +504,7 @@ class TestCSBootstrapTileInvariance:
         self._force_one_column_tiles(monkeypatch)
         tiled, _, _ = fit()
 
-        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiled.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         np.testing.assert_allclose(t["se"].to_numpy(), b["se"].to_numpy(), rtol=1e-10, atol=1e-12)
@@ -568,7 +568,7 @@ class TestCSBootstrapTileInvariance:
         self._force_one_column_tiles(monkeypatch)
         tiled = self._fit_survey(stratified)
 
-        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiled.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
@@ -611,7 +611,7 @@ class TestCSBootstrapTileInvariance:
         self._force_one_column_tiles(monkeypatch)
         tiled = fit()
 
-        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiled.se == pytest.approx(base.se, rel=1e-10, abs=1e-12)
         b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
@@ -738,7 +738,7 @@ class TestEfficientDiDBootstrapChunkInvariance:
         gt = [r.group_time_effects[k]["se"] for k in sorted(r.group_time_effects)]
         es = [float(x) for x in es_c.se]
         gp = [float(x) for x in grp_c.se]
-        return np.array([r.overall_se, *gt, *es, *gp], dtype=float)
+        return np.array([r.se, *gt, *es, *gp], dtype=float)
 
     def _run(self, monkeypatch, **fit_kwargs):
         base = self._fit(**fit_kwargs)

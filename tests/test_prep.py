@@ -4067,8 +4067,8 @@ class TestAggregateSurvey:
             first_treat="first_treat",
             survey_design=stage2,
         )
-        assert np.isfinite(result.overall_att), f"ATT not finite: {result.overall_att}"
-        assert result.overall_se > 0, f"SE not positive: {result.overall_se}"
+        assert np.isfinite(result.att), f"ATT not finite: {result.att}"
+        assert result.se > 0, f"SE not positive: {result.se}"
 
     def test_pweight_replicate_weight_design(self):
         """Pweight mode works correctly under replicate-weight survey designs."""

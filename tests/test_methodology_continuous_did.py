@@ -69,7 +69,7 @@ class TestLinearDoseResponse:
 
         est = ContinuousDiD(degree=1, num_knots=0)
         results = est.fit(linear_data, "outcome", "unit", "period", "first_treat", "dose")
-        np.testing.assert_allclose(results.overall_att, expected_att_glob, atol=1e-10)
+        np.testing.assert_allclose(results.att, expected_att_glob, atol=1e-10)
 
     def test_acrt_glob_plugin(self, linear_data):
         """ACRT_glob = mean(ACRT(D_i)) over treated = 2."""
@@ -164,13 +164,13 @@ class TestEdgeCasesMethodology:
         with pytest.warns(UserWarning, match="[Ii]dentical"):
             results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         # ATT_glob should be 5.0
-        np.testing.assert_allclose(results.overall_att, 5.0, atol=1e-10)
+        np.testing.assert_allclose(results.att, 5.0, atol=1e-10)
         # Dose-response: ATT(d) should be constant = overall_att everywhere.
         # With all-same dose, only the intercept is identified, which equals
         # mean(delta_tilde_Y) = att_glob — same quantity by both paths.
         np.testing.assert_allclose(
             results.dose_response_att.effects,
-            results.overall_att,
+            results.att,
             atol=1e-10,
         )
         # ACRT(d) should be zero everywhere (no dose variation → zero derivative)
@@ -457,7 +457,7 @@ class TestRBenchmark:
 
         # Compare overall ATT
         r_overall_att = r_out["overall_att"]
-        py_overall_att = results.overall_att
+        py_overall_att = results.att
         overall_att_diff = abs(py_overall_att - r_overall_att) / (abs(r_overall_att) + 1e-10)
         assert overall_att_diff < att_tol, (
             f"Overall ATT diff: {overall_att_diff:.4f} "
@@ -607,12 +607,10 @@ class TestRBenchmark:
             )
 
             # Overall ATT
-            att_diff = abs(results.overall_att - r_out["overall_att"]) / (
-                abs(r_out["overall_att"]) + 1e-10
-            )
+            att_diff = abs(results.att - r_out["overall_att"]) / (abs(r_out["overall_att"]) + 1e-10)
             assert att_diff < 0.01, (
                 f"Overall ATT diff: {att_diff:.4f} "
-                f"(R={r_out['overall_att']:.6f}, Py={results.overall_att:.6f})"
+                f"(R={r_out['overall_att']:.6f}, Py={results.att:.6f})"
             )
 
             # Overall ACRT
@@ -703,12 +701,10 @@ class TestRBenchmark:
                 "dose",
             )
 
-            att_diff = abs(results.overall_att - r_out["overall_att"]) / (
-                abs(r_out["overall_att"]) + 1e-10
-            )
+            att_diff = abs(results.att - r_out["overall_att"]) / (abs(r_out["overall_att"]) + 1e-10)
             assert att_diff < 0.01, (
                 f"Overall ATT diff: {att_diff:.4f} "
-                f"(R={r_out['overall_att']:.6f}, Py={results.overall_att:.6f})"
+                f"(R={r_out['overall_att']:.6f}, Py={results.att:.6f})"
             )
 
             acrt_diff = abs(results.overall_acrt - r_out["overall_acrt"]) / (
@@ -797,12 +793,10 @@ class TestRBenchmark:
             results.aggregate("event_study")
 
             # Compare overall ATT (binarized)
-            att_diff = abs(results.overall_att - r_out["overall_att"]) / (
-                abs(r_out["overall_att"]) + 1e-10
-            )
+            att_diff = abs(results.att - r_out["overall_att"]) / (abs(r_out["overall_att"]) + 1e-10)
             assert att_diff < 0.01, (
                 f"Overall ATT diff: {att_diff:.4f} "
-                f"(R={r_out['overall_att']:.6f}, Py={results.overall_att:.6f})"
+                f"(R={r_out['overall_att']:.6f}, Py={results.att:.6f})"
             )
         finally:
             os.unlink(tmp_path)
@@ -979,8 +973,8 @@ class TestCovariateReg:
                 pytest.skip(f"R DRDID failed: {r.stderr[:300]}")
             ref = json.loads(r.stdout)
         res = _fit_cov(df, "reg")
-        assert abs(float(res.overall_att) - ref["att"]) < 1e-8
-        assert abs(float(res.overall_att_se) - ref["se"]) < 1e-8
+        assert abs(float(res.att) - ref["att"]) < 1e-8
+        assert abs(float(res.se) - ref["se"]) < 1e-8
 
     @require_drdid
     def test_dr_matches_drdid(self):
@@ -1010,8 +1004,8 @@ class TestCovariateReg:
             ref = json.loads(r.stdout)
         res = _fit_cov(df, "dr")
         # dr att/se match DRDID (~1e-6; Python IRLS vs fastglm method=3)
-        assert abs(float(res.overall_att) - ref["att"]) < 1e-5
-        assert abs(float(res.overall_att_se) - ref["se"]) < 1e-5
+        assert abs(float(res.att) - ref["att"]) < 1e-5
+        assert abs(float(res.se) - ref["se"]) < 1e-5
 
     def test_dr_reg_numpy_crosscheck_p2(self):
         """R-free: estimator reg/dr att+se match an independent NumPy
@@ -1022,10 +1016,10 @@ class TestCovariateReg:
         ref = _numpy_reg_dr(dY, D, X)
         reg = _fit_cov(df, "reg")
         dr = _fit_cov(df, "dr")
-        assert abs(float(reg.overall_att) - ref["reg_att"]) < 1e-9
-        assert abs(float(reg.overall_att_se) - ref["reg_se"]) < 1e-9
-        assert abs(float(dr.overall_att) - ref["dr_att"]) < 1e-7
-        assert abs(float(dr.overall_att_se) - ref["dr_se"]) < 1e-7
+        assert abs(float(reg.att) - ref["reg_att"]) < 1e-9
+        assert abs(float(reg.se) - ref["reg_se"]) < 1e-9
+        assert abs(float(dr.att) - ref["dr_att"]) < 1e-7
+        assert abs(float(dr.se) - ref["dr_se"]) < 1e-7
 
     def test_reg_vs_dr_acrt_identical(self):
         """reg and dr share the dose-response shape: ACRT(d) point AND SE are
@@ -1040,7 +1034,7 @@ class TestCovariateReg:
         np.testing.assert_allclose(reg.dose_response_acrt.se, dr.dose_response_acrt.se, atol=1e-10)
         att_diff = reg.dose_response_att.effects - dr.dose_response_att.effects
         assert np.ptp(att_diff) < 1e-9  # constant shift across the grid
-        assert abs(float(reg.overall_att) - float(dr.overall_att)) > 1e-4  # levels differ
+        assert abs(float(reg.att) - float(dr.att)) > 1e-4  # levels differ
 
     def test_covariate_dgp_recovery(self):
         """Conditional-PT DGP where unconditional DiD is biased but covariate
@@ -1075,10 +1069,10 @@ class TestCovariateReg:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             uncond = ContinuousDiD().fit(df, "outcome", "unit", "period", "first_treat", "dose")
-        assert abs(float(uncond.overall_att) - tau) > 0.5  # unconditional biased
+        assert abs(float(uncond.att) - tau) > 0.5  # unconditional biased
         for method in ("reg", "dr"):
             res = _fit_cov(df, method)
-            assert abs(float(res.overall_att) - tau) < 0.1  # recovered
+            assert abs(float(res.att) - tau) < 0.1  # recovered
 
     @pytest.mark.slow
     def test_covariate_coverage(self):
@@ -1123,7 +1117,7 @@ class TestCovariateReg:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     res = _fit_cov(df, method)
-                lo, hi = res.overall_att_conf_int
+                lo, hi = res.conf_int
                 cover += int(lo <= tau <= hi)
                 total += 1
             rate = cover / total
@@ -1274,7 +1268,7 @@ class TestDiscreteSaturated:
         assert np.allclose(res.dose_response_att.dose_grid, levels)
         assert np.allclose(res.dose_response_att.effects, att, atol=1e-12)
         assert np.allclose(res.dose_response_acrt.effects, acrt, atol=1e-12)
-        assert np.isclose(res.overall_att, overall, atol=1e-12)
+        assert np.isclose(res.att, overall, atol=1e-12)
 
     def test_hand_calc_analytical_se(self):
         """Saturated SE reduces exactly to the per-level 2x2 DiD SE (the gate)."""
@@ -1308,7 +1302,7 @@ class TestDiscreteSaturated:
         assert np.isclose(
             r1.dose_response_acrt.effects[0], r1.dose_response_att.effects[0], atol=1e-12
         )
-        assert np.isclose(r1.overall_acrt, r1.overall_att, atol=1e-12)
+        assert np.isclose(r1.overall_acrt, r1.att, atol=1e-12)
         assert np.isfinite(r1.dose_response_acrt.se[0]) and r1.dose_response_acrt.se[0] > 0
         # d_1 = 2.0 -> ACRT = ATT / 2.
         df2 = _make_discrete_panel({2.0: 3.0}, n_per_level=60, n_control=90, seed=31)
@@ -1423,7 +1417,7 @@ class TestLowestDose:
         assert np.allclose(res.dose_response_att.dose_grid, modelled)  # d_L excluded
         assert np.allclose(res.dose_response_att.effects, att, atol=1e-12)
         assert np.allclose(res.dose_response_acrt.effects, acrt, atol=1e-12)
-        assert np.isclose(res.overall_att, overall, atol=1e-12)
+        assert np.isclose(res.att, overall, atol=1e-12)
         # overall_acrt (plug-in scalar) asserted explicitly, not just the rows.
         assert np.isclose(res.overall_acrt, overall_acrt, atol=1e-12)
 

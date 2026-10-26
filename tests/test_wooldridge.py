@@ -306,9 +306,9 @@ class TestWooldridgeDiDFitOLS:
         r = est.fit(
             mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
 
     def test_group_time_effects_populated(self, mpdta):
         est = WooldridgeDiD()
@@ -326,9 +326,9 @@ class TestWooldridgeDiDFitOLS:
         r = est.fit(
             mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
-        assert np.isfinite(r.overall_t_stat)
-        assert np.isfinite(r.overall_p_value)
-        assert all(np.isfinite(c) for c in r.overall_conf_int)
+        assert np.isfinite(r.t_stat)
+        assert np.isfinite(r.p_value)
+        assert all(np.isfinite(c) for c in r.conf_int)
 
     def test_never_treated_control_group(self, mpdta):
         est = WooldridgeDiD(control_group="never_treated")
@@ -366,7 +366,7 @@ class TestAggregations:
         post_keys = [(g, t) for (g, t) in w if t >= g]
         w_total = sum(w[k] for k in post_keys)
         manual_att = sum(w[k] * gt[k]["att"] for k in post_keys) / w_total
-        assert abs(fitted.overall_att - manual_att) < 1e-10
+        assert abs(fitted.att - manual_att) < 1e-10
 
     def test_aggregate_group_keys_match_cohorts(self, fitted):
         fitted.aggregate("group")
@@ -424,12 +424,12 @@ class TestWooldridgeDiDLogit:
         """ATT should be positive (treatment increases binary outcome)."""
         est = WooldridgeDiD(method="logit")
         r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert r.overall_att > 0
+        assert r.att > 0
 
     def test_logit_se_positive(self, binary_panel):
         est = WooldridgeDiD(method="logit")
         r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert r.overall_se > 0
+        assert r.se > 0
 
     def test_logit_method_stored(self, binary_panel):
         est = WooldridgeDiD(method="logit")
@@ -460,12 +460,12 @@ class TestWooldridgeDiDPoisson:
     def test_poisson_att_sign(self, count_panel):
         est = WooldridgeDiD(method="poisson")
         r = est.fit(count_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert r.overall_att > 0
+        assert r.att > 0
 
     def test_poisson_se_positive(self, count_panel):
         est = WooldridgeDiD(method="poisson")
         r = est.fit(count_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert r.overall_se > 0
+        assert r.se > 0
 
 
 class TestBootstrap:
@@ -478,7 +478,7 @@ class TestBootstrap:
         n_boot = ci_params.bootstrap(50, min_n=19)
         est = WooldridgeDiD(n_bootstrap=n_boot, seed=42)
         r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
-        assert abs(r.overall_se - r.overall_att) / max(abs(r.overall_att), 1e-8) < 10
+        assert abs(r.se - r.att) / max(abs(r.att), 1e-8) < 10
 
     def test_bootstrap_zero_disables(self):
         from diff_diff.datasets import load_mpdta
@@ -486,7 +486,7 @@ class TestBootstrap:
         df = load_mpdta()
         est = WooldridgeDiD(n_bootstrap=0)
         r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.se)
 
 
 class TestMethodologyCorrectness:
@@ -505,7 +505,7 @@ class TestMethodologyCorrectness:
             r = est.fit(
                 df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
             )
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         rank = [w for w in caught if "Rank-deficient" in str(w.message)]
         assert rank == [], f"unexpected rank deficiency: {[str(w.message)[:100] for w in rank]}"
 
@@ -542,7 +542,7 @@ class TestMethodologyCorrectness:
         df = pd.DataFrame(rows)
         r = WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert len(r.group_time_effects) == 1
-        assert abs(r.overall_att - 1.0) < 0.5
+        assert abs(r.att - 1.0) < 0.5
 
     def test_aggregation_weights_sum_to_one(self):
         """Simple aggregation weights should sum to 1."""
@@ -655,7 +655,7 @@ class TestAnticipation:
         est = WooldridgeDiD(anticipation=1)
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         r.aggregate("event_study").aggregate("group").aggregate("simple")
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         assert r.event_study_effects is not None
         assert r.group_effects is not None
         # Anticipation cells (t < g but t >= g - anticipation) should be in
@@ -670,7 +670,7 @@ class TestAnticipation:
         w = r._gt_weights
         w_total = sum(w.get(k, 0) for k in post_keys)
         manual_att = sum(w.get(k, 0) * gt[k]["att"] for k in post_keys) / w_total
-        assert abs(r.overall_att - manual_att) < 1e-10
+        assert abs(r.att - manual_att) < 1e-10
 
 
 class TestXgvarCovariates:
@@ -687,9 +687,9 @@ class TestXgvarCovariates:
         df = pd.DataFrame(rows)
         est = WooldridgeDiD()
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort", xgvar=["x1"])
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
 
 
 class TestAllEventuallyTreated:
@@ -752,7 +752,7 @@ class TestAllEventuallyTreated:
         # Scaled by each cell's own SE rather than a fixed band -- per-cell SEs
         # here are ~0.17-0.21, so a fixed tolerance is either flaky or vacuous.
         # The pre-fix values this guards against sat ~9 SE away (-0.0096 etc.).
-        assert res.overall_att == pytest.approx(1.5502, abs=1e-3)
+        assert res.att == pytest.approx(1.5502, abs=1e-3)
         for key, eff in res.group_time_effects.items():
             assert (
                 abs(eff["att"] - 1.5) < 3 * eff["se"]
@@ -797,7 +797,7 @@ class TestEmptyCells:
         df = pd.DataFrame(rows)
         est = WooldridgeDiD()
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
         r.aggregate("event_study")
         assert r.event_study_effects is not None
 
@@ -817,9 +817,9 @@ class TestMpdtaLogitPoisson:
         r = est.fit(
             df, outcome="lemp_bin", unit="countyreal", time="year", first_treat="first_treat"
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
         r.aggregate("event_study")
         assert r.event_study_effects is not None
 
@@ -829,11 +829,11 @@ class TestMpdtaLogitPoisson:
         df["emp"] = np.exp(df["lemp"])
         est = WooldridgeDiD(method="poisson")
         r = est.fit(df, outcome="emp", unit="countyreal", time="year", first_treat="first_treat")
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
         r.aggregate("simple")
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
 
 
 class TestControlGroupDistinction:
@@ -851,12 +851,12 @@ class TestControlGroupDistinction:
         r_nt = WooldridgeDiD(control_group="never_treated").fit(
             df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
-        assert np.isfinite(r_nyt.overall_att)
-        assert np.isfinite(r_nt.overall_att)
+        assert np.isfinite(r_nyt.att)
+        assert np.isfinite(r_nt.att)
         # They must differ — if they don't, control_group is a no-op
-        assert r_nyt.overall_att != r_nt.overall_att, (
-            f"never_treated ATT ({r_nt.overall_att:.6f}) == not_yet_treated ATT "
-            f"({r_nyt.overall_att:.6f}); control_group has no effect"
+        assert r_nyt.att != r_nt.att, (
+            f"never_treated ATT ({r_nt.att:.6f}) == not_yet_treated ATT "
+            f"({r_nyt.att:.6f}); control_group has no effect"
         )
 
     def test_never_treated_more_interaction_terms(self):
@@ -943,10 +943,10 @@ class TestBootstrapClusterLevel:
         r_region = WooldridgeDiD(n_bootstrap=99, seed=0, cluster="region").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(r_unit.overall_se)
-        assert np.isfinite(r_region.overall_se)
+        assert np.isfinite(r_unit.se)
+        assert np.isfinite(r_region.se)
         # Coarser clustering with fewer clusters should produce different SE
-        assert r_unit.overall_se != r_region.overall_se
+        assert r_unit.se != r_region.se
 
 
 class TestNonlinearRankDeficiency:
@@ -1013,10 +1013,10 @@ class TestNonlinearRankDeficiency:
         r_nocov = WooldridgeDiD(method="logit").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(r_cov.overall_att)
-        assert np.isfinite(r_cov.overall_se)
-        assert r_cov.overall_se > 0
-        assert r_cov.overall_att != r_nocov.overall_att, "Covariates should affect ATT"
+        assert np.isfinite(r_cov.att)
+        assert np.isfinite(r_cov.se)
+        assert r_cov.se > 0
+        assert r_cov.att != r_nocov.att, "Covariates should affect ATT"
 
     def test_poisson_with_covariates(self):
         """Poisson with covariates should produce finite ATT/SE and differ from
@@ -1038,10 +1038,10 @@ class TestNonlinearRankDeficiency:
         r_nocov = WooldridgeDiD(method="poisson").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(r_cov.overall_att)
-        assert np.isfinite(r_cov.overall_se)
-        assert r_cov.overall_se > 0
-        assert r_cov.overall_att != r_nocov.overall_att, "Covariates should affect ATT"
+        assert np.isfinite(r_cov.att)
+        assert np.isfinite(r_cov.se)
+        assert r_cov.se > 0
+        assert r_cov.att != r_nocov.att, "Covariates should affect ATT"
 
 
 class TestCohortTimeInvariance:
@@ -1181,8 +1181,8 @@ class TestUnbalancedOLS:
         r = WooldridgeDiD(control_group="never_treated").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
         # Should have pre-treatment placebo cells (OLS never_treated)
         pre_cells = [(g, t) for (g, t) in r.group_time_effects if t < g]
         assert len(pre_cells) > 0
@@ -1230,7 +1230,7 @@ class TestNonlinearNeverTreated:
         # All expected post-treatment cells present
         expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
         assert set(r.group_time_effects.keys()) == expected
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
 
     def test_poisson_never_treated_post_treatment_only(self, count_data):
         r = WooldridgeDiD(method="poisson", control_group="never_treated").fit(
@@ -1240,7 +1240,7 @@ class TestNonlinearNeverTreated:
             assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
         expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
         assert set(r.group_time_effects.keys()) == expected
-        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.att)
 
     def test_interaction_matrix_fewer_cols_for_nonlinear(self):
         """For never_treated, nonlinear methods get fewer interaction columns
@@ -1368,9 +1368,7 @@ class TestFullCovariateBasis:
         r_nocov = WooldridgeDiD().fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert (
-            r_cov.overall_att != r_nocov.overall_att
-        ), "Covariate-adjusted ATT should differ from unadjusted"
+        assert r_cov.att != r_nocov.att, "Covariate-adjusted ATT should differ from unadjusted"
 
 
 class TestWooldridgeSurvey:
@@ -1422,9 +1420,9 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
 
     def test_ols_survey_se_differs_from_naive(self, survey_panel):
         """Survey SE should differ from naive (unweighted) SE."""
@@ -1446,7 +1444,7 @@ class TestWooldridgeSurvey:
             time="time",
             first_treat="cohort",
         )
-        assert r_survey.overall_se != r_naive.overall_se
+        assert r_survey.se != r_naive.se
 
     def test_logit_survey_runs(self, survey_panel):
         """Logit with survey design completes."""
@@ -1461,9 +1459,9 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
 
     def test_poisson_survey_runs(self, survey_panel):
         """Poisson with survey design completes."""
@@ -1478,9 +1476,9 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
-        assert r.overall_se > 0
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
+        assert r.se > 0
 
     def test_bootstrap_survey_rejected(self, survey_panel):
         """n_bootstrap > 0 with survey_design raises ValueError."""
@@ -1512,8 +1510,8 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
         assert r.survey_metadata is not None
 
     def test_survey_metadata_present(self, survey_panel):
@@ -1587,7 +1585,7 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert r.overall_se != r_no_cluster.overall_se
+        assert r.se != r_no_cluster.se
 
     def test_survey_gt_weights_are_counts(self, survey_panel):
         """Survey aggregation uses cell counts, not survey-weight sums."""
@@ -1673,8 +1671,8 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
 
     def test_ols_survey_all_treated_refuses_period_filtering(self, survey_panel):
         """Comparison-support filtering under `survey_design=` is REFUSED.
@@ -1725,7 +1723,7 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_ols_survey_zero_weight_unit_rejected(self, survey_panel):
         """Zero-weight unit raises ValueError before within_transform."""
@@ -1766,8 +1764,8 @@ class TestWooldridgeSurvey:
             first_treat="cohort",
             survey_design=sd,
         )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se)
 
     def test_ols_survey_non_range_index(self, survey_panel):
         """OLS survey zero-weight guard works with non-RangeIndex DataFrames."""
@@ -1920,8 +1918,8 @@ class TestWooldridgeVcovType:
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert res.overall_att == pytest.approx(0.9178849934516233, abs=1e-14)
-        assert res.overall_se == pytest.approx(0.031906603167527435, abs=1e-14)
+        assert res.att == pytest.approx(0.9178849934516233, abs=1e-14)
+        assert res.se == pytest.approx(0.031906603167527435, abs=1e-14)
 
     def test_hc2_bm_finite_and_inflates_over_hc1(self):
         df = _make_vcov_panel()
@@ -1933,10 +1931,10 @@ class TestWooldridgeVcovType:
         )
         for k, eff in res_bm.group_time_effects.items():
             assert np.isfinite(eff["se"])
-        assert np.isfinite(res_bm.overall_se)
-        assert res_bm.overall_se > res_hc1.overall_se
+        assert np.isfinite(res_bm.se)
+        assert res_bm.se > res_hc1.se
         # ATT identity across vcov branches (only SE differs)
-        assert res_bm.overall_att == pytest.approx(res_hc1.overall_att, abs=1e-10)
+        assert res_bm.att == pytest.approx(res_hc1.att, abs=1e-10)
 
     def test_atts_identical_across_vcov_branches(self):
         """Per-cell ATT estimates must be identical across all 4 vcov branches
@@ -1949,7 +1947,7 @@ class TestWooldridgeVcovType:
             )
         ref = results["hc1"]
         for vt in ("hc2_bm", "hc2", "classical"):
-            assert results[vt].overall_att == pytest.approx(ref.overall_att, abs=1e-10)
+            assert results[vt].att == pytest.approx(ref.att, abs=1e-10)
             for k in ref.group_time_effects:
                 assert results[vt].group_time_effects[k]["att"] == pytest.approx(
                     ref.group_time_effects[k]["att"], abs=1e-10
@@ -1966,7 +1964,7 @@ class TestWooldridgeVcovType:
         res = WooldridgeDiD(method="ols", vcov_type="classical").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
         assert res.cluster_name is None
         assert res.n_clusters is None
 
@@ -1975,7 +1973,7 @@ class TestWooldridgeVcovType:
         res = WooldridgeDiD(method="ols", vcov_type="hc2").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
         assert res.cluster_name is None
         assert res.n_clusters is None
 
@@ -2079,14 +2077,14 @@ class TestWooldridgeVcovType:
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # ATT is unchanged by the bootstrap (only SE is overridden)
-        assert res_boot.overall_att == pytest.approx(res_analytical.overall_att, abs=1e-10)
+        assert res_boot.att == pytest.approx(res_analytical.att, abs=1e-10)
         # SE finite + sensible (positive, smaller than the panel SD of y)
-        assert np.isfinite(res_boot.overall_se)
-        assert res_boot.overall_se > 0
-        assert res_boot.overall_se < df["y"].std()
+        assert np.isfinite(res_boot.se)
+        assert res_boot.se > 0
+        assert res_boot.se < df["y"].std()
         # Bootstrap overrides analytical inference for overall ATT
-        assert np.isfinite(res_boot.overall_t_stat)
-        assert np.isfinite(res_boot.overall_p_value)
+        assert np.isfinite(res_boot.t_stat)
+        assert np.isfinite(res_boot.p_value)
         # Per-cell SEs still come from the analytical full-dummy CR2-BM path
         # (bootstrap only overrides overall_*); locks the coef_offset
         # bootstrap indexing didn't regress the per-cell analytical path.
@@ -2148,9 +2146,9 @@ class TestWooldridgeVcovType:
                 first_treat="cohort",
                 exovar=["xc", "xc_dup"],
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
     def test_get_params_includes_vcov_type(self):
         est = WooldridgeDiD(vcov_type="hc2_bm")
@@ -2268,8 +2266,8 @@ class TestWooldridgeVcovType:
         res1 = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         est2 = WooldridgeDiD(**est.get_params())
         res2 = est2.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert res1.overall_se == pytest.approx(res2.overall_se, abs=1e-14)
-        assert res1.overall_att == pytest.approx(res2.overall_att, abs=1e-14)
+        assert res1.se == pytest.approx(res2.se, abs=1e-14)
+        assert res1.att == pytest.approx(res2.att, abs=1e-14)
 
     def test_bm_dof_nan_fails_closed(self, monkeypatch):
         """When ``_compute_cr2_bm_contrast_dof`` returns NaN, BOTH per-cell
@@ -2288,12 +2286,12 @@ class TestWooldridgeVcovType:
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Overall: att + se preserved (sandwich is finite); inference NaN
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert np.isnan(res.overall_t_stat)
-        assert np.isnan(res.overall_p_value)
-        assert np.isnan(res.overall_conf_int[0])
-        assert np.isnan(res.overall_conf_int[1])
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert np.isnan(res.t_stat)
+        assert np.isnan(res.p_value)
+        assert np.isnan(res.conf_int[0])
+        assert np.isnan(res.conf_int[1])
         # Per-cell: same pattern (att + se preserved, inference NaN)
         for (g, t), eff in res.group_time_effects.items():
             assert np.isfinite(eff["att"]), f"cell ({g},{t}) att should be finite"
@@ -2415,8 +2413,8 @@ class TestWooldridgeVcovType:
             assert np.isfinite(eff["conf_int"][0])
             assert np.isfinite(eff["conf_int"][1])
         # Overall ATT inference: finite end-to-end.
-        assert np.isfinite(res.overall_t_stat)
-        assert np.isfinite(res.overall_p_value)
+        assert np.isfinite(res.t_stat)
+        assert np.isfinite(res.p_value)
         # All three aggregations (group/calendar/event) must produce finite
         # inference on identified contrasts under the reduced-design BM path.
         for agg_type in ("group", "calendar", "event_study"):
@@ -2469,8 +2467,8 @@ class TestWooldridgeVcovType:
                 eff["t_stat"]
             ), f"({k}) t_stat NaN under rank-deficient exovar — BM DOF not threaded"
             assert np.isfinite(eff["p_value"])
-        assert np.isfinite(res.overall_t_stat)
-        assert np.isfinite(res.overall_p_value)
+        assert np.isfinite(res.t_stat)
+        assert np.isfinite(res.p_value)
         # Group + calendar + event aggregates should all produce finite
         # inference under the reduced-design BM path.
         for agg_type in ("group", "calendar", "event_study"):
@@ -2571,7 +2569,7 @@ class TestOutcomeFitHint:
         df = self._binary_panel()
         with pytest.warns(UserWarning, match=r"method='logit'.*more appropriate"):
             res = self._fit(df, method="ols")
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_ols_count_warns_poisson(self):
         df = self._count_panel()
@@ -2604,7 +2602,7 @@ class TestOutcomeFitHint:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = self._fit(df, method="ols")  # must not raise
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_framing_paper_faithful(self):
         # Lock the paper-faithful framing (Wooldridge 2023: LPT vs IPT + the
@@ -2669,8 +2667,8 @@ class TestAbsorbedCovariateSnap:
                 first_treat="cohort",
                 exovar=["xc"],
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
 
 class TestReferencePeriodNormalization:
@@ -3060,8 +3058,8 @@ class TestOverallAttFailsClosed:
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
 
 class TestInvalidWeightsCannotHideBehindExclusion:
@@ -3167,7 +3165,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                 first_treat="cohort",
                 survey_design=SurveyDesign(weights="w"),
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert set(res.groups) == {3, 4}, "no cohort should be excluded on valid weights"
 
     def test_zero_weights_still_shape_support_without_excluding(self):
@@ -3212,7 +3210,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                 first_treat="cohort",
                 survey_design=SurveyDesign(weights="w"),
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert (4, 3) not in res.group_time_effects, "zero-weight cell should be unsupported"
         assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
 
@@ -3468,7 +3466,7 @@ class TestRankDeficientActionHonoredOnSkippedCells:
             res = WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="warn"
             ).fit(self._gapped(), outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert [w for w in caught if "Skipped 1 cohort-time" in str(w.message)] != []
 
     def test_silent_fits_without_warning(self):
@@ -3477,7 +3475,7 @@ class TestRankDeficientActionHonoredOnSkippedCells:
             res = WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="silent"
             ).fit(self._gapped(), outcome="y", unit="unit", time="time", first_treat="cohort")
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert [w for w in caught if "Skipped" in str(w.message)] == []
 
     @staticmethod
@@ -3601,7 +3599,7 @@ class TestWithinCohortSupportConnectivity:
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         assert (4, 5) in res.group_time_effects
 
     @pytest.mark.parametrize("method", ["logit", "poisson"])
@@ -3638,7 +3636,7 @@ class TestWithinCohortSupportConnectivity:
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert {k for k in res.group_time_effects if k[1] >= k[0]} == {(4, 4), (4, 5)}
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_ols_still_refuses_the_same_panel(self):
         """The OLS half of the contrast: the same data IS unidentified there,
@@ -3774,7 +3772,7 @@ class TestPartialRankLossFailsClosed:
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
         # True ATT(3,3)=ATT(3,4)=1.0, ATT(4,4)=3.0 -- recovered, not contrasts.
         assert res.group_time_effects[(3, 3)]["att"] == pytest.approx(1.0, abs=0.1)
         assert res.group_time_effects[(4, 4)]["att"] == pytest.approx(3.0, abs=0.1)
@@ -3957,7 +3955,7 @@ class TestComparisonSupportFiltering:
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
-        assert res.overall_att == pytest.approx(1.0171, abs=5e-3)
+        assert res.att == pytest.approx(1.0171, abs=5e-3)
 
     def test_branch_one_no_move_when_never_treated_covers_the_period(self):
         """Companion to the above, on a frame truncated to t <= 5.
@@ -3996,7 +3994,7 @@ class TestComparisonSupportFiltering:
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert not [m for m in w if "reference period moved" in str(m.message)]
-        assert res.overall_att == pytest.approx(0.9951, abs=5e-3)
+        assert res.att == pytest.approx(0.9951, abs=5e-3)
 
     def test_branch_two_references_are_invariant(self):
         """`not_yet_treated`: references provably cannot move, so no warning.
@@ -4062,7 +4060,7 @@ class TestComparisonSupportFiltering:
         assert sorted(int(g) for g in res.groups) == [3, 5]
         # 2 of 9 periods removed -> 7/9 of the rows survive.
         assert res.n_obs == len(df) * 7 // 9
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert np.isfinite(res.att) and np.isfinite(res.se)
 
         # Both warnings fire here, exactly as on OLS.
         assert [m for m in w if "no eligible comparison group" in str(m.message)]
@@ -4244,7 +4242,7 @@ class TestComparisonSupportFiltering:
         with pytest.raises(ValueError, match="comparison-support filtering removed"):
             res.aggregate(type="simple", weights="cohort_share")
         # The default weighting is untouched.
-        assert np.isfinite(res.aggregate(type="simple", weights="cell").overall_att)
+        assert np.isfinite(res.aggregate(type="simple", weights="cell").att)
 
     def test_every_aggregation_surface_reads_the_filtered_cell_set(self):
         """`group` / `calendar` / `event` all consume the REDUCED cell set.
@@ -4280,7 +4278,7 @@ class TestComparisonSupportFiltering:
         assert sorted(int(k) for k in evt.event_study_effects) == [0, 1, 2, 3, 4]
 
         for agg in (grp, cal, evt):
-            assert np.isfinite(agg.overall_att) and np.isfinite(agg.overall_se)
+            assert np.isfinite(agg.att) and np.isfinite(agg.se)
 
     def test_cohort_share_still_works_when_no_unit_is_lost(self):
         """The refusal must not fire on the balanced deliverable.
@@ -4297,7 +4295,7 @@ class TestComparisonSupportFiltering:
             )
         assert res._cohort_units_dropped == {}
         agg = res.aggregate(type="simple", weights="cohort_share")
-        assert np.isfinite(agg.overall_att)
+        assert np.isfinite(agg.att)
 
     def test_cells_derived_groups_did_not_leak_into_the_design(self):
         """`results.groups` is cells-derived; the DESIGN keeps present cohorts.
@@ -4327,7 +4325,7 @@ class TestComparisonSupportFiltering:
         res = WooldridgeDiD(control_group="not_yet_treated").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort", xtvar=["x"]
         )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_bootstrap_runs_on_a_filtered_fit(self):
         """Bootstrap consumes the FILTERED sample's residuals and cluster ids.
@@ -4341,8 +4339,8 @@ class TestComparisonSupportFiltering:
             res = WooldridgeDiD(control_group="not_yet_treated", n_bootstrap=49, seed=42).fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
 
 class TestUnsupportedPeriodAction:
@@ -4667,14 +4665,10 @@ class TestWooldridgeDfConvention:
     def test_default_hc1_is_t_residual_not_z(self):
         """The defect fix: the auto-clustered hc1 arm moved z -> t(residual)."""
         res = WooldridgeDiD().fit(self._panel(), **self._kw)
-        assert res.overall_p_value != self._z_p(res.overall_t_stat)
+        assert res.p_value != self._z_p(res.t_stat)
         # residual df = n - k_kept - absorbed [unit, time] rank; recover it
         n = 300
-        match = [
-            d
-            for d in range(2, n)
-            if abs(res.overall_p_value - self._t_p(res.overall_t_stat, d)) < 1e-13
-        ]
+        match = [d for d in range(2, n) if abs(res.p_value - self._t_p(res.t_stat, d)) < 1e-13]
         assert len(match) == 1, match
         # per-cell inference shares the same df
         _, eff = next(iter(res.group_time_effects.items()))
@@ -4685,15 +4679,15 @@ class TestWooldridgeDfConvention:
         r0 = WooldridgeDiD().fit(data, **self._kw)
         r1 = WooldridgeDiD(df_convention="cluster").fit(data, **self._kw)
         G = data["unit"].nunique()
-        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
-        assert r1.overall_p_value == pytest.approx(self._t_p(r1.overall_t_stat, G - 1), rel=1e-12)
+        assert r1.att == r0.att and r1.se == r0.se
+        assert r1.p_value == pytest.approx(self._t_p(r1.t_stat, G - 1), rel=1e-12)
 
     def test_normal_reproduces_pre39_z(self):
         data = self._panel()
         r0 = WooldridgeDiD().fit(data, **self._kw)
         rn = WooldridgeDiD(df_convention="normal").fit(data, **self._kw)
-        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
-        assert rn.overall_p_value == pytest.approx(self._z_p(rn.overall_t_stat), rel=1e-14)
+        assert rn.att == r0.att and rn.se == r0.se
+        assert rn.p_value == pytest.approx(self._z_p(rn.t_stat), rel=1e-14)
 
     def test_classical_and_hc2_bit_identical_under_default(self):
         """classical/hc2 already used t(n - rank(X)); the ONE resolved
@@ -4738,18 +4732,12 @@ class TestWooldridgeDfConvention:
         """aggregate() consumes the stored resolved fallback on every OLS arm."""
         res = WooldridgeDiD().fit(self._panel(), **self._kw)
         n = 300
-        match = [
-            d
-            for d in range(2, n)
-            if abs(res.overall_p_value - self._t_p(res.overall_t_stat, d)) < 1e-13
-        ]
+        match = [d for d in range(2, n) if abs(res.p_value - self._t_p(res.t_stat, d)) < 1e-13]
         agg = res.aggregate("group")
         ge = next(iter(agg.group_effects.values()))
         assert ge["p_value"] == pytest.approx(self._t_p(ge["t_stat"], match[0]), rel=1e-12)
         simple = res.aggregate("simple")
-        assert simple.overall_p_value == pytest.approx(
-            self._t_p(simple.overall_t_stat, match[0]), rel=1e-12
-        )
+        assert simple.p_value == pytest.approx(self._t_p(simple.t_stat, match[0]), rel=1e-12)
 
     def test_bootstrap_aggregate_group_stays_analytical_t(self):
         """On a bootstrap fit only the overall p/CI are percentile-overridden;
@@ -4788,7 +4776,7 @@ class TestWooldridgeDfConvention:
         assert not hasattr(revived, "_df_one_way") or "_df_one_way" not in revived.__dict__
         assert revived.df_convention == "residual"
         agg = revived.aggregate("simple")
-        assert np.isfinite(agg.overall_p_value)
+        assert np.isfinite(agg.p_value)
 
     def test_survey_df_precedence_over_knob(self):
         """Survey design df wins under EVERY knob value: the three fits are
@@ -4806,11 +4794,11 @@ class TestWooldridgeDfConvention:
         }
         base = fits["residual"]
         # the survey df is finite -> t inference even under "normal"
-        assert base.overall_p_value != self._z_p(base.overall_t_stat)
+        assert base.p_value != self._z_p(base.t_stat)
         for conv in ("cluster", "normal"):
             r = fits[conv]
-            assert r.overall_p_value == base.overall_p_value
-            assert r.overall_conf_int == base.overall_conf_int
+            assert r.p_value == base.p_value
+            assert r.conf_int == base.conf_int
             for k, eff in base.group_time_effects.items():
                 assert r.group_time_effects[k]["p_value"] == eff["p_value"]
 
