@@ -129,7 +129,7 @@ def build(scenario):
             # fit(aggregate="all") route, removed at 4.0).
             res.aggregate("event_study")
             res.aggregate("group")
-            return float(res.overall_att), float(res.overall_se)
+            return float(res.att), float(res.se)
 
         return df, fit
     if scenario == "survey_absorb":

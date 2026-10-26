@@ -114,12 +114,12 @@ def test_panel_composition(panel):
 
 def test_overall_att_close_to_truth(phase1_results):
     """Section 3 quotes 'about 12 sessions' headline (true effect = 12)."""
-    assert 11.7 <= phase1_results.overall_att <= 12.4, phase1_results.overall_att
+    assert 11.7 <= phase1_results.att <= 12.4, phase1_results.att
 
 
 def test_overall_ci_covers_truth(phase1_results):
     """Section 3 narrative claims the CI covers the true effect of 12."""
-    ci_low, ci_high = phase1_results.overall_conf_int
+    ci_low, ci_high = phase1_results.conf_int
     assert ci_low <= TREATMENT_EFFECT <= ci_high, (ci_low, ci_high)
 
 
@@ -127,7 +127,7 @@ def test_overall_ci_endpoints_match_quoted(phase1_results):
     """Section 3 narrative quotes '95% CI: 11.3 to 12.8'. Pin the
     one-decimal display exactly so any drift past the displayed
     rounding fails this test."""
-    ci_low, ci_high = phase1_results.overall_conf_int
+    ci_low, ci_high = phase1_results.conf_int
     assert round(ci_low, 1) == 11.3, ci_low
     assert round(ci_high, 1) == 12.8, ci_high
 

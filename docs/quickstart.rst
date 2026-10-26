@@ -202,7 +202,7 @@ When treatment is adopted at different times across units:
    )
 
    # View aggregated treatment effect
-   print(f"Overall ATT: {results.overall_att:.3f}")
+   print(f"Overall ATT: {results.att:.3f}")
 
 Parallel Trends Testing
 -----------------------

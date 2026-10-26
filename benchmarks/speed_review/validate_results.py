@@ -71,10 +71,10 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
     grp_container = results.aggregate("group")
 
     out = {
-        "overall_att": float(results.overall_att),
-        "overall_se": float(results.overall_se),
-        "overall_p_value": float(results.overall_p_value),
-        "overall_ci": [float(results.overall_conf_int[0]), float(results.overall_conf_int[1])],
+        "overall_att": float(results.att),
+        "overall_se": float(results.se),
+        "overall_p_value": float(results.p_value),
+        "overall_ci": [float(results.conf_int[0]), float(results.conf_int[1])],
     }
 
     # Group-time effects (sorted for determinism)
@@ -137,10 +137,16 @@ def save_baseline(path="benchmarks/speed_review/baseline_results.json"):
         name = scenario["name"]
         print(f"Running scenario: {name} ...")
         df = generate_data(n_covariates=scenario["n_cov"])
-        covariates = [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        covariates = (
+            [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        )
         control_group = scenario.get("control_group", "never_treated")
-        results = run_estimator(df, estimation_method=scenario["method"],
-                                covariates=covariates, control_group=control_group)
+        results = run_estimator(
+            df,
+            estimation_method=scenario["method"],
+            covariates=covariates,
+            control_group=control_group,
+        )
         all_results[name] = results
         print(f"  Overall ATT: {results['overall_att']:.10f}")
         print(f"  N group-time effects: {len(results['group_time_effects'])}")
@@ -165,14 +171,20 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
 
         baseline = all_baseline[name]
         df = generate_data(n_covariates=scenario["n_cov"])
-        covariates = [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        covariates = (
+            [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        )
         control_group = scenario.get("control_group", "never_treated")
 
         # Use relaxed tolerance for covariate scenarios (Cholesky vs lstsq)
         scenario_tol = 1e-10 if scenario["n_cov"] > 0 else tol
 
-        current = run_estimator(df, estimation_method=scenario["method"],
-                                covariates=covariates, control_group=control_group)
+        current = run_estimator(
+            df,
+            estimation_method=scenario["method"],
+            covariates=covariates,
+            control_group=control_group,
+        )
 
         failures = []
 
@@ -184,17 +196,27 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                 return
             diff = abs(base_val - cur_val)
             if diff > t:
-                failures.append(f"  {label}: baseline={base_val:.15e}, current={cur_val:.15e}, diff={diff:.2e}")
+                failures.append(
+                    f"  {label}: baseline={base_val:.15e}, current={cur_val:.15e}, diff={diff:.2e}"
+                )
 
-        compare(f"{name}/overall_att", baseline["overall_att"], current["overall_att"], scenario_tol)
+        compare(
+            f"{name}/overall_att", baseline["overall_att"], current["overall_att"], scenario_tol
+        )
         compare(f"{name}/overall_se", baseline["overall_se"], current["overall_se"], scenario_tol)
-        compare(f"{name}/overall_p_value", baseline["overall_p_value"], current["overall_p_value"], 0.02)
+        compare(
+            f"{name}/overall_p_value", baseline["overall_p_value"], current["overall_p_value"], 0.02
+        )
 
         # Compare overall CI values
         if "overall_ci" in baseline and "overall_ci" in current:
             for i, label in enumerate(["lower", "upper"]):
-                compare(f"{name}/overall_ci.{label}",
-                        baseline["overall_ci"][i], current["overall_ci"][i], scenario_tol)
+                compare(
+                    f"{name}/overall_ci.{label}",
+                    baseline["overall_ci"][i],
+                    current["overall_ci"][i],
+                    scenario_tol,
+                )
 
         # Group-time SE tolerance: tight for covariate scenarios, relaxed for bootstrap
         gt_se_tol = 1e-8 if scenario["n_cov"] > 0 else 0.01
@@ -213,7 +235,12 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                 compare(f"{name}/gt[{key}].p_value", b["p_value"], c["p_value"], 0.02)
             if "conf_int" in b and "conf_int" in c:
                 for i, label in enumerate(["lower", "upper"]):
-                    compare(f"{name}/gt[{key}].ci.{label}", b["conf_int"][i], c["conf_int"][i], gt_se_tol)
+                    compare(
+                        f"{name}/gt[{key}].ci.{label}",
+                        b["conf_int"][i],
+                        c["conf_int"][i],
+                        gt_se_tol,
+                    )
 
         # Compare event study effects/SEs if present
         if "event_study" in baseline and "event_study" in current:
@@ -231,7 +258,12 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                     compare(f"{name}/es[{e_key}].p_value", b_es["p_value"], c_es["p_value"], 0.02)
                 if "conf_int" in b_es and "conf_int" in c_es:
                     for i, label in enumerate(["lower", "upper"]):
-                        compare(f"{name}/es[{e_key}].ci.{label}", b_es["conf_int"][i], c_es["conf_int"][i], gt_se_tol)
+                        compare(
+                            f"{name}/es[{e_key}].ci.{label}",
+                            b_es["conf_int"][i],
+                            c_es["conf_int"][i],
+                            gt_se_tol,
+                        )
 
         # Compare group effects if present
         if "group_effects" in baseline and "group_effects" in current:
@@ -249,7 +281,12 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                     compare(f"{name}/ge[{g_key}].p_value", b_ge["p_value"], c_ge["p_value"], 0.02)
                 if "conf_int" in b_ge and "conf_int" in c_ge:
                     for i, label in enumerate(["lower", "upper"]):
-                        compare(f"{name}/ge[{g_key}].ci.{label}", b_ge["conf_int"][i], c_ge["conf_int"][i], gt_se_tol)
+                        compare(
+                            f"{name}/ge[{g_key}].ci.{label}",
+                            b_ge["conf_int"][i],
+                            c_ge["conf_int"][i],
+                            gt_se_tol,
+                        )
 
         if failures:
             all_failures.extend(failures)

@@ -218,7 +218,7 @@ Staggered Adoption Issues
                     time='period', first_treat='first_treat')
 
    # Access aggregated results
-   print(results.overall_att)                             # Overall ATT
+   print(results.att)                             # Overall ATT
    print(results.aggregate('event_study').to_dataframe())  # Event study
 
 Visualization Issues

@@ -267,7 +267,7 @@ the estimates can be biased.
        time="period", first_treat="first_treat",
    )
 
-   print(f"Overall campaign lift: {results.overall_att:.1f}")
+   print(f"Overall campaign lift: {results.att:.1f}")
    print(results.summary())
 
 .. note::

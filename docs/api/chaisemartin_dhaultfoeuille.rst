@@ -213,7 +213,7 @@ Basic usage with reversible treatment::
 
 Joiners and leavers views::
 
-    print(f"DID_M (overall):  {results.overall_att:.3f}")
+    print(f"DID_M (overall):  {results.att:.3f}")
     print(f"DID_+ (joiners):  {results.joiners_att:.3f}")
     print(f"DID_- (leavers):  {results.leavers_att:.3f}")
     print(f"Placebo (DID^pl): {results.placebo_effect:.3f}")
@@ -240,8 +240,8 @@ Multiplier bootstrap inference::
     # inference (not normal-theory recomputations from the bootstrap SE).
     # The t-stat is computed from the SE in both cases. See REGISTRY.md
     # `Note (bootstrap inference surface)` for the full contract.
-    print(f"Top-level p-value (bootstrap): {results.overall_p_value:.4f}")
-    print(f"Top-level CI (bootstrap):     {results.overall_conf_int}")
+    print(f"Top-level p-value (bootstrap): {results.p_value:.4f}")
+    print(f"Top-level CI (bootstrap):     {results.conf_int}")
     print(f"bootstrap_results.overall_se: {results.bootstrap_results.overall_se:.3f}")
     print(f"bootstrap_results.overall_ci: {results.bootstrap_results.overall_ci}")
 

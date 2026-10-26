@@ -121,9 +121,9 @@ Comparison with other estimators::
     imp = ImputationDiD().fit(data, outcome='outcome', unit='unit',
                               time='period', first_treat='first_treat')
 
-    print(f"Two-Stage ATT: {ts.overall_att:.3f} (SE: {ts.overall_se:.3f})")
-    print(f"CS ATT:        {cs.overall_att:.3f} (SE: {cs.overall_se:.3f})")
-    print(f"Imputation ATT:{imp.overall_att:.3f} (SE: {imp.overall_se:.3f})")
+    print(f"Two-Stage ATT: {ts.att:.3f} (SE: {ts.se:.3f})")
+    print(f"CS ATT:        {cs.att:.3f} (SE: {cs.se:.3f})")
+    print(f"Imputation ATT:{imp.att:.3f} (SE: {imp.se:.3f})")
 
 Estimator Comparison
 --------------------

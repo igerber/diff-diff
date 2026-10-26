@@ -202,7 +202,7 @@ class TestDidNumbersRecompute:
         out = notebook_output_text(NB)
         printed_att = _parse_number(out, r"per-geo-week ATT: ([\d.,-]+)")
         printed_total = _parse_number(out, r"CS total incremental sales:\s+([\d.,-]+)")
-        np.testing.assert_allclose(printed_att, res.overall_att, rtol=2e-3)
+        np.testing.assert_allclose(printed_att, res.att, rtol=2e-3)
         np.testing.assert_allclose(printed_total, total.att[0], rtol=2e-3)
         mass = int(((panel.first_treat > 0) & (panel.week >= panel.first_treat)).sum())
         assert total.n[0] == mass
@@ -225,8 +225,8 @@ class TestDidNumbersRecompute:
         )
         assert float(df.x[0]) == SEARCH_BASE * N_GEOS == 1500.0
         assert float(df.delta_x[0]) == BOOST * g_treated == 450.0
-        np.testing.assert_allclose(float(df.delta_y[0]), res.overall_att * g_treated, rtol=1e-12)
-        np.testing.assert_allclose(float(df.sigma[0]), res.overall_se * g_treated, rtol=1e-12)
+        np.testing.assert_allclose(float(df.delta_y[0]), res.att * g_treated, rtol=1e-12)
+        np.testing.assert_allclose(float(df.sigma[0]), res.se * g_treated, rtol=1e-12)
         out = notebook_output_text(NB)
         printed_roi = _parse_number(out, r"DiD measurement:\s+([\d.,-]+)")
         np.testing.assert_allclose(printed_roi, df.delta_y[0] / df.delta_x[0], atol=5e-3)

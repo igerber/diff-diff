@@ -299,18 +299,18 @@ def test_planted_and_realized_truth(pipeline):
 
 
 def test_scenario_a_design_weights_robust(pipeline):
-    att = pipeline["A_design"].overall_att * 100
+    att = pipeline["A_design"].att * 100
     assert -3.5 <= att <= -2.7, f"scenario A design ATT drifted: {att:.2f}pp"
 
 
 def test_scenario_b_design_weights_overstate(pipeline):
     res = pipeline["B_design"]
-    att = res.overall_att * 100
+    att = res.att * 100
     assert -4.6 <= att <= -3.7, f"scenario B design ATT drifted: {att:.2f}pp"
     # The quoted story: the design-weight CI EXCLUDES the realized truth
     # (~-2.98pp; -2.95 is the upper edge of the realized-truth band pinned
     # in test_planted_and_realized_truth).
-    hi = res.overall_conf_int[1]
+    hi = res.conf_int[1]
     assert hi * 100 < -2.95, (
         f"design-weight CI upper bound {hi*100:.2f}pp no longer excludes "
         "the realized truth (~-2.98pp)"
@@ -323,8 +323,8 @@ def test_scenario_b_design_weights_overstate(pipeline):
 
 
 def test_national_rake_is_not_a_fix(pipeline):
-    att_nat = pipeline["B_national"].overall_att * 100
-    att_des = pipeline["B_design"].overall_att * 100
+    att_nat = pipeline["B_national"].att * 100
+    att_des = pipeline["B_design"].att * 100
     realized = pipeline["truth"]["realized_att_pp"]
     assert -4.9 <= att_nat <= -4.0, f"national-rake ATT drifted: {att_nat:.2f}pp"
     # Quoted lesson: national raking does NOT move the estimate toward truth.
@@ -333,8 +333,8 @@ def test_national_rake_is_not_a_fix(pipeline):
 
 def test_state_rake_recovers_truth(pipeline):
     res = pipeline["B_raked"]
-    att = res.overall_att * 100
-    se = res.overall_se * 100
+    att = res.att * 100
+    se = res.se * 100
     realized = pipeline["truth"]["realized_att_pp"]
     assert -3.6 <= att <= -2.8, f"state-rake ATT drifted: {att:.2f}pp"
     assert (
@@ -404,7 +404,7 @@ def test_native_adapter_parity(pipeline):
             control_group="not_yet_treated",
             base_period="universal",
         )
-    np.testing.assert_allclose(res_adapter.overall_att, pipeline["B_raked"].overall_att, rtol=1e-12)
+    np.testing.assert_allclose(res_adapter.att, pipeline["B_raked"].att, rtol=1e-12)
     assert hasattr(res_adapter, "_balance_adjustment")
 
 
