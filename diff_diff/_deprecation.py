@@ -43,7 +43,7 @@ pre-existing M-001..M-003 ``DeprecationWarning`` sites were removed at the
 """
 
 import warnings
-from typing import Any
+from typing import Any, Dict, Mapping
 
 __all__: "list[str]" = []
 
@@ -186,3 +186,39 @@ def deprecated_field_property(
     _get.__name__ = old
     _get.__doc__ = f"Deprecated alias for :attr:`{new}` (removed in {removed_in})."
     return property(_get)
+
+
+#: The 3.x ``overall_*`` storage names of the nine results containers flipped
+#: at the 4.0 cut (ledger rows M-050..M-058), keyed to the canonical quintet
+#: field that now stores each value. Shared by the containers' ``__setstate__``
+#: pickle migration (spec section 5); ``ContinuousDiDResults`` keeps a
+#: module-local map for its deviant ``overall_att_*`` spellings.
+LEGACY_OVERALL_QUINTET: Dict[str, str] = {
+    "overall_att": "att",
+    "overall_se": "se",
+    "overall_t_stat": "t_stat",
+    "overall_p_value": "p_value",
+    "overall_conf_int": "conf_int",
+}
+
+
+def migrate_renamed_state_keys(
+    state: Mapping[str, Any], renames: Mapping[str, str]
+) -> Dict[str, Any]:
+    """Rewrite renamed storage keys of a pickled ``__dict__`` on load.
+
+    Returns a NEW dict (the input is never mutated). For each ``old -> new``
+    pair the legacy key is popped when present and its value seeds the
+    canonical key only when that key is absent - an existing canonical
+    value wins, and the legacy key never lingers in ``__dict__`` (a
+    ``deprecated_field_property`` data descriptor would shadow it on read,
+    but it would survive a re-pickle). Used by the ``__setstate__`` of the
+    M-050..M-058 containers; the ``SyntheticDiDResults.__setstate__``
+    precedent (``results.py``) is the hand-written form of the same rule.
+    """
+    out = dict(state)
+    for old, new in renames.items():
+        if old in out:
+            value = out.pop(old)
+            out.setdefault(new, value)
+    return out

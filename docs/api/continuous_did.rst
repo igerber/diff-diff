@@ -17,7 +17,7 @@ This module implements the methodology from Callaway, Goodman-Bacon & Sant'Anna 
    as well as ATT\ :sup:`glob` and ACRT\ :sup:`glob`, require the **Strong Parallel
    Trends (SPT)** assumption — that there is no selection into dose groups based on
    treatment effects. Under the weaker standard Parallel Trends (PT) assumption,
-   only the binarized ATT\ :sup:`loc` (``overall_att``) is identified; it equals
+   only the binarized ATT\ :sup:`loc` (``att``) is identified; it equals
    ATT\ :sup:`glob` only when SPT holds. See Callaway, Goodman-Bacon & Sant'Anna
    (2024), Assumptions 1–2.
 

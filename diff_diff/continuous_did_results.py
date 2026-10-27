@@ -12,6 +12,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property, migrate_renamed_state_keys
 from diff_diff.aggregation import (
     AggregationMixin,
     AggregationResult,
@@ -29,6 +30,18 @@ from diff_diff.results_base import (
 from diff_diff.utils import safe_inference
 
 __all__ = ["ContinuousDiDResults", "DoseResponseCurve"]
+
+
+# The 3.x ``overall_att_*`` storage names of this container (its deviant
+# spellings of the M-050..M-058 family) keyed to the canonical quintet
+# field; the four silent ``overall_se``-style aliases were never stored.
+_LEGACY_OVERALL_ATT_QUINTET: Dict[str, str] = {
+    "overall_att": "att",
+    "overall_att_se": "se",
+    "overall_att_t_stat": "t_stat",
+    "overall_att_p_value": "p_value",
+    "overall_att_conf_int": "conf_int",
+}
 
 
 class _ContinuousKitAggregator(_ContinuousDiDAggregationMixin):
@@ -117,7 +130,7 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         ATT(d) dose-response curve.
     dose_response_acrt : DoseResponseCurve
         ACRT(d) dose-response curve.
-    overall_att : float
+    att : float
         Binarized overall ATT (ATT^{loc} under PT, equals ATT^{glob} under SPT).
     overall_acrt : float
         Plug-in overall ACRT^{glob}.
@@ -144,11 +157,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
 
     dose_response_att: DoseResponseCurve
     dose_response_acrt: DoseResponseCurve
-    overall_att: float
-    overall_att_se: float
-    overall_att_t_stat: float
-    overall_att_p_value: float
-    overall_att_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     overall_acrt: float
     overall_acrt_se: float
     overall_acrt_t_stat: float
@@ -208,44 +221,52 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study", "dose")
     _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    # ATT-side is the headline contract; ACRT remains accessible via overall_acrt_*.
-    @property
-    def att(self) -> float:
-        return self.overall_att
+    # --- Deprecated 3.x storage names (ledger row M-058) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    # Nine spellings onto the five canonical fields: the five former
+    # ``overall_att_*`` fields AND the four former silent ``overall_*``
+    # aliases (the M-058 family); ``overall_acrt*`` is a separate estimand.
+    overall_att = deprecated_field_property(
+        "ContinuousDiDResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_att_se = deprecated_field_property(
+        "ContinuousDiDResults", "overall_att_se", "se", removed_in="5.0"
+    )
+    overall_att_t_stat = deprecated_field_property(
+        "ContinuousDiDResults", "overall_att_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_att_p_value = deprecated_field_property(
+        "ContinuousDiDResults", "overall_att_p_value", "p_value", removed_in="5.0"
+    )
+    overall_att_conf_int = deprecated_field_property(
+        "ContinuousDiDResults", "overall_att_conf_int", "conf_int", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "ContinuousDiDResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "ContinuousDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "ContinuousDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "ContinuousDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
-    @property
-    def se(self) -> float:
-        return self.overall_att_se
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles written under the ``overall_*`` storage names.
 
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_att_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_att_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_att_t_stat
-
-    # `overall_*` aliases for naming consistency with the rest of the staggered family.
-    @property
-    def overall_se(self) -> float:
-        return self.overall_att_se
-
-    @property
-    def overall_conf_int(self) -> Tuple[float, float]:
-        return self.overall_att_conf_int
-
-    @property
-    def overall_p_value(self) -> float:
-        return self.overall_att_p_value
-
-    @property
-    def overall_t_stat(self) -> float:
-        return self.overall_att_t_stat
+        The canonical quintet became the native fields at the 4.0 cut
+        (``docs/v4-design.md`` section 5; ``SyntheticDiDResults.__setstate__``
+        precedent): legacy keys are rewritten on load so the fields populate
+        under their canonical names and ``overall_*`` never reappear in
+        ``__dict__``.
+        """
+        self.__dict__.update(migrate_renamed_state_keys(state, _LEGACY_OVERALL_ATT_QUINTET))
 
     def __repr__(self) -> str:
         sig_att = _get_significance_stars(self.p_value)

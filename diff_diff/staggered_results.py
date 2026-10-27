@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.aggregation import (
     AggregationMixin,
     AggregationResult,
@@ -154,13 +159,13 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     ----------
     group_time_effects : dict
         Dictionary mapping (group, time) tuples to effect dictionaries.
-    overall_att : float
+    att : float
         Overall average treatment effect (weighted average of ATT(g,t)).
-    overall_se : float
+    se : float
         Standard error of overall ATT.
-    overall_p_value : float
+    p_value : float
         P-value for overall ATT.
-    overall_conf_int : tuple
+    conf_int : tuple
         Confidence interval for overall ATT.
     groups : list
         List of treatment cohorts (first treatment periods).
@@ -210,11 +215,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     """
 
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     groups: List[Any]
     time_periods: List[Any]
     n_obs: int
@@ -305,26 +310,37 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     reference_event_times: Optional[Tuple[Any, ...]] = None
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
+    # --- Deprecated 3.x storage names (ledger row M-050) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "CallawaySantAnnaResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "CallawaySantAnnaResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "CallawaySantAnnaResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "CallawaySantAnnaResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "CallawaySantAnnaResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
-    @property
-    def se(self) -> float:
-        return self.overall_se
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles written under the ``overall_*`` storage names.
 
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+        The canonical quintet became the native fields at the 4.0 cut
+        (``docs/v4-design.md`` section 5; ``SyntheticDiDResults.__setstate__``
+        precedent): legacy keys are rewritten on load so the fields populate
+        under their canonical names and ``overall_*`` never reappear in
+        ``__dict__``.
+        """
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -541,7 +557,7 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             n=np.array([float(self.n_treated_units + self.n_control_units)], dtype=float),
             # NOT ``df_inference``: that field is documented to stay None on
             # explicit ``survey_design=`` fits, where the df that actually
-            # governed ``overall_p_value`` lives on ``survey_metadata``.
+            # governed ``p_value`` lives on ``survey_metadata``.
             # Reading it directly reported df=NaN for survey fits whose CI
             # was built on a finite t-reference. Bootstrapped fits report a
             # NaN df column: no df governs percentile inference.

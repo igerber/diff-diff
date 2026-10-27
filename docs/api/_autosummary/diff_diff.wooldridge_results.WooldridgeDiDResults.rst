@@ -27,11 +27,9 @@
 
       ~WooldridgeDiDResults.alpha
       ~WooldridgeDiDResults.anticipation
-      ~WooldridgeDiDResults.att
       ~WooldridgeDiDResults.calendar_effects
       ~WooldridgeDiDResults.cluster_name
       ~WooldridgeDiDResults.cohort_trends
-      ~WooldridgeDiDResults.conf_int
       ~WooldridgeDiDResults.conley_lag_cutoff
       ~WooldridgeDiDResults.control_group
       ~WooldridgeDiDResults.df_convention
@@ -42,18 +40,20 @@
       ~WooldridgeDiDResults.n_control_units
       ~WooldridgeDiDResults.n_obs
       ~WooldridgeDiDResults.n_treated_units
-      ~WooldridgeDiDResults.p_value
-      ~WooldridgeDiDResults.se
+      ~WooldridgeDiDResults.overall_att
+      ~WooldridgeDiDResults.overall_conf_int
+      ~WooldridgeDiDResults.overall_p_value
+      ~WooldridgeDiDResults.overall_se
+      ~WooldridgeDiDResults.overall_t_stat
       ~WooldridgeDiDResults.survey_metadata
-      ~WooldridgeDiDResults.t_stat
       ~WooldridgeDiDResults.unsupported_period_action
       ~WooldridgeDiDResults.vcov_type
       ~WooldridgeDiDResults.group_time_effects
-      ~WooldridgeDiDResults.overall_att
-      ~WooldridgeDiDResults.overall_se
-      ~WooldridgeDiDResults.overall_t_stat
-      ~WooldridgeDiDResults.overall_p_value
-      ~WooldridgeDiDResults.overall_conf_int
+      ~WooldridgeDiDResults.att
+      ~WooldridgeDiDResults.se
+      ~WooldridgeDiDResults.t_stat
+      ~WooldridgeDiDResults.p_value
+      ~WooldridgeDiDResults.conf_int
       ~WooldridgeDiDResults.groups
       ~WooldridgeDiDResults.time_periods
       ~WooldridgeDiDResults.cohort_trend_coefs

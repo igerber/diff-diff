@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
 from diff_diff.results_base import _json_safe_label
 from diff_diff.staggered_results import CallawaySantAnnaResults
 
@@ -141,6 +142,22 @@ class DMLDiDResults(CallawaySantAnnaResults):
     bad_control: Optional[str] = None
     bad_control_covariates: Optional[Tuple[str, ...]] = None
     bad_control_diagnostics: Optional[Dict[Any, Dict[str, Any]]] = field(default=None, repr=False)
+
+    # --- Deprecated 3.x storage names (ride ledger row M-050) ---
+    # The storage is inherited from CallawaySantAnnaResults; the five shims are
+    # RE-DECLARED here so the FutureWarning names this subclass (plain class
+    # attributes, never dataclass fields). Removed at 5.0 with the parent's.
+    overall_att = deprecated_field_property("DMLDiDResults", "overall_att", "att", removed_in="5.0")
+    overall_se = deprecated_field_property("DMLDiDResults", "overall_se", "se", removed_in="5.0")
+    overall_t_stat = deprecated_field_property(
+        "DMLDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "DMLDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "DMLDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
     def __repr__(self) -> str:
         folds = f"n_folds={self.n_folds}"

@@ -28,29 +28,29 @@
 
       ~ImputationDiDResults.alpha
       ~ImputationDiDResults.anticipation
-      ~ImputationDiDResults.att
       ~ImputationDiDResults.bootstrap_results
       ~ImputationDiDResults.cluster_name
       ~ImputationDiDResults.coef_var
-      ~ImputationDiDResults.conf_int
       ~ImputationDiDResults.df_convention
       ~ImputationDiDResults.event_study_df
       ~ImputationDiDResults.is_significant
       ~ImputationDiDResults.leave_one_out
       ~ImputationDiDResults.n_clusters
-      ~ImputationDiDResults.p_value
-      ~ImputationDiDResults.pretrend_results
-      ~ImputationDiDResults.se
-      ~ImputationDiDResults.significance_stars
-      ~ImputationDiDResults.survey_metadata
-      ~ImputationDiDResults.t_stat
-      ~ImputationDiDResults.vcov_type
-      ~ImputationDiDResults.treatment_effects
       ~ImputationDiDResults.overall_att
+      ~ImputationDiDResults.overall_conf_int
+      ~ImputationDiDResults.overall_p_value
       ~ImputationDiDResults.overall_se
       ~ImputationDiDResults.overall_t_stat
-      ~ImputationDiDResults.overall_p_value
-      ~ImputationDiDResults.overall_conf_int
+      ~ImputationDiDResults.pretrend_results
+      ~ImputationDiDResults.significance_stars
+      ~ImputationDiDResults.survey_metadata
+      ~ImputationDiDResults.vcov_type
+      ~ImputationDiDResults.treatment_effects
+      ~ImputationDiDResults.att
+      ~ImputationDiDResults.se
+      ~ImputationDiDResults.t_stat
+      ~ImputationDiDResults.p_value
+      ~ImputationDiDResults.conf_int
       ~ImputationDiDResults.event_study_effects
       ~ImputationDiDResults.group_effects
       ~ImputationDiDResults.groups

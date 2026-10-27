@@ -61,7 +61,7 @@ class TestTargetParameterPerEstimator:
     def test_callaway_santanna(self):
         tp = describe_target_parameter(_minimal_result("CallawaySantAnnaResults"))
         assert tp["aggregation"] == "simple"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert "ATT(g,t)" in tp["name"] or "ATT(g, t)" in tp["definition"]
 
     def test_sun_abraham(self):
@@ -72,7 +72,7 @@ class TestTargetParameterPerEstimator:
     def test_imputation(self):
         tp = describe_target_parameter(_minimal_result("ImputationDiDResults"))
         assert tp["aggregation"] == "simple"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert (
             "imputation" in tp["name"].lower()
             or "BJS" in tp["reference"]
@@ -82,7 +82,7 @@ class TestTargetParameterPerEstimator:
     def test_two_stage(self):
         tp = describe_target_parameter(_minimal_result("TwoStageDiDResults"))
         assert tp["aggregation"] == "simple"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert "Gardner" in tp["reference"] or "two-stage" in tp["name"].lower()
 
     def test_stacked(self):
@@ -90,7 +90,7 @@ class TestTargetParameterPerEstimator:
             _minimal_result("StackedDiDResults", control_group="not_yet_treated")
         )
         assert tp["aggregation"] == "stacked"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert "sub-experiment" in tp["definition"].lower()
 
     def test_wooldridge_ols(self):
@@ -100,7 +100,7 @@ class TestTargetParameterPerEstimator:
         """
         tp = describe_target_parameter(_minimal_result("WooldridgeDiDResults", method="ols"))
         assert tp["aggregation"] == "simple"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         # OLS wording: mentions ATT(g,t) aggregation, not ASF.
         assert (
             "ATT(g,t)" in tp["name"] or "ATT(g,t)" in tp["definition"] or "OLS ETWFE" in tp["name"]
@@ -114,7 +114,7 @@ class TestTargetParameterPerEstimator:
         for method in ("logit", "poisson"):
             tp = describe_target_parameter(_minimal_result("WooldridgeDiDResults", method=method))
             assert tp["aggregation"] == "simple"
-            assert tp["headline_attribute"] == "overall_att"
+            assert tp["headline_attribute"] == "att"
             assert "ASF" in tp["name"]
             assert method in tp["name"] or method in tp["definition"]
 
@@ -123,7 +123,7 @@ class TestTargetParameterPerEstimator:
         assert tp["aggregation"] == "pt_all_combined"
         assert "PT-All" in tp["name"]
         # PR #347 R7 P1 regression: the definition must disambiguate
-        # the library's cohort-size-weighted ``overall_att`` from the
+        # the library's cohort-size-weighted ``att`` from the
         # paper's uniform-event-time ``ES_avg``.
         defn = tp["definition"]
         assert "cohort-size-weighted" in defn
@@ -161,10 +161,10 @@ class TestTargetParameterPerEstimator:
         )
         assert tp["aggregation"] == "M"
         assert "DID_M" in tp["name"]
-        # R1 PR #347 review: headline lives in ``overall_att``, not
+        # R1 PR #347 review: headline lives in ``att``, not
         # ``att``. Machine-readable field must match the raw attribute
         # downstream consumers should read.
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
 
     def test_dcdh_did_1(self):
         """``L_max = 1`` → headline is ``DID_1`` (per-group single-
@@ -182,7 +182,7 @@ class TestTargetParameterPerEstimator:
         )
         assert tp["aggregation"] == "DID_1"
         assert "DID_1" in tp["name"]
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
 
     def test_dcdh_delta(self):
         """``L_max >= 2`` (no trends) → headline is the cost-benefit
@@ -199,7 +199,7 @@ class TestTargetParameterPerEstimator:
         )
         assert tp["aggregation"] == "delta"
         assert "delta" in tp["name"]
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
 
     def test_dcdh_did_1_with_controls(self):
         tp = describe_target_parameter(
@@ -227,7 +227,7 @@ class TestTargetParameterPerEstimator:
 
     def test_dcdh_trends_linear_with_l_max_geq_2_emits_no_scalar_headline(self):
         """``trends_linear=True`` with ``L_max >= 2`` intentionally
-        suppresses the scalar aggregate (``overall_att`` is NaN by
+        suppresses the scalar aggregate (``att`` is NaN by
         design per ``chaisemartin_dhaultfoeuille.py:2828-2834``). The
         target-parameter block must reflect that — ``aggregation =
         "no_scalar_headline"`` and ``headline_attribute = None``.
@@ -253,7 +253,7 @@ class TestTargetParameterPerEstimator:
     def test_dcdh_trends_linear_empty_surface_still_no_scalar(self):
         """PR #347 R9 P1 regression: the estimator sets
         ``linear_trends_effects=None`` when the cumulated-horizon dict
-        is empty, but still unconditionally NaN-s ``overall_att`` for
+        is empty, but still unconditionally NaN-s ``att`` for
         ``trends_linear=True`` with ``L_max >= 2`` (see
         ``chaisemartin_dhaultfoeuille.py:2828-2834``). The previous
         inference on ``linear_trends_effects is not None`` would have
@@ -306,7 +306,7 @@ class TestTargetParameterPerEstimator:
         )
         assert tp["aggregation"] == "DID_1_fd"
         assert "DID^{fd}_1" in tp["name"]
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
 
     def test_sdid(self):
         tp = describe_target_parameter(_minimal_result("SyntheticDiDResults"))
@@ -427,13 +427,13 @@ class TestTargetParameterFitConfigReads:
             )
         )
         assert tp["aggregation"] == expected_tag
-        # Contract: ``headline_attribute`` is "overall_att" whenever
+        # Contract: ``headline_attribute`` is "att" whenever
         # there IS a scalar aggregate, and None when the
         # ``trends_linear + L_max>=2`` no-scalar rule fires.
         if expected_tag == "no_scalar_headline":
             assert tp["headline_attribute"] is None
         else:
-            assert tp["headline_attribute"] == "overall_att"
+            assert tp["headline_attribute"] == "att"
 
 
 class TestTargetParameterCoversEveryResultClass:
@@ -473,13 +473,9 @@ class TestTargetParameterCrossSurfaceParity:
             pass
 
         stub = CallawaySantAnnaResults()
-        stub.overall_att = 1.0
         stub.att = 1.0
-        stub.overall_se = 0.2
         stub.se = 0.2
-        stub.overall_p_value = 0.001
         stub.p_value = 0.001
-        stub.overall_conf_int = (0.6, 1.4)
         stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
@@ -504,13 +500,9 @@ class TestTargetParameterProseRendering:
             pass
 
         stub = CallawaySantAnnaResults()
-        stub.overall_att = 1.0
         stub.att = 1.0
-        stub.overall_se = 0.2
         stub.se = 0.2
-        stub.overall_p_value = 0.001
         stub.p_value = 0.001
-        stub.overall_conf_int = (0.6, 1.4)
         stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 500
@@ -609,7 +601,7 @@ class TestTargetParameterRealFitIntegration:
         )
         assert type(fit).__name__ == "StackedDiDResults"
         tp = describe_target_parameter(fit)
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         # R1 P1 fix: the definition must describe the actual estimand —
         # the average of post-treatment delta_h event-study coefficients.
         assert (
@@ -637,7 +629,7 @@ class TestTargetParameterRealFitIntegration:
                 rows.append({"unit": u, "period": t, "treated": d, "outcome": y})
         return pd.DataFrame(rows)
 
-    def test_dcdh_did_m_fit_headline_attribute_is_overall_att(self):
+    def test_dcdh_did_m_fit_headline_attribute_is_att(self):
         """``ChaisemartinDHaultfoeuilleResults.att`` holds the
         DID_M headline scalar (``chaisemartin_dhaultfoeuille_results.py``
         line ~357). R1 P1: previously ``headline_attribute="att"``
@@ -660,7 +652,7 @@ class TestTargetParameterRealFitIntegration:
         assert type(fit).__name__ == "ChaisemartinDHaultfoeuilleResults"
         tp = describe_target_parameter(fit)
         assert tp["aggregation"] == "M"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         # Sanity: the attribute BR/DR points at actually exists on the
         # real fit object.
         assert hasattr(fit, tp["headline_attribute"]), (
@@ -690,7 +682,7 @@ class TestTargetParameterRealFitIntegration:
         tp = describe_target_parameter(fit)
         assert tp["aggregation"] == "DID_1"
         assert "DID_1" in tp["name"]
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert hasattr(fit, "att")
 
     def test_dcdh_delta_fit_real(self):
@@ -714,7 +706,7 @@ class TestTargetParameterRealFitIntegration:
         tp = describe_target_parameter(fit)
         assert tp["aggregation"] == "delta"
         assert "delta" in tp["name"]
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
         assert hasattr(fit, "att")
 
     def test_dcdh_trends_linear_no_scalar_propagates_through_br(self):
@@ -833,11 +825,11 @@ class TestTargetParameterRealFitIntegration:
         )
 
         return ChaisemartinDHaultfoeuilleResults(
-            overall_att=float("nan"),
-            overall_se=float("nan"),
-            overall_t_stat=float("nan"),
-            overall_p_value=float("nan"),
-            overall_conf_int=(float("nan"), float("nan")),
+            att=float("nan"),
+            se=float("nan"),
+            t_stat=float("nan"),
+            p_value=float("nan"),
+            conf_int=(float("nan"), float("nan")),
             joiners_att=float("nan"),
             joiners_se=float("nan"),
             joiners_t_stat=float("nan"),
@@ -971,11 +963,11 @@ class TestTargetParameterRealFitIntegration:
         )
 
         return ChaisemartinDHaultfoeuilleResults(
-            overall_att=float("nan"),
-            overall_se=float("nan"),
-            overall_t_stat=float("nan"),
-            overall_p_value=float("nan"),
-            overall_conf_int=(float("nan"), float("nan")),
+            att=float("nan"),
+            se=float("nan"),
+            t_stat=float("nan"),
+            p_value=float("nan"),
+            conf_int=(float("nan"), float("nan")),
             joiners_att=float("nan"),
             joiners_se=float("nan"),
             joiners_t_stat=float("nan"),
@@ -1141,11 +1133,11 @@ class TestTargetParameterRealFitIntegration:
         )
 
         stub = ChaisemartinDHaultfoeuilleResults(
-            overall_att=float("nan"),
-            overall_se=float("nan"),
-            overall_t_stat=float("nan"),
-            overall_p_value=float("nan"),
-            overall_conf_int=(float("nan"), float("nan")),
+            att=float("nan"),
+            se=float("nan"),
+            t_stat=float("nan"),
+            p_value=float("nan"),
+            conf_int=(float("nan"), float("nan")),
             joiners_att=float("nan"),
             joiners_se=float("nan"),
             joiners_t_stat=float("nan"),
@@ -1215,7 +1207,7 @@ class TestTargetParameterRealFitIntegration:
 
     def test_dcdh_trends_linear_with_l_max_geq_2_fit_real(self):
         """Real ``trends_linear=True`` + ``L_max>=2`` fit: the library
-        intentionally sets ``overall_att=NaN`` and populates the
+        intentionally sets ``att=NaN`` and populates the
         per-horizon effects on ``linear_trends_effects`` instead
         (``chaisemartin_dhaultfoeuille.py:2828-2834``). The target-
         parameter block must reflect that via
@@ -1239,9 +1231,9 @@ class TestTargetParameterRealFitIntegration:
             L_max=2,
             trends_linear=True,
         )
-        # Real fit must intentionally produce NaN overall_att.
+        # Real fit must intentionally produce NaN att.
         assert math.isnan(fit.att), (
-            "trends_linear + L_max>=2 must suppress overall_att (NaN by "
+            "trends_linear + L_max>=2 must suppress att (NaN by "
             "design). If this test fails, the library contract changed — "
             "update the ``no_scalar_headline`` branch of "
             "describe_target_parameter accordingly."

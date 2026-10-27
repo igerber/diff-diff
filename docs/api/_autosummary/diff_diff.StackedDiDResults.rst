@@ -27,13 +27,11 @@
 
       ~StackedDiDResults.alpha
       ~StackedDiDResults.anticipation
-      ~StackedDiDResults.att
       ~StackedDiDResults.balance
       ~StackedDiDResults.balance_diagnostics
       ~StackedDiDResults.base_period
       ~StackedDiDResults.cluster_name
       ~StackedDiDResults.coef_var
-      ~StackedDiDResults.conf_int
       ~StackedDiDResults.control_group
       ~StackedDiDResults.covariates
       ~StackedDiDResults.df_convention
@@ -50,19 +48,21 @@
       ~StackedDiDResults.n_stacked_obs
       ~StackedDiDResults.n_sub_experiments
       ~StackedDiDResults.n_treated_units
-      ~StackedDiDResults.p_value
-      ~StackedDiDResults.reference_event_times
-      ~StackedDiDResults.se
-      ~StackedDiDResults.significance_stars
-      ~StackedDiDResults.survey_metadata
-      ~StackedDiDResults.t_stat
-      ~StackedDiDResults.vcov_type
-      ~StackedDiDResults.weighting
       ~StackedDiDResults.overall_att
+      ~StackedDiDResults.overall_conf_int
+      ~StackedDiDResults.overall_p_value
       ~StackedDiDResults.overall_se
       ~StackedDiDResults.overall_t_stat
-      ~StackedDiDResults.overall_p_value
-      ~StackedDiDResults.overall_conf_int
+      ~StackedDiDResults.reference_event_times
+      ~StackedDiDResults.significance_stars
+      ~StackedDiDResults.survey_metadata
+      ~StackedDiDResults.vcov_type
+      ~StackedDiDResults.weighting
+      ~StackedDiDResults.att
+      ~StackedDiDResults.se
+      ~StackedDiDResults.t_stat
+      ~StackedDiDResults.p_value
+      ~StackedDiDResults.conf_int
       ~StackedDiDResults.event_study_effects
       ~StackedDiDResults.group_effects
       ~StackedDiDResults.stacked_data

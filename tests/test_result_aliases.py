@@ -1,8 +1,14 @@
-"""Inference-field aliases on result classes (balance / external-adapter compatibility).
+"""Inference-field names on result classes (balance / external-adapter compatibility).
 
-Each in-scope result class exposes flat aliases (``att`` / ``se`` / ``conf_int`` /
-``p_value`` / ``t_stat``) that map to the canonical native fields (``overall_*``,
-``overall_att_*``, or ``avg_*``). This file pins the alias-canonical contract.
+Since the 4.0 storage flip (ledger rows M-050..M-058, PR 5b) the canonical
+quintet ``att`` / ``se`` / ``t_stat`` / ``p_value`` / ``conf_int`` IS the
+native storage on every estimator container in this file, and the 3.x
+``overall_*`` / ``overall_att_*`` names are read-only ``FutureWarning``
+properties (removed at 5.0). This file pins that direction: canonical names
+are constructor keywords and dataclass fields, legacy names warn and relay.
+The one exception is ``StaggeredTripleDiffResults``, which keeps the 3.x
+direction (``overall_*`` storage, canonical names as silent forwarding
+properties) until the item-6 container unification retires it.
 
 Motivating bug: ``balance.interop.diff_diff.as_balance_diagnostic`` reads
 ``getattr(res, "se", None)`` and ``getattr(res, "conf_int", None)`` without
@@ -14,6 +20,7 @@ shipped with ``se=NaN`` / ``conf_int=NaN`` in the methods-appendix table.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import asdict, fields
 
 import numpy as np
@@ -139,13 +146,20 @@ def test_required_init_kwargs_handles_default_factory_and_tuple_dispatch():
     assert inst.x == 1.5
 
 
-def _assert_pattern_b_aliases(res, *, att, se, t_stat, p_value, conf_int):
-    """Pattern B: 5 flat aliases mapping to the overall_* canonical fields."""
-    assert _alias_equal(res.att, att), f"att alias != overall_att ({res.att} vs {att})"
-    assert _alias_equal(res.se, se)
-    assert _alias_equal(res.conf_int, conf_int)
-    assert _alias_equal(res.p_value, p_value)
-    assert _alias_equal(res.t_stat, t_stat)
+def _assert_legacy_aliases_relay(res, *, att, se, t_stat, p_value, conf_int):
+    """Pattern B post-flip: the five legacy ``overall_*`` properties warn and relay
+    the canonical fields."""
+    cls = type(res).__name__
+    for old, expected in (
+        ("overall_att", att),
+        ("overall_se", se),
+        ("overall_t_stat", t_stat),
+        ("overall_p_value", p_value),
+        ("overall_conf_int", conf_int),
+    ):
+        with pytest.warns(FutureWarning, match=rf"{cls}\.{old} is deprecated"):
+            got = getattr(res, old)
+        assert _alias_equal(got, expected), f"{cls}.{old} relays {got!r}, expected {expected!r}"
 
 
 # Sentinel inference values exercised across direct-construction tests.
@@ -156,71 +170,118 @@ _P = 0.001
 _CI = (1.0, 2.0)
 
 
+_CANONICAL = {"att": _ATT, "se": _SE, "t_stat": _T, "p_value": _P, "conf_int": _CI}
+_CANONICAL_NAN = {
+    "att": np.nan,
+    "se": np.nan,
+    "t_stat": np.nan,
+    "p_value": np.nan,
+    "conf_int": (np.nan, np.nan),
+}
+
+# The nine flipped containers (M-050..M-058) plus DMLDiDResults, which inherits
+# CallawaySantAnnaResults' storage and re-declares the shims under its own name.
+FLIPPED_PATTERN_B = [
+    CallawaySantAnnaResults,
+    DMLDiDResults,
+    StackedDiDResults,
+    EfficientDiDResults,
+    ChaisemartinDHaultfoeuilleResults,
+    WooldridgeDiDResults,
+    SunAbrahamResults,
+    ImputationDiDResults,
+    TwoStageDiDResults,
+]
+
+
 # ============================================================================
-# Pattern B (10 classes) — direct-construction alias mechanics
+# Pattern B (9 flipped classes) — direct-construction mechanics
 # ============================================================================
 
 
-@pytest.mark.parametrize(
-    "cls",
-    [
-        CallawaySantAnnaResults,
-        DMLDiDResults,
-        StackedDiDResults,
-        EfficientDiDResults,
-        ChaisemartinDHaultfoeuilleResults,
-        StaggeredTripleDiffResults,
-        WooldridgeDiDResults,
-        SunAbrahamResults,
-        ImputationDiDResults,
-        TwoStageDiDResults,
-    ],
-    ids=lambda c: c.__name__,
-)
-def test_pattern_b_aliases_match_overall(cls):
-    """Each Pattern B class's flat aliases equal the canonical overall_* fields."""
-    overrides = {
-        "overall_att": _ATT,
-        "overall_se": _SE,
-        "overall_t_stat": _T,
-        "overall_p_value": _P,
-        "overall_conf_int": _CI,
-    }
-    res = cls(**_required_init_kwargs(cls, overrides))
-    _assert_pattern_b_aliases(res, att=_ATT, se=_SE, t_stat=_T, p_value=_P, conf_int=_CI)
+@pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
+def test_pattern_b_legacy_aliases_relay_canonical(cls):
+    """Each flipped class constructs with canonical keywords; the legacy
+    ``overall_*`` properties warn (FutureWarning) and relay the stored value."""
+    res = cls(**_required_init_kwargs(cls, dict(_CANONICAL)))
+    assert res.att == _ATT
+    assert res.se == _SE
+    assert res.t_stat == _T
+    assert res.p_value == _P
+    assert res.conf_int == _CI
+    _assert_legacy_aliases_relay(res, att=_ATT, se=_SE, t_stat=_T, p_value=_P, conf_int=_CI)
 
 
-@pytest.mark.parametrize(
-    "cls",
-    [
-        CallawaySantAnnaResults,
-        DMLDiDResults,
-        StackedDiDResults,
-        EfficientDiDResults,
-        ChaisemartinDHaultfoeuilleResults,
-        StaggeredTripleDiffResults,
-        WooldridgeDiDResults,
-        SunAbrahamResults,
-        ImputationDiDResults,
-        TwoStageDiDResults,
-    ],
-    ids=lambda c: c.__name__,
-)
-def test_pattern_b_aliases_propagate_nan(cls):
-    """When canonical overall_* fields are NaN (degenerate fit), aliases are NaN.
+@pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
+def test_pattern_b_legacy_aliases_propagate_nan(cls):
+    """When the canonical fields are NaN (degenerate fit), the legacy aliases are NaN.
 
     Pins the safe_inference() joint-NaN contract (per CLAUDE.md: ALL inference
     fields are computed together and stay NaN-consistent). Aliases are pure
     read-throughs, so the contract holds without re-computation.
     """
-    overrides = {
-        "overall_att": np.nan,
-        "overall_se": np.nan,
-        "overall_t_stat": np.nan,
-        "overall_p_value": np.nan,
-        "overall_conf_int": (np.nan, np.nan),
+    res = cls(**_required_init_kwargs(cls, dict(_CANONICAL_NAN)))
+    with pytest.warns(FutureWarning):
+        assert math.isnan(res.overall_att)
+        assert math.isnan(res.overall_se)
+        assert math.isnan(res.overall_t_stat)
+        assert math.isnan(res.overall_p_value)
+        assert math.isnan(res.overall_conf_int[0])
+        assert math.isnan(res.overall_conf_int[1])
+
+
+@pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
+def test_pattern_b_legacy_constructor_keywords_rejected(cls):
+    """The 3.x ``overall_*`` names are no longer constructor keywords."""
+    kwargs = _required_init_kwargs(cls, dict(_CANONICAL))
+    kwargs["overall_att"] = _ATT
+    with pytest.raises(TypeError, match="unexpected keyword argument 'overall_att'"):
+        cls(**kwargs)
+
+
+# ============================================================================
+# StaggeredTripleDiffResults — UNFLIPPED (dies with the item-6 container
+# unification; keeps the 3.x direction until then)
+# ============================================================================
+
+
+def _sddd_legacy_overrides(att=_ATT, se=_SE, t=_T, p=_P, ci=_CI):
+    return {
+        "overall_att": att,
+        "overall_se": se,
+        "overall_t_stat": t,
+        "overall_p_value": p,
+        "overall_conf_int": ci,
     }
-    res = cls(**_required_init_kwargs(cls, overrides))
+
+
+def test_staggered_triple_diff_keeps_legacy_storage_direction():
+    """``StaggeredTripleDiffResults`` is NOT in M-050..M-058: it still stores
+    ``overall_*`` and exposes the canonical names as silent forwarding
+    properties (no warning). Unflipped on purpose - the class is retired by
+    the item-6 unified DDD container, which is born canonical."""
+    res = StaggeredTripleDiffResults(
+        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert res.att == _ATT == res.overall_att
+        assert res.se == _SE == res.overall_se
+        assert res.t_stat == _T == res.overall_t_stat
+        assert res.p_value == _P == res.overall_p_value
+        assert res.conf_int == _CI == res.overall_conf_int
+    field_names = {f.name for f in fields(res)}
+    assert {"overall_att", "overall_se"} <= field_names
+    assert not ({"att", "se", "t_stat", "p_value", "conf_int"} & field_names)
+
+
+def test_staggered_triple_diff_aliases_propagate_nan():
+    res = StaggeredTripleDiffResults(
+        **_required_init_kwargs(
+            StaggeredTripleDiffResults,
+            _sddd_legacy_overrides(np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan)),
+        )
+    )
     assert math.isnan(res.att)
     assert math.isnan(res.se)
     assert math.isnan(res.t_stat)
@@ -230,17 +291,17 @@ def test_pattern_b_aliases_propagate_nan(cls):
 
 
 # ============================================================================
-# Pattern C — ContinuousDiDResults: flat AND overall_* aliases
+# Pattern C — ContinuousDiDResults: nine legacy spellings onto the canonical five
 # ============================================================================
 
 
 def _continuous_did_overrides(att=_ATT, se=_SE, t=_T, p=_P, ci=_CI):
     return {
-        "overall_att": att,
-        "overall_att_se": se,
-        "overall_att_t_stat": t,
-        "overall_att_p_value": p,
-        "overall_att_conf_int": ci,
+        "att": att,
+        "se": se,
+        "t_stat": t,
+        "p_value": p,
+        "conf_int": ci,
         "overall_acrt": 0.0,
         "overall_acrt_se": 0.0,
         "overall_acrt_t_stat": 0.0,
@@ -249,8 +310,8 @@ def _continuous_did_overrides(att=_ATT, se=_SE, t=_T, p=_P, ci=_CI):
     }
 
 
-def test_continuous_did_flat_aliases():
-    """ContinuousDiD flat aliases map to the ATT-side overall_att_* fields."""
+def test_continuous_did_canonical_fields_native():
+    """ContinuousDiD stores the ATT-side headline under the canonical quintet."""
     res = ContinuousDiDResults(
         **_required_init_kwargs(ContinuousDiDResults, _continuous_did_overrides())
     )
@@ -259,29 +320,32 @@ def test_continuous_did_flat_aliases():
     assert res.conf_int == _CI
     assert res.p_value == _P
     assert res.t_stat == _T
+    assert res.overall_acrt == 0.0  # the separate ACRT estimand is untouched
 
 
-def test_continuous_did_overall_aliases():
-    """ContinuousDiD overall_* aliases also map to the ATT-side fields
-    (consistency with Pattern B family naming)."""
+@pytest.mark.parametrize(
+    ("old", "expected"),
+    [
+        ("overall_att", _ATT),
+        ("overall_att_se", _SE),
+        ("overall_att_t_stat", _T),
+        ("overall_att_p_value", _P),
+        ("overall_att_conf_int", _CI),
+        ("overall_se", _SE),
+        ("overall_t_stat", _T),
+        ("overall_p_value", _P),
+        ("overall_conf_int", _CI),
+    ],
+)
+def test_continuous_did_legacy_spellings_warn_and_relay(old, expected):
+    """All nine 3.x spellings - the five former ``overall_att_*`` fields and the
+    four former silent ``overall_*`` aliases - warn and relay the canonical
+    field (the M-058 family)."""
     res = ContinuousDiDResults(
         **_required_init_kwargs(ContinuousDiDResults, _continuous_did_overrides())
     )
-    assert res.overall_se == _SE
-    assert res.overall_conf_int == _CI
-    assert res.overall_p_value == _P
-    assert res.overall_t_stat == _T
-
-
-def test_continuous_did_double_alias_resolves_same_value():
-    """``res.se`` and ``res.overall_se`` MUST point at the same value."""
-    res = ContinuousDiDResults(
-        **_required_init_kwargs(ContinuousDiDResults, _continuous_did_overrides())
-    )
-    assert res.se == res.overall_se
-    assert res.conf_int == res.overall_conf_int
-    assert res.p_value == res.overall_p_value
-    assert res.t_stat == res.overall_t_stat
+    with pytest.warns(FutureWarning, match=rf"ContinuousDiDResults\.{old} is deprecated"):
+        assert getattr(res, old) == expected
 
 
 # ============================================================================
@@ -290,45 +354,60 @@ def test_continuous_did_double_alias_resolves_same_value():
 
 
 @pytest.mark.parametrize(
-    ("cls", "ovr"),
+    ("cls", "ovr", "legacy_names"),
     [
         (
             CallawaySantAnnaResults,
-            {
-                "overall_att": _ATT,
-                "overall_se": _SE,
-                "overall_t_stat": _T,
-                "overall_p_value": _P,
-                "overall_conf_int": _CI,
-            },
+            dict(_CANONICAL),
+            ("overall_att", "overall_se", "overall_t_stat", "overall_p_value", "overall_conf_int"),
         ),
-        (ContinuousDiDResults, _continuous_did_overrides()),
+        (
+            ContinuousDiDResults,
+            _continuous_did_overrides(),
+            (
+                "overall_att",
+                "overall_att_se",
+                "overall_att_t_stat",
+                "overall_att_p_value",
+                "overall_att_conf_int",
+                "overall_se",
+                "overall_t_stat",
+                "overall_p_value",
+                "overall_conf_int",
+            ),
+        ),
     ],
-    ids=lambda v: v.__name__ if hasattr(v, "__name__") else "ovr",
+    ids=["CallawaySantAnnaResults", "ContinuousDiDResults"],
 )
-def test_aliases_are_read_only(cls, ovr):
-    """Assigning to an alias must raise AttributeError (no setter installed).
+def test_legacy_aliases_are_read_only_canonical_fields_writable(cls, ovr, legacy_names):
+    """Post-flip read-only semantics are INVERTED from 3.x: assigning to a legacy
+    ``overall_*`` property raises AttributeError (no setter installed), while the
+    canonical quintet are plain dataclass fields and accept assignment (the
+    ``WooldridgeDiDResults.aggregate("simple")`` write path relies on this).
 
-    Regression: a downstream test in tests/test_practitioner.py used
-    `r.overall_se = X` on a `ContinuousDiDResults.__new__()` mock — pre-alias
-    that silently created a junk attribute; post-alias the property correctly
-    rejects the assignment. Locking read-only here means future contributors
-    who write similar fixtures fail loudly via this test rather than via a
-    surprise `AttributeError: can't set attribute` deep in another suite.
+    Regression lineage: a downstream test in tests/test_practitioner.py once
+    used `r.overall_se = X` on a `ContinuousDiDResults.__new__()` mock. Locking
+    the direction here means fixtures that assign the wrong name fail loudly
+    via this test rather than deep in another suite.
     """
     res = cls(**_required_init_kwargs(cls, ovr))
+    for name in legacy_names:
+        with pytest.raises(AttributeError):
+            setattr(res, name, object())
+    for name in ("att", "se", "conf_int", "p_value", "t_stat"):
+        setattr(res, name, 7.0)
+        assert getattr(res, name) == 7.0
+
+
+def test_staggered_triple_diff_canonical_aliases_are_read_only():
+    """Unflipped SDDD keeps the 3.x semantics: the canonical names are read-only
+    forwarding properties over the ``overall_*`` fields."""
+    res = StaggeredTripleDiffResults(
+        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
+    )
     for name in ("att", "se", "conf_int", "p_value", "t_stat"):
         with pytest.raises(AttributeError):
             setattr(res, name, object())
-    # ContinuousDiDResults also exposes overall_se / overall_conf_int /
-    # overall_p_value / overall_t_stat as read-only aliases over the
-    # ATT-side canonical fields (no parallel `overall_att` alias is needed
-    # because `overall_att_att` would be confusing; the flat `att` covers
-    # that one). These must also reject assignment.
-    if cls.__name__ == "ContinuousDiDResults":
-        for name in ("overall_se", "overall_conf_int", "overall_p_value", "overall_t_stat"):
-            with pytest.raises(AttributeError):
-                setattr(res, name, object())
 
 
 @pytest.mark.parametrize(
@@ -336,52 +415,57 @@ def test_aliases_are_read_only(cls, ovr):
     [CallawaySantAnnaResults, ContinuousDiDResults],
     ids=lambda v: v.__name__,
 )
-def test_aliases_excluded_from_dataclass_fields_and_asdict(cls):
-    """Aliases must not appear in ``dataclasses.fields()`` or
-    ``dataclasses.asdict()`` output. This is the contract the registry
-    documents (PR for v3.3.3 + REGISTRY note), but the existing alias
-    suite only locks read-through and read-only semantics — a future
-    refactor that converted an `@property` to a real dataclass field
-    would silently surface aliases to serializers and field-walkers
-    without this regression catching it.
+def test_legacy_aliases_excluded_from_dataclass_fields_and_asdict(cls):
+    """The legacy ``overall_*`` properties must not appear in
+    ``dataclasses.fields()`` or ``dataclasses.asdict()`` output, and the
+    canonical quintet MUST (it is the storage). A future refactor that
+    annotated a shim (turning it into a real field) would silently surface
+    the deprecated names to serializers and field-walkers without this
+    regression catching it.
 
-    Two representative classes cover the surviving alias patterns:
-    Pattern B (`CallawaySantAnnaResults`) and the double-alias case
-    (`ContinuousDiDResults`); the `avg_*` mapping left with its
-    calendar-keyed event-study container at the 4.0 cut.
+    Two representative classes cover the flipped patterns: Pattern B
+    (`CallawaySantAnnaResults`) and the nine-spelling case
+    (`ContinuousDiDResults`).
     """
     ovr = {
-        CallawaySantAnnaResults: {
-            "overall_att": _ATT,
-            "overall_se": _SE,
-            "overall_t_stat": _T,
-            "overall_p_value": _P,
-            "overall_conf_int": _CI,
-        },
+        CallawaySantAnnaResults: dict(_CANONICAL),
         ContinuousDiDResults: _continuous_did_overrides(),
     }[cls]
     res = cls(**_required_init_kwargs(cls, ovr))
     field_names = {f.name for f in fields(res)}
     asdict_keys = set(asdict(res).keys())
-    alias_names = ["att", "se", "conf_int", "p_value", "t_stat"]
-    # ContinuousDiDResults is the documented double-alias case: it
-    # also exposes `overall_se` / `overall_conf_int` / `overall_p_value`
-    # / `overall_t_stat` aliases pointing at the ATT side (the native
-    # field is `overall_att_*`). Lock those out of fields()/asdict() too
-    # so a future refactor cannot silently surface them as dataclass
-    # fields (which would duplicate the native `overall_att_*` keys in
-    # serializer output).
+    canonical = ["att", "se", "conf_int", "p_value", "t_stat"]
+    legacy = ["overall_att", "overall_se", "overall_conf_int", "overall_p_value", "overall_t_stat"]
     if cls is ContinuousDiDResults:
-        alias_names += ["overall_se", "overall_conf_int", "overall_p_value", "overall_t_stat"]
-    for alias in alias_names:
+        legacy += [
+            "overall_att_se",
+            "overall_att_conf_int",
+            "overall_att_p_value",
+            "overall_att_t_stat",
+        ]
+    for name in canonical:
+        assert name in field_names, f"{cls.__name__}: canonical {name!r} is not a dataclass field"
+        assert name in asdict_keys
+    for alias in legacy:
         assert alias not in field_names, (
-            f"{cls.__name__}: alias {alias!r} surfaced in "
-            f"dataclasses.fields() output - aliases must remain "
-            f"@property descriptors, never real fields."
+            f"{cls.__name__}: legacy {alias!r} surfaced in "
+            f"dataclasses.fields() output - shims must remain "
+            f"descriptors, never real fields."
         )
         assert (
             alias not in asdict_keys
-        ), f"{cls.__name__}: alias {alias!r} surfaced in dataclasses.asdict() output."
+        ), f"{cls.__name__}: legacy {alias!r} surfaced in dataclasses.asdict() output."
+
+
+def test_staggered_triple_diff_canonical_aliases_excluded_from_fields():
+    """Unflipped SDDD: the canonical names stay out of fields()/asdict()."""
+    res = StaggeredTripleDiffResults(
+        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
+    )
+    field_names = {f.name for f in fields(res)}
+    for alias in ("att", "se", "conf_int", "p_value", "t_stat"):
+        assert alias not in field_names
+        assert alias not in asdict(res)
 
 
 # ============================================================================
@@ -421,7 +505,8 @@ def test_balance_adapter_pattern_returns_populated_se():
         conf_int is not None and len(conf_int) == 2 and all(np.isfinite(x) for x in conf_int)
     ), f"balance adapter would see conf_int={conf_int!r}; pre-alias bug returned None"
     assert p_value is not None and np.isfinite(p_value)
-    # Aliases must equal the canonical overall_* fields.
-    assert se == res.overall_se
-    assert conf_int == res.overall_conf_int
-    assert p_value == res.overall_p_value
+    # The legacy overall_* properties relay the same stored values (and warn).
+    with pytest.warns(FutureWarning):
+        assert se == res.overall_se
+        assert conf_int == res.overall_conf_int
+        assert p_value == res.overall_p_value

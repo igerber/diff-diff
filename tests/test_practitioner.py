@@ -122,19 +122,16 @@ def mock_scm_results():
 @pytest.fixture
 def mock_efficient_results():
     r = EfficientDiDResults.__new__(EfficientDiDResults)
-    r.overall_att = 0.6
-    r.overall_se = 0.15
+    r.att = 0.6
+    r.se = 0.15
     return r
 
 
 @pytest.fixture
 def mock_continuous_results():
     r = ContinuousDiDResults.__new__(ContinuousDiDResults)
-    r.overall_att = 0.4
-    # Canonical SE field on ContinuousDiDResults is overall_att_se (the ATT side).
-    # `overall_se` is a read-only property alias since the v3.3.3 inference-field
-    # alias surface; assigning to it raises AttributeError.
-    r.overall_att_se = 0.1
+    r.att = 0.4
+    r.se = 0.1  # the ATT-side headline; ACRT lives on overall_acrt*
     return r
 
 
@@ -149,32 +146,32 @@ def mock_triple_results():
 @pytest.fixture
 def mock_sa_results():
     r = SunAbrahamResults.__new__(SunAbrahamResults)
-    r.overall_att = 0.5
-    r.overall_se = 0.1
+    r.att = 0.5
+    r.se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_imputation_results():
     r = ImputationDiDResults.__new__(ImputationDiDResults)
-    r.overall_att = 0.5
-    r.overall_se = 0.1
+    r.att = 0.5
+    r.se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_two_stage_results():
     r = TwoStageDiDResults.__new__(TwoStageDiDResults)
-    r.overall_att = 0.5
-    r.overall_se = 0.1
+    r.att = 0.5
+    r.se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_stacked_results():
     r = StackedDiDResults.__new__(StackedDiDResults)
-    r.overall_att = 0.5
-    r.overall_se = 0.1
+    r.att = 0.5
+    r.se = 0.1
     return r
 
 
@@ -642,8 +639,8 @@ class TestImputationAggregationStep(_AggregationStepMixin):
 
     def _results(self):
         r = ImputationDiDResults.__new__(ImputationDiDResults)
-        r.overall_att = 0.6
-        r.overall_se = 0.15
+        r.att = 0.6
+        r.se = 0.15
         return r
 
 
@@ -652,8 +649,8 @@ class TestTwoStageAggregationStep(_AggregationStepMixin):
 
     def _results(self):
         r = TwoStageDiDResults.__new__(TwoStageDiDResults)
-        r.overall_att = 0.6
-        r.overall_se = 0.15
+        r.att = 0.6
+        r.se = 0.15
         return r
 
 
@@ -674,8 +671,8 @@ class TestContinuousAggregationStep:
 
     def _results(self):
         r = ContinuousDiDResults.__new__(ContinuousDiDResults)
-        r.overall_att = 0.6
-        r.overall_att_se = 0.15
+        r.att = 0.6
+        r.se = 0.15
         return r
 
     def test_aggregation_step_present_with_all_routes(self):

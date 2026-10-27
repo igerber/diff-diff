@@ -1714,17 +1714,21 @@ results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_tre
 ## Results Objects
 
 **Canonical quintet note.** Every staggered result class in this
-section exposes the headline inference under the canonical flat names
-`att` / `se` / `conf_int` / `p_value` / `t_stat` (4.0 design spec section
-5) - read those. The `overall_*` / `overall_att_*` spellings in the tables
-below are the 3.x STORED field names; they resolve to the same values
-(the flat names are read-only `@property` aliases over them until the 4.0
-storage flip makes the flat names the native fields, after which the
-`overall_*` spellings become `FutureWarning` aliases removed at 5.0).
-External adapters that `getattr(res, "se", None)`-style query the
-inference surface (e.g. `balance.interop.diff_diff.as_balance_diagnostic()`)
-therefore work on every staggered class; assume the flat names are
-present unless explicitly noted otherwise.
+section stores the headline inference under the canonical names
+`att` / `se` / `t_stat` / `p_value` / `conf_int` (4.0 design spec section
+5; the storage flipped at the 4.0 cut, ledger rows M-050..M-058) - read
+and construct with those. The 3.x `overall_att` / `overall_se` /
+`overall_t_stat` / `overall_p_value` / `overall_conf_int` spellings (and
+ContinuousDiD's `overall_att_se`-style spellings) are read-only
+`FutureWarning` properties that relay the same values and are removed at
+5.0; they are not constructor keywords and never appear in `to_dict()`.
+3.x pickles load (the legacy keys are rewritten on load). The bootstrap
+draw containers (`bootstrap_results.overall_att_se` etc.) keep their
+payload names. External adapters that `getattr(res, "se", None)`-style
+query the inference surface (e.g.
+`balance.interop.diff_diff.as_balance_diagnostic()`) therefore work on
+every staggered class; assume the canonical names are present unless
+explicitly noted otherwise.
 
 **balance interop.** Meta's `balance` package (>= 0.21) ships the
 one-way adapter `balance.interop.diff_diff` (`pip install "balance[did]"`,
@@ -1778,11 +1782,11 @@ Returned by `CallawaySantAnna.fit()`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `group_time_effects` | `dict[(g,t), GroupTimeEffect]` | ATT(g,t) for each (group, time) |
-| `overall_att` | `float` | Overall ATT |
-| `overall_se` | `float` | SE of overall ATT |
-| `overall_t_stat` | `float` | T-statistic |
-| `overall_p_value` | `float` | P-value |
-| `overall_conf_int` | `tuple[float, float]` | CI for overall ATT |
+| `att` | `float` | Overall ATT |
+| `se` | `float` | SE of overall ATT |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | CI for overall ATT |
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |
 | `n_obs` | `int` | Number of observations |
@@ -1816,11 +1820,11 @@ Returned by `SunAbraham.fit()`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `event_study_effects` | `dict[int, dict]` | Effects by relative time |
-| `overall_att` | `float` | Overall ATT |
-| `overall_se` | `float` | SE of overall ATT |
-| `overall_t_stat` | `float` | T-statistic |
-| `overall_p_value` | `float` | P-value |
-| `overall_conf_int` | `tuple[float, float]` | CI |
+| `att` | `float` | Overall ATT |
+| `se` | `float` | SE of overall ATT |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | CI |
 | `cohort_weights` | `dict[int, dict]` | Interaction weights per period |
 | `groups` | `list` | Treatment cohorts |
 | `n_obs` | `int` | Number of observations |
@@ -1996,11 +2000,11 @@ ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDRes
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `overall_att` | `float` | Overall ATT |
-| `overall_se` | `float` | SE of overall ATT |
-| `overall_t_stat` | `float` | T-statistic |
-| `overall_p_value` | `float` | P-value |
-| `overall_conf_int` | `tuple[float, float]` | CI |
+| `att` | `float` | Overall ATT |
+| `se` | `float` | SE of overall ATT |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | CI |
 | `event_study_effects` | `dict[int, dict] | None` | Legacy field. `None` on analytical fits and on every EfficientDiD fit; populated on bootstrapped ImputationDiD/TwoStageDiD fits (the percentile surface computed at fit, relayed by `aggregate('event_study')`); StackedDiD always populates it (row M-024). The canonical surface is the `aggregate('event_study')` CONTAINER |
 | `event_study_df` | `float | dict | None` | Producer-side per-row df channel for the unified event-study container. On `EfficientDiDResults`/`ImputationDiDResults` (3.12, M-092 completion): the scalar survey df governing the ES rows' t-inference (ImputationDiD threads the FINAL replicate-override value; leads included on survey fits); `None` on non-survey fits, on bootstrapped fits (percentile inference used no df), on analytical fits (no surface is stored - the kit recomputes), and for the replicate-undefined `0` sentinel |
 | `group_effects` | `dict | None` | Legacy field. `None` on analytical fits and on every EfficientDiD fit; populated on bootstrapped ImputationDiD/TwoStageDiD fits (relayed by `aggregate('group')`). The canonical surface is the `aggregate('group')` AggregationResult container |
@@ -2029,11 +2033,11 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 |-----------|------|-------------|
 | `dose_response_att` | `DoseResponseCurve` | Dose-response curve for ATT |
 | `dose_response_acrt` | `DoseResponseCurve` | Dose-response curve for ACRT |
-| `overall_att` | `float` | Overall ATT |
-| `overall_att_se` | `float` | SE of overall ATT |
-| `overall_att_t_stat` | `float` | T-statistic for ATT |
-| `overall_att_p_value` | `float` | P-value for ATT |
-| `overall_att_conf_int` | `tuple[float, float]` | CI for ATT |
+| `att` | `float` | Overall ATT (the headline; ACRT is the separate `overall_acrt*` family) |
+| `se` | `float` | SE of overall ATT |
+| `t_stat` | `float` | T-statistic for ATT |
+| `p_value` | `float` | P-value for ATT |
+| `conf_int` | `tuple[float, float]` | CI for ATT |
 | `overall_acrt` | `float` | Overall ACRT |
 | `overall_acrt_se` | `float` | SE of overall ACRT |
 | `overall_acrt_t_stat` | `float` | T-statistic for ACRT |
@@ -2139,7 +2143,7 @@ Results container for `ChangesInChanges` under both methods (the `method` field 
 
 ### LWDiDResults
 
-Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int` (when inference is unavailable - e.g. psm, degenerate designs - `se`/`t_stat`/`p_value` and both CI bounds are jointly NaN while `att` is RETAINED: the fail-closed contract), plus `n_obs`, `n_treated`, `n_control`, `df_inference`, `cluster_name`/`n_clusters`, and fit provenance (`rolling`, `estimation_method`, `vcov_type`, `alpha`, `control_group`, `n_bootstrap`, `seed`, `pscore_trim`, `psm_config`, `inference_basis`). Staggered fits also carry `cohort_effects` and `cohort_time_effects` dicts. Methods: `summary(alpha=None)` / `print_summary(alpha=None)` (alpha must equal the fit-time alpha - the family-wide guard), `to_dict()`, `to_dataframe(level='simple')` / `to_csv(path, level='simple')` (4.0: aggregate-backed - `aggregate(level).to_dataframe()` plus the `rolling`/`estimation_method`/`vcov_type` columns; `level` in `'simple'` (one headline row, default), `'group'` (per-cohort rows, staggered only), `'event_study'`; columns `conf_int_lower`/`conf_int_upper`, `n` = treated units - `n_obs`/`n_control` live in `to_dict()`), `aggregate(level)` with levels `'simple'` (view-relay of the fitted headline -> AggregationResult), `'event_study'` (per-event-time effects -> EventStudyResults), and `'group'` (per-cohort effects -> AggregationResult; staggered fits only - common-timing fits raise), and - common-timing `estimation_method='reg'` fits ONLY - `randomization_test()` and `wild_cluster_bootstrap()` (the latter ADDITIONALLY requires a `cluster=` fit - unclustered fits raise; both REPLAY the fitted collapsed design; no data arguments accepted; other fits reject informatively). NOTE: there is NO `overall_att` or `period_effects` attribute - those surfaces were retired pre-release (unlike the shared staggered pattern above); use `.att` for the overall effect and `aggregate('event_study')` for per-period effects.
+Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int` (when inference is unavailable - e.g. psm, degenerate designs - `se`/`t_stat`/`p_value` and both CI bounds are jointly NaN while `att` is RETAINED: the fail-closed contract), plus `n_obs`, `n_treated`, `n_control`, `df_inference`, `cluster_name`/`n_clusters`, and fit provenance (`rolling`, `estimation_method`, `vcov_type`, `alpha`, `control_group`, `n_bootstrap`, `seed`, `pscore_trim`, `psm_config`, `inference_basis`). Staggered fits also carry `cohort_effects` and `cohort_time_effects` dicts. Methods: `summary(alpha=None)` / `print_summary(alpha=None)` (alpha must equal the fit-time alpha - the family-wide guard), `to_dict()`, `to_dataframe(level='simple')` / `to_csv(path, level='simple')` (4.0: aggregate-backed - `aggregate(level).to_dataframe()` plus the `rolling`/`estimation_method`/`vcov_type` columns; `level` in `'simple'` (one headline row, default), `'group'` (per-cohort rows, staggered only), `'event_study'`; columns `conf_int_lower`/`conf_int_upper`, `n` = treated units - `n_obs`/`n_control` live in `to_dict()`), `aggregate(level)` with levels `'simple'` (view-relay of the fitted headline -> AggregationResult), `'event_study'` (per-event-time effects -> EventStudyResults), and `'group'` (per-cohort effects -> AggregationResult; staggered fits only - common-timing fits raise), and - common-timing `estimation_method='reg'` fits ONLY - `randomization_test()` and `wild_cluster_bootstrap()` (the latter ADDITIONALLY requires a `cluster=` fit - unclustered fits raise; both REPLAY the fitted collapsed design; no data arguments accepted; other fits reject informatively). NOTE: there is NO `overall_att` or `period_effects` attribute, not even as a deprecated alias - those surfaces were retired pre-release (the staggered containers above carry `overall_att` only as a 5.0-removed FutureWarning property); use `.att` for the overall effect and `aggregate('event_study')` for per-period effects.
 
 ### TROPResults
 

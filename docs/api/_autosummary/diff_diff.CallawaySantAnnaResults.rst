@@ -29,13 +29,11 @@
       ~CallawaySantAnnaResults.allow_unbalanced_panel
       ~CallawaySantAnnaResults.alpha
       ~CallawaySantAnnaResults.anticipation
-      ~CallawaySantAnnaResults.att
       ~CallawaySantAnnaResults.base_period
       ~CallawaySantAnnaResults.bootstrap_results
       ~CallawaySantAnnaResults.cband_crit_value
       ~CallawaySantAnnaResults.cluster_name
       ~CallawaySantAnnaResults.coef_var
-      ~CallawaySantAnnaResults.conf_int
       ~CallawaySantAnnaResults.control_group
       ~CallawaySantAnnaResults.df_inference
       ~CallawaySantAnnaResults.epv_diagnostics
@@ -48,23 +46,25 @@
       ~CallawaySantAnnaResults.influence_functions
       ~CallawaySantAnnaResults.is_significant
       ~CallawaySantAnnaResults.n_clusters
-      ~CallawaySantAnnaResults.p_value
+      ~CallawaySantAnnaResults.overall_att
+      ~CallawaySantAnnaResults.overall_conf_int
+      ~CallawaySantAnnaResults.overall_p_value
+      ~CallawaySantAnnaResults.overall_se
+      ~CallawaySantAnnaResults.overall_t_stat
       ~CallawaySantAnnaResults.panel
       ~CallawaySantAnnaResults.pscore_fallback
       ~CallawaySantAnnaResults.pscore_trim
       ~CallawaySantAnnaResults.reference_event_times
-      ~CallawaySantAnnaResults.se
       ~CallawaySantAnnaResults.significance_stars
       ~CallawaySantAnnaResults.survey_metadata
-      ~CallawaySantAnnaResults.t_stat
       ~CallawaySantAnnaResults.used_rc_on_unbalanced_panel
       ~CallawaySantAnnaResults.vcov_type
       ~CallawaySantAnnaResults.group_time_effects
-      ~CallawaySantAnnaResults.overall_att
-      ~CallawaySantAnnaResults.overall_se
-      ~CallawaySantAnnaResults.overall_t_stat
-      ~CallawaySantAnnaResults.overall_p_value
-      ~CallawaySantAnnaResults.overall_conf_int
+      ~CallawaySantAnnaResults.att
+      ~CallawaySantAnnaResults.se
+      ~CallawaySantAnnaResults.t_stat
+      ~CallawaySantAnnaResults.p_value
+      ~CallawaySantAnnaResults.conf_int
       ~CallawaySantAnnaResults.groups
       ~CallawaySantAnnaResults.time_periods
       ~CallawaySantAnnaResults.n_obs

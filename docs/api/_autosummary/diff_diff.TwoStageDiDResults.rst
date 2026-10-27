@@ -27,28 +27,28 @@
 
       ~TwoStageDiDResults.alpha
       ~TwoStageDiDResults.anticipation
-      ~TwoStageDiDResults.att
       ~TwoStageDiDResults.bootstrap_results
       ~TwoStageDiDResults.cluster_name
       ~TwoStageDiDResults.coef_var
-      ~TwoStageDiDResults.conf_int
       ~TwoStageDiDResults.event_study_df
       ~TwoStageDiDResults.event_study_vcov
       ~TwoStageDiDResults.event_study_vcov_index
       ~TwoStageDiDResults.is_significant
       ~TwoStageDiDResults.n_clusters
-      ~TwoStageDiDResults.p_value
-      ~TwoStageDiDResults.se
-      ~TwoStageDiDResults.significance_stars
-      ~TwoStageDiDResults.survey_metadata
-      ~TwoStageDiDResults.t_stat
-      ~TwoStageDiDResults.vcov_type
-      ~TwoStageDiDResults.treatment_effects
       ~TwoStageDiDResults.overall_att
+      ~TwoStageDiDResults.overall_conf_int
+      ~TwoStageDiDResults.overall_p_value
       ~TwoStageDiDResults.overall_se
       ~TwoStageDiDResults.overall_t_stat
-      ~TwoStageDiDResults.overall_p_value
-      ~TwoStageDiDResults.overall_conf_int
+      ~TwoStageDiDResults.significance_stars
+      ~TwoStageDiDResults.survey_metadata
+      ~TwoStageDiDResults.vcov_type
+      ~TwoStageDiDResults.treatment_effects
+      ~TwoStageDiDResults.att
+      ~TwoStageDiDResults.se
+      ~TwoStageDiDResults.t_stat
+      ~TwoStageDiDResults.p_value
+      ~TwoStageDiDResults.conf_int
       ~TwoStageDiDResults.event_study_effects
       ~TwoStageDiDResults.group_effects
       ~TwoStageDiDResults.groups

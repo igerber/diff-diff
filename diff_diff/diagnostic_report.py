@@ -52,7 +52,7 @@ import pandas as pd
 from diff_diff._reporting_helpers import describe_target_parameter  # noqa: E402 (top-level import)
 from diff_diff.results_base import Diagnostic, _coverage_pct
 
-DIAGNOSTIC_REPORT_SCHEMA_VERSION = "2.0"
+DIAGNOSTIC_REPORT_SCHEMA_VERSION = "3.0"
 
 __all__ = [
     "DiagnosticReport",
@@ -1379,7 +1379,7 @@ class DiagnosticReport:
         # Headline metric — best-effort across estimator types.
         # PR #347 R4 P1: the dCDH ``trends_linear=True`` + ``L_max>=2``
         # configuration does not produce a scalar headline by design
-        # (``overall_att`` is intentionally NaN per
+        # (``att`` is intentionally NaN per
         # ``chaisemartin_dhaultfoeuille.py:2828-2834``). Route the
         # headline through a dedicated no-scalar block when the
         # target-parameter helper flags this case so prose does not
@@ -3838,10 +3838,16 @@ def _extract_scalar_headline(
     """Extract ``(name, value, se, p_value, conf_int, alpha)`` from a fitted result.
 
     Centralizes the scalar-headline mapping shared by both ``BusinessReport``
-    and ``DiagnosticReport`` so schema drift (e.g. ``ContinuousDiDResults``
-    using ``overall_att_se`` / ``overall_att_p_value`` /
-    ``overall_att_conf_int`` instead of the ``overall_att`` stem) is handled
-    in one place.
+    and ``DiagnosticReport`` so the two reports agree on which fields a
+    result class exposes for its headline. Since the 4.0 storage flip
+    (ledger rows M-050..M-058) every scalar-headline estimator container
+    stores the canonical quintet ``att`` / ``se`` / ``p_value`` /
+    ``conf_int`` natively, so the table has a single row; the 3.x
+    ``overall_*`` / ``overall_att_*`` row was deleted at the cut (reading it
+    would now emit the containers' FutureWarning shims). The returned
+    ``name`` is therefore ``"att"`` for every scalar-headline estimator,
+    including ``StaggeredTripleDiffResults``, whose canonical names are
+    silent forwarding properties over its unflipped ``overall_*`` storage.
 
     Each row in the attribute-alias table below is tried in priority order.
     The first point-estimate attribute that resolves to a non-None value
@@ -3850,14 +3856,7 @@ def _extract_scalar_headline(
     """
     # (name, [se aliases], [p-value aliases], [ci aliases])
     alias_table: List[Tuple[str, List[str], List[str], List[str]]] = [
-        # Staggered / multi-period aggregations
-        (
-            "overall_att",
-            ["overall_se", "overall_att_se"],
-            ["overall_p_value", "overall_att_p_value"],
-            ["overall_conf_int", "overall_att_conf_int"],
-        ),
-        # Simple DiDResults / SyntheticDiDResults / TROPResults / TripleDifferenceResults
+        # Every scalar-headline estimator container (the canonical quintet).
         ("att", ["se"], ["p_value"], ["conf_int"]),
     ]
     for name, se_aliases, p_aliases, ci_aliases in alias_table:

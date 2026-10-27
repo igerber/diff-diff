@@ -101,7 +101,7 @@ The BusinessReport and DiagnosticReport schemas both carry a
 top-level `target_parameter` block that names what scalar the
 headline number actually represents. The dispatched result classes have
 meaningfully different estimands — a stakeholder reading
-`overall_att = -0.0214` on a Callaway-Sant'Anna fit cannot tell
+`att = -0.0214` on a Callaway-Sant'Anna fit cannot tell
 whether that is the simple-weighted average across `ATT(g,t)`
 cells, an event-study-weighted aggregate, or a group-weighted
 aggregate. Baker et al. (2025) Step 2 is "Define the target
@@ -114,7 +114,7 @@ Schema shape:
   "name": "overall ATT (cohort-size-weighted average of ATT(g,t))",
   "definition": "A cohort-size-weighted average of group-time ATTs ...",
   "aggregation": "simple",
-  "headline_attribute": "overall_att",
+  "headline_attribute": "att",
   "reference": "Callaway & Sant'Anna (2021); REGISTRY.md Sec. CallawaySantAnna"
 }
 ```
@@ -143,7 +143,7 @@ Field semantics:
   - `"dose_overall"` (ContinuousDiD)
   - `"ddd"` / `"staggered_ddd"` (TripleDifference / StaggeredTripleDiff)
   - `"spillover"` (SpilloverDiD — Butts 2021 total effect on the treated `tau_total`, identified off far-away controls; headline `att`)
-  - dCDH dynamic branches follow the exact `overall_att`
+  - dCDH dynamic branches follow the exact `att`
     contract: `"M"` / `"M_x"` / `"M_fd"` / `"M_x_fd"` for
     `L_max=None`; `"DID_1"` / `"DID_1_x"` / `"DID_1_fd"` /
     `"DID_1_x_fd"` for `L_max=1`; `"delta"` / `"delta_x"` for
@@ -154,10 +154,13 @@ Field semantics:
     `"twfe"` (BaconDecomposition read-out) / `"unknown"` (default
     fallback).
 - `headline_attribute` — the raw result attribute the scalar
-  comes from (`"overall_att"` / `"att"` / `"twfe_estimate"`;
+  comes from (`"att"` for every estimator container since the 4.0
+  storage flip, rows M-050..M-058; `"overall_att"` only for the
+  unflipped `StaggeredTripleDiffResults` until the item-6 container
+  unification; `"twfe_estimate"` for the BaconDecomposition read-out;
   `"avg_att"` left with the removed MultiPeriodDiDResults at 4.0), OR `None` when `aggregation ==
   "no_scalar_headline"` (the dCDH `trends_linear=True,
-  L_max>=2` branch where `overall_att` is intentionally NaN by
+  L_max>=2` branch where `att` is intentionally NaN by
   design). Agents dispatching on this field must handle `None` by
   inspecting `headline.reason` (BR) / `headline_metric.reason`
   (DR), which distinguishes two subcases:
@@ -200,7 +203,7 @@ A few branches read fit-time config from the result object:
   describing which units qualify as controls.
 - `ChaisemartinDHaultfoeuilleResults.L_max` +
   `covariate_residuals` + `linear_trends_effects`: branches the
-  dCDH estimand tag per the exact `overall_att` contract in
+  dCDH estimand tag per the exact `att` contract in
   `chaisemartin_dhaultfoeuille.py:2602-2634` and
   `chaisemartin_dhaultfoeuille.py:2828-2834`:
   - `L_max=None` → `DID_M` (Phase 1 per-period aggregate;
@@ -210,7 +213,7 @@ A few branches read fit-time config from the result object:
     `aggregation="DID_1"`).
   - `L_max>=2` → cost-benefit `delta` (Lemma 4 cross-horizon
     aggregate; `aggregation="delta"`).
-  - `trends_linear=True` AND `L_max>=2` → `overall_att` is
+  - `trends_linear=True` AND `L_max>=2` → `att` is
     intentionally NaN (no scalar aggregate; per-horizon level
     effects live on `results.linear_trends_effects[l]`).
     `aggregation="no_scalar_headline"` and
@@ -226,8 +229,8 @@ A few branches read fit-time config from the result object:
 
 A few branches emit a fixed tag regardless of fit-time config —
 notably `CallawaySantAnna`, `ImputationDiD`, `TwoStageDiD`, and
-`WooldridgeDiD`. For these estimators the `overall_att`
-(or `att`) scalar is ALWAYS the simple weighted
+`WooldridgeDiD`. For these estimators the `att`
+scalar is ALWAYS the simple weighted
 aggregation; post-fit `results.aggregate()` (the successor to the
 deprecated fit-time `aggregate` kwarg, rows M-020..M-027) returns
 the horizon / group tables without changing the headline scalar —
@@ -579,6 +582,22 @@ a library setting.
   window (ledger row M-095; spec section 5 forbids deprecated names in
   serialized output from 4.0). A key removal is breaking under the policy
   above, hence the major bump; `DIAGNOSTIC_REPORT_SCHEMA_VERSION` stays 2.0.
+
+- **Note:** `DIAGNOSTIC_REPORT_SCHEMA_VERSION` 2.0 -> 3.0 and
+  `BUSINESS_REPORT_SCHEMA_VERSION` 3.0 -> 4.0 at the 4.0 cut (PR 5b,
+  2026-10-26, the M-050..M-058 storage flip): the nine flipped containers
+  store the canonical quintet natively, so `_extract_scalar_headline`'s
+  legacy `overall_*` / `overall_att_*` alias row was deleted and
+  `_reporting_helpers.describe_target_parameter` reports the raw attribute
+  the scalar comes from as `att`. Observable in the schemas: DR's
+  `headline_metric.name` and both reports' `target_parameter.headline_attribute`
+  read `"att"` where they read `"overall_att"` under 3.x (BR's `headline`
+  block carries no name key, so BR's bump covers `headline_attribute` only).
+  Value changes in an existing string field are renames under the policy
+  above, hence the major bumps. `StaggeredTripleDiffResults` is unflipped
+  until item 6: its `headline_attribute` stays `"overall_att"`, while its
+  `headline_metric.name` is `"att"` like every other scalar headline (the
+  single alias row reads the canonical forwarding properties).
 
 - **Note:** Schema version 2.0 (both BR and DR). The BR/DR gap #6
   target-parameter PR adds the `headline.status` /

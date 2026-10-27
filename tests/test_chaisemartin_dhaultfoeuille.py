@@ -1323,11 +1323,11 @@ class TestResultsDataclass:
         )
 
         r_nan = ChaisemartinDHaultfoeuilleResults(
-            overall_att=2.0,
-            overall_se=float("nan"),
-            overall_t_stat=float("nan"),
-            overall_p_value=float("nan"),
-            overall_conf_int=(float("nan"), float("nan")),
+            att=2.0,
+            se=float("nan"),
+            t_stat=float("nan"),
+            p_value=float("nan"),
+            conf_int=(float("nan"), float("nan")),
             joiners_att=float("nan"),
             joiners_se=float("nan"),
             joiners_t_stat=float("nan"),
@@ -1365,11 +1365,11 @@ class TestResultsDataclass:
 
         # Independently verify: with finite SE > 0, coef_var equals SE/|ATT|
         r_finite = ChaisemartinDHaultfoeuilleResults(
-            overall_att=2.0,
-            overall_se=0.5,
-            overall_t_stat=4.0,
-            overall_p_value=0.01,
-            overall_conf_int=(1.0, 3.0),
+            att=2.0,
+            se=0.5,
+            t_stat=4.0,
+            p_value=0.01,
+            conf_int=(1.0, 3.0),
             joiners_att=float("nan"),
             joiners_se=float("nan"),
             joiners_t_stat=float("nan"),
@@ -5166,10 +5166,10 @@ class TestByPathBootstrap:
         # untouched — simulates the reversible-panel scenario where the
         # overall IF is identically zero but the by_path subset IF is
         # not.
-        res.overall_se = float("nan")
-        res.overall_t_stat = float("nan")
-        res.overall_p_value = float("nan")
-        res.overall_conf_int = (float("nan"), float("nan"))
+        res.se = float("nan")
+        res.t_stat = float("nan")
+        res.p_value = float("nan")
+        res.conf_int = (float("nan"), float("nan"))
         if res.event_study_effects is not None:
             for entry in res.event_study_effects.values():
                 entry["se"] = float("nan")

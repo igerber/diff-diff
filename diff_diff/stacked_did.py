@@ -1045,11 +1045,11 @@ class StackedDiD(BaseEstimator):
 
         # ---- Construct results ----
         self.results_ = StackedDiDResults(
-            overall_att=overall_att,
-            overall_se=overall_se,
-            overall_t_stat=overall_t,
-            overall_p_value=overall_p,
-            overall_conf_int=overall_ci,
+            att=overall_att,
+            se=overall_se,
+            t_stat=overall_t,
+            p_value=overall_p,
+            conf_int=overall_ci,
             event_study_effects=event_study_effects,
             group_effects=None,
             stacked_data=stacked_df,

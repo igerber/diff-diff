@@ -2091,7 +2091,7 @@ class TestStackedAggregate:
         assert isinstance(agg, AggregationResult)
         assert agg.level == "simple"
         assert list(agg.label) == ["overall"]
-        # target is "att": overall_att is the equally-weighted post-period
+        # target is "att": att is the equally-weighted post-period
         # average, NOT the per-event trimmed aggregate ATT (M-024 Note).
         assert list(agg.target) == ["att"]
         assert float(agg.att[0]) == stacked_fitted.att
@@ -3697,8 +3697,8 @@ class TestImputationAggregate:
         # cohort-zero design (one replicate NaNs one cohort's group target
         # while overall stays finite) the joint [overall, groups] stack
         # dropped a replicate the [overall]-only stack keeps -> the plain
-        # fit's overall_se differs from the pre-removal fit(aggregate='group')
-        # overall_se (oracle); post-fit aggregate('group') level-matches the
+        # fit's se differs from the pre-removal fit(aggregate='group')
+        # se (oracle); post-fit aggregate('group') level-matches the
         # oracle rows exactly.
         d, rep_cols = _imputation_survey_panel(replicate=True, degenerate="cohort_zero")
         sd = _imputation_survey_design(rep_cols)
@@ -6088,7 +6088,7 @@ class TestTotalCallawaySantAnna:
         """A FINITE overall value that becomes non-finite BY the x C scaling
         blanks the row entirely - the one path allowed to blank a finite att,
         pinned on both the att and se halves of the guard."""
-        for field_name in ("overall_att", "overall_se"):
+        for field_name in ("att", "se"):
             res = CallawaySantAnna().fit(panel, **FIT_KW)
             setattr(res, field_name, 1e308)
             tot = res.aggregate("total")

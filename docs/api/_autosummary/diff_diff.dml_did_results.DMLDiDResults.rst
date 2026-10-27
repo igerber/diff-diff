@@ -30,7 +30,6 @@
       ~DMLDiDResults.allow_unbalanced_panel
       ~DMLDiDResults.alpha
       ~DMLDiDResults.anticipation
-      ~DMLDiDResults.att
       ~DMLDiDResults.bad_control
       ~DMLDiDResults.bad_control_covariates
       ~DMLDiDResults.bad_control_diagnostics
@@ -41,7 +40,6 @@
       ~DMLDiDResults.cband_crit_value
       ~DMLDiDResults.cluster_name
       ~DMLDiDResults.coef_var
-      ~DMLDiDResults.conf_int
       ~DMLDiDResults.control_group
       ~DMLDiDResults.cross_fit_diagnostics
       ~DMLDiDResults.df_inference
@@ -59,25 +57,27 @@
       ~DMLDiDResults.n_clusters
       ~DMLDiDResults.n_folds
       ~DMLDiDResults.outcome_learner
-      ~DMLDiDResults.p_value
+      ~DMLDiDResults.overall_att
+      ~DMLDiDResults.overall_conf_int
+      ~DMLDiDResults.overall_p_value
+      ~DMLDiDResults.overall_se
+      ~DMLDiDResults.overall_t_stat
       ~DMLDiDResults.panel
       ~DMLDiDResults.propensity_learner
       ~DMLDiDResults.pscore_fallback
       ~DMLDiDResults.pscore_trim
       ~DMLDiDResults.reference_event_times
-      ~DMLDiDResults.se
       ~DMLDiDResults.seed
       ~DMLDiDResults.significance_stars
       ~DMLDiDResults.survey_metadata
-      ~DMLDiDResults.t_stat
       ~DMLDiDResults.used_rc_on_unbalanced_panel
       ~DMLDiDResults.vcov_type
       ~DMLDiDResults.group_time_effects
-      ~DMLDiDResults.overall_att
-      ~DMLDiDResults.overall_se
-      ~DMLDiDResults.overall_t_stat
-      ~DMLDiDResults.overall_p_value
-      ~DMLDiDResults.overall_conf_int
+      ~DMLDiDResults.att
+      ~DMLDiDResults.se
+      ~DMLDiDResults.t_stat
+      ~DMLDiDResults.p_value
+      ~DMLDiDResults.conf_int
       ~DMLDiDResults.groups
       ~DMLDiDResults.time_periods
       ~DMLDiDResults.n_obs

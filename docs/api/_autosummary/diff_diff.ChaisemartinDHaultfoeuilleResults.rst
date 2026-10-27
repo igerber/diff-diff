@@ -27,10 +27,8 @@
 
       ~ChaisemartinDHaultfoeuilleResults.L_max
       ~ChaisemartinDHaultfoeuilleResults.alpha
-      ~ChaisemartinDHaultfoeuilleResults.att
       ~ChaisemartinDHaultfoeuilleResults.bootstrap_results
       ~ChaisemartinDHaultfoeuilleResults.coef_var
-      ~ChaisemartinDHaultfoeuilleResults.conf_int
       ~ChaisemartinDHaultfoeuilleResults.cost_benefit_delta
       ~ChaisemartinDHaultfoeuilleResults.covariate_residuals
       ~ChaisemartinDHaultfoeuilleResults.design2_effects
@@ -41,28 +39,30 @@
       ~ChaisemartinDHaultfoeuilleResults.is_significant
       ~ChaisemartinDHaultfoeuilleResults.linear_trends_effects
       ~ChaisemartinDHaultfoeuilleResults.normalized_effects
-      ~ChaisemartinDHaultfoeuilleResults.p_value
+      ~ChaisemartinDHaultfoeuilleResults.overall_att
+      ~ChaisemartinDHaultfoeuilleResults.overall_conf_int
+      ~ChaisemartinDHaultfoeuilleResults.overall_p_value
+      ~ChaisemartinDHaultfoeuilleResults.overall_se
+      ~ChaisemartinDHaultfoeuilleResults.overall_t_stat
       ~ChaisemartinDHaultfoeuilleResults.path_cumulated_event_study
       ~ChaisemartinDHaultfoeuilleResults.path_effects
       ~ChaisemartinDHaultfoeuilleResults.path_heterogeneity_effects
       ~ChaisemartinDHaultfoeuilleResults.path_placebo_event_study
       ~ChaisemartinDHaultfoeuilleResults.path_sup_t_bands
       ~ChaisemartinDHaultfoeuilleResults.placebo_event_study
-      ~ChaisemartinDHaultfoeuilleResults.se
       ~ChaisemartinDHaultfoeuilleResults.significance_stars
       ~ChaisemartinDHaultfoeuilleResults.sup_t_bands
       ~ChaisemartinDHaultfoeuilleResults.survey_metadata
-      ~ChaisemartinDHaultfoeuilleResults.t_stat
       ~ChaisemartinDHaultfoeuilleResults.trends_linear
       ~ChaisemartinDHaultfoeuilleResults.twfe_beta_fe
       ~ChaisemartinDHaultfoeuilleResults.twfe_fraction_negative
       ~ChaisemartinDHaultfoeuilleResults.twfe_sigma_fe
       ~ChaisemartinDHaultfoeuilleResults.twfe_weights
-      ~ChaisemartinDHaultfoeuilleResults.overall_att
-      ~ChaisemartinDHaultfoeuilleResults.overall_se
-      ~ChaisemartinDHaultfoeuilleResults.overall_t_stat
-      ~ChaisemartinDHaultfoeuilleResults.overall_p_value
-      ~ChaisemartinDHaultfoeuilleResults.overall_conf_int
+      ~ChaisemartinDHaultfoeuilleResults.att
+      ~ChaisemartinDHaultfoeuilleResults.se
+      ~ChaisemartinDHaultfoeuilleResults.t_stat
+      ~ChaisemartinDHaultfoeuilleResults.p_value
+      ~ChaisemartinDHaultfoeuilleResults.conf_int
       ~ChaisemartinDHaultfoeuilleResults.joiners_att
       ~ChaisemartinDHaultfoeuilleResults.joiners_se
       ~ChaisemartinDHaultfoeuilleResults.joiners_t_stat

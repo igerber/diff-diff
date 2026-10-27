@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
 from diff_diff.bootstrap_chunking import effective_weight_backend
 from diff_diff.bootstrap_utils import (
@@ -138,16 +143,16 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     group_time_effects : dict
         ``{(g, t): {'effect', 'se', 't_stat', 'p_value', 'conf_int',
         'n_treated', 'n_control'}}``
-    overall_att : float
+    att : float
         Overall ATT (cohort-size weighted average of post-treatment
         group-time effects, matching CallawaySantAnna convention).
-    overall_se : float
+    se : float
         Standard error of overall ATT.
-    overall_t_stat : float
+    t_stat : float
         t-statistic for overall ATT.
-    overall_p_value : float
+    p_value : float
         p-value for overall ATT.
-    overall_conf_int : tuple
+    conf_int : tuple
         Confidence interval for overall ATT.
     groups : list
         Treatment cohort identifiers.
@@ -222,11 +227,11 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     """
 
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     groups: List[Any]
     time_periods: List[Any]
     n_obs: int
@@ -288,26 +293,37 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     # the mixin default ("event_study",) - CS precedent, do not redeclare.
     _AGGREGATE_SUPPORTED = ("simple", "event_study", "group", "total")
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
+    # --- Deprecated 3.x storage names (ledger row M-055) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "EfficientDiDResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "EfficientDiDResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "EfficientDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "EfficientDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "EfficientDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
-    @property
-    def se(self) -> float:
-        return self.overall_se
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles written under the ``overall_*`` storage names.
 
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+        The canonical quintet became the native fields at the 4.0 cut
+        (``docs/v4-design.md`` section 5; ``SyntheticDiDResults.__setstate__``
+        precedent): legacy keys are rewritten on load so the fields populate
+        under their canonical names and ``overall_*`` never reappear in
+        ``__dict__``.
+        """
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     # --- Post-fit aggregation (M-023) -----------------------------------
 

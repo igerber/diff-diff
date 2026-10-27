@@ -278,7 +278,7 @@ serves a different purpose: R-parity accuracy). They complement it.
   ```
 - **Operation chain.** (1) dCDH fit with `L_max=3` (computes `DID_l` for
   l=1..3, dynamic placebos, sup-t bands, TWFE diagnostic); (2) snapshot
-  `placebo_effect`, `overall_att`, `joiners_att`, `leavers_att` from the
+  `placebo_effect`, `att`, `joiners_att`, `leavers_att` from the
   result object for pre-trend evidence and joiner/leaver inspection;
   (3) `compute_honest_did()` M-grid on the placebo event study;
   (4) heterogeneity refit with `heterogeneity="group"`. The TSL path for
