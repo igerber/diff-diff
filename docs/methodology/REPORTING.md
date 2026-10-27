@@ -278,7 +278,14 @@ a library setting.
   the key, mirroring the `df_denom` additive-key convention), and any
   warnings the kit recompute re-emits are captured and re-published on
   the consuming section's `warnings` list (record-and-republish; never
-  swallowed). This
+  swallowed). Event-time labels are never truncated: integer-valued
+  horizons key the adapted surface as `int`, fractional horizons (a
+  half-step calendar's `e = t - g` in `-1.5, -1.0, -0.5, ...`) stay
+  `float`, and the pre/post split compares the numeric value against
+  the anticipation-aware boundary - so every pre-period reaches the PT
+  family and stays hash-aligned with the covariance index (an earlier
+  `int(k)` conversion merged `-0.5` into the treatment horizon and
+  silently dropped it; CI review on PR #878). This
   mirrors the guidance in `practitioner._parallel_trends_step(staggered=True)`.
 
 - **Note:** Survey-design threading for fit-faithful Bacon replay.

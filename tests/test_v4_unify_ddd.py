@@ -88,6 +88,39 @@ ES_OVERALL_ORACLE = dict(  # overall_att_es and siblings, analytical
 # so the balanced surface coincides with the unbalanced one on this panel - the
 # pin is that balance_e threads through without disturbing anything)
 ES_OVERALL_BALANCE1_ORACLE = ES_OVERALL_ORACLE
+# aggregate="event_study", balance_e=3: cohort 3 is observed through e=3 (t=6)
+# and cohort 4 only through e=2, so balancing on e=3 DROPS cohort 4 (and with
+# it the e=-2 horizon) - a genuinely different surface from the unbalanced one
+# (CI review on PR #878 asked for a partial-cohort-removal oracle). (effect, se)
+BALANCE3_ES_ORACLE = {
+    -1.0: (-0.027719840746928036, 0.27963313073357926),
+    0.0: (2.762999666832223, 0.28233821941873094),
+    1.0: (2.946059062614397, 0.39516152783198905),
+    2.0: (3.0227256449202673, 0.3155992489776067),
+    3.0: (3.426518594109598, 0.3635995672681256),
+}
+BALANCE3_ES_OVERALL_ORACLE = dict(
+    att=3.0395757421191214,
+    se=0.26041596101583653,
+    t_stat=11.672002477353058,
+    p_value=1.7720240558757052e-31,
+    ci=(2.529169837528695, 3.549981646709548),
+)
+# n_bootstrap=49, seed=7, cband=True, aggregate="event_study", balance_e=3
+BOOT_BALANCE3_CBAND_ORACLE = 2.49333299518289
+BOOT_BALANCE3_ES_SE_ORACLE = {
+    -1.0: 0.2722181669173392,
+    0.0: 0.28424292019694336,
+    1.0: 0.3731732550535591,
+    2.0: 0.31109084929419584,
+    3.0: 0.3383619126874234,
+}
+BOOT_BALANCE3_ES_OVERALL_ORACLE = dict(
+    att=3.0395757421191214,
+    se=0.25314100819156565,
+    p_value=0.02,
+    ci=(2.5589358849283936, 3.5484478904824353),
+)
 # n_bootstrap=49, seed=7, cband=True, aggregate="all"
 BOOT_CBAND_ORACLE = 2.7121511569356116
 BOOT_ES_SE_ORACLE = {
@@ -168,6 +201,16 @@ def survey_fit(stag_survey):
 @pytest.fixture(scope="module")
 def cross_fit(cross):
     return TripleDifference().fit(cross, **C)
+
+
+@pytest.fixture(scope="module")
+def half_step_fit():
+    # A half-step calendar: periods 0.5..4.0 and cohorts 2.0 / 2.5, so the
+    # event-study horizons e = t - g are fractional (-1.0, -0.5, 0.0, 0.5, ...).
+    df = generate_staggered_ddd_data(n_units=96, n_periods=8, cohort_periods=[4, 5], seed=42)
+    df["period"] = df["period"] / 2.0
+    df["first_treat"] = df["first_treat"] / 2.0
+    return _fit_stag(df)
 
 
 def _row(es, e):
@@ -364,6 +407,50 @@ class TestAggregateReproducesFitTimeSurfaces:
         o = stag_fit.aggregate("simple", weights="event_time", balance_e=1)
         assert_allclose(o.att[0], ES_OVERALL_BALANCE1_ORACLE["att"], rtol=ORACLE_RTOL)
         assert_allclose(o.se[0], ES_OVERALL_BALANCE1_ORACLE["se"], rtol=ORACLE_RTOL)
+
+    def test_balance_e_3_drops_cohort_4_analytical(self, stag_fit):
+        # Partial cohort removal: cohort 4 is unobserved at e=3, so the balanced
+        # surface loses it (and the e=-2 horizon it alone contributed).
+        es = stag_fit.aggregate("event_study", balance_e=3)
+        assert [float(t) for t in es.event_time] == sorted(BALANCE3_ES_ORACLE)
+        for e, (eff, se) in BALANCE3_ES_ORACLE.items():
+            i = _row(es, e)
+            assert_allclose(es.att[i], eff, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+            assert_allclose(es.se[i], se, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        unbalanced = stag_fit.aggregate("event_study")
+        assert len(unbalanced.event_time) == len(es.event_time) + 1
+        assert es.att[_row(es, 0.0)] != unbalanced.att[_row(unbalanced, 0.0)]
+        o = stag_fit.aggregate("simple", weights="event_time", balance_e=3)
+        assert_allclose(o.att[0], BALANCE3_ES_OVERALL_ORACLE["att"], rtol=ORACLE_RTOL)
+        assert_allclose(o.se[0], BALANCE3_ES_OVERALL_ORACLE["se"], rtol=ORACLE_RTOL)
+        assert_allclose(o.t_stat[0], BALANCE3_ES_OVERALL_ORACLE["t_stat"], rtol=ORACLE_RTOL)
+        assert_allclose(o.p_value[0], BALANCE3_ES_OVERALL_ORACLE["p_value"], rtol=ORACLE_RTOL)
+        assert_allclose(o.conf_int_lower[0], BALANCE3_ES_OVERALL_ORACLE["ci"][0], rtol=ORACLE_RTOL)
+        assert_allclose(o.conf_int_upper[0], BALANCE3_ES_OVERALL_ORACLE["ci"][1], rtol=ORACLE_RTOL)
+        assert o.att[0] != ES_OVERALL_ORACLE["att"]
+
+    def test_balance_e_3_bootstrap_replay(self, boot_fit):
+        es = boot_fit.aggregate("event_study", balance_e=3)
+        assert [float(t) for t in es.event_time] == sorted(BOOT_BALANCE3_ES_SE_ORACLE)
+        assert_allclose(
+            es.cband_crit_value, BOOT_BALANCE3_CBAND_ORACLE, rtol=ORACLE_RTOL, atol=ORACLE_ATOL
+        )
+        assert es.cband_crit_value != BOOT_CBAND_ORACLE  # the replay re-ran on the balanced set
+        for e, se in BOOT_BALANCE3_ES_SE_ORACLE.items():
+            i = _row(es, e)
+            assert_allclose(es.se[i], se, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+            assert_allclose(es.att[i], BALANCE3_ES_ORACLE[e][0], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        o = boot_fit.aggregate("simple", weights="event_time", balance_e=3)
+        assert_allclose(o.att[0], BOOT_BALANCE3_ES_OVERALL_ORACLE["att"], rtol=ORACLE_RTOL)
+        assert_allclose(o.se[0], BOOT_BALANCE3_ES_OVERALL_ORACLE["se"], rtol=ORACLE_RTOL)
+        assert_allclose(o.p_value[0], BOOT_BALANCE3_ES_OVERALL_ORACLE["p_value"], rtol=ORACLE_RTOL)
+        assert_allclose(
+            o.conf_int_lower[0], BOOT_BALANCE3_ES_OVERALL_ORACLE["ci"][0], rtol=ORACLE_RTOL
+        )
+        assert_allclose(
+            o.conf_int_upper[0], BOOT_BALANCE3_ES_OVERALL_ORACLE["ci"][1], rtol=ORACLE_RTOL
+        )
+        assert np.isnan(o.df[0])
 
     def test_bootstrap_replay(self, boot_fit):
         assert boot_fit.inference_method == "bootstrap" and boot_fit.n_bootstrap == 49
@@ -583,6 +670,26 @@ class TestReportSurface:
         assert d["design"] == "staggered" and d["estimator"] == "TripleDifferenceResults"
         assert d["headline_metric"]["name"] == "att"
         assert d["target_parameter"]["headline_attribute"] == "att"
+
+    def test_diagnostic_report_keeps_fractional_pre_horizons(self, half_step_fit):
+        # CI review on PR #878 (P0): the DR adapter used to key the derived
+        # surface by ``int(k)``, so on a half-step calendar ``-0.5`` collapsed
+        # into the treatment horizon ``0`` and the pre-period vanished from
+        # the PT family without a warning. Every negative horizon on the
+        # surface must reach the PT test, labelled at its real value and
+        # aligned with the covariance index (joint Wald, not Bonferroni).
+        from diff_diff.diagnostic_report import DiagnosticReport
+
+        es = half_step_fit.aggregate("event_study")
+        horizons = [float(t) for t in es.event_time]
+        assert any(not float(t).is_integer() for t in horizons)
+        pre = [t for t, ref in zip(horizons, es.is_reference) if t < 0 and not ref]
+        assert -0.5 in pre and len(pre) >= 2
+        pt = DiagnosticReport(half_step_fit).to_dict()["parallel_trends"]
+        assert pt["status"] == "ran" and pt["method"] == "joint_wald_event_study"
+        assert pt["n_pre_periods"] == len(pre)
+        assert [row["period"] for row in pt["per_period"]] == sorted(pre)
+        assert np.isfinite(pt["joint_p_value"])
 
     def test_diagnostic_report_2x2x2_has_no_pt_row(self, cross_fit):
         from diff_diff.diagnostic_report import DiagnosticReport

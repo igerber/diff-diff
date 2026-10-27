@@ -44,7 +44,7 @@ constant below. The schema is marked experimental in v3.2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -2663,7 +2663,7 @@ class DiagnosticReport:
             if bool(is_ref):
                 continue
             try:
-                rel = int(k)
+                rel = _event_time_value(k)
             except (TypeError, ValueError):
                 continue
             if rel < boundary:
@@ -3382,9 +3382,9 @@ class DiagnosticReport:
                 items = []
             for key, entry in items:
                 try:
-                    rel = int(key)
+                    rel = _event_time_value(key)
                 except (TypeError, ValueError):
-                    # Non-integer keys — unknown shape; skip conservatively
+                    # Non-numeric keys — unknown shape; skip conservatively
                     # rather than mixing into the dispersion summary.
                     continue
                 if rel < post_cutoff:
@@ -4049,6 +4049,32 @@ def _pre_post_boundary(results: Any) -> int:
     return -k
 
 
+def _event_time_value(k: Any) -> float:
+    """Numeric value of an event-time label for pre/post comparisons.
+
+    Raises ``TypeError`` / ``ValueError`` for non-numeric or non-finite
+    labels (callers skip those rows). Never truncates: a fractional
+    horizon from a half-step calendar compares at its real value.
+    """
+    v = float(k)
+    if not np.isfinite(v):
+        raise ValueError(f"non-finite event-time label {k!r}")
+    return v
+
+
+def _event_time_key(k: Any) -> Union[int, float]:
+    """Hashable dict key for an event-time label, without truncation.
+
+    Integer-valued labels (``-2``, ``np.int64(-2)``, ``-2.0``) become Python
+    ``int``; fractional labels (``-0.5``) stay ``float``. Both hash-equal
+    their ``np.float64`` / ``np.int64`` counterparts, so a key built here
+    aligns with the surface's ``vcov_index`` labels under plain ``in`` /
+    dict lookups.
+    """
+    v = _event_time_value(k)
+    return int(v) if v.is_integer() else v
+
+
 def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
     """Adapt an ``EventStudyResults`` container to the legacy
     ``event_study_effects`` dict shape consumed by this module's readers.
@@ -4070,10 +4096,15 @@ def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
     PT to "inconclusive". NaN se/p on surviving rows pass through so the
     undefined-inference guards behave identically to the raw route.
 
-    Keys are Python ``int`` (matching the ImputationDiD/TwoStageDiD raw
-    key dtype exactly; the CS derived route orders numerically where its
-    raw ``np.int64`` keys str-sort — presentational only, the two routes
-    never coexist).
+    Keys go through ``_event_time_key``: integer-valued horizons become
+    Python ``int`` (matching the ImputationDiD/TwoStageDiD raw key dtype
+    exactly; the CS derived route orders numerically where its raw
+    ``np.int64`` keys str-sort — presentational only, the two routes never
+    coexist) and fractional horizons stay ``float``. A half-step calendar
+    (``e = t - g`` in ``-1.5, -1.0, -0.5, ...``) therefore keeps every
+    horizon distinct: the former ``int(k)`` truncation merged ``-1.5`` into
+    ``-1`` and ``-0.5`` into ``0``, silently dropping pre-periods from the
+    PT family (CI review on PR #878).
     """
     if getattr(surface, "time_scale", "relative") != "relative":
         raise ValueError(
@@ -4094,7 +4125,7 @@ def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
             continue
         if np.isfinite(n) and float(n) == 0.0:
             continue
-        out[int(k)] = {
+        out[_event_time_key(k)] = {
             "effect": float(att),
             "se": float(se),
             "p_value": float(p),
@@ -4181,9 +4212,14 @@ def _collect_pre_period_coefs(
             es = surface_dict
         es = es or {}
         for k, entry in es.items():
-            # Pre-period relative-time keys are negative (convention: e=-1, -2, ...).
+            # Pre-period relative-time keys are negative (convention: e=-1,
+            # -2, ...). Compare the NUMERIC value - never ``int(k)``, which
+            # truncates a fractional horizon toward zero (``-0.5`` -> ``0``)
+            # and reclassifies a pre-period as the treatment horizon. The
+            # key itself is kept verbatim as the row label so it stays
+            # hash-equal to the covariance index.
             try:
-                rel = int(k)
+                rel = _event_time_value(k)
             except (TypeError, ValueError):
                 continue
             if rel >= pre_cutoff:

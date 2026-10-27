@@ -3723,6 +3723,103 @@ class TestDerivedEventStudySurface:
         assert [k for (k, _, _, _) in pre_coefs] == [-3]
         assert n_dropped == 0
 
+    def test_adapter_preserves_fractional_horizons(self):
+        # CI review on PR #878 (P0): ``int(k)`` keys merged a half-step
+        # calendar's ``-1.5`` into ``-1`` and ``-0.5`` into ``0``. With pre
+        # p-values ``[1e-20, 0.92, 1e-30]`` only the middle row survived and
+        # the PT verdict read ``p=0.92`` / no violation. Every horizon must
+        # survive, labelled at its real value, hash-aligned with the
+        # covariance index, and the integer-valued keys stay ``int``.
+        from diff_diff.diagnostic_report import (
+            _collect_pre_period_coefs,
+            _event_time_key,
+            _event_time_value,
+            _surface_to_event_study_dict,
+        )
+        from diff_diff.results_base import EventStudyResults
+
+        horizons = np.array([-1.5, -1.0, -0.5, 0.0, 0.5])
+        surface = EventStudyResults(
+            event_time=horizons,
+            att=np.array([0.9, 0.01, 1.1, 0.5, 0.6]),
+            se=np.array([0.1, 0.1, 0.1, 0.1, 0.1]),
+            t_stat=np.array([9.0, 0.1, 11.0, 5.0, 6.0]),
+            p_value=np.array([1e-20, 0.92, 1e-30, 0.001, 0.001]),
+            conf_int_lower=np.array([0.7, -0.19, 0.9, 0.3, 0.4]),
+            conf_int_upper=np.array([1.1, 0.21, 1.3, 0.7, 0.8]),
+            is_reference=np.array([False] * 5),
+            n=np.array([40.0] * 5),
+            vcov=np.eye(5) * 0.01,
+            vcov_index=list(horizons),
+        )
+        adapted = _surface_to_event_study_dict(surface)
+        assert list(adapted) == [-1.5, -1, -0.5, 0, 0.5]
+        key_types = {k: type(k) for k in adapted}
+        assert key_types[-1] is int and key_types[0] is int
+        assert key_types[-1.5] is float and key_types[-0.5] is float
+        assert adapted[-0.5]["p_value"] == 1e-30 and adapted[-1.5]["p_value"] == 1e-20
+
+        class _Shell:
+            event_study_effects = None
+            anticipation = 0
+
+        pre_coefs, n_dropped = _collect_pre_period_coefs(_Shell(), surface_dict=adapted)
+        assert n_dropped == 0
+        assert [k for (k, _, _, _) in pre_coefs] == [-1.5, -1, -0.5]
+        # the family's smallest p-value is the one the truncation used to drop
+        assert min(p for (_, _, _, p) in pre_coefs) == 1e-30
+        # covariance alignment: every retained key resolves in the vcov index
+        idx_map = {k: i for i, k in enumerate(surface.vcov_index)}
+        assert [idx_map[k] for (k, _, _, _) in pre_coefs] == [0, 1, 2]
+        # the raw-field route (dict keyed by the surface's own float labels)
+        # compares numerically too: -0.5 is a pre-period, 0.5 is not
+        shell = _Shell()
+        shell.event_study_effects = {
+            -0.5: {"effect": 1.1, "se": 0.1, "p_value": 1e-30},
+            0.5: {"effect": 0.6, "se": 0.1, "p_value": 0.001},
+        }
+        raw_pre, _ = _collect_pre_period_coefs(shell)
+        assert [k for (k, _, _, _) in raw_pre] == [-0.5]
+        # the helpers themselves
+        assert _event_time_key(np.int64(-2)) == -2 and isinstance(_event_time_key(-2.0), int)
+        assert _event_time_key(np.float64(-0.5)) == -0.5
+        assert _event_time_value("-1.5") == -1.5
+        with pytest.raises(ValueError):
+            _event_time_value(float("nan"))
+        with pytest.raises((TypeError, ValueError)):
+            _event_time_key("2001Q1")
+
+    def test_effect_collectors_compare_fractional_horizons_numerically(self):
+        # The heterogeneity collectors share the pre/post boundary: ``-0.5``
+        # is NOT a post-treatment horizon, ``0.5`` is.
+        from diff_diff.diagnostic_report import DiagnosticReport
+        from diff_diff.results_base import EventStudyResults
+
+        class _Shell:
+            group_effects = None
+            anticipation = 0
+            event_study_effects = {
+                -0.5: {"effect": -7.0, "se": 0.1, "p_value": 0.5},
+                0.5: {"effect": 2.0, "se": 0.1, "p_value": 0.01},
+                1.0: {"effect": 3.0, "se": 0.1, "p_value": 0.01},
+            }
+
+        dr = object.__new__(DiagnosticReport)
+        dr._results = _Shell()
+        assert dr._collect_effect_scalars() == [2.0, 3.0]
+        surface = EventStudyResults(
+            event_time=np.array([-0.5, 0.5, 1.0]),
+            att=np.array([-7.0, 2.0, 3.0]),
+            se=np.array([0.1, 0.1, 0.1]),
+            t_stat=np.array([-70.0, 20.0, 30.0]),
+            p_value=np.array([0.5, 0.01, 0.01]),
+            conf_int_lower=np.array([-7.2, 1.8, 2.8]),
+            conf_int_upper=np.array([-6.8, 2.2, 3.2]),
+            is_reference=np.array([False, False, False]),
+            n=np.array([40.0, 40.0, 40.0]),
+        )
+        assert dr._surface_post_effect_scalars(surface) == [2.0, 3.0]
+
     def test_adapter_rejects_calendar_scale(self):
         from diff_diff.diagnostic_report import _surface_to_event_study_dict
         from diff_diff.results_base import EventStudyResults
