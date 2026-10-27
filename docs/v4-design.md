@@ -452,7 +452,15 @@ INVENT one - the two containers disagree on storage (native quintet vs
 counterpart, `to_dataframe`/`epv_summary`/`summary` diverge, and changing the
 2x2x2 return type is an unrowed breaking change to a surface with no
 deprecation row. [M-014] keeps the obligation and now records the second
-construction site.
+construction site. **(SHIPPED at 4.0, item 6, 2026-10-27.)** `TripleDifferenceResults`
+IS the unified container (module `diff_diff/triple_diff_results.py`, re-exported
+from `triple_diff.py`; the staggered engine imports it without a cycle): the 2x2x2
+positional layout is byte-stable, the staggered structure is appended with
+defaults, `design` (`"2x2x2"` / `"staggered"`) discriminates, the canonical quintet
+is native in both designs, the group-time table is empty in 2x2x2, the fit-time
+`overall_*_es` fields are gone (successor `aggregate('simple', weights='event_time')`),
+and `df_inference` records the 2x2x2 engine's t df. `StaggeredTripleDiffResults` is
+removed; its 3.x pickles cannot load (3.x 2x2x2 pickles do, via `__setstate__`).
 
 **Deprecation choreography.** 3.9: staggered params ship on TripleDifference;
 `time` -> `post` in 2x2x2 mode [M-031] (the `time` NAME persists as the
@@ -557,10 +565,18 @@ the surviving `TripleDifference`, rowed as [M-140] [M-141] with
 which machine-checks that the 4.0 container unification ([M-014]) delivers the
 post-fit `aggregate()` in the same release the params die. The rule above is
 otherwise unchanged: no OTHER estimator may add a fit-time `aggregate=`.
+**(SHIPPED at 4.0, item 6, 2026-10-27.)** Both keywords are gone (`TypeError`);
+`TripleDifferenceResults` is an `AggregationMixin` adopter (`'simple'` relay in both
+designs, `'event_study'` / `'group'` recomputed from the retained CS kit in the
+staggered design with the CS-style bootstrap replay; the 2x2x2 design fails those
+levels closed). No fit-time `aggregate=` survives anywhere in the library.
 
 **Vocabulary.** Closed set: `"simple"`, `"event_study"`, `"group"`,
 `"calendar"`, `"total"`, plus per-estimator documented extras where the estimand demands
-them (ContinuousDiD adds `"dose"` [M-025]; HAD's `"overall"` maps to
+them (ContinuousDiD adds `"dose"` [M-025]; TripleDifference's staggered design
+exposes the paper's Eq. 4.14 overall as `aggregate('simple', weights='event_time')` -
+a `weights=` SELECTOR on the existing type (the Wooldridge / LWDiD weights hook), not
+a vocabulary word (user decision 2026-10-27, item 6); HAD's `"overall"` maps to
 `"simple"` [M-027] - its fit-time mode selector, and the workflow twin
 `did_had_pretest_workflow(aggregate=)` [M-139], both resolve by
 panel-shape inference; Wooldridge's `"gt"` group-time table stays as a
@@ -1176,6 +1192,12 @@ tests-first PR that flips no rows).
 6. DDD container unification [M-014] [M-140] [M-141] (user decision: lands at
    4.0, not re-scheduled), born with canonical fields - after 5, so the
    unified container never carries `overall_*` storage.
+   (SHIPPED, item 6, 2026-10-27: `TripleDifferenceResults` serves both designs
+   with a `design` discriminator; `StaggeredTripleDiffResults` and the fit-time
+   `aggregate=`/`balance_e=` are gone; post-fit `aggregate()` with bootstrap
+   replay; the Eq. 4.14 overall is `aggregate('simple', weights='event_time')`;
+   report schemas gain an additive `design` key under the unshipped DR 3.0 /
+   BR 4.0 numbers. Pinned by `tests/test_v4_unify_ddd.py`.)
 7. Inference defaults: the df_convention flips + [M-080] as re-scoped +
    the uniform `cluster=False` off-switch.
 8. [M-093] sentinel retirement + event-study schema enforcement.

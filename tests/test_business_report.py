@@ -767,7 +767,7 @@ class TestAssumptionBlockSourceFaithful:
 
     def test_triple_difference_assumption_uses_ddd_decomposition(self):
         class TripleDifferenceResults:
-            pass
+            design = "2x2x2"
 
         obj = TripleDifferenceResults()
         obj.att = 1.0
@@ -867,10 +867,10 @@ class TestSCMBusinessReport:
         assert native["in_time_placebo"]["status"] == "ran"
 
     def test_staggered_triple_diff_assumption_uses_ddd_not_generic_pt(self):
-        class StaggeredTripleDiffResults:
-            pass
+        class TripleDifferenceResults:
+            design = "staggered"
 
-        obj = StaggeredTripleDiffResults()
+        obj = TripleDifferenceResults()
         obj.att = 1.0
         obj.se = 0.1
         obj.p_value = 0.001
@@ -1580,10 +1580,10 @@ class TestStaggeredTripleDiffNeverTreatedFixedComparison:
 
     @staticmethod
     def _stub(control_group: str):
-        class StaggeredTripleDiffResults:
-            pass
+        class TripleDifferenceResults:
+            design = "staggered"
 
-        stub = StaggeredTripleDiffResults()
+        stub = TripleDifferenceResults()
         stub.att = 1.0
         stub.se = 0.2
         stub.p_value = 0.001
@@ -2201,10 +2201,10 @@ class TestStaggeredTripleDiffDynamicControlSample:
     """
 
     def test_notyettreated_surfaces_n_never_enabled(self):
-        class StaggeredTripleDiffResults:
-            pass
+        class TripleDifferenceResults:
+            design = "staggered"
 
-        stub = StaggeredTripleDiffResults()
+        stub = TripleDifferenceResults()
         stub.att = 1.0
         stub.se = 0.2
         stub.p_value = 0.001

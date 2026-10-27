@@ -28,8 +28,7 @@ Reference:
 """
 
 import warnings
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,16 +40,14 @@ from diff_diff._deprecation import (
 )
 from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
-from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import (
-    _SUMMARY_ALPHA_MESSAGE,
-    BaseResults,
-    _coverage_pct,
-    _require_fit_alpha,
-)
 from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
 from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
-from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
+
+# The results container lives in its own module since the 4.0 unification
+# (item 6, row M-014) so the shared staggered engine can import it without a
+# cycle; re-exported here because `diff_diff.triple_diff.TripleDifferenceResults`
+# is the class path 3.x pickles and existing readers use.
+from diff_diff.triple_diff_results import TripleDifferenceResults  # noqa: F401
 from diff_diff.utils import (
     safe_inference,
     staggered_ddd_ctor_offenders,
@@ -60,329 +57,6 @@ from diff_diff.utils import (
 )
 
 _MIN_CELL_SIZE = 10
-
-# =============================================================================
-# Results Classes
-# =============================================================================
-
-
-@dataclass
-class TripleDifferenceResults(BaseResults):
-    """
-    Results from Triple Difference (DDD) estimation.
-
-    Provides access to the estimated average treatment effect on the treated
-    (ATT), standard errors, confidence intervals, and diagnostic information.
-
-    Attributes
-    ----------
-    att : float
-        Average Treatment effect on the Treated (ATT).
-        This is the effect on units in the treated group (G=1) and eligible
-        partition (P=1) after treatment (T=1).
-    se : float
-        Standard error of the ATT estimate.
-    t_stat : float
-        T-statistic for the ATT estimate.
-    p_value : float
-        P-value for the null hypothesis that ATT = 0.
-    conf_int : tuple[float, float]
-        Confidence interval for the ATT.
-    n_obs : int
-        Total number of observations used in estimation.
-    n_treated_eligible : int
-        Number of observations in treated group and eligible partition.
-    n_treated_ineligible : int
-        Number of observations in treated group and ineligible partition.
-    n_control_eligible : int
-        Number of observations in control group and eligible partition.
-    n_control_ineligible : int
-        Number of observations in control group and ineligible partition.
-    estimation_method : str
-        Estimation method used: "dr" (doubly robust), "reg" (regression
-        adjustment), or "ipw" (inverse probability weighting).
-    alpha : float
-        Significance level used for confidence intervals.
-    """
-
-    att: float
-    se: float
-    t_stat: float
-    p_value: float
-    conf_int: Tuple[float, float]
-    n_obs: int
-    n_treated_eligible: int
-    n_treated_ineligible: int
-    n_control_eligible: int
-    n_control_ineligible: int
-    estimation_method: str
-    alpha: float = 0.05
-    # Group means for diagnostics
-    group_means: Optional[Dict[str, float]] = field(default=None)
-    # Propensity score diagnostics (for IPW/DR)
-    pscore_stats: Optional[Dict[str, float]] = field(default=None)
-    # Regression diagnostics
-    r_squared: Optional[float] = field(default=None)
-    # Covariate balance statistics
-    covariate_balance: Optional[pd.DataFrame] = field(default=None, repr=False)
-    # Inference details
-    inference_method: str = field(default="analytical")
-    vcov_type: str = field(default="hc1")
-    cluster_name: Optional[str] = field(default=None)
-    n_bootstrap: Optional[int] = field(default=None)
-    n_clusters: Optional[int] = field(default=None)
-    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
-    survey_metadata: Optional[Any] = field(default=None)
-    # EPV diagnostics per subgroup comparison
-    epv_diagnostics: Optional[Dict[int, Dict[str, Any]]] = field(default=None, repr=False)
-    epv_threshold: float = 10
-    pscore_fallback: str = "error"
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        return (
-            f"TripleDifferenceResults(ATT={self.att:.4f}{self.significance_stars}, "
-            f"SE={self.se:.4f}, p={self.p_value:.4f}, method={self.estimation_method})"
-        )
-
-    def summary(self, alpha: Optional[float] = None) -> str:
-        """
-        Generate a formatted summary of the estimation results.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Accepted for signature uniformity. The stored intervals were
-            computed at fit time; a value different from the stored
-            ``alpha`` raises ValueError rather than silently recomputing
-            or relabeling. Re-fit at the desired alpha instead.
-
-        Returns
-        -------
-        str
-            Formatted summary table.
-        """
-        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
-        conf_level = _coverage_pct(alpha)
-
-        lines = [
-            "=" * 75,
-            "Triple Difference (DDD) Estimation Results".center(75),
-            "=" * 75,
-            "",
-            f"{'Estimation method:':<30} {self.estimation_method:>15}",
-            f"{'Total observations:':<30} {self.n_obs:>15}",
-            "",
-            "Sample Composition by Cell:",
-            f"  {'Treated group, Eligible:':<28} {self.n_treated_eligible:>15}",
-            f"  {'Treated group, Ineligible:':<28} {self.n_treated_ineligible:>15}",
-            f"  {'Control group, Eligible:':<28} {self.n_control_eligible:>15}",
-            f"  {'Control group, Ineligible:':<28} {self.n_control_ineligible:>15}",
-        ]
-
-        if self.r_squared is not None:
-            lines.append(f"{'R-squared:':<30} {self.r_squared:>15.4f}")
-
-        # Add survey design info
-        if self.survey_metadata is not None:
-            sm = self.survey_metadata
-            lines.extend(_format_survey_block(sm, 75))
-
-        if self.inference_method != "analytical":
-            lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")
-            if self.n_bootstrap is not None:
-                lines.append(f"{'Bootstrap replications:':<30} {self.n_bootstrap:>15}")
-        # Variance-estimator line. Suppressed under survey designs (the survey
-        # block above already names the design + n_psu + df; the analytical
-        # SE is TSL on the combined IF, not the raw hc1 sandwich). For bare
-        # cluster= fits the actual algebra is CR1 Liang-Zeger on the combined
-        # IF, so route through the shared _format_vcov_label to render a
-        # cluster-aware label rather than raw "hc1".
-        if self.survey_metadata is None:
-            from diff_diff.results import _format_vcov_label
-
-            vcov_label = _format_vcov_label(
-                self.vcov_type,
-                cluster_name=self.cluster_name,
-                n_clusters=self.n_clusters,
-                n_obs=self.n_obs,
-            )
-            if vcov_label:
-                lines.append(f"{'Variance estimator:':<30} {vcov_label:>15}")
-        if self.n_clusters is not None:
-            lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
-
-        lines.extend(
-            [
-                "",
-                "-" * 75,
-                f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'':>5}",
-                "-" * 75,
-                f"{'ATT':<15} {self.att:>12.4f} {self.se:>12.4f} {self.t_stat:>10.3f} {self.p_value:>10.4f} {self.significance_stars:>5}",
-                "-" * 75,
-                "",
-                f"{conf_level}% Confidence Interval: [{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
-            ]
-        )
-
-        # EPV diagnostics block (if any subgroup has low EPV)
-        if self.epv_diagnostics:
-            low_epv = {k: v for k, v in self.epv_diagnostics.items() if v.get("is_low")}
-            if low_epv:
-                n_affected = len(low_epv)
-                n_total = len(self.epv_diagnostics)
-                min_entry = min(low_epv.values(), key=lambda v: v["epv"])
-                lines.extend(
-                    [
-                        "",
-                        "-" * 75,
-                        "EPV Diagnostics".center(75),
-                        "-" * 75,
-                        f"WARNING: Low Events Per Variable (EPV) in "
-                        f"{n_affected} of {n_total} subgroup comparison(s).",
-                        f"Minimum EPV: {min_entry['epv']:.1f}. "
-                        f"Threshold: {self.epv_threshold:.0f}.",
-                        "Consider: estimation_method='reg' or fewer covariates.",
-                        "Call results.epv_summary() for details.",
-                        "-" * 75,
-                    ]
-                )
-
-        # Show group means if available
-        if self.group_means:
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Cell Means (Y):",
-                    "-" * 75,
-                ]
-            )
-            for cell, mean in self.group_means.items():
-                lines.append(f"  {cell:<35} {mean:>12.4f}")
-
-        # Show propensity score diagnostics if available
-        if self.pscore_stats:
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Propensity Score Diagnostics:",
-                    "-" * 75,
-                ]
-            )
-            for stat, value in self.pscore_stats.items():
-                lines.append(f"  {stat:<35} {value:>12.4f}")
-
-        lines.extend(
-            [
-                "",
-                "Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1",
-                "=" * 75,
-            ]
-        )
-
-        return "\n".join(lines)
-
-    def print_summary(self, alpha: Optional[float] = None) -> None:
-        """Print the summary to stdout."""
-        print(self.summary(alpha))
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert results to a dictionary.
-
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary containing all estimation results.
-        """
-        result = {
-            "att": self.att,
-            "se": self.se,
-            "t_stat": self.t_stat,
-            "p_value": self.p_value,
-            "conf_int_lower": self.conf_int[0],
-            "conf_int_upper": self.conf_int[1],
-            "n_obs": self.n_obs,
-            "n_treated_eligible": self.n_treated_eligible,
-            "n_treated_ineligible": self.n_treated_ineligible,
-            "n_control_eligible": self.n_control_eligible,
-            "n_control_ineligible": self.n_control_ineligible,
-            "estimation_method": self.estimation_method,
-            "inference_method": self.inference_method,
-            "vcov_type": self.vcov_type,
-        }
-        if self.r_squared is not None:
-            result["r_squared"] = self.r_squared
-        if self.n_bootstrap is not None:
-            result["n_bootstrap"] = self.n_bootstrap
-        if self.n_clusters is not None:
-            result["n_clusters"] = self.n_clusters
-        if self.cluster_name is not None:
-            result["cluster_name"] = self.cluster_name
-        if self.survey_metadata is not None:
-            sm = self.survey_metadata
-            result["weight_type"] = sm.weight_type
-            result["effective_n"] = sm.effective_n
-            result["design_effect"] = sm.design_effect
-            result["sum_weights"] = sm.sum_weights
-            result["n_strata"] = sm.n_strata
-            result["n_psu"] = sm.n_psu
-            result["df_survey"] = sm.df_survey
-        return result
-
-    def to_dataframe(self) -> pd.DataFrame:
-        """
-        Convert results to a pandas DataFrame.
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with estimation results.
-        """
-        return pd.DataFrame([self.to_dict()])
-
-    @property
-    def is_significant(self) -> bool:
-        """Check if the ATT is statistically significant at the alpha level."""
-        return bool(self.p_value < self.alpha)
-
-    @property
-    def significance_stars(self) -> str:
-        """Return significance stars based on p-value."""
-        return _get_significance_stars(self.p_value)
-
-    def epv_summary(self, show_all: bool = False) -> pd.DataFrame:
-        """
-        Return per-subgroup EPV diagnostics as a DataFrame.
-
-        Parameters
-        ----------
-        show_all : bool, default False
-            If False, only show subgroups with low EPV. If True, show all.
-
-        Returns
-        -------
-        pd.DataFrame
-            Columns: subgroup, epv, n_events, n_params, is_low.
-        """
-        if not self.epv_diagnostics:
-            return pd.DataFrame(columns=["subgroup", "epv", "n_events", "n_params", "is_low"])
-        rows = []
-        for sg, diag in sorted(self.epv_diagnostics.items()):
-            if show_all or diag.get("is_low", False):
-                rows.append(
-                    {
-                        "subgroup": sg,
-                        "epv": diag.get("epv"),
-                        "n_events": diag.get("n_events"),
-                        "n_params": diag.get("k"),
-                        "is_low": diag.get("is_low", False),
-                    }
-                )
-        cols = ["subgroup", "epv", "n_events", "n_params", "is_low"]
-        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
 
 # =============================================================================
@@ -502,11 +176,13 @@ class TripleDifference(
 
     Attributes
     ----------
-    results_ : TripleDifferenceResults or StaggeredTripleDiffResults
-        Estimation results after calling fit(). The 2x2x2 mode returns
-        ``TripleDifferenceResults``; the staggered mode returns
-        ``StaggeredTripleDiffResults`` (the two containers unify at 4.0, row
-        M-014).
+    results_ : TripleDifferenceResults
+        Estimation results after calling fit(). ONE container serves both
+        designs since 4.0 (row M-014): ``results_.design`` is ``"2x2x2"`` or
+        ``"staggered"``; the canonical ``att`` / ``se`` / ``t_stat`` /
+        ``p_value`` / ``conf_int`` are populated in both, and the staggered
+        design's event-study / cohort surfaces come from the post-fit
+        ``results_.aggregate('event_study')`` / ``aggregate('group')``.
     is_fitted_ : bool
         Whether the model has been fitted.
 
@@ -690,7 +366,7 @@ class TripleDifference(
         self.cband = cband
 
         self.is_fitted_ = False
-        self.results_: Optional[Union[TripleDifferenceResults, StaggeredTripleDiffResults]] = None
+        self.results_: Optional[TripleDifferenceResults] = None
 
     def fit(
         self,
@@ -705,9 +381,7 @@ class TripleDifference(
         *,
         unit: Any = NOT_SUPPLIED,
         first_treat: Any = NOT_SUPPLIED,
-        aggregate: Optional[str] = None,
-        balance_e: Optional[int] = None,
-    ) -> Union[TripleDifferenceResults, StaggeredTripleDiffResults]:
+    ) -> TripleDifferenceResults:
         """
         Fit the Triple Difference model, in either of its two designs.
 
@@ -759,18 +433,18 @@ class TripleDifference(
         first_treat : str, keyword-only
             Staggered mode, and the MODE TRIGGER. Column giving each unit's
             enabling period; 0 or ``np.inf`` marks never-enabled units.
-        aggregate : str, optional, keyword-only
-            Staggered mode. ``"event_study"``, ``"group"``, ``"simple"`` or
-            ``"all"``.
-        balance_e : int, optional, keyword-only
-            Staggered mode. Event time to balance the event study on.
 
         Returns
         -------
-        TripleDifferenceResults or StaggeredTripleDiffResults
-            2x2x2 mode returns ``TripleDifferenceResults``; staggered mode
-            returns ``StaggeredTripleDiffResults``. The two containers unify at
-            4.0 (row M-014).
+        TripleDifferenceResults
+            One container for both designs (``results.design`` says which).
+            In the staggered design the event-study and cohort surfaces are
+            post-fit: ``results.aggregate('event_study')`` /
+            ``results.aggregate('group')`` (the 3.x fit-time ``aggregate=`` /
+            ``balance_e=`` keywords were removed at 4.0, rows M-140 / M-141;
+            ``balance_e`` is now a keyword of ``aggregate()``), and the paper's
+            Eq. 4.14 overall is ``results.aggregate('simple',
+            weights='event_time')``.
 
         Raises
         ------
@@ -780,19 +454,6 @@ class TripleDifference(
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
         """
-        # ---- Step 0: mode-INDEPENDENT value validation -------------------
-        # A bad `aggregate` value must not be masked by a mode error (3(a)'s
-        # `spec` precedent). Consequence, deliberate: fit(aggregate="bogus")
-        # WITHOUT first_treat reports the invalid value, not the mode error.
-        # `_validate_vcov_type` is deliberately NOT hoisted here - it stays
-        # after the 2x2x2 keyword checks so a direct-attribute-mutated vcov_type
-        # is reported after, not instead of, a wrong-keyword error.
-        if aggregate is not None and aggregate not in ("event_study", "group", "simple", "all"):
-            raise ValueError(
-                f"aggregate must be 'event_study', 'group', 'simple', or 'all', "
-                f"got '{aggregate}'"
-            )
-
         # ---- Step 1: staggered mode ---------------------------------------
         # Raw sentinels forwarded: the 2x2x2 `time=` check must not run, because
         # `time=` is the calendar column on this path.
@@ -807,27 +468,19 @@ class TripleDifference(
                 group=group,
                 post=post,
                 covariates=covariates,
-                aggregate=aggregate,
-                balance_e=balance_e,
                 survey_design=survey_design,
             )
 
         # ---- Step 2: 2x2x2 mode, staggered-only FIT params ----------------
         _staggered_only = [
-            name
-            for name, supplied in (
-                ("unit", unit is not NOT_SUPPLIED),
-                ("aggregate", aggregate is not None),
-                ("balance_e", balance_e is not None),
-            )
-            if supplied
+            name for name, supplied in (("unit", unit is not NOT_SUPPLIED),) if supplied
         ]
         if _staggered_only:
             raise ValueError(
                 f"{', '.join(_staggered_only)} require(s) first_treat= (the staggered DDD "
                 f"mode); the 2x2x2 TripleDifference design estimates a single ATT from the "
-                f"(group=, partition=, post=) triple and has no adoption cohorts to "
-                f"aggregate over. For staggered adoption pass fit(..., unit=<unit id>, "
+                f"(group=, partition=, post=) triple and has no unit dimension. For "
+                f"staggered adoption pass fit(..., unit=<unit id>, "
                 f"time=<calendar column>, first_treat=<cohort column>, "
                 f"partition=<partition column>)."
             )
@@ -1081,6 +734,11 @@ class TripleDifference(
             epv_diagnostics=epv_diag if epv_diag else None,
             epv_threshold=self.epv_threshold,
             pscore_fallback=self.pscore_fallback,
+            pscore_trim=self.pscore_trim,
+            # The t df that governed p_value / conf_int above when no survey
+            # design carries it (on survey fits the governing df lives on
+            # survey_metadata.df_survey, which resolve_inference_df reads first).
+            df_inference=None if resolved_survey is not None else float(df),
         )
 
         self.is_fitted_ = True
@@ -1098,10 +756,8 @@ class TripleDifference(
         group: Any,
         post: Any,
         covariates: Optional[List[str]],
-        aggregate: Optional[str],
-        balance_e: Optional[int],
         survey_design,
-    ) -> StaggeredTripleDiffResults:
+    ) -> TripleDifferenceResults:
         """Staggered branch of the merged fit (row M-013).
 
         Reached only when ``first_treat=`` was supplied. Rejects the other
@@ -1167,8 +823,6 @@ class TripleDifference(
             first_treat,
             partition,
             covariates=covariates,
-            aggregate=aggregate,
-            balance_e=balance_e,
             survey_design=survey_design,
             estimator_name="TripleDifference",
             partition_label="partition",

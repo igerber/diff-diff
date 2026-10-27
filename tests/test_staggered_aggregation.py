@@ -413,15 +413,18 @@ class TestCombinedIFFrozenParity:
         consumer of the mixin."""
         rec = _ParityRecorder(monkeypatch)
         std = TripleDifference()
-        std.fit(
+        res = std.fit(
             _make_ddd(),
             outcome="outcome",
             unit="unit",
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="all",
         )
+        # 4.0 (rows M-014/M-140): the event-study / cohort aggregations run
+        # post-fit off the retained (eligibility-zeroed) kit.
+        res.aggregate("event_study")
+        res.aggregate("group")
         assert rec.n_calls > 0
 
 
@@ -642,14 +645,17 @@ class TestFastPathTaken:
         the .get defaults."""
         calls = self._spy(monkeypatch)
         std = TripleDifference()
-        std.fit(
+        res = std.fit(
             _make_ddd(),
             outcome="outcome",
             unit="unit",
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="all",
         )
+        # 4.0 (rows M-014/M-140): the event-study / cohort aggregations run
+        # post-fit off the retained (eligibility-zeroed) kit.
+        res.aggregate("event_study")
+        res.aggregate("group")
         assert calls["resolved"] > 0
         assert calls["fallback"] == 0

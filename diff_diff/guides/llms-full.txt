@@ -728,10 +728,8 @@ ddd.fit(
     first_treat: str,               # Enabling cohort (0 = never enabled)
     partition: str,                 # Binary eligibility partition (0/1)
     covariates: list[str] | None = None,
-    aggregate: str | None = None,   # None, "simple", "group", "event_study", "all"
-    balance_e: int | None = None,   # Max event time for balanced event study
     survey_design=None,
-) -> StaggeredTripleDiffResults
+) -> TripleDifferenceResults           # design == "staggered"; aggregation is post-fit
 ```
 
 ```python
@@ -739,9 +737,11 @@ from diff_diff import TripleDifference
 
 sddd = TripleDifference(estimation_method='dr', n_bootstrap=999)
 results = sddd.fit(data, outcome='y', unit='id', time='t',
-                   first_treat='ft', partition='eligible',
-                   aggregate='event_study')
+                   first_treat='ft', partition='eligible')
 results.print_summary()
+es = results.aggregate('event_study')          # post-fit; replays the bootstrap
+cohorts = results.aggregate('group')
+eq414 = results.aggregate('simple', weights='event_time')  # paper Eq. 4.14 overall
 ```
 
 ### ContinuousDiD
@@ -1905,11 +1905,14 @@ Returned by `SyntheticControl.fit()`.
 
 ### TripleDifferenceResults
 
-Returned by `TripleDifference.fit()`.
+Returned by `TripleDifference.fit()` in BOTH designs (4.0, row M-014); `design` says which.
+The 2x2x2 design is the degenerate single-ATT view (empty `group_time_effects`); the
+staggered design's event-study / cohort surfaces are post-fit (`aggregate()`).
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `att` | `float` | ATT estimate |
+| `design` | `str` | `"2x2x2"` or `"staggered"` |
+| `att` | `float` | ATT estimate (staggered: the cohort-size-weighted post-treatment average, the CS "simple" convention) |
 | `se` | `float` | Standard error |
 | `t_stat` | `float` | T-statistic |
 | `p_value` | `float` | P-value |
@@ -1923,8 +1926,16 @@ Returned by `TripleDifference.fit()`.
 | `group_means` | `dict` | Cell means |
 | `pscore_stats` | `dict` | Propensity score diagnostics |
 | `r_squared` | `float` | R-squared (for "reg") |
+| `df_inference` | `float \| None` | t df that governed `att`'s inference when no survey design carries it (2x2x2: `n_obs - 8 - len(covariates)`; staggered plain fits: None, normal reference) |
+| `inference_method` | `str` | `"analytical"` or `"bootstrap"` (staggered, `n_bootstrap > 0`; `n_bootstrap` records the draws) |
+| `group_time_effects` | `dict` | Staggered: `(group, time) -> {effect, se, t_stat, p_value, conf_int, ...}`; `{}` in 2x2x2 |
+| `groups`, `time_periods` | `list` | Staggered: enabling cohorts that produced cells; calendar periods |
+| `n_treated_units`, `n_control_units`, `n_never_enabled`, `n_eligible`, `n_ineligible` | `int \| None` | Staggered unit counts (None in 2x2x2) |
+| `control_group`, `base_period`, `anticipation`, `pscore_trim` | | Staggered engine configuration (`pscore_trim` in both designs) |
+| `bootstrap_results` | `CSBootstrapResults \| None` | Staggered multiplier-bootstrap payload |
+| `epv_diagnostics` | `dict \| None` | Keyed by subgroup (2x2x2) or `(g, t)` cell (staggered) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level=None)` (`'overall'` one-row scalars, both designs; `'group_time'` cells, staggered), `epv_summary()`, `aggregate(type, weights=None, *, balance_e=None)` - `'simple'` relays the stored headline in both designs (one-row `AggregationResult`; `weights='event_time'` gives the paper's Eq. 4.14 overall, the unweighted mean of post-treatment ES(e), accepting `balance_e=`); `'event_study'` (`EventStudyResults`, `balance_e=`) and `'group'` (`AggregationResult`) are recomputed from the retained kit in the staggered design - bootstrapped fits REPLAY the fit-time multiplier bootstrap - and raise in the 2x2x2 design. No `'total'`. The 3.x `StaggeredTripleDiffResults`, its `overall_*` fields and the fit-time `aggregate=` / `balance_e=` keywords were removed at 4.0 (rows M-014 / M-140 / M-141).
 
 ### BaconDecompositionResults
 
@@ -3055,7 +3066,7 @@ dr.applicable_checks     # tuple of checks that will run for this estimator
 dr.skipped_checks        # dict of {check: plain-English reason}
 ```
 
-Schema top-level keys: `schema_version, estimator, headline_metric,
+Schema top-level keys: `schema_version, estimator, design, headline_metric,
 target_parameter, parallel_trends, pretrends_power, sensitivity,
 placebo, bacon, design_effect, heterogeneity, epv,
 estimator_native_diagnostics, skipped, warnings,

@@ -3,7 +3,8 @@ the class and its ``SDDD`` alias were removed at the 4.0 cut (PR 4a).
 
 Ledger rows under test: M-013 (the class merge, now removed), M-064 (the retired
 ``SDDD`` alias), M-085 (2x2x2 ``time=`` raises), M-140/M-141 (fit-time
-aggregate=/balance_e= carried on the surviving class), M-142 (the pscore_trim
+aggregate=/balance_e= carried on the surviving class through 3.x, removed at
+4.0 by item 6), M-142 (the pscore_trim
 validation tightening).
 
 TOLERANCE DOCTRINE
@@ -89,7 +90,6 @@ from diff_diff.prep_dgp import (
     generate_ddd_panel_data,
     generate_staggered_ddd_data,
 )
-from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
 from diff_diff.survey import SurveyDesign
 from diff_diff.triple_diff import TripleDifferenceResults
 
@@ -563,10 +563,14 @@ class TestGateBPrimeStaggeredOracle:
 
     def test_base_config_matches_oracle(self, stag):
         exp = ORACLE_STAGGERED["stag_dr_all"]
-        r = _fit_new(stag, aggregate="all")
+        r = _fit_new(stag)
         assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-        assert_allclose(r.overall_att_es, exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        es_overall = r.aggregate("simple", weights="event_time")
+        assert_allclose(
+            es_overall.att[0], exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL
+        )
+        assert_allclose(es_overall.se[0], exp["overall_se_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert r.n_obs == exp["n_obs"]
         assert r.n_never_enabled == exp["n_never_enabled"]
         got = {f"{g}|{t}": v for (g, t), v in sorted(r.group_time_effects.items())}
@@ -577,11 +581,15 @@ class TestGateBPrimeStaggeredOracle:
 
     def test_bootstrap_config_matches_oracle(self, stag):
         exp = ORACLE_STAGGERED["stag_dr_all_boot49"]
-        r = _fit_new(stag, aggregate="all", ctor=dict(n_bootstrap=49, seed=7, cband=True))
+        r = _fit_new(stag, ctor=dict(n_bootstrap=49, seed=7, cband=True))
         assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        # The sup-t critical value now comes from the post-fit event-study
+        # aggregation, which REPLAYS the fit-time multiplier bootstrap from the
+        # kit's retained RNG state - same weight stream, same statistic.
+        es = r.aggregate("event_study")
         assert_allclose(
-            r.cband_crit_value, exp["cband_crit_value"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL
+            es.cband_crit_value, exp["cband_crit_value"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL
         )
 
     # -- branch coverage for the rest of the relocated engine -----------------
@@ -596,7 +604,7 @@ class TestGateBPrimeStaggeredOracle:
         spelling; the oracle was captured through the removed class's compact one,
         so this also pins the vocabulary bridge onto real numbers."""
         exp = ORACLE_STAGGERED["stag_dr_nevertreated"]
-        r = _fit_new(stag, aggregate="all", ctor=dict(control_group="never_treated"))
+        r = _fit_new(stag, ctor=dict(control_group="never_treated"))
         self._assert_against(r, exp)
         # ...and it must actually be a DIFFERENT comparison group, else a bridge
         # that collapsed every spelling to one branch would still pass above.
@@ -610,7 +618,6 @@ class TestGateBPrimeStaggeredOracle:
         exp = ORACLE_STAGGERED[f"stag_{method}_cov"]
         r = _fit_new(
             stag_cov,
-            aggregate="all",
             covariates=STAG_COVS,
             ctor=dict(estimation_method=method),
         )
@@ -629,17 +636,14 @@ class TestGateBPrimeStaggeredOracle:
         so dr/ipw/reg collapse to the same estimator. Asserted live rather than
         committed as three identical literal blocks that would LOOK like
         nuisance-model coverage while providing none."""
-        fits = [
-            _fit_new(stag, aggregate="all", ctor=dict(estimation_method=m))
-            for m in ("dr", "ipw", "reg")
-        ]
+        fits = [_fit_new(stag, ctor=dict(estimation_method=m)) for m in ("dr", "ipw", "reg")]
         for r in fits[1:]:
             assert_allclose(r.att, fits[0].att, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
             assert_allclose(r.se, fits[0].se, rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
 
     def test_survey_pweight_matches_oracle(self, stag_survey):
         exp = ORACLE_STAGGERED["stag_dr_survey_pweight"]
-        r = _fit_new(stag_survey, aggregate="all", survey_design=SurveyDesign(weights="w"))
+        r = _fit_new(stag_survey, survey_design=SurveyDesign(weights="w"))
         self._assert_against(r, exp)
         # the weights must actually bite
         assert exp["overall"]["att"] != ORACLE_STAGGERED["stag_dr_all"]["overall"]["att"]
@@ -648,7 +652,11 @@ class TestGateBPrimeStaggeredOracle:
     def _assert_against(r, exp):
         assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         assert_allclose(r.se, exp["overall"]["se"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
-        assert_allclose(r.overall_att_es, exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
+        es_overall = r.aggregate("simple", weights="event_time")
+        assert_allclose(
+            es_overall.att[0], exp["overall_att_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL
+        )
+        assert_allclose(es_overall.se[0], exp["overall_se_es"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
         got = {f"{g}|{t}": v for (g, t), v in sorted(r.group_time_effects.items())}
         assert set(got) == set(exp["group_time"])
         for k, v in exp["group_time"].items():
@@ -657,14 +665,10 @@ class TestGateBPrimeStaggeredOracle:
 
 
 _STAG_FIELDS = [
-    "overall_att",
-    "overall_se",
-    "overall_t_stat",
-    "overall_p_value",
-    "overall_att_es",
-    "overall_se_es",
-    "overall_t_stat_es",
-    "overall_p_value_es",
+    "att",
+    "se",
+    "t_stat",
+    "p_value",
     "n_obs",
     "n_treated_units",
     "n_control_units",
@@ -676,7 +680,8 @@ _STAG_FIELDS = [
 
 
 def _assert_staggered_parity(old, new):
-    assert type(new) is type(old) is StaggeredTripleDiffResults
+    assert type(new) is type(old) is TripleDifferenceResults
+    assert old.design == new.design == "staggered"
     for f in _STAG_FIELDS:
         a, b = getattr(old, f), getattr(new, f)
         if a is None or b is None:
@@ -685,11 +690,16 @@ def _assert_staggered_parity(old, new):
             _eq_with_nans(a, b)
     _eq_with_nans(np.asarray(old.conf_int, dtype=float), np.asarray(new.conf_int, dtype=float))
     _eq_dicts_with_nans(old.group_time_effects, new.group_time_effects)
-    for attr in ("event_study_effects", "group_effects"):
-        a, b = getattr(old, attr), getattr(new, attr)
-        assert (a is None) == (b is None)
-        if a is not None:
-            _eq_dicts_with_nans(a, b, keys=("effect", "se"))
+    # The event-study / cohort surfaces are post-fit since 4.0 (rows M-014/M-140):
+    # compare the recomputed containers, not stored fields (which are None).
+    es_a, es_b = old.aggregate("event_study"), new.aggregate("event_study")
+    _eq_with_nans(es_a.event_time, es_b.event_time)
+    _eq_with_nans(es_a.att, es_b.att)
+    _eq_with_nans(es_a.se, es_b.se)
+    g_a, g_b = old.aggregate("group"), new.aggregate("group")
+    assert list(g_a.label) == list(g_b.label)
+    _eq_with_nans(g_a.att, g_b.att)
+    _eq_with_nans(g_a.se, g_b.se)
 
 
 # ---------------------------------------------------------------------------
@@ -713,8 +723,8 @@ class TestGateBMergedSurfaceContracts:
         """
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            nyt = _fit_new(stag, ctor=dict(control_group="not_yet_treated"), aggregate="all")
-            nev = _fit_new(stag, ctor=dict(control_group="never_treated"), aggregate="all")
+            nyt = _fit_new(stag, ctor=dict(control_group="not_yet_treated"))
+            nev = _fit_new(stag, ctor=dict(control_group="never_treated"))
         assert nyt.att != nev.att, (
             "not_yet_treated and never_treated produced identical ATTs - the "
             "comparison-group branch is not reading control_group"
@@ -726,7 +736,7 @@ class TestGateBMergedSurfaceContracts:
         df.loc[df["first_treat"] == 0, "first_treat"] = np.inf
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            _fit_new(df, aggregate="simple")
+            _fit_new(df)
         msgs = [str(x.message) for x in w if "first_treat=inf" in str(x.message)]
         assert msgs, [str(x.message) for x in w]
 
@@ -763,7 +773,7 @@ class TestGateCRejectionMatrix:
             with pytest.raises(ValueError, match=r"belong\(s\) to the 2x2x2 mode"):
                 _fit_new(stag, **kw)
 
-    @pytest.mark.parametrize("kw", [{"unit": "unit"}, {"aggregate": "all"}, {"balance_e": 1}])
+    @pytest.mark.parametrize("kw", [{"unit": "unit"}])
     def test_2x2x2_rejects_staggered_fit_params(self, cross, kw):
         with pytest.raises(ValueError, match=r"require\(s\) first_treat="):
             TripleDifference().fit(cross, **C_COLS, **kw)
@@ -814,11 +824,14 @@ class TestGateCRejectionMatrix:
         r = TripleDifference(**{param: value}).fit(cross, **C_COLS)
         assert np.isfinite(r.att)
 
-    def test_bad_aggregate_VALUE_precedes_the_mode_error(self, cross):
-        """Deliberate ordering (3(a)'s `spec` precedent): a bad value is
-        reported as a bad value even in the wrong mode."""
-        with pytest.raises(ValueError, match="aggregate must be"):
-            TripleDifference().fit(cross, aggregate="bogus", **C_COLS)
+    @pytest.mark.parametrize("kw", [{"aggregate": "all"}, {"balance_e": 1}])
+    def test_fit_time_aggregate_keywords_are_gone(self, cross, stag, kw):
+        """Rows M-140/M-141, removed at 4.0: the keywords are unknown to fit()
+        in BOTH designs (TypeError, never a mode error); aggregation is post-fit."""
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            TripleDifference().fit(cross, **C_COLS, **kw)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            _fit_new(stag, **kw)
 
     @pytest.mark.parametrize("missing", ["group", "partition", "post"])
     def test_2x2x2_required_args_named_individually(self, cross, missing):
@@ -863,7 +876,7 @@ class TestGateDTimeSemantics:
         check must never fire on this path."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = _fit_new(stag, aggregate="simple")
+            r = _fit_new(stag)
         assert np.isfinite(r.att)
 
     def test_2x2x2_both_post_and_time_raises(self, cross):
@@ -884,8 +897,9 @@ class TestGateDTimeSemantics:
 
 
 class TestGateERemoval:
-    """The class, its module and the ``SDDD`` alias are gone; the merged surface
-    constructs silently; the results container (M-014) is still exported."""
+    """The class, its module, the ``SDDD`` alias and - since item 6 (row M-014) -
+    the ``StaggeredTripleDiffResults`` container are gone; the merged surface
+    constructs silently and returns the unified ``TripleDifferenceResults``."""
 
     @pytest.mark.parametrize("name", ["StaggeredTripleDifference", "SDDD"])
     def test_name_is_absent(self, name):
@@ -903,12 +917,19 @@ class TestGateERemoval:
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module("diff_diff.staggered_triple_diff")
 
-    def test_results_container_still_exported(self):
-        """M-014 dies in PR 6, not here."""
+    def test_results_container_is_gone(self):
+        """M-014 (item 6): the staggered container and its module are removed;
+        the unified TripleDifferenceResults is the one export."""
+        import importlib
+
         import diff_diff
 
-        assert diff_diff.StaggeredTripleDiffResults is StaggeredTripleDiffResults
-        assert "StaggeredTripleDiffResults" in diff_diff.__all__
+        assert not hasattr(diff_diff, "StaggeredTripleDiffResults")
+        assert "StaggeredTripleDiffResults" not in diff_diff.__all__
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("diff_diff.staggered_triple_diff_results")
+        assert diff_diff.TripleDifferenceResults is TripleDifferenceResults
+        assert "TripleDifferenceResults" in diff_diff.__all__
 
     def test_successor_does_not_warn(self, stag):
         with warnings.catch_warnings(record=True) as w:
@@ -1017,9 +1038,7 @@ class TestGateFIntrospectionAndValidation:
         # the guard is EAGER: it fires at construction, so no fit can be reached
         # with an out-of-domain window even via the staggered branch.
         with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
-            TripleDifference(anticipation=-1).fit(
-                stag, partition="eligibility", **S_NEW, aggregate="simple"
-            )
+            TripleDifference(anticipation=-1).fit(stag, partition="eligibility", **S_NEW)
 
     # -- first_treat cohort encoding (silent-population guard) ----------------
 
@@ -1041,7 +1060,7 @@ class TestGateFIntrospectionAndValidation:
         df["first_treat"] = df["first_treat"].astype(float)
         df.loc[df["first_treat"] == 0, "first_treat"] = sentinel
         with pytest.raises(ValueError, match="negative cohort value"):
-            _fit_new(df, aggregate="simple")
+            _fit_new(df)
 
     # -- degenerate enabling cohort (honest-reporting guard) ------------------
 
@@ -1060,7 +1079,7 @@ class TestGateFIntrospectionAndValidation:
         deliberately unchanged: it is valid for the cohorts that do identify."""
         df = self._strip_eligibility_from_cohort(stag, 4)
         with pytest.warns(UserWarning, match=r"cohort g=4\.0 has no eligible treated units"):
-            r = _fit_new(df, aggregate="simple")
+            r = _fit_new(df)
         assert list(r.groups) == [3.0], "groups must not advertise a non-contributing cohort"
         assert r.to_dict()["n_groups"] == 1
         assert {g for g, _ in r.group_time_effects} == {3.0}
@@ -1069,7 +1088,7 @@ class TestGateFIntrospectionAndValidation:
         """Negative pin: no warning and no groups change on a well-posed panel."""
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            r = _fit_new(stag, aggregate="simple")
+            r = _fit_new(stag)
         assert not [x for x in w if "no eligible treated units" in str(x.message)]
         assert list(r.groups) == [3.0, 4.0]
 
@@ -1078,7 +1097,7 @@ class TestGateFIntrospectionAndValidation:
         treated mass."""
         df = self._strip_eligibility_from_cohort(stag_survey, 4)
         with pytest.warns(UserWarning, match=r"cohort g=4\.0 has no eligible treated units"):
-            r = _fit_new(df, aggregate="simple", survey_design=SurveyDesign(weights="w"))
+            r = _fit_new(df, survey_design=SurveyDesign(weights="w"))
         assert list(r.groups) == [3.0]
 
     def test_positive_inf_still_recodes_with_a_warning(self, stag):
@@ -1087,14 +1106,14 @@ class TestGateFIntrospectionAndValidation:
         df["first_treat"] = df["first_treat"].astype(float)
         df.loc[df["first_treat"] == 0, "first_treat"] = np.inf
         with pytest.warns(UserWarning, match="recoding to 0"):
-            r = _fit_new(df, aggregate="simple")
-        plain = _fit_new(stag, aggregate="simple")
+            r = _fit_new(df)
+        plain = _fit_new(stag)
         _eq_with_nans([r.att, r.se], [plain.att, plain.se])
         assert r.n_never_enabled == plain.n_never_enabled
 
     def test_valid_cohorts_are_untouched_by_the_guard(self, stag):
         """Regression pin: the guard changes no accepted fit."""
-        r = _fit_new(stag, aggregate="all")
+        r = _fit_new(stag)
         exp = ORACLE_STAGGERED["stag_dr_all"]
         assert_allclose(r.att, exp["overall"]["att"], rtol=ORACLE_RTOL, atol=ORACLE_ATOL)
 
@@ -1103,7 +1122,7 @@ class TestGateFIntrospectionAndValidation:
         est = TripleDifference()
         est.anticipation = -1  # neither validator sees this
         with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
-            est.fit(stag, partition="eligibility", **S_NEW, aggregate="simple")
+            est.fit(stag, partition="eligibility", **S_NEW)
 
     @pytest.mark.parametrize("compact", ["notyettreated", "nevertreated"])
     def test_merged_class_rejects_the_compact_vocabulary(self, compact):
@@ -1130,14 +1149,16 @@ class TestGateFIntrospectionAndValidation:
         est = TripleDifference()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            stag_first = est.fit(stag, partition="eligibility", **S_NEW, aggregate="all")
-            assert isinstance(stag_first, StaggeredTripleDiffResults)
+            stag_first = est.fit(stag, partition="eligibility", **S_NEW)
+            assert isinstance(stag_first, TripleDifferenceResults)
+            assert stag_first.design == "staggered"
             then_cross = est.fit(cross, **C_COLS)
             assert isinstance(then_cross, TripleDifferenceResults)
+            assert then_cross.design == "2x2x2"
             fresh_cross = TripleDifference().fit(cross, **C_COLS)
             _eq_with_nans(_quintet(then_cross), _quintet(fresh_cross))
 
-            back_to_stag = est.fit(stag, partition="eligibility", **S_NEW, aggregate="all")
+            back_to_stag = est.fit(stag, partition="eligibility", **S_NEW)
             _assert_staggered_parity(stag_first, back_to_stag)
         assert est.is_fitted_
 
@@ -1164,7 +1185,7 @@ class TestGateGAttributionAndThreading:
         df = generate_staggered_ddd_data(**{**STAG_KW, "cohort_periods": [1, 3]})
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            _fit_new(df, aggregate="simple")
+            _fit_new(df)
         fired = [x for x in w if "outside the observed panel" in str(x.message)]
         assert fired, "expected the base-period warning"
         assert all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
@@ -1176,7 +1197,7 @@ class TestGateGAttributionAndThreading:
         offset through getattr rather than taking it as an argument."""
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            _fit_new(stag, ctor=dict(n_bootstrap=9, seed=1), aggregate="simple")
+            _fit_new(stag, ctor=dict(n_bootstrap=9, seed=1))
         fired = [x for x in w if "is low" in str(x.message)]
         assert fired and all(x.filename.endswith("test_v4_merge_ddd.py") for x in fired), [
             (x.filename, str(x.message)[:40]) for x in fired
@@ -1243,11 +1264,9 @@ class TestGateHConsumers:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             nyt = BusinessReport(
-                _fit_new(stag, ctor=dict(control_group="not_yet_treated"), aggregate="simple")
+                _fit_new(stag, ctor=dict(control_group="not_yet_treated"))
             ).to_dict()
-            nev = BusinessReport(
-                _fit_new(stag, ctor=dict(control_group="never_treated"), aggregate="simple")
-            ).to_dict()
+            nev = BusinessReport(_fit_new(stag, ctor=dict(control_group="never_treated"))).to_dict()
         assert nyt["sample"]["n_never_enabled"] == nev["sample"]["n_never_enabled"] > 0
 
     def test_summary_renders_in_both_modes(self, cross, stag):
@@ -1259,7 +1278,7 @@ class TestGateHConsumers:
         assert "Triple Difference" in est.summary()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            est.fit(stag, partition="eligibility", **S_NEW, aggregate="all")
+            est.fit(stag, partition="eligibility", **S_NEW)
         text = est.summary()
         assert "ATT" in text and len(text.splitlines()) > 10
 
@@ -1315,29 +1334,15 @@ class TestGateHConsumers:
             progress=False,
         )
 
-    @pytest.mark.parametrize("fn_name", ["simulate_power", "simulate_mde", "simulate_sample_size"])
-    def test_power_accepts_explicit_none_aggregate_and_balance_e(self, cross, fn_name):
-        """`aggregate`/`balance_e` default to None and fit() rejects only a
-        NON-None value, so keying the power guard on KEY PRESENCE rejected
-        `estimator_kwargs={"aggregate": None}` - a config fit() accepts. That
-        broke the boundary the guard exists to uphold: legal to fit implies
-        legal to simulate."""
-        import diff_diff.power as power_mod
-
-        kw = {"aggregate": None, "balance_e": None}
-        assert TripleDifference().fit(cross, **C_COLS, **kw) is not None
-
-        fn = getattr(power_mod, fn_name)
-        extra = {"n_units": 48} if fn_name != "simulate_sample_size" else {}
-        if fn_name != "simulate_power":
-            extra.update(max_steps=2, progress=False)
-        assert fn(TripleDifference(), n_simulations=2, seed=1, estimator_kwargs=kw, **extra)
-
     @pytest.mark.parametrize("key,value", [("aggregate", "simple"), ("balance_e", 1)])
-    def test_power_still_rejects_non_none_aggregate_and_balance_e(self, key, value):
+    def test_power_forwards_removed_fit_time_keywords_to_fit(self, key, value):
+        """Rows M-140/M-141: `aggregate`/`balance_e` are no longer fit() keywords,
+        so power's staggered-boundary guard no longer keys on them (there is no
+        by-value pair any more); `estimator_kwargs` is forwarded to fit(), whose
+        own TypeError is the observable - never the "staggered DDD mode" ValueError."""
         from diff_diff.power import simulate_power
 
-        with pytest.raises(ValueError, match="staggered DDD mode"):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             simulate_power(
                 TripleDifference(), n_units=48, n_simulations=1, estimator_kwargs={key: value}
             )
@@ -1375,7 +1380,7 @@ class TestGateHConsumers:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            _fit_new(df, aggregate="event_study", survey_design=design, ctor=ctor)
+            _fit_new(df, survey_design=design, ctor=ctor)
         hits = [
             str(w.message)
             for w in caught

@@ -1528,12 +1528,13 @@ class TestInferenceDfProvenance:
                 time="period",
                 first_treat="first_treat",
                 partition="eligibility",
-                aggregate="all",
                 **fit_extra,
             )
-        assert res.group_effects, "fixture produced no staggered-DDD group rows"
-        for g, eff in res.group_effects.items():
-            assert eff.get("df_used") is None, f"DDD group {g} kept analytical df on bootstrap"
+            # 4.0 (rows M-014/M-140): the cohort surface is post-fit and REPLAYS
+            # the fit-time bootstrap; the df column is the provenance carrier.
+            grp = res.aggregate("group")
+        assert len(grp.label) > 0, "fixture produced no staggered-DDD group rows"
+        assert np.isnan(grp.df).all(), "DDD group rows kept analytical df on bootstrap"
 
     def test_group_df_is_not_the_event_study_df(self, fitted):
         """``group`` must not borrow ``event_study_df``: on a plain fit that
@@ -1664,7 +1665,7 @@ class TestContainerNormalization:
 # --------------------------------------------------------------------------- #
 
 
-def test_staggered_triple_diff_overall_att_es_still_works():
+def test_staggered_triple_diff_event_time_overall_still_works():
     """TripleDifference (staggered mode) inherits the CS aggregation mixin and is the
     ONLY reader of the Eq. 4.14 overall, which the purity refactor converted
     from a self-attribute to a returned value."""
@@ -1694,10 +1695,11 @@ def test_staggered_triple_diff_overall_att_es_still_works():
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-    assert res.overall_att_es is not None
-    assert np.isfinite(res.overall_att_es)
+        # 4.0: the Eq. 4.14 overall is the post-fit weights='event_time' row.
+        es_overall = res.aggregate("simple", weights="event_time")
+    assert np.isfinite(es_overall.att[0])
+    assert np.isfinite(es_overall.se[0]) and es_overall.se[0] > 0
 
 
 # --------------------------------------------------------------------------- #

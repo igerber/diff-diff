@@ -309,6 +309,30 @@ def _assert_no_fit_time_aggregation_lines(fit_block: str, label: str) -> None:
     ), f"{label}: fit-time aggregation keyword(s) still documented: {offending}"
 
 
+def test_llms_full_triple_difference_fit_blocks_have_no_fit_time_aggregate():
+    # M-140 / M-141 (removed at 4.0, item 6): BOTH fit() signature blocks of the
+    # TripleDifference section (2x2x2 and staggered) are keyword-free of
+    # aggregate / balance_e - the last fit-time aggregation went post-fit.
+    text = get_llm_guide("full")
+    start = text.index("### TripleDifference\n")
+    section = text[start : text.index("\n### ", start + 1)]
+    blocks = []
+    pos = 0
+    while True:
+        # Signature blocks only (one parameter per line, closed by "\n)"); the
+        # inline usage examples are `.fit(data, ...)` one-liners.
+        fit_start = section.find(".fit(\n", pos)
+        if fit_start < 0:
+            break
+        end = section.index("\n)", fit_start)
+        blocks.append(section[fit_start:end])
+        pos = end
+    assert len(blocks) >= 2, "expected the 2x2x2 and staggered fit blocks"
+    for block in blocks:
+        _assert_no_fit_time_aggregation_lines(block, "TripleDifference")
+    assert "StaggeredTripleDiffResults" not in section
+
+
 def test_llms_full_callaway_fit_block_has_no_fit_time_aggregate():
     # M-020 / M-117 (removed at 4.0, PR 3b): the CallawaySantAnna signature block
     # lost its `aggregate: str = None` / `balance_e: int = None` lines.

@@ -987,7 +987,7 @@ These three are feature deferrals (paper-supported extensions that the library h
 
 | Field | Value |
 |-------|-------|
-| Module | `_staggered_triple_diff_engine.py` (the engine behind `TripleDifference`'s staggered mode; the `staggered_triple_diff.py` class surface was removed at 4.0), `staggered_triple_diff_results.py` |
+| Module | `_staggered_triple_diff_engine.py` (the engine behind `TripleDifference`'s staggered mode; the `staggered_triple_diff.py` class surface was removed at 4.0), `triple_diff_results.py` (the unified `TripleDifferenceResults`, both designs, since item 6) |
 | Primary Reference | Ortiz-Villavicencio & Sant'Anna (2025) — same paper as TripleDifference, staggered case |
 | R Reference | `triplediff::ddd(panel=TRUE)` + `agg_ddd()` (per `benchmarks/R/benchmark_staggered_triplediff.R`) |
 | Status | **Complete** |
@@ -1005,7 +1005,7 @@ These three are feature deferrals (paper-supported extensions that the library h
 - **Three-term DDD decomposition (Eq. 4.1):** post-treatment ATT(g,t) recover a known constant effect.
 - **GMM combination (Eqs. 4.11-4.12):** optimal weights sum to one; a single comparison group reduces to `w=[1]`.
 - **Event study (Eq. 4.13):** ES(e) equals the eligible-treated cohort-share-weighted average of ATT(g, g+e).
-- **Overall (Eq. 4.14 / Cor. 4.2):** opt-in `overall_att_es` = unweighted mean of post-treatment ES(e), cross-validated against R `agg_ddd(type="eventstudy")$overall.att`/`overall.se`.
+- **Overall (Eq. 4.14 / Cor. 4.2):** post-fit `aggregate("simple", weights="event_time")` (the 3.x fit-time `overall_att_es`) = unweighted mean of post-treatment ES(e), cross-validated against R `agg_ddd(type="eventstudy")$overall.att`/`overall.se`.
 
 **R Comparison Results** (`benchmarks/R/benchmark_staggered_triplediff.R`; `triplediff::ddd(panel=TRUE)` + `agg_ddd()`; CSV fixtures gitignored / regenerated on-the-fly, JSON golden committed):
 
@@ -1014,8 +1014,8 @@ These three are feature deferrals (paper-supported extensions that the library h
 | Group-time ATT(g,t) | rtol 0.1% | exact |
 | Group-time SE(g,t) | rtol 1% | matches |
 | Event-study ES(e) | rtol 25% | within (per-e eligible-treated weighting deviation) |
-| Overall ATT, Eq. 4.14 (`overall_att_es`) | rtol 10% | ≤5% (weighting deviation averages out in the mean) |
-| Overall SE, Eq. 4.14 (`overall_se_es`) | rtol 3% | ≤0.5% |
+| Overall ATT, Eq. 4.14 (`aggregate("simple", weights="event_time")`) | rtol 10% | ≤5% (weighting deviation averages out in the mean) |
+| Overall SE, Eq. 4.14 (same call, `se`) | rtol 3% | ≤0.5% |
 
 The paper-equation-anchored Verified Components above are deterministic and run without R.
 The R cross-validation in this table runs only when local `R` + `triplediff` are available

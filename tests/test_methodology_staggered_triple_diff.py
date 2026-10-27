@@ -131,7 +131,6 @@ def _run_python(data, method, control_group):
         time="period",
         first_treat="first_treat",
         partition="eligibility",
-        aggregate="event_study",
     )
 
 
@@ -281,15 +280,16 @@ class TestStaggeredDDDAggregation:
     The eligible-treated aggregation weighting (REGISTRY deviation) propagates into
     the individual per-relative-time ES(e) values and the simple overall, so those
     are checked at a loose 25% envelope (the per-(g,t) ATT(g,t) themselves match R
-    exactly, 0.00%). The Eq. 4.14 overall (``overall_att_es``) is the unweighted MEAN
-    of the post-treatment ES(e), where the weighting deviation largely averages out
-    -- empirically <=5% on ATT and <=0.5% on SE across all benchmark scenarios -- so
-    it is checked at a much tighter, dedicated envelope.
+    exactly, 0.00%). The Eq. 4.14 overall (``aggregate("simple",
+    weights="event_time")``) is the unweighted MEAN of the post-treatment ES(e),
+    where the weighting deviation largely averages out -- empirically <=5% on ATT
+    and <=0.5% on SE across all benchmark scenarios -- so it is checked at a much
+    tighter, dedicated envelope.
     """
 
     AGG_RTOL = 0.25  # per-e ES + simple overall: weighting deviation on individual values
     AGG_ATOL = 3.0
-    # Eq. 4.14 overall_att_es: the weighting deviation averages out in the mean
+    # Eq. 4.14 overall (weights="event_time"): the weighting deviation averages out in the mean
     # (max observed across all scenarios: ATT 5.0%, SE 0.4%); tight-but-safe envelope.
     OVERALL_ES_ATT_RTOL = 0.10
     OVERALL_ES_SE_RTOL = 0.03
@@ -303,17 +303,22 @@ class TestStaggeredDDDAggregation:
         data = _load_r_data(r["seed"], r["dgp_type"])
         res = _run_python(data, r["est_method"], r["control_group"])
 
-        assert res.event_study_effects is not None
+        assert res.event_study_effects is None  # post-fit surface on 4.0 fits
+        es = res.aggregate("event_study", balance_e=None)
         r_es = dict(zip(r["es_event_times"], r["es_att"]))
-        for e, eff in res.event_study_effects.items():
-            if e in r_es:
-                _assert_close(
-                    eff["effect"],
-                    r_es[e],
-                    self.AGG_RTOL,
-                    self.AGG_ATOL,
-                    f"{key} ES ATT(e={e})",
-                )
+        checked = 0
+        for e, a, is_ref in zip(es.event_time, es.att, es.is_reference):
+            if is_ref or e not in r_es:
+                continue
+            checked += 1
+            _assert_close(
+                a,
+                r_es[e],
+                self.AGG_RTOL,
+                self.AGG_ATOL,
+                f"{key} ES ATT(e={e})",
+            )
+        assert checked > 0, f"{key}: no Python ES horizon matched an R horizon"
 
     @pytest.mark.parametrize("key", ALL_SCENARIOS)
     def test_overall_att_close_to_r(self, r_results, key):
@@ -335,7 +340,7 @@ class TestStaggeredDDDAggregation:
             partition="eligibility",
         )
         _assert_close(
-            res.overall_att,
+            res.att,
             r["overall_att_simple"],
             self.AGG_RTOL,
             self.AGG_ATOL,
@@ -348,7 +353,9 @@ class TestStaggeredDDDAggregation:
 
         R's ``agg_ddd(type="eventstudy")$overall.att`` / ``overall.se`` ARE the
         paper's Eq. 4.14 overall and its analytical SE; the library exposes them
-        opt-in as ``overall_att_es`` / ``overall_se_es``. The AGG_RTOL tolerance
+        post-fit as ``res.aggregate("simple", weights="event_time")`` (the R golden
+        JSON keeps its ``overall_att_es`` / ``overall_se_es`` keys - an output-file
+        interface). The AGG_RTOL tolerance
         reflects the documented eligible-treated weighting (REGISTRY deviation)
         propagating from ES(e) into the overall -- NOT a new deviation; per-(g,t)
         ATT(g,t) match R exactly, and empirically the overall agreement is far
@@ -360,9 +367,11 @@ class TestStaggeredDDDAggregation:
             pytest.skip("No event-study overall in R")
         data = _load_r_data(r["seed"], r["dgp_type"])
         res = _run_python(data, r["est_method"], r["control_group"])
-        assert res.overall_att_es is not None
+        o = res.aggregate("simple", weights="event_time")
+        assert o.att.shape == (1,)
+        assert np.isfinite(o.att[0])
         _assert_close(
-            res.overall_att_es,
+            o.att[0],
             r_att,
             self.OVERALL_ES_ATT_RTOL,
             self.OVERALL_ES_ATOL,
@@ -371,7 +380,7 @@ class TestStaggeredDDDAggregation:
         r_se = r.get("overall_se_es")
         if r_se is not None and not (isinstance(r_se, float) and np.isnan(r_se)):
             _assert_close(
-                res.overall_se_es,
+                o.se[0],
                 r_se,
                 self.OVERALL_ES_SE_RTOL,
                 self.OVERALL_ES_ATOL,
@@ -440,7 +449,7 @@ class TestEquation41Decomposition:
         tau = 2.5
         data = generate_staggered_ddd_data(n_units=800, treatment_effect=tau, noise_sd=0.3, seed=21)
         res = TripleDifference(estimation_method="dr", control_group="not_yet_treated").fit(
-            data, **_FIT_KW, aggregate="event_study"
+            data, **_FIT_KW
         )
         post = [
             v["effect"]
@@ -505,12 +514,15 @@ class TestEquation413EventStudy:
             seed=41,
         )
         res = TripleDifference(estimation_method="dr", control_group="never_treated").fit(
-            data, **_FIT_KW, aggregate="event_study"
+            data, **_FIT_KW
         )
-        assert res.event_study_effects is not None
+        assert res.event_study_effects is None  # post-fit surface on 4.0 fits
+        es = res.aggregate("event_study", balance_e=None)
         gt = res.group_time_effects
         checked_multi = False
-        for e, es in res.event_study_effects.items():
+        for e, es_att, is_ref in zip(es.event_time, es.att, es.is_reference):
+            if is_ref:
+                continue
             contrib = [
                 (g, t) for (g, t) in gt if (t - g) == e and np.isfinite(gt[(g, t)]["effect"])
             ]
@@ -521,18 +533,36 @@ class TestEquation413EventStudy:
             eff = np.array([gt[(g, t)]["effect"] for (g, t) in contrib])
             expected = float(np.sum(w / w.sum() * eff))
             assert (
-                abs(es["effect"] - expected) < 1e-9
-            ), f"ES(e={e})={es['effect']:.6f} != cohort-share-weighted avg {expected:.6f}"
+                abs(es_att - expected) < 1e-9
+            ), f"ES(e={e})={es_att:.6f} != cohort-share-weighted avg {expected:.6f}"
         assert checked_multi, "DGP did not produce a multi-cohort relative time to check"
 
 
+def _post_es_mean(res, anticipation):
+    """Unweighted mean of the estimated post-treatment ES(e) from the post-fit surface.
+
+    Mirrors the 3.x fit-time rule: the old ``event_study_effects`` dict held only
+    the ESTIMATED horizons, so the reference horizon (att 0 / se NaN) is excluded
+    explicitly alongside non-finite horizons.
+    """
+    es = res.aggregate("event_study", balance_e=None)
+    event_time = np.asarray(es.event_time, dtype=float)
+    att = np.asarray(es.att, dtype=float)
+    is_ref = np.asarray(es.is_reference, dtype=bool)
+    mask = (event_time >= -anticipation) & ~is_ref & np.isfinite(att)
+    assert mask.any(), "no estimated post-treatment horizon on the fixture"
+    return float(np.mean(att[mask]))
+
+
 class TestEquation414Overall:
-    """Eq. (4.14) / Corollary 4.2: ``overall_att_es`` is the UNWEIGHTED mean of the
-    post-treatment event-study effects ES(e); opt-in via ``aggregate='event_study'``;
-    ``None`` otherwise; the default ``overall_att`` is undisturbed.
+    """Eq. (4.14) / Corollary 4.2: the Eq. 4.14 overall is the UNWEIGHTED mean of the
+    post-treatment event-study effects ES(e). Since 4.0 it is the post-fit call
+    ``res.aggregate("simple", weights="event_time")`` (a one-row AggregationResult);
+    the fit-time ``overall_att_es`` field is gone and the default ``res.att`` (the
+    cohort-size-weighted CS-simple overall) is undisturbed.
     """
 
-    def _fit(self, aggregate, anticipation=0, seed=51):
+    def _fit(self, anticipation=0, seed=51):
         data = generate_staggered_ddd_data(
             n_units=600,
             cohort_periods=[3, 5],
@@ -544,47 +574,56 @@ class TestEquation414Overall:
         est = TripleDifference(
             estimation_method="dr", control_group="never_treated", anticipation=anticipation
         )
-        return est.fit(data, **_FIT_KW, aggregate=aggregate)
+        return est.fit(data, **_FIT_KW)
 
     def test_overall_es_is_unweighted_mean_of_post_es(self):
-        res = self._fit("event_study")
-        assert res.overall_att_es is not None
-        assert res.event_study_effects is not None
-        post = [
-            es["effect"]
-            for e, es in res.event_study_effects.items()
-            if e >= 0 and np.isfinite(es["effect"])
-        ]
-        assert abs(res.overall_att_es - float(np.mean(post))) < 1e-10
+        res = self._fit()
+        o = res.aggregate("simple", weights="event_time")
+        assert o.att.shape == (1,) and o.se.shape == (1,)
+        assert abs(o.att[0] - _post_es_mean(res, anticipation=0)) < 1e-10
 
-    def test_overall_es_none_without_event_study(self):
-        assert self._fit("simple").overall_att_es is None
-        assert self._fit(None).overall_att_es is None
+    def test_overall_es_field_gone_and_event_time_overall_always_available(self):
+        # Replaces the 3.x "None without aggregate='event_study'" test: there is no
+        # fit-time opt-in any more. The field does not exist on the container and
+        # the Eq. 4.14 overall is available post-fit on EVERY staggered fit.
+        res = self._fit()
+        assert res.design == "staggered"
+        assert not hasattr(res, "overall_att_es")
+        assert not hasattr(res, "overall_se_es")
+        assert res.event_study_effects is None
+        assert res.group_effects is None
+        assert res.cband_crit_value is None
+        o = res.aggregate("simple", weights="event_time")
+        assert np.isfinite(o.att[0])
+        assert np.isfinite(o.se[0]) and o.se[0] > 0
+        assert np.isfinite(o.t_stat[0]) and np.isfinite(o.p_value[0])
+        assert o.conf_int_lower[0] < o.att[0] < o.conf_int_upper[0]
 
     def test_overall_es_respects_anticipation_window(self):
-        # anticipation=1 => post-treatment is e >= -1 (matches the default overall_att set)
-        res = self._fit("event_study", anticipation=1)
-        assert res.overall_att_es is not None
-        assert res.event_study_effects is not None
-        post = [
-            es["effect"]
-            for e, es in res.event_study_effects.items()
-            if e >= -1 and np.isfinite(es["effect"])
-        ]
-        assert abs(res.overall_att_es - float(np.mean(post))) < 1e-10
+        # anticipation=1 => post-treatment is e >= -1 (matches the default res.att set)
+        res = self._fit(anticipation=1)
+        assert res.anticipation == 1
+        o = res.aggregate("simple", weights="event_time")
+        assert abs(o.att[0] - _post_es_mean(res, anticipation=1)) < 1e-10
+        # The window matters: averaging only e >= 0 would give a different number.
+        assert abs(o.att[0] - _post_es_mean(res, anticipation=0)) > 1e-6
 
     def test_overall_es_does_not_disturb_default_overall(self):
-        res_es = self._fit("event_study")
-        res_simple = self._fit("simple")
-        # Default overall_att stays the CS-simple aggregation regardless of ES opt-in
-        assert abs(res_es.overall_att - res_simple.overall_att) < 1e-9
-        assert res_es.overall_se_es is not None
-        assert np.isfinite(res_es.overall_se_es) and res_es.overall_se_es > 0
+        res = self._fit()
+        o = res.aggregate("simple", weights="event_time")
+        simple = res.aggregate("simple")
+        # Default res.att stays the CS-simple aggregation; aggregate('simple') relays
+        # it verbatim, and the Eq. 4.14 overall is a distinct, finite estimate.
+        assert simple.att[0] == res.att
+        assert simple.se[0] == res.se
+        assert np.isfinite(o.se[0]) and o.se[0] > 0
+        assert abs(o.att[0] - res.att) > 1e-6
 
 
 class TestEquation414OverallBootstrap:
     """Cross-surface: the Eq. 4.14 overall is finite under the multiplier bootstrap
-    (its SE is overridden by the per-draw mean of post-treatment ES(e) draws).
+    (``aggregate("simple", weights="event_time")`` REPLAYS the fit-time bootstrap;
+    its SE is the per-draw mean of post-treatment ES(e) draws, percentile inference).
     """
 
     def test_bootstrap_overall_es_finite(self):
@@ -596,11 +635,15 @@ class TestEquation414OverallBootstrap:
             control_group="never_treated",
             n_bootstrap=199,
             seed=7,
-        ).fit(data, **_FIT_KW, aggregate="event_study")
-        assert res.overall_att_es is not None
-        assert np.isfinite(res.overall_att_es)
-        assert res.overall_se_es is not None
-        assert np.isfinite(res.overall_se_es) and res.overall_se_es > 0
+        ).fit(data, **_FIT_KW)
+        assert res.inference_method == "bootstrap"
+        o = res.aggregate("simple", weights="event_time")
+        assert np.isfinite(o.att[0])
+        assert np.isfinite(o.se[0]) and o.se[0] > 0
+        assert np.isfinite(o.p_value[0])
+        assert o.conf_int_lower[0] < o.att[0] < o.conf_int_upper[0]
+        # Percentile inference: no df governs it.
+        assert np.isnan(o.df[0])
 
     def test_balance_e_empties_event_study_fails_soft(self):
         """A balance_e that removes every event-study cohort must fail SOFT (NaN +
@@ -609,8 +652,10 @@ class TestEquation414OverallBootstrap:
         Regression for the empty-rel_periods ``np.column_stack`` crash in the shared
         bootstrap mixin: ``balance_e=100`` (no cohort reaches relative time 100)
         empties the event study, so the Eq. 4.14 overall is "requested but
-        undefined" -> NaN. The default ``overall_att`` (CS-simple, balance_e-
-        independent) stays finite.
+        undefined" -> NaN. Since 4.0 ``balance_e`` is an argument of the post-fit
+        ``aggregate("simple", weights="event_time", balance_e=...)`` call, so the
+        warning is emitted BY THAT CALL, not by fit. The default ``res.att``
+        (CS-simple, balance_e-independent) stays finite.
         """
         data = generate_staggered_ddd_data(
             n_units=400, cohort_periods=[3, 5], treatment_effect=3.0, seed=71
@@ -619,13 +664,20 @@ class TestEquation414OverallBootstrap:
             est = TripleDifference(
                 estimation_method="dr", control_group="never_treated", n_bootstrap=nb, seed=3
             )
-            with pytest.warns(UserWarning):
-                res = est.fit(data, **_FIT_KW, aggregate="event_study", balance_e=100)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # low-n_bootstrap advisory on nb=10
+                res = est.fit(data, **_FIT_KW)
+            with pytest.warns(
+                UserWarning,
+                match="no post-treatment horizons are available for the Eq. 4.14 overall",
+            ):
+                o = res.aggregate("simple", weights="event_time", balance_e=100)
             # requested-but-undefined -> NaN (not a stale value, not a crash)
-            assert res.overall_att_es is not None and np.isnan(res.overall_att_es)
-            assert res.overall_se_es is None or np.isnan(res.overall_se_es)
-            # default overall_att is balance_e-independent and stays finite
-            assert np.isfinite(res.overall_att)
+            assert o.att.shape == (1,)
+            assert np.isnan(o.att[0])
+            assert np.isnan(o.se[0])
+            # default res.att is balance_e-independent and stays finite
+            assert np.isfinite(res.att)
 
 
 class TestAggregationReturnContract:
@@ -664,8 +716,8 @@ class TestRankGuardedAnalyticalSE:
 
     The per-pair outcome-regression bread and propensity-score Hessian are
     near-singular when a covariate is constant/collinear. Previously
-    np.linalg.solve / np.linalg.inv returned a garbage inverse (overall_se
-    inflated 30-100x); the rank-guarded inverse drops the redundant direction,
+    np.linalg.solve / np.linalg.inv returned a garbage inverse (the headline
+    ``se`` inflated 30-100x); the rank-guarded inverse drops the redundant direction,
     giving a finite SE equal to fitting without the redundant covariate.
     """
 
@@ -703,9 +755,9 @@ class TestRankGuardedAnalyticalSE:
                 covariates=["x1", "xc"],
             )
 
-        assert np.isfinite(with_const.overall_se)
-        assert with_const.overall_se < 1.0  # was 30-100x inflated
-        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        assert np.isfinite(with_const.se)
+        assert with_const.se < 1.0  # was 30-100x inflated
+        np.testing.assert_allclose(with_const.se, drop_one.se, rtol=1e-9)
 
     def test_constant_covariate_emits_rank_guard_warning(self):
         # reg uses the OR bread only -> exactly one OR-path rank-guard warning.
@@ -739,7 +791,7 @@ class TestRankGuardedAnalyticalSE:
                 covariates=["x1", "x2"],
             )
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.se)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_survey_weighted_constant_covariate_finite_se(self, method):
@@ -781,9 +833,9 @@ class TestRankGuardedAnalyticalSE:
                 covariates=["x1", "xc"],
                 survey_design=sd,
             )
-        assert np.isfinite(with_const.overall_se)
-        assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        assert np.isfinite(with_const.se)
+        assert with_const.se < 1.0
+        np.testing.assert_allclose(with_const.se, drop_one.se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_notyettreated_silent_constant_covariate(self, method):
@@ -808,8 +860,8 @@ class TestRankGuardedAnalyticalSE:
                 partition="eligibility",
                 covariates=["x1", "xc"],
             )
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se < 1.0
+        assert np.isfinite(res.se)
+        assert res.se < 1.0
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
@@ -877,8 +929,8 @@ class TestRankGuardedAnalyticalSE:
                 partition="eligibility",
                 covariates=["x1", "x2d"],
             )
-        assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
-        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
+        assert np.isfinite(with_deg.se) and with_deg.se > 0
+        np.testing.assert_allclose(with_deg.se, drop_one.se, rtol=5e-2)
 
 
 class TestStaggeredTripleDiffCovariateScaleEquilibration:
@@ -906,7 +958,7 @@ class TestStaggeredTripleDiffCovariateScaleEquilibration:
 
     def test_or_fit_offset_invariant(self):
         """A 1e6 constant offset on the covariate (absorbed by the intercept)
-        leaves ATT(g,t) unchanged — the OR fit is scale-equilibrated."""
+        leaves ATT(g,t) unchanged - the OR fit is scale-equilibrated."""
         base = self._fit(0.0)
         shifted = self._fit(1e6)
         common = set(base.group_time_effects) & set(shifted.group_time_effects)

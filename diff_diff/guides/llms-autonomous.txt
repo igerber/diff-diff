@@ -1213,8 +1213,10 @@ Top-level keys emitted by `BusinessReport.to_dict()`
 (source: `diff_diff/business_report.py`):
 
 - `schema_version: str` - `BUSINESS_REPORT_SCHEMA_VERSION`, e.g. `"4.0"`.
-- `estimator: dict` - `class_name` (the fitted result class) and a
-  human-friendly `display_name`.
+- `estimator: dict` - `class_name` (the fitted result class), a
+  human-friendly `display_name`, and `design` (`"2x2x2"` / `"staggered"`
+  for `TripleDifferenceResults`, which serves both DDD designs since 4.0;
+  `None` for every other estimator).
 - `context: dict` - the `BusinessContext` bundle: `outcome_label`,
   `outcome_unit`, `outcome_direction`, `business_question`,
   `treatment_label`, `alpha`.
@@ -1254,6 +1256,9 @@ Top-level keys (source: `diff_diff/diagnostic_report.py`):
 
 - `schema_version: str` - `DIAGNOSTIC_REPORT_SCHEMA_VERSION`.
 - `estimator: str` - the fitted result class name.
+- `design: str | None` - `"2x2x2"` / `"staggered"` for
+  `TripleDifferenceResults` (both DDD designs share the class since 4.0);
+  `None` for every other estimator.
 - `headline_metric: dict` - the main scalar the report headlines.
 - `target_parameter: dict` - same shape as the BR field above.
 - `parallel_trends: dict` - PT test result.

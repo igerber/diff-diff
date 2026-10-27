@@ -155,9 +155,9 @@ Field semantics:
     fallback).
 - `headline_attribute` — the raw result attribute the scalar
   comes from (`"att"` for every estimator container since the 4.0
-  storage flip, rows M-050..M-058; `"overall_att"` only for the
-  unflipped `StaggeredTripleDiffResults` until the item-6 container
-  unification; `"twfe_estimate"` for the BaconDecomposition read-out;
+  storage flip, rows M-050..M-058, and - since the item-6 container
+  unification retired `StaggeredTripleDiffResults` - for both
+  `TripleDifferenceResults` designs; `"twfe_estimate"` for the BaconDecomposition read-out;
   `"avg_att"` left with the removed MultiPeriodDiDResults at 4.0), OR `None` when `aggregation ==
   "no_scalar_headline"` (the dCDH `trends_linear=True,
   L_max>=2` branch where `att` is intentionally NaN by
@@ -402,7 +402,7 @@ a library setting.
   container (M-093 seventh amendment). Other staggered families with
   event-study output (`ImputationDiDResults`, `TwoStageDiDResults`,
   `SpilloverDiDResults`, `StackedDiDResults`, `EfficientDiDResults`,
-  `StaggeredTripleDiffResults`, `WooldridgeDiDResults`,
+  `TripleDifferenceResults` (staggered design), `WooldridgeDiDResults`,
   `ChaisemartinDHaultfoeuilleResults`) do not yet have a power
   adapter and therefore render the `no_detected_violation` tier as
   `underpowered` with the fallback reason recorded in
@@ -594,10 +594,15 @@ a library setting.
   read `"att"` where they read `"overall_att"` under 3.x (BR's `headline`
   block carries no name key, so BR's bump covers `headline_attribute` only).
   Value changes in an existing string field are renames under the policy
-  above, hence the major bumps. `StaggeredTripleDiffResults` is unflipped
-  until item 6: its `headline_attribute` stays `"overall_att"`, while its
-  `headline_metric.name` is `"att"` like every other scalar headline (the
-  single alias row reads the canonical forwarding properties).
+  above, hence the major bumps. Item 6 (2026-10-27, the DDD container
+  unification, row M-014) folds into the SAME bump - DR 3.0 / BR 4.0 had not
+  shipped: `StaggeredTripleDiffResults` is retired, so the DR class-name
+  string and BR's `class_name` read `TripleDifferenceResults` for staggered DDD
+  fits, their `target_parameter.headline_attribute` reads `"att"` (the last
+  `"overall_att"`), and both schemas gain an additive `design` key - top-level
+  in DR, inside BR's class-name block - holding `"2x2x2"` / `"staggered"` for
+  `TripleDifferenceResults` and `None` for every other estimator (additive
+  keys need no bump under the policy above). No further version change.
 
 - **Note:** Schema version 2.0 (both BR and DR). The BR/DR gap #6
   target-parameter PR adds the `headline.status` /

@@ -43,7 +43,6 @@ ESTIMATOR_RESULTS = [
     "WooldridgeDiDResults",
     "ChaisemartinDHaultfoeuilleResults",
     "LPDiDResults",
-    "StaggeredTripleDiffResults",
     "TripleDifferenceResults",
     "TROPResults",
     "SyntheticControlResults",

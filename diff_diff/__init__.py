@@ -253,9 +253,6 @@ from diff_diff.staggered import (
     CSBootstrapResults,
     GroupTimeEffect,
 )
-from diff_diff.staggered_triple_diff_results import (
-    StaggeredTripleDiffResults,
-)
 from diff_diff.sun_abraham import (
     SABootstrapResults,
     SunAbraham,
@@ -383,7 +380,6 @@ __all__ = [
     "TwoStageBootstrapResults",
     "SpilloverDiDResults",
     "TripleDifferenceResults",
-    "StaggeredTripleDiffResults",
     "TROPResults",
     "SyntheticControlResults",
     "StackedDiDResults",

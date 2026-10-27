@@ -68,10 +68,10 @@ class BaseResults:
       ``conf_int`` bound to ONE coherent inference row. Native fields on
       every estimator container since the 4.0 storage flip (ledger rows
       M-050..M-058; the legacy ``overall_*`` names live on as read-only
-      FutureWarning properties until 5.0) EXCEPT
-      :class:`StaggeredTripleDiffResults`, which keeps ``overall_*``
-      storage behind property aliases until the item-6 container
-      unification retires it.
+      FutureWarning properties until 5.0); the last ``overall_*`` container,
+      ``StaggeredTripleDiffResults``, was retired by the item-6 DDD
+      container unification (row M-014) in favour of the canonical
+      :class:`~diff_diff.TripleDifferenceResults`.
     - **Serialization.** ``summary(alpha=None)``, ``to_dict()`` (canonical
       key names only - deprecated names never leak into serialized
       output), and ``to_dataframe(level=...)`` where multiple views exist.
@@ -889,7 +889,12 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     # Absence only possible on pre-3.9 pickles: 3.9+ fits always
     # materialize the surface (row M-024).
     "StackedDiDResults": "re-fit with diff-diff >= 3.9, which always computes the surface",
-    "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
+    # Post-fit since 4.0 (rows M-014/M-140/M-141); the 2x2x2 design has no
+    # event-study surface at all.
+    "TripleDifferenceResults": (
+        "call results.aggregate('event_study') (staggered design only - the 2x2x2 "
+        "design has a single ATT)"
+    ),
     "EfficientDiDResults": "call results.aggregate('event_study')",
     "ContinuousDiDResults": (
         "call results.aggregate('event_study') (a bootstrapped fit from before "
@@ -1073,7 +1078,8 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     Covers CallawaySantAnna, DMLDiD (via its inherited CS container
     channel), SunAbraham, ImputationDiD, TwoStageDiD,
     StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, Wooldridge
-    (``att`` inner key normalized here), and StaggeredTripleDiff.
+    (``att`` inner key normalized here), and TripleDifference's staggered
+    design (through the carrier its ``aggregate('event_study')`` builds).
 
     Reference resolution is PRODUCER-AWARE, because a zero count is not a
     universal reference marker:

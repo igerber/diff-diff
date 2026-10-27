@@ -50,6 +50,7 @@ from diff_diff.diagnostic_report import (
 _TOP_LEVEL_KEYS = {
     "schema_version",
     "estimator",
+    "design",
     "headline_metric",
     "target_parameter",
     "parallel_trends",
@@ -3608,7 +3609,11 @@ class TestDerivedEventStudySurface:
         # DR must never auto-call Wooldridge's MUTATING aggregate.
         assert w.event_study_effects is None
 
-    def test_staggered_triple_diff_reason_names_canonical_kwarg(self):
+    def test_staggered_triple_diff_derives_pt_post_fit(self):
+        """Item 6 (rows M-014/M-140): the staggered DDD container has post-fit
+        ``aggregate('event_study')``, so DR derives the pre-period surface itself
+        - no "re-fit with aggregate=" advice survives, and the schema records the
+        fitted design."""
         from diff_diff import TripleDifference
 
         sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
@@ -3621,10 +3626,13 @@ class TestDerivedEventStudySurface:
             time="period",
             first_treat="first_treat",
         )
-        skipped = DiagnosticReport(t).run_all().skipped_checks
-        assert "aggregate='event_study'" in skipped["parallel_trends"]
-        assert "canonical" in skipped["parallel_trends"]
-        assert "deprecated" not in skipped["parallel_trends"]
+        dr = DiagnosticReport(t).run_all()
+        assert "parallel_trends" in dr.applicable_checks
+        reason = dr.skipped_checks.get("parallel_trends", "")
+        assert "Re-fit" not in reason and "fit-time" not in reason
+        assert "aggregate='event_study'" not in reason
+        assert dr.to_dict()["design"] == "staggered"
+        assert dr.to_dict()["estimator"] == "TripleDifferenceResults"
 
     def test_plain_imputation_twostage_continuous_heterogeneity(
         self, imp_pretrends_fits, ts_pretrends_fits
