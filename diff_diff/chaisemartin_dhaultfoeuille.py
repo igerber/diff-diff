@@ -4183,11 +4183,11 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             _es_df_provenance = float(_final_inf_df)
 
         results = ChaisemartinDHaultfoeuilleResults(
-            overall_att=effective_overall_att,
-            overall_se=effective_overall_se,
-            overall_t_stat=effective_overall_t,
-            overall_p_value=effective_overall_p,
-            overall_conf_int=effective_overall_ci,
+            att=effective_overall_att,
+            se=effective_overall_se,
+            t_stat=effective_overall_t,
+            p_value=effective_overall_p,
+            conf_int=effective_overall_ci,
             joiners_att=joiners_att if effective_joiners_available else float("nan"),
             joiners_se=joiners_se if effective_joiners_available else float("nan"),
             joiners_t_stat=joiners_t if effective_joiners_available else float("nan"),

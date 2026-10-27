@@ -534,7 +534,10 @@ dtype, int labels never become floats).
 
 **Pickle migration.** Renamed-field classes ship `__setstate__` migration
 following the existing `SyntheticDiDResults.__setstate__` precedent
-(diff_diff/results.py) so 3.x pickles load under 4.0.
+(diff_diff/results.py) so 3.x pickles load under 4.0; the nine M-050..M-058
+containers do so through `_deprecation.migrate_renamed_state_keys` with the
+shared `LEGACY_OVERALL_QUINTET` key map (an existing canonical key wins; the
+legacy key never lingers in `__dict__`).
 
 ## 6. Aggregation contract: `results.aggregate(type=...)`
 
@@ -1153,6 +1156,23 @@ tests-first PR that flips no rows).
 5. Storage flip [M-050]..[M-058] + pickle migration + the `.att` sweep over
    docs/notebooks/guides/benchmarks (incl. a disposition for the un-rowed
    `CSBootstrapResults.overall_att_se`).
+   (SHIPPED as three PRs: 5a (#873) and 5a-ii (#874) migrated every
+   in-repo reader - source, tests, docs, notebooks, guides, benchmarks - to
+   the canonical quintet ahead of the flip; 5b, 2026-10-26, flipped the
+   storage: the quintet are the native fields, renamed in slot, with the
+   `overall_*` names as read-only `deprecated_field_property` FutureWarning
+   shims (removed 5.0), `DMLDiDResults` re-declaring the five shims so the
+   warning names the subclass, `__setstate__` migration through the new
+   `_deprecation.migrate_renamed_state_keys` / `LEGACY_OVERALL_QUINTET`,
+   ContinuousDiD's nine spellings shimmed, the report surface reading the
+   raw attribute as `att` (DR schema 3.0, BR 4.0), and
+   `tests/test_v4_storage_flip.py` as the nine rows' `test_ref`.
+   Disposition of the bootstrap draw containers
+   (`CSBootstrapResults.overall_att_se` and siblings, `DCDHBootstrapResults.
+   overall_se` and siblings): LEFT AS-IS, user decision 2026-10-26, recorded
+   as the REGISTRY.md "Result-class field naming" Note - they hold no point
+   estimate, so the quintet contract does not apply. `StaggeredTripleDiffResults`
+   is unflipped and dies at item 6.)
 6. DDD container unification [M-014] [M-140] [M-141] (user decision: lands at
    4.0, not re-scheduled), born with canonical fields - after 5, so the
    unified container never carries `overall_*` storage.

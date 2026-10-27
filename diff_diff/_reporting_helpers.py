@@ -51,11 +51,11 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
     - ``ImputationDiD`` / ``TwoStageDiD``: horizon / group tables come
       from post-fit ``results.aggregate('event_study'/'group')`` since
       3.9 (the fit-time ``aggregate`` kwarg was removed at 4.0) and never
-      change ``overall_att``. The headline is always the sample-mean
+      change ``att``. The headline is always the sample-mean
       overall ATT (per BJS 2024 Step 3 with ``w_it = 1/N_1``);
       disambiguate via the event-study or group aggregate if you need
       the horizon / group target.
-    - ``CallawaySantAnna``: ``overall_att`` is cohort-size-weighted
+    - ``CallawaySantAnna``: ``att`` is cohort-size-weighted
       across post-treatment ``ATT(g, t)`` cells regardless of any
       aggregation. The event-study / group tables are produced post-fit
       via ``results.aggregate('event_study'/'group')``; the legacy
@@ -66,13 +66,13 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
       both regime readings (``ATT^loc`` under PT,
       ``ATT^glob`` under SPT) so the user can pick the
       interpretation that matches their assumption.
-    - ``WooldridgeDiD``: ``overall_att`` depends on the fit-time
+    - ``WooldridgeDiD``: ``att`` depends on the fit-time
       ``method`` — for OLS ETWFE (``method="ols"``) it is the
       observation-count-weighted average of ``ATT(g, t)``
       coefficients from the saturated regression; for nonlinear
       ETWFE (``method="logit"`` / ``"poisson"``) it is the
       average-structural-function (ASF) contrast across cohort x
-      time cells. Both paths preserve ``overall_att`` across
+      time cells. Both paths preserve ``att`` across
       ``.aggregate("event_study")`` calls (which only populate additional
       event-study tables).
     """
@@ -123,7 +123,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "definition": (
                 "A cohort-size-weighted average of group-time ATTs "
                 "``ATT(g, t)`` across post-treatment cells (``t >= g``). "
-                "``overall_att`` is the simple-aggregation headline regardless "
+                "``att`` is the simple-aggregation headline regardless "
                 "of aggregation choices; event-study and group tables are "
                 "produced post-fit via "
                 "``results.aggregate('event_study'/'group')`` (the legacy "
@@ -131,7 +131,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "on every CallawaySantAnna fit since 4.0)."
             ),
             "aggregation": "simple",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Callaway & Sant'Anna (2021); REGISTRY.md Sec. CallawaySantAnna",
         }
 
@@ -203,12 +203,12 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "anticipation=0) — " + weight_clause + " — "
                 "where each cell is a conditional-on-covariates ATT "
                 + score_clause
-                + ". ``overall_att`` is the simple-aggregation "
+                + ". ``att`` is the simple-aggregation "
                 "headline; event-study and group tables are produced "
                 "post-fit via ``results.aggregate('event_study'/'group')``."
             ),
             "aggregation": "simple",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": reference,
         }
 
@@ -222,7 +222,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "each event time; the headline is the resulting overall ATT."
             ),
             "aggregation": "iw",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Sun & Abraham (2021); REGISTRY.md Sec. SunAbraham",
         }
 
@@ -237,12 +237,12 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "untreated observations only (BJS 2024 Step 3). Post-fit "
                 "``results.aggregate('event_study'/'group')`` (3.9; the "
                 "fit-time ``aggregate`` kwarg was removed at 4.0) yields the "
-                "horizon / group tables and does NOT change ``overall_att`` "
+                "horizon / group tables and does NOT change ``att`` "
                 "— for the horizon or group estimand, consult the "
                 "event-study or group aggregate directly."
             ),
             "aggregation": "simple",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Borusyak-Jaravel-Spiess (2024); REGISTRY.md Sec. ImputationDiD",
         }
 
@@ -258,10 +258,10 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "equivalent to Borusyak-Jaravel-Spiess imputation. As with "
                 "ImputationDiD, post-fit ``results.aggregate(...)`` (3.9) "
                 "yields the additional tables and does NOT change "
-                "``overall_att``."
+                "``att``."
             ),
             "aggregation": "simple",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Gardner (2022); REGISTRY.md Sec. TwoStageDiD",
         }
 
@@ -295,19 +295,19 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "set over the event window ``[-kappa_pre, +kappa_post]``; "
                 "each per-horizon ``delta_h`` is the paper's "
                 "``theta_kappa^e`` treated-share-weighted cross-event "
-                "aggregate. The ``overall_att`` headline is the equally-"
+                "aggregate. The ``att`` headline is the equally-"
                 "weighted average of these per-horizon coefficients, not a "
                 "separate cross-event weighted aggregate at the ATT level. " + control_clause
             ),
             "aggregation": "stacked",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Wing-Freedman-Hollingsworth (2024); REGISTRY.md Sec. StackedDiD",
         }
 
     if name == "WooldridgeDiDResults":
         # PR #347 R4 P2: Wooldridge ETWFE has two identification paths
         # (REGISTRY.md splits them at Sec. WooldridgeDiD): the OLS
-        # path computes ``overall_att`` as an observation-count-
+        # path computes ``att`` as an observation-count-
         # weighted aggregation of ``ATT(g, t)`` coefficients from the
         # saturated regression, while the nonlinear (logit / Poisson)
         # paths produce an ASF-based ATT from the average-structural-
@@ -324,14 +324,14 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "definition": (
                     "The overall ATT under OLS ETWFE (Wooldridge 2025): the "
                     "saturated regression fits cohort x time ATT(g, t) "
-                    "coefficients, and ``overall_att`` is their "
+                    "coefficients, and ``att`` is their "
                     "observation-count-weighted average across post-"
                     'treatment cells. Calling ``.aggregate("event_study")`` '
                     "populates additional event-study tables but does NOT "
-                    "change the ``overall_att`` scalar."
+                    "change the ``att`` scalar."
                 ),
                 "aggregation": "simple",
-                "headline_attribute": "overall_att",
+                "headline_attribute": "att",
                 "reference": ("Wooldridge (2025); REGISTRY.md Sec. WooldridgeDiD (OLS path)"),
             }
         return {
@@ -348,17 +348,17 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 f"nonlinearity; OLS ETWFE uses the saturated-regression "
                 f'coefficient path instead. Calling ``.aggregate("event_study")`` '
                 f"populates additional event-study tables but does NOT "
-                f"change the ``overall_att`` scalar."
+                f"change the ``att`` scalar."
             ),
             "aggregation": "simple",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": (
                 "Wooldridge (2023, 2025); REGISTRY.md Sec. WooldridgeDiD " "(nonlinear / ASF path)"
             ),
         }
 
     if name == "EfficientDiDResults":
-        # PR #347 R7 P1: the BR/DR headline ``overall_att`` is the
+        # PR #347 R7 P1: the BR/DR headline ``att`` is the
         # library's cohort-size-weighted average over post-treatment
         # ``(g, t)`` cells (see ``efficient_did.py`` around line 1274
         # and REGISTRY.md Sec. EfficientDiD). This is distinct from
@@ -369,7 +369,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         # the aggregation choice for the headline scalar.
         pt_assumption = getattr(results, "pt_assumption", "all")
         library_aggregation_note = (
-            " The BR/DR headline ``overall_att`` is the library's "
+            " The BR/DR headline ``att`` is the library's "
             "cohort-size-weighted average of ATT(g, t) over post-"
             "treatment cells, NOT the paper's ``ES_avg`` uniform event-"
             "time average (see REGISTRY.md Sec. EfficientDiD for the "
@@ -386,7 +386,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                     "single-baseline DiD (Corollary 3.2)." + library_aggregation_note
                 ),
                 "aggregation": "pt_post_single_baseline",
-                "headline_attribute": "overall_att",
+                "headline_attribute": "att",
                 "reference": "Chen-Sant'Anna-Xie (2025) Cor. 3.2; REGISTRY.md Sec. EfficientDiD",
             }
         return {
@@ -399,7 +399,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "efficiency bound on the no-covariate path." + library_aggregation_note
             ),
             "aggregation": "pt_all_combined",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Chen-Sant'Anna-Xie (2025) Lemma 2.1; REGISTRY.md Sec. EfficientDiD",
         }
 
@@ -418,7 +418,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "dose-specific inference."
             ),
             "aggregation": "dose_overall",
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": "Callaway-Goodman-Bacon-Sant'Anna (2024); REGISTRY.md Sec. ContinuousDiD",
         }
 
@@ -460,7 +460,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         # ``linear_trends_effects is not None``. The estimator can set
         # ``linear_trends_effects = None`` when the cumulated-horizon
         # dict is empty (no estimable horizons) while still
-        # unconditionally NaN-ing ``overall_att`` under
+        # unconditionally NaN-ing ``att`` under
         # ``trends_linear=True`` + ``L_max >= 2``
         # (``chaisemartin_dhaultfoeuille.py:2828-2834``). The previous
         # inference missed that edge case; the new explicit flag
@@ -476,7 +476,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "de Chaisemartin & D'Haultfoeuille (2020, 2024); "
             "REGISTRY.md Sec. ChaisemartinDHaultfoeuille"
         )
-        # PR #347 R2 P1 review: mirror the exact ``overall_att``
+        # PR #347 R2 P1 review: mirror the exact ``att``
         # contract from ``chaisemartin_dhaultfoeuille.py`` lines
         # 2602-2634 (L_max>=2 overrides with cost-benefit ``delta``,
         # NaN if non-estimable) and lines 2828-2834 (``trends_linear``
@@ -485,7 +485,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         # ``chaisemartin_dhaultfoeuille_results.py:454-490`` is the
         # source-of-truth; this branch tracks that logic.
 
-        # Trends + L_max>=2: overall_att is NaN. No scalar aggregate;
+        # Trends + L_max>=2: ``att`` is NaN. No scalar aggregate;
         # per-horizon effects are on ``linear_trends_effects``.
         if has_trends and l_max is not None and l_max >= 2:
             # PR #347 R12 P1: distinguish the populated-surface case
@@ -509,7 +509,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 definition_text = (
                     "Under ``trends_linear=True`` with ``L_max >= 2``, the "
                     "estimator intentionally does NOT produce a scalar "
-                    "aggregate in ``overall_att`` (it is NaN by design, "
+                    "aggregate in ``att`` (it is NaN by design, "
                     "matching R's ``did_multiplegt_dyn`` with "
                     "``trends_lin=TRUE``). On this fit, no cumulated level "
                     f"effects ``{estimand_label}`` survived estimation "
@@ -525,7 +525,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 definition_text = (
                     "Under ``trends_linear=True`` with ``L_max >= 2``, the "
                     "estimator intentionally does NOT produce a scalar "
-                    "aggregate in ``overall_att`` (it is NaN by design, "
+                    "aggregate in ``att`` (it is NaN by design, "
                     "matching R's ``did_multiplegt_dyn`` with "
                     "``trends_lin=TRUE``). Per-horizon cumulated level "
                     "effects ``DID^{fd}_l`` (or ``DID^{X,fd}_l`` when "
@@ -586,7 +586,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "``delta = sum_l w_l * DID_l`` (Lemma 4 of the dCDH "
                 "dynamic companion paper), a weighted cross-horizon "
                 "combination where ``w_l`` reflects the cumulative dose at "
-                "each horizon. ``overall_att`` holds this delta when "
+                "each horizon. ``att`` holds this delta when "
                 "``L_max >= 2``; if delta is non-estimable (no eligible "
                 "switchers at any horizon) it is NaN with the same "
                 "``overall_se`` / CI surface."
@@ -635,7 +635,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "name": f"{name_label} ({base_label})",
             "definition": definition_core + suffix_clause,
             "aggregation": agg_base + agg_suffix,
-            "headline_attribute": "overall_att",
+            "headline_attribute": "att",
             "reference": reference,
         }
 

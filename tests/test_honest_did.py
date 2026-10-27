@@ -812,11 +812,11 @@ class TestEdgeCases:
         # Create CS results with valid pre-periods but NaN SEs in post-periods
         cs_results = CallawaySantAnnaResults(
             group_time_effects={},
-            overall_att=np.nan,
-            overall_se=np.nan,
-            overall_t_stat=np.nan,
-            overall_p_value=np.nan,
-            overall_conf_int=(np.nan, np.nan),
+            att=np.nan,
+            se=np.nan,
+            t_stat=np.nan,
+            p_value=np.nan,
+            conf_int=(np.nan, np.nan),
             groups=[2004],
             time_periods=[2000, 2001, 2002, 2003],
             n_obs=400,

@@ -53,7 +53,7 @@ from diff_diff._reporting_helpers import describe_target_parameter
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
 
-BUSINESS_REPORT_SCHEMA_VERSION = "3.0"
+BUSINESS_REPORT_SCHEMA_VERSION = "4.0"
 
 __all__ = [
     "BusinessReport",
@@ -633,9 +633,8 @@ class BusinessReport:
         r = self._results
         # Delegate the attribute-alias lookup to the shared helper in the
         # diagnostic_report module so BR and DR agree on which fields a
-        # result class exposes for its headline (including
-        # ``ContinuousDiDResults`` which uses ``overall_att_se`` /
-        # ``overall_att_p_value`` / ``overall_att_conf_int``).
+        # result class exposes for its headline (the canonical quintet on
+        # every scalar-headline container since the 4.0 storage flip).
         from diff_diff.diagnostic_report import _extract_scalar_headline
 
         extracted = _extract_scalar_headline(r, fallback_alpha=self._context.alpha)
@@ -2231,7 +2230,7 @@ def _render_headline_sentence(schema: Dict[str, Any]) -> str:
     h = schema.get("headline", {})
     # PR #347 R4 P1: the dCDH ``trends_linear=True`` + ``L_max>=2``
     # configuration does not produce a scalar headline by design —
-    # ``overall_att`` is intentionally NaN (per
+    # ``att`` is intentionally NaN (per
     # ``chaisemartin_dhaultfoeuille.py:2828-2834``). Render explicit
     # "no scalar headline by design" prose instead of routing through
     # the non-finite / estimation-failure path.

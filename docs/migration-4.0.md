@@ -228,13 +228,14 @@ replicate-weight `ImputationDiD`/`TwoStageDiD` designs: the plain fit's replicat
 
 ## Results fields
 
-Nine containers rename `overall_att` to the canonical `att`. **The new accessor already works
-today**, so this migration can be done immediately; the old name becomes a warning-emitting
-property at 4.0 and is removed at 5.0.
+Nine containers rename `overall_att` to the canonical `att`. Since 4.0 the canonical name
+is the stored dataclass field and the old name is a read-only warning-emitting property
+(removed at 5.0); the new accessor already worked under 3.x, so a codebase that migrated
+early sees no change.
 
 ```python
-att = results.att          # canonical, works now
-att = results.overall_att  # warns from 4.0, removed at 5.0
+att = results.att          # canonical: the stored field
+att = results.overall_att  # FutureWarning since 4.0, removed at 5.0
 ```
 
 **The whole inference quintet moves, not just the point estimate.** Wherever a container
@@ -250,11 +251,34 @@ names in the same step:
 | `overall_conf_int` | `conf_int` |
 
 ```{note}
-`ContinuousDiDResults` is the outlier: its sibling fields are spelled
+`ContinuousDiDResults` is the outlier: its sibling fields were spelled
 `overall_att_se`, `overall_att_t_stat`, `overall_att_p_value` and
-`overall_att_conf_int` — with the `att` infix — and they flip to the same canonical
-names. If you grep for `overall_se` you will miss them.
+`overall_att_conf_int` — with the `att` infix — and they flipped to the same canonical
+names. If you grep for `overall_se` you will miss them. Since 4.0 all nine of its legacy
+spellings warn: the five former fields AND the four former silent `overall_se` /
+`overall_t_stat` / `overall_p_value` / `overall_conf_int` aliases.
 ```
+
+**Constructing a results object by hand** (test fixtures, adapters) takes the canonical
+keywords: `CallawaySantAnnaResults(att=..., se=..., t_stat=..., p_value=..., conf_int=..., ...)`.
+Passing a legacy keyword such as `overall_att=` raises `TypeError`. The fields were renamed in
+their original slots, so positional construction order is unchanged.
+
+**Pickles written under 3.x load unchanged.** Each flipped container's `__setstate__` rewrites
+the legacy `overall_*` keys to the canonical names on load (an existing canonical key wins),
+so the loaded object stores the quintet natively and `overall_*` never reappear in its
+`__dict__` or in a re-pickle.
+
+**The legacy names are read-only.** Assigning `results.overall_se = x` raises
+`AttributeError`; assign the canonical field (`results.se = x`) instead. The bootstrap draw
+containers (`results.bootstrap_results.overall_att_se` and friends) are NOT part of this
+flip: they hold no point estimate, keep their payload names, and emit no warning.
+
+**Report schemas.** `DiagnosticReport.to_dict()` reports `headline_metric.name` and
+`target_parameter.headline_attribute` as `"att"` for the nine containers (`"overall_att"`
+under 3.x), and `DIAGNOSTIC_REPORT_SCHEMA_VERSION` is `"3.0"`;
+`BusinessReport.to_dict()` reports `target_parameter.headline_attribute` as `"att"` likewise
+and `BUSINESS_REPORT_SCHEMA_VERSION` is `"4.0"` (its `headline` block carries no name key).
 
 ## Inference defaults that move numbers
 
@@ -459,15 +483,15 @@ does not mean no action is required, so read the `Fix` cell.
 | M-130 | df-convention-flip | `diff_diff:StackedDiD[df_convention]` | — | The `df_convention` default flips to `"cluster"`; pass `df_convention="residual"` to keep 3.x numbers. |
 | M-131 | df-convention-flip | `diff_diff:ImputationDiD[df_convention]` | — | The `df_convention` default flips to `"cluster"`; pass `df_convention="residual"` to keep 3.x numbers. |
 | M-090 | diagnostic-family | `diff_diff:BaconDecomposition` | — | Bacon moves out of the estimator roster into the diagnostics family - update docs references and imports of the roster, not call sites. |
-| M-050 | field-flip | `diff_diff:CallawaySantAnnaResults.overall_att` | `diff_diff:CallawaySantAnnaResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-051 | field-flip | `diff_diff:SunAbrahamResults.overall_att` | `diff_diff:SunAbrahamResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-052 | field-flip | `diff_diff:ImputationDiDResults.overall_att` | `diff_diff:ImputationDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-053 | field-flip | `diff_diff:TwoStageDiDResults.overall_att` | `diff_diff:TwoStageDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-054 | field-flip | `diff_diff:StackedDiDResults.overall_att` | `diff_diff:StackedDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-055 | field-flip | `diff_diff:EfficientDiDResults.overall_att` | `diff_diff:EfficientDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-056 | field-flip | `diff_diff:WooldridgeDiDResults.overall_att` | `diff_diff:WooldridgeDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-057 | field-flip | `diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att` | `diff_diff:ChaisemartinDHaultfoeuilleResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
-| M-058 | field-flip | `diff_diff:ContinuousDiDResults.overall_att` | `diff_diff:ContinuousDiDResults.att` | Read `att` instead of `overall_att`; the canonical accessor already works today. |
+| M-050 | field-flip | `diff_diff:CallawaySantAnnaResults.overall_att` | `diff_diff:CallawaySantAnnaResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-051 | field-flip | `diff_diff:SunAbrahamResults.overall_att` | `diff_diff:SunAbrahamResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-052 | field-flip | `diff_diff:ImputationDiDResults.overall_att` | `diff_diff:ImputationDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-053 | field-flip | `diff_diff:TwoStageDiDResults.overall_att` | `diff_diff:TwoStageDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-054 | field-flip | `diff_diff:StackedDiDResults.overall_att` | `diff_diff:StackedDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-055 | field-flip | `diff_diff:EfficientDiDResults.overall_att` | `diff_diff:EfficientDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-056 | field-flip | `diff_diff:WooldridgeDiDResults.overall_att` | `diff_diff:WooldridgeDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-057 | field-flip | `diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att` | `diff_diff:ChaisemartinDHaultfoeuilleResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-058 | field-flip | `diff_diff:ContinuousDiDResults.overall_att` | `diff_diff:ContinuousDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
 | M-070 | function-wrappers | `diff_diff:imputation_did` | — | Call the estimator class directly instead of `imputation_did`. |
 | M-071 | function-wrappers | `diff_diff:two_stage_did` | — | Call the estimator class directly instead of `two_stage_did`. |
 | M-072 | function-wrappers | `diff_diff:stacked_did` | — | Call the estimator class directly instead of `stacked_did`. |

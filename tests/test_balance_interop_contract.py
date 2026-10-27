@@ -278,10 +278,11 @@ def test_result_accepts_provenance_attribute(fitted_cs):
     fitted_cs._balance_adjustment = sentinel
     assert fitted_cs._balance_adjustment is sentinel
     del fitted_cs._balance_adjustment
-    # ...while the flat aliases stay read-only properties (full alias
-    # coverage lives in tests/test_result_aliases.py - not duplicated here).
+    # ...while the legacy ``overall_*`` names are read-only FutureWarning
+    # properties since the 4.0 storage flip (the canonical ``att`` is the
+    # stored field; full coverage lives in tests/test_result_aliases.py).
     with pytest.raises(AttributeError):
-        fitted_cs.att = 0.0
+        fitted_cs.overall_att = 0.0
 
 
 # ---------------------------------------------------------------------------

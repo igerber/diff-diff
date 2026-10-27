@@ -2083,11 +2083,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         # Construct results
         self.results_ = TwoStageDiDResults(
             treatment_effects=treated_df,
-            overall_att=overall_att,
-            overall_se=overall_se,
-            overall_t_stat=overall_t,
-            overall_p_value=overall_p,
-            overall_conf_int=overall_ci,
+            att=overall_att,
+            se=overall_se,
+            t_stat=overall_t,
+            p_value=overall_p,
+            conf_int=overall_ci,
             event_study_effects=event_study_effects,
             group_effects=group_effects,
             groups=treatment_groups,

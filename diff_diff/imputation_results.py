@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.aggregation import (
     AggregationMixin,
     AggregationResult,
@@ -130,15 +135,15 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
     ----------
     treatment_effects : pd.DataFrame
         Unit-level treatment effects with columns: unit, time, tau_hat, weight.
-    overall_att : float
+    att : float
         Overall average treatment effect on the treated.
-    overall_se : float
+    se : float
         Standard error of overall ATT.
-    overall_t_stat : float
+    t_stat : float
         T-statistic for overall ATT.
-    overall_p_value : float
+    p_value : float
         P-value for overall ATT.
-    overall_conf_int : tuple
+    conf_int : tuple
         Confidence interval for overall ATT.
     event_study_effects : dict, optional
         Dictionary mapping relative time h to effect dict with keys:
@@ -174,11 +179,11 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
     """
 
     treatment_effects: pd.DataFrame
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     event_study_effects: Optional[Dict[int, Dict[str, Any]]]
     group_effects: Optional[Dict[Any, Dict[str, Any]]]
     groups: List[Any]
@@ -229,26 +234,37 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
     # default ("event_study",) - CS precedent, do not redeclare.
     _AGGREGATE_SUPPORTED = ("simple", "event_study", "group", "total")
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
+    # --- Deprecated 3.x storage names (ledger row M-052) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "ImputationDiDResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "ImputationDiDResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "ImputationDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "ImputationDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "ImputationDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
-    @property
-    def se(self) -> float:
-        return self.overall_se
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles written under the ``overall_*`` storage names.
 
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+        The canonical quintet became the native fields at the 4.0 cut
+        (``docs/v4-design.md`` section 5; ``SyntheticDiDResults.__setstate__``
+        precedent): legacy keys are rewritten on load so the fields populate
+        under their canonical names and ``overall_*`` never reappear in
+        ``__dict__``.
+        """
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     # --- Post-fit aggregation (M-021/M-118) ------------------------------
 

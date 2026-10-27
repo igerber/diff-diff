@@ -473,7 +473,7 @@ can be meaningfully aggregated.
    under conditional parallel trends (`covariates=`, `estimation_method=`). Each `(g,t)` cell replaces
    the unconditional control mean with a covariate-adjusted counterfactual (`reg`:
    `ΔY_i − X_i'γ̂`; `dr`: additionally minus the DRDID augmentation `η̄_cont`); the B-spline dose
-   layer is unchanged. Scalar `overall_att` + SE match `DRDID::reg_did_panel` / `drdid_panel`. `ipw`
+   layer is unchanged. Scalar `att` + SE match `DRDID::reg_did_panel` / `drdid_panel`. `ipw`
    is not offered on the dose curve (its covariate adjustment is a scalar level shift → `ACRT(d)`
    unchanged), and `covariates=` + `survey_design=` is deferred. See REGISTRY § ContinuousDiD
    Note #5.

@@ -2874,11 +2874,11 @@ class CallawaySantAnna(
 
         self.results_ = CallawaySantAnnaResults(
             group_time_effects=group_time_effects,
-            overall_att=overall_att,
-            overall_se=overall_se,
-            overall_t_stat=overall_t,
-            overall_p_value=overall_p,
-            overall_conf_int=overall_ci,
+            att=overall_att,
+            se=overall_se,
+            t_stat=overall_t,
+            p_value=overall_p,
+            conf_int=overall_ci,
             groups=treatment_groups,
             time_periods=time_periods,
             n_obs=len(df),

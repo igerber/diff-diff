@@ -581,11 +581,10 @@ SURFACE_ALLOWLIST = {
     ),
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
     "DMLDiDResults.overall_att": (
-        "INHERITED CallawaySantAnnaResults dataclass field, not an "
-        "independent surface: the M-050 storage flip applies through "
-        "subclassing automatically, and the DMLDiDResults construction "
-        "site is in M-050's code_refs (diff_diff/dml_did.py) so the flip "
-        "PR rewrites it"
+        "re-declared deprecated_field_property shim so the FutureWarning "
+        "names the subclass; the storage is INHERITED from "
+        "CallawaySantAnnaResults and rides M-050 (dml_did_results.py / "
+        "dml_did.py are in its code_refs) - no independent row"
     ),
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"

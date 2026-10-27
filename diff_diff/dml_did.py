@@ -3280,11 +3280,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         results = DMLDiDResults(
             group_time_effects=group_time_effects,
-            overall_att=overall_att,
-            overall_se=overall_se,
-            overall_t_stat=overall_t_stat,
-            overall_p_value=overall_p_value,
-            overall_conf_int=overall_conf_int,
+            att=overall_att,
+            se=overall_se,
+            t_stat=overall_t_stat,
+            p_value=overall_p_value,
+            conf_int=overall_conf_int,
             groups=treatment_groups,
             time_periods=time_periods,
             n_obs=int(len(df)),

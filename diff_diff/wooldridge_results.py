@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.results_base import (
     _SUMMARY_ALPHA_MESSAGE,
     BaseResults,
@@ -48,11 +53,11 @@ class WooldridgeDiDResults(BaseResults):
     # ------------------------------------------------------------------ #
     # Simple (overall) aggregation — always populated at fit time         #
     # ------------------------------------------------------------------ #
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
 
     # ------------------------------------------------------------------ #
     # Other aggregations — populated by .aggregate()                      #
@@ -141,8 +146,8 @@ class WooldridgeDiDResults(BaseResults):
     # aggregation surface so ``summary()`` / ``to_dataframe()`` /
     # ``__repr__()`` can label each surface correctly under mixed-order
     # ``aggregate(weights=...)`` calls. Keys: ``"simple"`` (matches the
-    # ``overall_*`` fields), ``"group"``, ``"calendar"``, ``"event_study"``.
-    # The fit-time ``overall_*`` is cell-weighted, so ``"simple"`` is
+    # ``att``/``se``/... fields), ``"group"``, ``"calendar"``, ``"event_study"``.
+    # The fit-time ``att`` is cell-weighted, so ``"simple"`` is
     # initialized to ``"cell"`` and only flips after a successful
     # ``aggregate(type="simple", weights="cohort_share")`` call. The
     # other keys are populated lazily by ``aggregate()``. Mutation is
@@ -240,7 +245,12 @@ class WooldridgeDiDResults(BaseResults):
         which restores the pre-3.9 normal-theory aggregation for them).
         ``df_convention`` (added 3.9) defaults to ``"residual"``.
         Missing ``unsupported_period_action`` defaults to ``"drop"``.
+        Pickles written before the 4.0 storage flip (``docs/v4-design.md``
+        section 5) carry the simple aggregate under ``overall_att`` /
+        ``overall_se`` / ...; the keys are rewritten to the canonical quintet
+        BEFORE the update (key renames first, default backfills after).
         """
+        state = migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET)
         self.__dict__.update(state)
         # NOTE: check __dict__ membership, not hasattr - dataclass field
         # defaults live as CLASS attributes, so hasattr is always True.
@@ -592,11 +602,11 @@ class WooldridgeDiDResults(BaseResults):
                     )
                     se = _agg_se(w_vec)
                     eff = _build_effect(att, se, dofs.get("simple"))
-                    self.overall_att = eff["att"]
-                    self.overall_se = eff["se"]
-                    self.overall_t_stat = eff["t_stat"]
-                    self.overall_p_value = eff["p_value"]
-                    self.overall_conf_int = eff["conf_int"]
+                    self.att = eff["att"]
+                    self.se = eff["se"]
+                    self.t_stat = eff["t_stat"]
+                    self.p_value = eff["p_value"]
+                    self.conf_int = eff["conf_int"]
                     # Atomic metadata mutation — only after successful write.
                     self.aggregation_weights["simple"] = weights
 
@@ -935,26 +945,26 @@ class WooldridgeDiDResults(BaseResults):
             se = {k: v["se"] for k, v in (self.event_study_effects or {}).items()}
         plot_event_study(effects=effects, se=se, alpha=self.alpha, **kwargs)
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
-
-    @property
-    def se(self) -> float:
-        return self.overall_se
-
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+    # --- Deprecated 3.x storage names (ledger row M-056) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "WooldridgeDiDResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "WooldridgeDiDResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "WooldridgeDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "WooldridgeDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "WooldridgeDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
     def __repr__(self) -> str:
         n_gt = len(self.group_time_effects)

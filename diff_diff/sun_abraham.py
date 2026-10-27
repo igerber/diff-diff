@@ -28,6 +28,11 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
 
 if TYPE_CHECKING:
@@ -87,15 +92,15 @@ class SunAbrahamResults(BaseResults):
         percentile p-values/CIs never used a df - a narrower clearing rule
         than ``event_study_vcov``, which also clears under replicate refits
         (whose rows DID use a genuine df).
-    overall_att : float
+    att : float
         Overall average treatment effect (weighted average of post-treatment effects).
-    overall_se : float
+    se : float
         Standard error of overall ATT.
-    overall_t_stat : float
+    t_stat : float
         T-statistic for overall ATT.
-    overall_p_value : float
+    p_value : float
         P-value for overall ATT.
-    overall_conf_int : tuple
+    conf_int : tuple
         Confidence interval for overall ATT.
     cohort_weights : dict
         Dictionary mapping relative time to cohort weight dictionaries.
@@ -129,11 +134,11 @@ class SunAbrahamResults(BaseResults):
     """
 
     event_study_effects: Dict[int, Dict[str, Any]]
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     cohort_weights: Dict[int, Dict[Any, float]]
     groups: List[Any]
     time_periods: List[Any]
@@ -215,26 +220,37 @@ class SunAbrahamResults(BaseResults):
     fallback (None under "normal" = normal theory). None on bootstrap fits,
     whose overall p/CI are percentile-based and never used a df."""
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
+    # --- Deprecated 3.x storage names (ledger row M-051) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "SunAbrahamResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "SunAbrahamResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "SunAbrahamResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "SunAbrahamResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "SunAbrahamResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
-    @property
-    def se(self) -> float:
-        return self.overall_se
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles written under the ``overall_*`` storage names.
 
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+        The canonical quintet became the native fields at the 4.0 cut
+        (``docs/v4-design.md`` section 5; ``SyntheticDiDResults.__setstate__``
+        precedent): legacy keys are rewritten on load so the fields populate
+        under their canonical names and ``overall_*`` never reappear in
+        ``__dict__``.
+        """
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -1535,11 +1551,11 @@ class SunAbraham(BaseEstimator):
         # Store results
         self.results_ = SunAbrahamResults(
             event_study_effects=event_study_effects,
-            overall_att=overall_att,
-            overall_se=overall_se,
-            overall_t_stat=overall_t,
-            overall_p_value=overall_p,
-            overall_conf_int=overall_ci,
+            att=overall_att,
+            se=overall_se,
+            t_stat=overall_t,
+            p_value=overall_p,
+            conf_int=overall_ci,
             cohort_weights=cohort_weights,
             groups=treatment_groups,
             time_periods=time_periods,

@@ -11,6 +11,11 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import (
@@ -32,16 +37,16 @@ class StackedDiDResults(BaseResults, AggregationMixin):
 
     Attributes
     ----------
-    overall_att : float
+    att : float
         Overall average treatment effect on the treated (average of
         post-treatment event-study coefficients).
-    overall_se : float
+    se : float
         Standard error of overall ATT (delta method on VCV).
-    overall_t_stat : float
+    t_stat : float
         T-statistic for overall ATT.
-    overall_p_value : float
+    p_value : float
         P-value for overall ATT.
-    overall_conf_int : tuple
+    conf_int : tuple
         Confidence interval for overall ATT.
     event_study_effects : dict, optional
         Dictionary mapping event time h to effect dict with keys:
@@ -118,11 +123,11 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         overall inference used normal theory or failed closed.
     """
 
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
     event_study_effects: Optional[Dict[int, Dict[str, Any]]]
     group_effects: Optional[Dict[Any, Dict[str, Any]]]
     stacked_data: pd.DataFrame = field(repr=False)
@@ -174,13 +179,14 @@ class StackedDiDResults(BaseResults, AggregationMixin):
     inference_df: Optional[float] = None
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate 3.x pickles created before the ``clean_control`` ->
-        ``control_group`` rename: rewrite the legacy key on load so the
-        field populates under its canonical name."""
+        """Migrate 3.x pickles: the ``clean_control`` -> ``control_group``
+        rename and the 4.0 ``overall_*`` -> canonical-quintet storage flip
+        (``docs/v4-design.md`` section 5). Legacy keys are rewritten on load
+        so each field populates under its canonical name."""
         if "clean_control" in state and "control_group" not in state:
             state = dict(state)
             state["control_group"] = state.pop("clean_control")
-        self.__dict__.update(state)
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     # ------------------------------------------------------------------
     # Container-consumer provenance (rows M-024 / M-093). Class-level
@@ -237,7 +243,7 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         # than CallawaySantAnna's treated+control "units" (REGISTRY
         # StackedDiD M-024 Note; cross-container ``n`` comparisons are out
         # of contract for this estimator). ``target`` is "att" per the CS
-        # precedent: ``overall_att`` is the equally-weighted average of
+        # precedent: ``att`` is the equally-weighted average of
         # post-treatment event-study coefficients, NOT the per-event-time
         # trimmed aggregate ATT, so weighting-specific target strings
         # would misstate the scalar (``describe_target_parameter`` is the
@@ -264,26 +270,26 @@ class StackedDiDResults(BaseResults, AggregationMixin):
             estimator=type(self).__name__.replace("Results", ""),
         )
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
-
-    @property
-    def se(self) -> float:
-        return self.overall_se
-
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+    # --- Deprecated 3.x storage names (ledger row M-054) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "StackedDiDResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "StackedDiDResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "StackedDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "StackedDiDResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "StackedDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
     def __repr__(self) -> str:
         """Concise string representation."""

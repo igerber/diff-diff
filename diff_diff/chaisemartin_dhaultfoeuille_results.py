@@ -31,6 +31,11 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    LEGACY_OVERALL_QUINTET,
+    deprecated_field_property,
+    migrate_renamed_state_keys,
+)
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import (
@@ -212,13 +217,13 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     exposed via ``n_groups_dropped_crossers``.
 
     **Inference-method switch when bootstrap is enabled.** The
-    ``overall_p_value`` / ``overall_conf_int`` (and joiners/leavers
+    ``p_value`` / ``conf_int`` (and joiners/leavers
     analogues) fields are populated by *normal-theory* inference from
     the cohort-recentered analytical SE when ``n_bootstrap=0`` (the
     default). When ``n_bootstrap > 0``, the same fields are populated
     by *percentile-based bootstrap inference* from the multiplier
     bootstrap distribution computed by ``_compute_dcdh_bootstrap()``.
-    The t-stat (``overall_t_stat``, etc.) is computed from the SE in
+    The t-stat (``t_stat``, etc.) is computed from the SE in
     both cases, since percentile bootstrap does not define an
     alternative t-stat semantic. ``event_study_effects[1]``,
     ``summary()``, ``to_dataframe()``, ``is_significant``, and
@@ -233,13 +238,13 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
 
     Attributes
     ----------
-    overall_att : float
+    att : float
         ``DID_M = DID_1``: the contemporaneous-switch dCDH point estimate.
-    overall_se : float
+    se : float
         Standard error of ``DID_M``.
-    overall_t_stat : float
-    overall_p_value : float
-    overall_conf_int : tuple of float
+    t_stat : float
+    p_value : float
+    conf_int : tuple of float
     joiners_att : float
         ``DID_+``: the joiners-only contribution. ``NaN`` when
         ``joiners_available`` is False.
@@ -304,7 +309,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         ``time``, ``weight``. Computed on the **FULL pre-filter cell
         sample** passed by the user (the same input the standalone
         :func:`twowayfeweights` function uses) — NOT the post-filter
-        estimation sample described by ``overall_att`` and
+        estimation sample described by ``att`` and
         ``units``. When ``fit()`` drops groups via the ragged-panel
         or ``drop_larger_lower`` filters, ``results.twfe_*`` and
         ``results.att`` describe different samples and a
@@ -325,7 +330,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         sample**.
     twfe_beta_fe : float, optional
         The plain TWFE coefficient computed on the **FULL pre-filter
-        cell sample**, for comparison with ``overall_att``. Note that
+        cell sample**, for comparison with ``att``. Note that
         the two are computed on different samples when ``fit()``
         filters drop groups — see the ``twfe_weights`` docstring above
         for the sample contract.
@@ -526,11 +531,11 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     """
 
     # --- Core: DID_M aggregate ---
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
+    att: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
 
     # --- Joiners-only view (DID_+) ---
     joiners_att: float
@@ -576,7 +581,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
 
     # --- Event study (Phase 2: multi-horizon) ---
     # Populated with {l: {effect, se, t_stat, p_value, conf_int, n_obs}}.
-    # Phase 1 (L_max=None): single entry {1: {...}} mirroring overall_att.
+    # Phase 1 (L_max=None): single entry {1: {...}} mirroring ``att``.
     # Phase 2 (L_max>=2): entries for l = 1, ..., L_max.
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
     L_max: Optional[int] = None
@@ -603,7 +608,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     # ``linear_trends_effects is not None`` broke on the empty-
     # horizon case — the estimator sets ``linear_trends_effects=None``
     # when the cumulated dict is empty but still unconditionally
-    # NaN-s ``overall_att`` for ``trends_linear=True`` with
+    # NaN-s ``att`` for ``trends_linear=True`` with
     # ``L_max >= 2``. BR/DR dispatch on this flag (via
     # ``describe_target_parameter``) to route the no-scalar-by-design
     # headline correctly even when the horizon surface is empty.
@@ -688,15 +693,18 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     event_study_df: Optional[float] = field(default=None, repr=False)
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate 3.x pickles created before the ``groups`` -> ``units`` rename.
+        """Migrate 3.x pickles: the ``groups`` -> ``units`` rename and the 4.0
+        ``overall_*`` -> canonical-quintet storage flip (``docs/v4-design.md``
+        section 5).
 
-        Results pickled under the old name stored the list under ``groups``;
-        rewriting the key on load populates ``units`` from old pickles.
+        Results pickled under the old names stored the list under ``groups``
+        and the DID_M aggregate under ``overall_att``/``overall_se``/...;
+        rewriting the keys on load populates the canonical fields.
         """
         if "groups" in state and "units" not in state:
             state = dict(state)
             state["units"] = state.pop("groups")
-        self.__dict__.update(state)
+        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
 
     # ------------------------------------------------------------------
     # Post-fit aggregation (row M-026, on the M-122 contract): dCDH's
@@ -854,26 +862,26 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             return f"{did_part}{suffix}_{sub_part}" if sub_part else f"{did_part}{suffix}"
         return base
 
-    # --- Inference-field aliases (balance/external-adapter compatibility) ---
-    @property
-    def att(self) -> float:
-        return self.overall_att
-
-    @property
-    def se(self) -> float:
-        return self.overall_se
-
-    @property
-    def conf_int(self) -> Tuple[float, float]:
-        return self.overall_conf_int
-
-    @property
-    def p_value(self) -> float:
-        return self.overall_p_value
-
-    @property
-    def t_stat(self) -> float:
-        return self.overall_t_stat
+    # --- Deprecated 3.x storage names (ledger row M-057) ---
+    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
+    # annotation) so they stay descriptors, never dataclass fields - the
+    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
+    # (the LWDiDResults 3.10-alias precedent).
+    overall_att = deprecated_field_property(
+        "ChaisemartinDHaultfoeuilleResults", "overall_att", "att", removed_in="5.0"
+    )
+    overall_se = deprecated_field_property(
+        "ChaisemartinDHaultfoeuilleResults", "overall_se", "se", removed_in="5.0"
+    )
+    overall_t_stat = deprecated_field_property(
+        "ChaisemartinDHaultfoeuilleResults", "overall_t_stat", "t_stat", removed_in="5.0"
+    )
+    overall_p_value = deprecated_field_property(
+        "ChaisemartinDHaultfoeuilleResults", "overall_p_value", "p_value", removed_in="5.0"
+    )
+    overall_conf_int = deprecated_field_property(
+        "ChaisemartinDHaultfoeuilleResults", "overall_conf_int", "conf_int", removed_in="5.0"
+    )
 
     def __repr__(self) -> str:
         """Concise string representation."""

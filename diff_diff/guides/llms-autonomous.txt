@@ -1202,17 +1202,17 @@ close to zero support parallel trends.
 
 `BusinessReport(results)` and `DiagnosticReport(results)` are experimental
 in the 3.2 line. Their schema is versioned (`BUSINESS_REPORT_SCHEMA_VERSION`
-and `DIAGNOSTIC_REPORT_SCHEMA_VERSION`, `"3.0"` and `"2.0"` respectively at time of writing)
+and `DIAGNOSTIC_REPORT_SCHEMA_VERSION`, `"4.0"` and `"3.0"` respectively at time of writing)
 and expected to evolve. Treat `.to_dict()` output as the agent-legible
 contract; the prose renderers (`summary()`, `full_report()`) are derived
 from it.
 
-### BusinessReport `to_dict()` schema (v3.0)
+### BusinessReport `to_dict()` schema (v4.0)
 
 Top-level keys emitted by `BusinessReport.to_dict()`
 (source: `diff_diff/business_report.py`):
 
-- `schema_version: str` - `BUSINESS_REPORT_SCHEMA_VERSION`, e.g. `"3.0"`.
+- `schema_version: str` - `BUSINESS_REPORT_SCHEMA_VERSION`, e.g. `"4.0"`.
 - `estimator: dict` - `class_name` (the fitted result class) and a
   human-friendly `display_name`.
 - `context: dict` - the `BusinessContext` bundle: `outcome_label`,
@@ -1248,7 +1248,7 @@ Top-level keys emitted by `BusinessReport.to_dict()`
   checks.
 - `references: list[dict]` - citations relevant to the estimator.
 
-### DiagnosticReport `to_dict()` schema (v2.0)
+### DiagnosticReport `to_dict()` schema (v3.0)
 
 Top-level keys (source: `diff_diff/diagnostic_report.py`):
 

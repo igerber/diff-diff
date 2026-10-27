@@ -65,11 +65,13 @@ class BaseResults:
     subclass converges to:
 
     - **Canonical quintet.** ``att``, ``se``, ``t_stat``, ``p_value``,
-      ``conf_int`` bound to ONE coherent inference row (native fields or
-      property aliases over legacy ``overall_*``/``avg_*`` storage; the
-      storage flips to native canonical fields at 4.0, ledger rows
-      M-050..M-058, with legacy names living on as FutureWarning
-      properties until 5.0).
+      ``conf_int`` bound to ONE coherent inference row. Native fields on
+      every estimator container since the 4.0 storage flip (ledger rows
+      M-050..M-058; the legacy ``overall_*`` names live on as read-only
+      FutureWarning properties until 5.0) EXCEPT
+      :class:`StaggeredTripleDiffResults`, which keeps ``overall_*``
+      storage behind property aliases until the item-6 container
+      unification retires it.
     - **Serialization.** ``summary(alpha=None)``, ``to_dict()`` (canonical
       key names only - deprecated names never leak into serialized
       output), and ``to_dataframe(level=...)`` where multiple views exist.

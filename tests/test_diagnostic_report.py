@@ -216,7 +216,7 @@ class TestSchemaContract:
         fit, _ = twfe_fit
         schema = DiagnosticReport(fit).to_dict()
         assert schema["schema_version"] == DIAGNOSTIC_REPORT_SCHEMA_VERSION
-        assert DIAGNOSTIC_REPORT_SCHEMA_VERSION == "2.0"
+        assert DIAGNOSTIC_REPORT_SCHEMA_VERSION == "3.0"
 
     def test_all_statuses_use_closed_enum(self, cs_fit):
         fit, sdf = cs_fit
@@ -431,11 +431,11 @@ class TestPrecomputed:
         from diff_diff.pretrends import PreTrendsPowerResults
 
         class _CSStub:
-            overall_att = 1.0
-            overall_se = 0.25
-            overall_t_stat = 4.0
-            overall_p_value = 0.001
-            overall_conf_int = (0.5, 1.5)
+            att = 1.0
+            se = 0.25
+            t_stat = 4.0
+            p_value = 0.001
+            conf_int = (0.5, 1.5)
             alpha = 0.05
             n_obs = 400
             n_treated = 80
@@ -489,11 +489,11 @@ class TestPrecomputed:
 
         # Minimal CS-shaped stub with full vcov populated.
         class _CSStub:
-            overall_att = 1.0
-            overall_se = 0.25
-            overall_t_stat = 4.0
-            overall_p_value = 0.001
-            overall_conf_int = (0.5, 1.5)
+            att = 1.0
+            se = 0.25
+            t_stat = 4.0
+            p_value = 0.001
+            conf_int = (0.5, 1.5)
             alpha = 0.05
             n_obs = 400
             n_treated = 80
@@ -542,11 +542,11 @@ class TestPrecomputed:
         from diff_diff.pretrends import PreTrendsPowerResults
 
         class _CSStub:
-            overall_att = 1.0
-            overall_se = 0.25
-            overall_t_stat = 4.0
-            overall_p_value = 0.001
-            overall_conf_int = (0.5, 1.5)
+            att = 1.0
+            se = 0.25
+            t_stat = 4.0
+            p_value = 0.001
+            conf_int = (0.5, 1.5)
             alpha = 0.05
             n_obs = 400
             n_treated = 80
@@ -903,13 +903,9 @@ class TestJointWaldAlignment:
         obj.event_study_vcov = np.asarray(vcov, dtype=float) if vcov is not None else None
         obj.vcov = None
         obj.interaction_indices = None
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
@@ -1198,13 +1194,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
@@ -1255,13 +1247,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
@@ -1317,13 +1305,9 @@ class TestReferenceMarkerAndNaNFiltering:
         obj.interaction_indices = None
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
@@ -1405,13 +1389,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = StackedDiDResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.2
         obj.se = 0.2
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.6, 1.4)
         obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
@@ -1450,13 +1430,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.2
         obj.se = 0.2
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.6, 1.4)
         obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 500
@@ -1503,13 +1479,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = StackedDiDResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.2
         obj.se = 0.2
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.6, 1.4)
         obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
@@ -1561,13 +1533,9 @@ class TestReferenceMarkerAndNaNFiltering:
         obj.interaction_indices = None
         obj.event_study_vcov = None
         obj.event_study_vcov_index = None
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 100
@@ -1601,13 +1569,9 @@ class TestReferenceMarkerAndNaNFiltering:
             pass
 
         obj = StackedDiDResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.2
         obj.se = 0.2
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.6, 1.4)
         obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 400
@@ -1692,7 +1656,7 @@ class TestReferenceMarkerAndNaNFiltering:
             -1: {"effect": 0.0, "se": 0.2, "p_value": 0.99, "n_groups": 1},
             0: {"effect": 1.0, "se": 0.2, "p_value": 0.0, "n_groups": 1},
         }
-        obj.overall_att = 1.0
+        obj.att = 1.0
         obj.alpha = 0.05
 
         pp = compute_pretrends_power(obj, alpha=0.05, target_power=0.80, violation_type="linear")
@@ -1785,13 +1749,9 @@ class TestEPVDictBacked:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
@@ -1887,13 +1847,9 @@ class TestCSJointWaldViaEventStudyVCov:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.1
         obj.se = 0.1
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.8, 1.2)
         obj.conf_int = (0.8, 1.2)
         obj.alpha = 0.05
         obj.n_obs = 200
@@ -1928,7 +1884,7 @@ class TestCSJointWaldViaEventStudyVCov:
 
 
 class TestContinuousDiDHeadline:
-    """ContinuousDiDResults exposes overall_att_se/p_value/conf_int, not overall_se/…
+    """ContinuousDiDResults exposes the canonical quintet like every other container…
 
     Regression for the P1 CI-review finding that both report classes missed
     ContinuousDiDResults inference fields.
@@ -1941,20 +1897,16 @@ class TestContinuousDiDHeadline:
             pass
 
         obj = ContinuousDiDResults()
-        obj.overall_att = 2.5
         obj.att = 2.5
-        obj.overall_att_se = 0.4
         obj.se = 0.4
-        obj.overall_att_p_value = 0.00001
         obj.p_value = 0.00001
-        obj.overall_att_conf_int = (1.7, 3.3)
         obj.conf_int = (1.7, 3.3)
         obj.alpha = 0.05
 
         result = _extract_scalar_headline(obj)
         assert result is not None
         name, value, se, p, ci, alpha = result
-        assert name == "overall_att"
+        assert name == "att"
         assert value == pytest.approx(2.5)
         assert se == pytest.approx(0.4)
         assert p == pytest.approx(0.00001)
@@ -2493,13 +2445,9 @@ class TestDCDHParallelTrendsViaPlaceboEventStudy:
 
         stub = ChaisemartinDHaultfoeuilleResults()
         stub.att = 1.0
-        stub.overall_att = 1.0
         stub.att = 1.0
-        stub.overall_se = 0.2
         stub.se = 0.2
-        stub.overall_p_value = 0.001
         stub.p_value = 0.001
-        stub.overall_conf_int = (0.6, 1.4)
         stub.conf_int = (0.6, 1.4)
         stub.alpha = 0.05
         stub.n_obs = 100
@@ -2579,13 +2527,9 @@ class TestHeterogeneityPostTreatmentOnly:
             1: {"effect": 2.0, "se": 0.2, "n_groups": 12},
             2: {"effect": float("nan"), "se": 0.2, "n_groups": 5},  # non-finite
         }
-        stub.overall_att = 1.5
         stub.att = 1.5
-        stub.overall_se = 0.1
         stub.se = 0.1
-        stub.overall_p_value = 0.001
         stub.p_value = 0.001
-        stub.overall_conf_int = (1.3, 1.7)
         stub.conf_int = (1.3, 1.7)
         stub.alpha = 0.05
         stub.n_obs = 100
@@ -2665,13 +2609,9 @@ class TestSurveyDesignThreading:
             pass
 
         obj = CallawaySantAnnaResults()
-        obj.overall_att = 1.0
         obj.att = 1.0
-        obj.overall_se = 0.2
         obj.se = 0.2
-        obj.overall_p_value = 0.001
         obj.p_value = 0.001
-        obj.overall_conf_int = (0.6, 1.4)
         obj.conf_int = (0.6, 1.4)
         obj.alpha = 0.05
         obj.n_obs = 600

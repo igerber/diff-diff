@@ -2649,11 +2649,11 @@ class WooldridgeDiD(BaseEstimator):
 
         results = WooldridgeDiDResults(
             group_time_effects=gt_effects,
-            overall_att=overall["att"],
-            overall_se=overall["se"],
-            overall_t_stat=overall["t_stat"],
-            overall_p_value=overall["p_value"],
-            overall_conf_int=overall["conf_int"],
+            att=overall["att"],
+            se=overall["se"],
+            t_stat=overall["t_stat"],
+            p_value=overall["p_value"],
+            conf_int=overall["conf_int"],
             method=self.method,
             control_group=self.control_group,
             groups=result_groups,
@@ -2752,10 +2752,10 @@ class WooldridgeDiD(BaseEstimator):
             if boot_atts:
                 boot_se = float(np.std(boot_atts, ddof=1))
                 t_stat_b, p_b, ci_b = safe_inference(results.att, boot_se, alpha=self.alpha)
-                results.overall_se = boot_se
-                results.overall_t_stat = t_stat_b
-                results.overall_p_value = p_b
-                results.overall_conf_int = ci_b
+                results.se = boot_se
+                results.t_stat = t_stat_b
+                results.p_value = p_b
+                results.conf_int = ci_b
                 results._bootstrap_used = True
 
         return results
@@ -2978,11 +2978,11 @@ class WooldridgeDiD(BaseEstimator):
 
         return WooldridgeDiDResults(
             group_time_effects=gt_effects,
-            overall_att=overall["att"],
-            overall_se=overall["se"],
-            overall_t_stat=overall["t_stat"],
-            overall_p_value=overall["p_value"],
-            overall_conf_int=overall["conf_int"],
+            att=overall["att"],
+            se=overall["se"],
+            t_stat=overall["t_stat"],
+            p_value=overall["p_value"],
+            conf_int=overall["conf_int"],
             method=self.method,
             control_group=self.control_group,
             groups=_cells_derived_groups(gt_effects),
@@ -3242,11 +3242,11 @@ class WooldridgeDiD(BaseEstimator):
 
         return WooldridgeDiDResults(
             group_time_effects=gt_effects,
-            overall_att=overall["att"],
-            overall_se=overall["se"],
-            overall_t_stat=overall["t_stat"],
-            overall_p_value=overall["p_value"],
-            overall_conf_int=overall["conf_int"],
+            att=overall["att"],
+            se=overall["se"],
+            t_stat=overall["t_stat"],
+            p_value=overall["p_value"],
+            conf_int=overall["conf_int"],
             method=self.method,
             control_group=self.control_group,
             groups=_cells_derived_groups(gt_effects),
