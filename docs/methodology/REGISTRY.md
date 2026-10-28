@@ -2,7 +2,7 @@
 
 This document provides the academic foundations and key implementation requirements for each estimator in diff-diff. It serves as a reference for contributors and users who want to understand the theoretical basis of the methods.
 
-**Result-class field naming.** Since the 4.0 storage flip (ledger rows M-050..M-058, PR 5b) the headline scalar inference fields are stored under ONE native naming pattern on every estimator results container: the canonical quintet `att` / `se` / `t_stat` / `p_value` / `conf_int` (`DiDResults`, `SyntheticDiDResults`, `TROPResults`, `TripleDifferenceResults`, `HeterogeneousAdoptionDiDResults`, `ChangesInChangesResults` always stored them this way; `CallawaySantAnnaResults`, `DMLDiDResults`, `SunAbrahamResults`, `ImputationDiDResults`, `TwoStageDiDResults`, `StackedDiDResults`, `EfficientDiDResults`, `WooldridgeDiDResults`, `ChaisemartinDHaultfoeuilleResults` and `ContinuousDiDResults` flipped from their 3.x `overall_*` / `overall_att_*` storage at the cut, with the fields renamed in slot so the generated `__init__` positional layout is unchanged). The one exception is `StaggeredTripleDiffResults`, which keeps `overall_*` storage behind silent read-only `att` / `se` / ... forwarding properties until the item-6 container unification retires it (its successor is born canonical). The 3.x names (`overall_att`, `overall_se`, `overall_t_stat`, `overall_p_value`, `overall_conf_int`; on `ContinuousDiDResults` also the `overall_att_se` / `overall_att_t_stat` / `overall_att_p_value` / `overall_att_conf_int` spellings and the former silent `overall_se`-style aliases - nine spellings in all) live on as read-only `FutureWarning` properties built by `diff_diff._deprecation.deprecated_field_property`, removed at 5.0; `DMLDiDResults` re-declares the five shims so the warning names the subclass. The deprecated names are plain descriptors, not dataclass fields: they do NOT appear in `dataclasses.fields()` / `dataclasses.asdict()` / `to_dict()` output (spec section 5 forbids deprecated names in serialized output), they are not constructor keywords (`CallawaySantAnnaResults(overall_att=...)` raises `TypeError`), and assignment to one raises `AttributeError`. 3.x pickles load: every flipped container's `__setstate__` rewrites the legacy keys through `diff_diff._deprecation.migrate_renamed_state_keys` (an existing canonical key wins; the legacy key never lingers in `__dict__`). The canonical field is authoritative for documentation, semantics, and computation; the deprecated properties are pure read-throughs and inherit the `safe_inference()` joint-NaN consistency contract automatically. `ContinuousDiDResults` keeps its separate `overall_acrt` / `overall_acrt_se` / ... fields: ACRT is a distinct estimand, not a spelling of the headline.
+**Result-class field naming.** Since the 4.0 storage flip (ledger rows M-050..M-058, PR 5b) the headline scalar inference fields are stored under ONE native naming pattern on every estimator results container: the canonical quintet `att` / `se` / `t_stat` / `p_value` / `conf_int` (`DiDResults`, `SyntheticDiDResults`, `TROPResults`, `TripleDifferenceResults`, `HeterogeneousAdoptionDiDResults`, `ChangesInChangesResults` always stored them this way; `CallawaySantAnnaResults`, `DMLDiDResults`, `SunAbrahamResults`, `ImputationDiDResults`, `TwoStageDiDResults`, `StackedDiDResults`, `EfficientDiDResults`, `WooldridgeDiDResults`, `ChaisemartinDHaultfoeuilleResults` and `ContinuousDiDResults` flipped from their 3.x `overall_*` / `overall_att_*` storage at the cut, with the fields renamed in slot so the generated `__init__` positional layout is unchanged). The last `overall_*` container, `StaggeredTripleDiffResults`, was retired by the item-6 DDD container unification (row M-014): `TripleDifferenceResults` serves both DDD designs with native canonical storage. The 3.x names (`overall_att`, `overall_se`, `overall_t_stat`, `overall_p_value`, `overall_conf_int`; on `ContinuousDiDResults` also the `overall_att_se` / `overall_att_t_stat` / `overall_att_p_value` / `overall_att_conf_int` spellings and the former silent `overall_se`-style aliases - nine spellings in all) live on as read-only `FutureWarning` properties built by `diff_diff._deprecation.deprecated_field_property`, removed at 5.0; `DMLDiDResults` re-declares the five shims so the warning names the subclass. The deprecated names are plain descriptors, not dataclass fields: they do NOT appear in `dataclasses.fields()` / `dataclasses.asdict()` / `to_dict()` output (spec section 5 forbids deprecated names in serialized output), they are not constructor keywords (`CallawaySantAnnaResults(overall_att=...)` raises `TypeError`), and assignment to one raises `AttributeError`. 3.x pickles load: every flipped container's `__setstate__` rewrites the legacy keys through `diff_diff._deprecation.migrate_renamed_state_keys` (an existing canonical key wins; the legacy key never lingers in `__dict__`). The canonical field is authoritative for documentation, semantics, and computation; the deprecated properties are pure read-throughs and inherit the `safe_inference()` joint-NaN consistency contract automatically. `ContinuousDiDResults` keeps its separate `overall_acrt` / `overall_acrt_se` / ... fields: ACRT is a distinct estimand, not a spelling of the headline.
 
 - **Note:** Bootstrap draw containers (`CSBootstrapResults`, `SABootstrapResults`, `ImputationBootstrapResults`, `TwoStageBootstrapResults`, `EDiDBootstrapResults`: `overall_att_se` / `overall_att_ci` / `overall_att_p_value`; `DCDHBootstrapResults`: `overall_se` / `overall_ci` / `overall_p_value`) keep their estimator-local payload names through the 4.0 storage flip (user decision 2026-10-26): they hold no point estimate, so the headline-quintet contract does not apply, `overall_att_se` literally names "the SE of the overall ATT", and `ci` is not `conf_int`. `results.bootstrap_results.overall_att_se` therefore stays valid and warning-free.
 
@@ -4096,8 +4096,8 @@ shared verbatim.
 - **Dispatch.** `first_treat=` selects the staggered engine; the 2x2x2 engine
   serves `(group, partition, post)`. Mixing the two parameter sets is an ERROR in
   both directions, constructor params included, never a silent guess. The
-  staggered-only fit params (`unit`, `first_treat`, `aggregate`, `balance_e`) are
-  keyword-only, so a positionally-written staggered call cannot bind to the 2x2x2
+  staggered-only fit params (`unit`, `first_treat`) are keyword-only, so a
+  positionally-written staggered call cannot bind to the 2x2x2
   slots; positional slots 1-8 are unchanged.
 - **Note (`time=` semantics):** the dual role is resolved by dispatch ORDER, not
   value inspection. In staggered mode `time=` is the calendar column; in 2x2x2
@@ -4124,13 +4124,12 @@ shared verbatim.
   the SAME boundary:** `simulate_power` / `simulate_mde` / `simulate_sample_size`
   reject only those four and accept the three inert ones, so an estimator that is
   legal to `fit()` is legal to simulate. That equivalence extends to the FIT
-  kwargs, and the test differs per param because `fit()`'s does: `first_treat`
-  and `unit` are sentinel-defaulted, so SUPPLYING them at all selects staggered
-  mode (an explicit `first_treat=None` still does, then fails on a missing
-  column), while `aggregate`/`balance_e` default to `None` and only a NON-`None`
-  value is staggered-only. Power therefore keys on presence for the first pair
-  and on value for the second — keying on presence throughout would reject
-  `estimator_kwargs={"aggregate": None}`, a configuration `fit()` accepts. An earlier 3(b) revision rejected all
+  kwargs: `first_treat` and `unit` are sentinel-defaulted, so SUPPLYING them at
+  all selects staggered mode (an explicit `first_treat=None` still does, then
+  fails on a missing column), and power keys on their presence. (Through 3.x the
+  fit-time `aggregate`/`balance_e` were a second, by-VALUE pair; they were removed
+  at 4.0 with rows M-140/M-141, so `estimator_kwargs={"aggregate": ...}` now
+  surfaces as `fit()`'s own `TypeError`.) An earlier 3(b) revision rejected all
   seven at the power front door, which made `TripleDifference(seed=7)` fittable
   but not simulatable - `seed` is set habitually for reproducibility and the
   `simulate_*` helpers take their own separate `seed=`.
@@ -4167,9 +4166,10 @@ shared verbatim.
   recorded, and `CallawaySantAnnaResults` has exactly the same gap through the
   shared `CallawaySantAnnaBootstrapMixin`. Adding the field to one container
   alone would leave the two siblings inconsistent, and
-  `StaggeredTripleDiffResults` is already slated for the 4.0 container port
-  (row M-014), so the fix is sequenced there and tracked as a `TODO.md` row
-  covering BOTH containers. Estimators that do expose it
+  the 4.0 container unification (row M-014, item 6) landed WITHOUT it - the
+  unified `TripleDifferenceResults` records `n_bootstrap` and `inference_method`
+  but not `seed` - so the gap stays tracked as a `TODO.md` row covering BOTH
+  containers. Estimators that do expose it
   (`ContinuousDiDResults`, `EfficientDiDResults`, `SyntheticDiDResults`) are
   the precedent for the eventual shape.
 - **Note (`anticipation` domain validated from birth):** `anticipation` is one of
@@ -4238,10 +4238,54 @@ shared verbatim.
   3.29438582 → 2.99470938 with `n_never_enabled` 24 → 0, no error and no
   warning). The guard lives in the staggered engine; the behavior it replaces
   was pre-existing (then also surfaced by the `StaggeredTripleDifference` class).
-- **Note (results containers):** 2x2x2 mode returns `TripleDifferenceResults` and
-  staggered mode returns `StaggeredTripleDiffResults` through 3.9; `fit`'s return
-  type is a `Union`. The one-shape unification lands at 4.0 with row M-014, so no
-  downstream consumer changes in 3.9.
+- **Note (results containers, row M-014):** since 4.0 (item 6, 2026-10-27) BOTH
+  designs return ONE `TripleDifferenceResults` (`diff_diff/triple_diff_results.py`,
+  re-exported from `triple_diff.py`) with a `design` discriminator (`"2x2x2"` /
+  `"staggered"`): the 2x2x2 positional layout is byte-stable, the staggered
+  structure (`group_time_effects`, `groups`, `time_periods`, the unit counts,
+  `control_group`, `base_period`, `anticipation`, `bootstrap_results`, ...) is
+  appended with defaults, the canonical quintet is native in both designs, the
+  group-time table is empty in 2x2x2, and `df_inference` records the 2x2x2 engine's
+  t df (`n_obs - 8 - len(covariates)` on non-survey fits; the LWDiDResults contract).
+  `StaggeredTripleDiffResults` (storage `overall_*`, `to_dict` keys `overall_*`, the
+  five fit-time `overall_*_es` fields) is removed; 3.x 2x2x2 pickles load via
+  `__setstate__`, 3.x staggered pickles do not. Through 3.9 the facade returned
+  `TripleDifferenceResults` (2x2x2) or `StaggeredTripleDiffResults` (staggered).
+- **Note (post-fit aggregate() - rows M-014/M-140/M-141):** the fit-time
+  `aggregate=`/`balance_e=` keywords - the one documented exception to the section-6
+  aggregate-postfit program through 3.x - were REMOVED at 4.0 (item 6; `fit()`
+  raises `TypeError`). `TripleDifferenceResults` is an `AggregationMixin` adopter
+  (`_AGGREGATE_SUPPORTED = ('simple', 'event_study', 'group')`; no `'total'`, which
+  the DDD estimators never offered): `aggregate('simple')` relays the stored
+  headline in BOTH designs (one row; `n_kind` `units` in the staggered design, `obs`
+  in 2x2x2; the df column is `resolve_inference_df` provenance - the 2x2x2 t df, the
+  survey df on survey fits, NaN where the normal reference or percentile inference
+  governed); `aggregate('event_study')` / `aggregate('group')` RECOMPUTE from the
+  retained CS aggregation kit (built by `staggered.py`'s `_build_aggregation_kit` on
+  the eligibility-zeroed `precomputed` copy, so the eligible-treated weighting below
+  is preserved exactly; `balance_e=` on `'event_study'`), and on bootstrapped fits
+  REPLAY the fit-time multiplier bootstrap from the kit's `BootstrapReplaySpec` (the
+  CS/DMLDiD/EfficientDiD mechanism: same weight stream, so sup-t bands and percentile
+  inference match a 3.x fit-time aggregation to BLAS reassociation; pre-replay
+  pickles and cross-backend artifacts fail closed with a refit message). The 2x2x2
+  design fails `'event_study'` / `'group'` / `weights=` / `balance_e=` closed with a
+  message naming `first_treat=` (a single ATT has no cells to aggregate). The
+  paper's Eq. 4.14 overall (the 3.x fit-time `overall_att_es` family) is
+  `aggregate('simple', weights='event_time')` - a `weights=` selector on the existing
+  type, not a vocabulary word (user decision 2026-10-27); it accepts `balance_e=`
+  (the balanced horizons are averaged, as the 3.x field did), reproduces the engine's
+  df rule (the per-statistic effective df when the survey design yields one, else the
+  fit's sentinelled survey df carried as the `ddd_df_survey_original` bookkeeping key -
+  None on plain fits, the survey df on survey fits, 0 on replicate designs with
+  undefined df, so inference the fit reported as NaN stays NaN post-fit) and both
+  3.x warnings (no post-treatment horizon -> NaN row; finite point estimate with an
+  undefined SE -> the cause-accurate NaN-SE warning); `weights='event_time'` on any
+  other type, and `balance_e=` on the plain `'simple'` relay, are rejected rather than
+  silently ignored (the mixin's shared `balance_e` rejection text lists `'simple'`
+  because of this one selector). `summary()` no longer prints the event-study /
+  cohort / Eq. 4.14 blocks (it points at the post-fit calls); `to_dataframe()` keeps
+  `'group_time'` (default in the staggered design) and `'overall'` (default in 2x2x2),
+  while `'event_study'` / `'group'` raise with the post-fit pointer.
 
 ## StaggeredTripleDifference
 
@@ -4353,9 +4397,10 @@ Overall ATT: two summaries are available. (1) The default `att` is the
 cohort-size-weighted average across post-treatment (g,t) pairs (reuses
 `CallawaySantAnnaAggregationMixin._aggregate_simple()`) — the library-wide
 Callaway-Sant'Anna "simple" convention, matching R `agg_ddd(type="simple")`.
-(2) The opt-in `overall_att_es` is the paper's Equation 4.14 overall — the unweighted
-mean of the post-treatment event-study effects ES(e) — populated when
-`aggregate="event_study"` or `"all"` (see the labeled Note below).
+(2) `results.aggregate("simple", weights="event_time")` is the paper's Equation 4.14
+overall — the unweighted mean of the post-treatment event-study effects ES(e) —
+computed post-fit (through 3.x the fit-time `overall_att_es` field; see the labeled
+Note below).
 
 Group effects: average across post-treatment time periods for each cohort.
 Reuses `CallawaySantAnnaAggregationMixin._aggregate_by_group()`.
@@ -4378,14 +4423,15 @@ uncertainty in cohort-share weights, inherited from the CallawaySantAnna mixin.
 - **Note:** The default overall ATT (`att`) is the Callaway-Sant'Anna simple
   post-treatment (g,t) average — the library-wide convention across staggered
   estimators — and is NOT the paper's Equation 4.14 overall (which averages the
-  event-study effects). The paper's Eq 4.14 form is exposed opt-in as `overall_att_es`
-  (populated only when `aggregate` is `"event_study"`/`"all"`), computed as the
+  event-study effects). The paper's Eq 4.14 form is exposed post-fit as
+  `results.aggregate("simple", weights="event_time")` (through 3.x the fit-time
+  `overall_att_es` field), computed as the
   unweighted mean of the post-treatment ES(e) over `e >= -anticipation`. Its analytical
   SE is the influence function of that mean (the average of the per-event-time combined
   IFs, routed through the same survey-aware variance estimator as the per-e effects);
   a multiplier-bootstrap SE replaces it when `n_bootstrap > 0`. The two summaries answer
-  different questions and generally differ; `overall_att_es` is cross-validated against
-  R `agg_ddd(type="eventstudy")$overall.att`/`overall.se`.
+  different questions and generally differ; the Eq. 4.14 overall is cross-validated
+  against R `agg_ddd(type="eventstudy")$overall.att`/`overall.se`.
 
 *Standard errors:*
 
@@ -4442,7 +4488,8 @@ confidence bands (sup-t) for event study.
 **Reference implementation(s):**
 - R `triplediff` (companion package by paper authors) — cross-validated in
   `tests/test_methodology_staggered_triple_diff.py` (group-time ATT/SE for both control
-  groups, plus the Eq. 4.14 overall `overall_att_es` against `agg_ddd(type="eventstudy")`).
+  groups, plus the Eq. 4.14 overall `aggregate("simple", weights="event_time")` against
+  `agg_ddd(type="eventstudy")`).
   CSV fixtures are gitignored and regenerated on-the-fly from
   `benchmarks/R/benchmark_staggered_triplediff.R`; the JSON golden is committed.
 

@@ -119,8 +119,25 @@ results = TripleDifference().fit(data, outcome="y", unit="id", time="period",
                                  first_treat="g", partition="p")
 ```
 
-The staggered fit parameters are keyword-only on the merged class. The results container is the
-unified `TripleDifference` shape; the 2x2x2 design reads as a degenerate single-ATT view of it.
+The staggered fit parameters are keyword-only on the merged class. Both designs return ONE
+`TripleDifferenceResults` (row M-014; `results.design` is `"2x2x2"` or `"staggered"`); the
+2x2x2 design reads as a degenerate single-ATT view of it (empty group-time table). The 3.x
+`StaggeredTripleDiffResults` container is gone: read `results.att` / `results.se` / ... where you
+read `overall_att` / `overall_se` / ..., and its `to_dict()` emits the canonical keys. The
+fit-time `aggregate=` / `balance_e=` keywords are gone too (rows M-140 / M-141) - aggregation is
+post-fit, and the paper's Eq. 4.14 overall (the 3.x `overall_att_es` field) is a `weights=`
+selector on `aggregate('simple')`:
+
+```python
+# 4.0: post-fit aggregation on the staggered design (bootstrapped fits replay the
+# fit-time multiplier bootstrap, so sup-t bands and percentile inference match)
+es = results.aggregate("event_study", balance_e=None)   # EventStudyResults
+cohorts = results.aggregate("group")                     # AggregationResult
+eq414 = results.aggregate("simple", weights="event_time")  # the Eq. 4.14 overall, one row
+```
+
+3.x pickles of the 2x2x2 `TripleDifferenceResults` load unchanged (the new fields are
+backfilled); 3.x `StaggeredTripleDiffResults` pickles cannot load, like every removed class.
 
 ### QDiD → ChangesInChanges(method="qdid")
 
@@ -503,10 +520,10 @@ does not mean no action is required, so read the `Fix` cell.
 | M-151 | lwdid-results-contract | `diff_diff:LWDiDResults.pvalue` | `diff_diff:LWDiDResults.p_value` | Read `.p_value`; the alias warns from 4.0 and is removed at 5.0. |
 | M-152 | lwdid-results-contract | `diff_diff:LWDiDResults.ci` | `diff_diff:LWDiDResults.conf_int` | Read `.conf_int`; the alias warns from 4.0 and is removed at 5.0. |
 | M-013 | merge-ddd | `diff_diff:StaggeredTripleDifference` | `diff_diff:TripleDifference.fit[first_treat]` | See the merges section for the worked before/after. |
-| M-014 | merge-ddd | `diff_diff:StaggeredTripleDiffResults` | — | Read the unified `TripleDifference` results shape (a degenerate single-ATT view for 2x2x2) instead of this container. |
+| M-014 | merge-ddd | `diff_diff:StaggeredTripleDiffResults` | — | Both designs return `TripleDifferenceResults` (`results.design` says which); read `att` / `se` / ... where you read `overall_*`; event-study and cohort surfaces are `results.aggregate(...)`. 3.x staggered pickles cannot load. |
 | M-085 | merge-ddd | `diff_diff:TripleDifference.fit[time]` | — | In 2x2x2 mode, `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the staggered calendar column only. |
-| M-140 | merge-ddd | `diff_diff:TripleDifference.fit[aggregate]` | `diff_diff:TripleDifferenceResults.aggregate` *(not yet implemented)* | No successor yet - post-fit `aggregate()` is not implemented on the DDD container (open `TODO.md` row). Keep the fit-time call until it lands. |
-| M-141 | merge-ddd | `diff_diff:TripleDifference.fit[balance_e]` | `diff_diff:TripleDifferenceResults.aggregate[balance_e]` *(not yet implemented)* | No successor yet - post-fit `aggregate()` is not implemented on the DDD container (open `TODO.md` row). Keep the fit-time call until it lands. |
+| M-140 | merge-ddd | `diff_diff:TripleDifference.fit[aggregate]` | `diff_diff:TripleDifferenceResults.aggregate` | Drop the keyword and call `results.aggregate('event_study')` / `aggregate('group')` / `aggregate('simple')` post-fit; the Eq. 4.14 overall (3.x `overall_att_es`) is `aggregate('simple', weights='event_time')`. |
+| M-141 | merge-ddd | `diff_diff:TripleDifference.fit[balance_e]` | `diff_diff:TripleDifferenceResults.aggregate[balance_e]` | Pass `balance_e=` to `results.aggregate('event_study', balance_e=...)` or to `aggregate('simple', weights='event_time', balance_e=...)`. |
 | M-010 | merge-mpd | `diff_diff:MultiPeriodDiD` | `diff_diff:TwoWayFixedEffects.fit[event_study]` | See the merges section for the worked before/after. |
 | M-011 | merge-mpd | `diff_diff:MultiPeriodDiDResults` | — | Read the unified event-study surface on the merged `TwoWayFixedEffects` results instead of this container. |
 | M-012 | merge-mpd | `diff_diff:PeriodEffect` | — | Superseded by the unified event-study representation - read the event-study surface rather than per-period `PeriodEffect` objects. |

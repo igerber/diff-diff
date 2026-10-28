@@ -679,7 +679,8 @@ class CallawaySantAnnaBootstrapMixin:
         event_study_vcov = None
         event_study_vcov_index = None
         # Paper Eq. (4.14) overall (event-study average) bootstrap inference; stays
-        # NaN unless event-study draws exist. Mirrors the analytical overall_att_es.
+        # NaN unless event-study draws exist. Mirrors the analytical Eq. 4.14
+        # overall (TripleDifferenceResults.aggregate('simple', weights='event_time')).
         overall_att_es_se = np.nan
         overall_att_es_ci = (np.nan, np.nan)
         overall_att_es_p_value = np.nan

@@ -6,9 +6,9 @@ native storage on every estimator container in this file, and the 3.x
 ``overall_*`` / ``overall_att_*`` names are read-only ``FutureWarning``
 properties (removed at 5.0). This file pins that direction: canonical names
 are constructor keywords and dataclass fields, legacy names warn and relay.
-The one exception is ``StaggeredTripleDiffResults``, which keeps the 3.x
-direction (``overall_*`` storage, canonical names as silent forwarding
-properties) until the item-6 container unification retires it.
+The last ``overall_*`` container, ``StaggeredTripleDiffResults``, was retired by
+the item-6 DDD container unification (row M-014): ``TripleDifferenceResults``
+now serves both DDD designs with native canonical storage.
 
 Motivating bug: ``balance.interop.diff_diff.as_balance_diagnostic`` reads
 ``getattr(res, "se", None)`` and ``getattr(res, "conf_int", None)`` without
@@ -20,7 +20,6 @@ shipped with ``se=NaN`` / ``conf_int=NaN`` in the methods-appendix table.
 from __future__ import annotations
 
 import math
-import warnings
 from dataclasses import asdict, fields
 
 import numpy as np
@@ -40,7 +39,6 @@ from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.imputation_results import ImputationDiDResults
 from diff_diff.stacked_did_results import StackedDiDResults
 from diff_diff.staggered_results import CallawaySantAnnaResults
-from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
 from diff_diff.sun_abraham import SunAbrahamResults
 from diff_diff.two_stage_results import TwoStageDiDResults
 from diff_diff.wooldridge_results import WooldridgeDiDResults
@@ -240,57 +238,6 @@ def test_pattern_b_legacy_constructor_keywords_rejected(cls):
 
 
 # ============================================================================
-# StaggeredTripleDiffResults — UNFLIPPED (dies with the item-6 container
-# unification; keeps the 3.x direction until then)
-# ============================================================================
-
-
-def _sddd_legacy_overrides(att=_ATT, se=_SE, t=_T, p=_P, ci=_CI):
-    return {
-        "overall_att": att,
-        "overall_se": se,
-        "overall_t_stat": t,
-        "overall_p_value": p,
-        "overall_conf_int": ci,
-    }
-
-
-def test_staggered_triple_diff_keeps_legacy_storage_direction():
-    """``StaggeredTripleDiffResults`` is NOT in M-050..M-058: it still stores
-    ``overall_*`` and exposes the canonical names as silent forwarding
-    properties (no warning). Unflipped on purpose - the class is retired by
-    the item-6 unified DDD container, which is born canonical."""
-    res = StaggeredTripleDiffResults(
-        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        assert res.att == _ATT == res.overall_att
-        assert res.se == _SE == res.overall_se
-        assert res.t_stat == _T == res.overall_t_stat
-        assert res.p_value == _P == res.overall_p_value
-        assert res.conf_int == _CI == res.overall_conf_int
-    field_names = {f.name for f in fields(res)}
-    assert {"overall_att", "overall_se"} <= field_names
-    assert not ({"att", "se", "t_stat", "p_value", "conf_int"} & field_names)
-
-
-def test_staggered_triple_diff_aliases_propagate_nan():
-    res = StaggeredTripleDiffResults(
-        **_required_init_kwargs(
-            StaggeredTripleDiffResults,
-            _sddd_legacy_overrides(np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan)),
-        )
-    )
-    assert math.isnan(res.att)
-    assert math.isnan(res.se)
-    assert math.isnan(res.t_stat)
-    assert math.isnan(res.p_value)
-    assert math.isnan(res.conf_int[0])
-    assert math.isnan(res.conf_int[1])
-
-
-# ============================================================================
 # Pattern C — ContinuousDiDResults: nine legacy spellings onto the canonical five
 # ============================================================================
 
@@ -399,17 +346,6 @@ def test_legacy_aliases_are_read_only_canonical_fields_writable(cls, ovr, legacy
         assert getattr(res, name) == 7.0
 
 
-def test_staggered_triple_diff_canonical_aliases_are_read_only():
-    """Unflipped SDDD keeps the 3.x semantics: the canonical names are read-only
-    forwarding properties over the ``overall_*`` fields."""
-    res = StaggeredTripleDiffResults(
-        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
-    )
-    for name in ("att", "se", "conf_int", "p_value", "t_stat"):
-        with pytest.raises(AttributeError):
-            setattr(res, name, object())
-
-
 @pytest.mark.parametrize(
     "cls",
     [CallawaySantAnnaResults, ContinuousDiDResults],
@@ -455,17 +391,6 @@ def test_legacy_aliases_excluded_from_dataclass_fields_and_asdict(cls):
         assert (
             alias not in asdict_keys
         ), f"{cls.__name__}: legacy {alias!r} surfaced in dataclasses.asdict() output."
-
-
-def test_staggered_triple_diff_canonical_aliases_excluded_from_fields():
-    """Unflipped SDDD: the canonical names stay out of fields()/asdict()."""
-    res = StaggeredTripleDiffResults(
-        **_required_init_kwargs(StaggeredTripleDiffResults, _sddd_legacy_overrides())
-    )
-    field_names = {f.name for f in fields(res)}
-    for alias in ("att", "se", "conf_int", "p_value", "t_stat"):
-        assert alias not in field_names
-        assert alias not in asdict(res)
 
 
 # ============================================================================

@@ -27,7 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from diff_diff._reporting_helpers import describe_target_parameter
-from diff_diff.diagnostic_report import _APPLICABILITY
+from diff_diff.diagnostic_report import _APPLICABILITY, _DESIGN_APPLICABILITY
 
 
 def _minimal_result(class_name: str, **attrs):
@@ -151,9 +151,14 @@ class TestTargetParameterPerEstimator:
         assert tp["headline_attribute"] == "att"
 
     def test_staggered_triple_difference(self):
-        tp = describe_target_parameter(_minimal_result("StaggeredTripleDiffResults"))
+        # One container, two designs since 4.0 (row M-014): the staggered DDD
+        # entry is selected by the ``design`` discriminator, and its headline
+        # attribute is the canonical ``att`` (the last ``overall_att`` died here).
+        tp = describe_target_parameter(
+            _minimal_result("TripleDifferenceResults", design="staggered")
+        )
         assert tp["aggregation"] == "staggered_ddd"
-        assert tp["headline_attribute"] == "overall_att"
+        assert tp["headline_attribute"] == "att"
 
     def test_dcdh_m(self):
         tp = describe_target_parameter(
@@ -451,6 +456,15 @@ class TestTargetParameterCoversEveryResultClass:
             "Every result class in _APPLICABILITY must have an explicit "
             f"describe_target_parameter branch. Missing: {missing}"
         )
+
+    def test_every_design_applicability_entry_has_explicit_branch(self):
+        """Mirror guard for the design-keyed table (4.0, row M-014): a class that
+        serves two designs from one name dispatches on ``design``, so every
+        ``(class_name, design)`` key must reach a non-default branch too."""
+        for class_name, design in _DESIGN_APPLICABILITY:
+            tp = describe_target_parameter(_minimal_result(class_name, design=design))
+            assert tp["aggregation"] != "unknown", (class_name, design)
+            assert tp["headline_attribute"] == "att", (class_name, design)
 
     def test_every_applicability_class_has_nonempty_fields(self):
         for class_name in _APPLICABILITY:

@@ -486,8 +486,10 @@ def _build_rowed_index():
 _CS_COHORT = "ATT(g,t) cohort in Callaway-Sant'Anna's own notation (v4-design section 8 carve-out)"
 _RULE1_TIME = "rule-1 canonical calendar column (v4-design section 8 rule 1)"
 
-# The 8 surviving staggered-family results containers whose `groups` field
+# The surviving staggered-family results containers whose `groups` field
 # names the ATT(g,t) cohort (dCDH's `groups` means unit ids and IS rowed, M-114).
+# TripleDifferenceResults joined at 4.0 (row M-014): its staggered design
+# carries the former StaggeredTripleDiffResults' `groups`.
 _CS_GROUPS_CLASSES = (
     "CallawaySantAnnaResults",
     "ContinuousDiDResults",
@@ -496,6 +498,7 @@ _CS_GROUPS_CLASSES = (
     "ImputationDiDResults",
     "StackedDiDResults",
     "SunAbrahamResults",
+    "TripleDifferenceResults",
     "TwoStageDiDResults",
     "WooldridgeDiDResults",
 )
@@ -1270,16 +1273,16 @@ CONSUMER_ALLOWLIST = {
     ("aggregate", "diff_diff/guides/llms.txt"): (
         "canonical post-fit results.aggregate() vocabulary; the fit-time "
         "aggregate= teaching for the eight adopters was removed with the "
-        "4.0 PR 3b/3c sweep (M-020..M-027, M-117..M-120, M-139); the only "
-        "surviving fit-time aggregate= is TripleDifference's canonical "
-        "staggered-mode keyword (M-140/M-141)"
+        "4.0 PR 3b/3c sweep (M-020..M-027, M-117..M-120, M-139); the last "
+        "fit-time aggregate=, TripleDifference's staggered-design keyword, went "
+        "post-fit with the item-6 container unification (M-014/M-140/M-141)"
     ),
     ("aggregate", "diff_diff/guides/llms-full.txt"): (
         "canonical post-fit results.aggregate() vocabulary and the "
         "signature blocks WITHOUT the removed fit-time lines (4.0 PR 3b/3c "
         "sweep; pinned by tests/test_guides.py's "
-        "*_fit_block_has_no_fit_time_aggregate tests); the only surviving "
-        "fit-time aggregate= is TripleDifference's (M-140/M-141)"
+        "*_fit_block_has_no_fit_time_aggregate tests); no fit-time aggregate= "
+        "survives - TripleDifference's went post-fit at item 6 (M-014/M-140/M-141)"
     ),
     ("aggregate", "diff_diff/guides/llms-practitioner.txt"): (
         "canonical post-fit results.aggregate() vocabulary; the bootstrapped "
@@ -1430,7 +1433,7 @@ CONSUMER_ALLOWLIST = {
             "diff_diff/results_base.py",
             "diff_diff/stacked_did_results.py",
             "diff_diff/staggered_results.py",
-            "diff_diff/staggered_triple_diff_results.py",
+            "diff_diff/triple_diff_results.py",
             "diff_diff/sun_abraham.py",
             "diff_diff/two_stage_results.py",
             "diff_diff/visualization/_staggered.py",

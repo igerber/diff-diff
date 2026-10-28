@@ -1,13 +1,20 @@
 """Tests for the staggered-DDD engine behind TripleDifference's staggered mode
 (``fit(..., first_treat=, partition=)``; formerly the ``StaggeredTripleDifference``
-class, removed at the 4.0 cut, PR 4a)."""
+class, removed at the 4.0 cut, PR 4a).
+
+Since PR 6 of the 4.0 cut the staggered fit returns the unified
+``TripleDifferenceResults`` (``design == "staggered"``); the event-study, cohort and
+Eq. 4.14 surfaces are post-fit ``results.aggregate(...)`` calls, not fit-time fields.
+"""
 
 import numpy as np
 import pytest
 
 from diff_diff import (
-    StaggeredTripleDiffResults,
+    AggregationResult,
+    EventStudyResults,
     TripleDifference,
+    TripleDifferenceResults,
     generate_staggered_ddd_data,
 )
 
@@ -109,7 +116,8 @@ class TestStaggeredTripleDiffBasic:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert isinstance(res, StaggeredTripleDiffResults)
+        assert isinstance(res, TripleDifferenceResults)
+        assert res.design == "staggered"
         assert est.is_fitted_
 
     def test_results_structure(self, simple_data):
@@ -122,11 +130,17 @@ class TestStaggeredTripleDiffBasic:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert isinstance(res.overall_att, float)
-        assert isinstance(res.overall_se, float)
-        assert res.overall_se > 0
-        assert isinstance(res.overall_conf_int, tuple)
-        assert len(res.overall_conf_int) == 2
+        assert isinstance(res.att, float)
+        assert isinstance(res.se, float)
+        assert res.se > 0
+        assert isinstance(res.conf_int, tuple)
+        assert len(res.conf_int) == 2
+        assert res.conf_int[0] < res.att < res.conf_int[1]
+        assert res.t_stat == pytest.approx(res.att / res.se)
+        # The 3.x fit-time surfaces are not stored on 4.0 fits (post-fit aggregate()).
+        assert res.event_study_effects is None
+        assert res.group_effects is None
+        assert res.cband_crit_value is None
         assert len(res.groups) > 0
         assert len(res.time_periods) > 0
         assert res.n_obs > 0
@@ -168,11 +182,17 @@ class TestStaggeredTripleDiffBasic:
         summary = res.summary()
         assert "Staggered Triple Difference" in summary
         assert "ATT" in summary
+        # 4.0: no fit-time event-study / cohort / Eq. 4.14 blocks; a pointer line instead.
+        assert "results.aggregate('event_study')" in summary
+        assert "results.aggregate('group')" in summary
+        assert "Eq. 4.14" not in summary
 
-    def test_overall_att_es_result_surface(self, simple_data):
-        """Opt-in Eq. 4.14 overall (overall_att_es) is exposed on the result surface
-        (attribute, summary(), to_dict()) under aggregate='event_study', and is None
-        for the default (no event-study) fit."""
+    def test_event_time_overall_aggregate_surface(self, simple_data):
+        """The paper's Eq. 4.14 overall (the 3.x fit-time ``overall_att_es`` field) is
+        a post-fit surface: ``aggregate("simple", weights="event_time")`` returns a
+        one-row AggregationResult that is the unweighted mean of the post-treatment
+        event-study effects. The fit-time fields are gone from the attribute, summary()
+        and to_dict() surfaces."""
         res = TripleDifference().fit(
             simple_data,
             outcome="outcome",
@@ -180,73 +200,66 @@ class TestStaggeredTripleDiffBasic:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        es_fields = (
+        o = res.aggregate("simple", weights="event_time")
+        assert isinstance(o, AggregationResult)
+        assert len(o.att) == 1
+        assert np.isfinite(o.att[0]) and np.isfinite(o.se[0]) and o.se[0] > 0
+        assert o.t_stat[0] == pytest.approx(o.att[0] / o.se[0])
+        assert 0.0 <= o.p_value[0] <= 1.0
+        assert o.conf_int_lower[0] < o.att[0] < o.conf_int_upper[0]
+        # Eq. 4.14: the unweighted mean of the finite post-treatment ES(e) effects.
+        es = res.aggregate("event_study")
+        post = es.att[(es.event_time >= 0) & ~es.is_reference & np.isfinite(es.att)]
+        assert len(post) > 0
+        assert o.att[0] == pytest.approx(post.mean(), abs=1e-10)
+        # The Eq. 4.14 overall differs from the stored cohort-size-weighted headline.
+        assert o.att[0] != res.att
+        # The 3.x fit-time fields and their summary()/to_dict() entries are gone.
+        for f in (
             "overall_att_es",
             "overall_se_es",
             "overall_t_stat_es",
             "overall_p_value_es",
             "overall_conf_int_es",
-        )
-        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
-        for f in es_fields:
-            assert getattr(res, f) is not None
-        assert "Eq. 4.14" in res.summary()
-        d = res.to_dict()
-        for f in es_fields:
-            assert f in d
-        # Default fit (no event-study aggregation): fields are None and absent from to_dict.
-        res_default = TripleDifference().fit(
-            simple_data,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-            partition="eligibility",
-        )
-        assert res_default.overall_att_es is None
-        assert "overall_att_es" not in res_default.to_dict()
+        ):
+            assert not hasattr(res, f)
+        assert not any(k.startswith("overall_") for k in res.to_dict())
+        assert "Eq. 4.14" not in res.summary()
 
-    def test_overall_att_es_aggregate_all_matches_event_study(self, simple_data):
-        """Eq. 4.14 overall (overall_att_es) is populated under aggregate='all' (not only
-        'event_study') and matches the 'event_study' path bit-for-bit on the same data.
+    def test_event_time_overall_unperturbed_by_other_aggregations(self, simple_data):
+        """The Eq. 4.14 overall is deterministic and independent of which other
+        post-fit aggregations ran on the same result (the 4.0 form of the 3.x
+        guard that aggregate='all' matched aggregate='event_study' bit-for-bit).
 
-        Regression guard for the documented public contract that BOTH surfaces expose
-        overall_att_es: aggregate='all' additionally computes the per-cohort group
-        aggregation, and must neither drop nor perturb the event-study-average overall.
+        aggregate('event_study') / aggregate('group') memoize into a scratch copy of
+        the kit and must neither drop nor perturb the event-study-average overall.
         """
-        res_all = TripleDifference().fit(
+        res = TripleDifference().fit(
             simple_data,
             outcome="outcome",
             unit="unit",
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="all",
         )
-        res_es = TripleDifference().fit(
-            simple_data,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-            partition="eligibility",
-            aggregate="event_study",
-        )
-        # Populated (not None / finite) on the 'all' surface.
-        assert res_all.overall_att_es is not None and np.isfinite(res_all.overall_att_es)
-        assert res_all.overall_se_es is not None and np.isfinite(res_all.overall_se_es)
-        # Identical point estimate AND inference vs the event_study path: same data, same
-        # analytical influence-function SE (no bootstrap), so bit-for-bit close.
-        assert res_all.overall_att_es == pytest.approx(res_es.overall_att_es, abs=1e-10)
-        assert res_all.overall_se_es == pytest.approx(res_es.overall_se_es, abs=1e-10)
-        assert res_all.overall_t_stat_es == pytest.approx(res_es.overall_t_stat_es, abs=1e-10)
-        assert res_all.overall_p_value_es == pytest.approx(res_es.overall_p_value_es, abs=1e-10)
-        ci_all, ci_es = res_all.overall_conf_int_es, res_es.overall_conf_int_es
-        assert ci_all is not None and ci_es is not None
-        assert ci_all[0] == pytest.approx(ci_es[0], abs=1e-10)
-        assert ci_all[1] == pytest.approx(ci_es[1], abs=1e-10)
+        o_first = res.aggregate("simple", weights="event_time")
+        # Run the other recompute surfaces in between (the former aggregate='all').
+        res.aggregate("group")
+        res.aggregate("event_study")
+        o_again = res.aggregate("simple", weights="event_time")
+        assert np.isfinite(o_first.att[0]) and np.isfinite(o_first.se[0])
+        # Identical point estimate AND inference: same data, same analytical
+        # influence-function SE (no bootstrap), so bit-for-bit close.
+        assert o_again.att[0] == pytest.approx(o_first.att[0], abs=1e-10)
+        assert o_again.se[0] == pytest.approx(o_first.se[0], abs=1e-10)
+        assert o_again.t_stat[0] == pytest.approx(o_first.t_stat[0], abs=1e-10)
+        assert o_again.p_value[0] == pytest.approx(o_first.p_value[0], abs=1e-10)
+        assert o_again.conf_int_lower[0] == pytest.approx(o_first.conf_int_lower[0], abs=1e-10)
+        assert o_again.conf_int_upper[0] == pytest.approx(o_first.conf_int_upper[0], abs=1e-10)
+        # The stored headline is a relay, untouched by the recomputes.
+        assert res.aggregate("simple").att[0] == res.att
+        assert res.aggregate("simple").se[0] == res.se
 
     def test_to_dataframe_group_time(self, simple_data):
         est = TripleDifference()
@@ -274,7 +287,8 @@ class TestStaggeredTripleDiffBasic:
             partition="eligibility",
         )
         r = repr(res)
-        assert "StaggeredTripleDiffResults" in r
+        assert "TripleDifferenceResults" in r
+        assert "design='staggered'" in r
 
     def test_significance_properties(self, simple_data):
         est = TripleDifference()
@@ -307,7 +321,7 @@ class TestStaggeredTripleDiffRecovery:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert abs(res.overall_att - 3.0) < 2 * res.overall_se
+        assert abs(res.att - 3.0) < 2 * res.se
 
     def test_null_effect(self, null_effect_data):
         """ATT should not be significant when true effect is 0."""
@@ -320,7 +334,7 @@ class TestStaggeredTripleDiffRecovery:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert abs(res.overall_att) < 2 * res.overall_se
+        assert abs(res.att) < 2 * res.se
 
     def test_att_with_covariates(self, data_with_covariates):
         """ATT recovery with covariates."""
@@ -334,7 +348,7 @@ class TestStaggeredTripleDiffRecovery:
             partition="eligibility",
             covariates=["x1", "x2"],
         )
-        assert abs(res.overall_att - 3.0) < 2 * res.overall_se
+        assert abs(res.att - 3.0) < 2 * res.se
 
 
 # ---------------------------------------------------------------------------
@@ -354,9 +368,9 @@ class TestStaggeredTripleDiffMethods:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
 
 # ---------------------------------------------------------------------------
@@ -374,10 +388,19 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        assert res.event_study_effects is not None
-        assert len(res.event_study_effects) > 0
+        # Not stored at fit time; produced post-fit by aggregate().
+        assert res.event_study_effects is None
+        es = res.aggregate("event_study")
+        assert isinstance(es, EventStudyResults)
+        n_horizons = len(es.event_time)
+        assert n_horizons > 0
+        for arr in (es.att, es.se, es.t_stat, es.p_value, es.conf_int_lower, es.conf_int_upper):
+            assert len(arr) == n_horizons
+        estimated = ~es.is_reference
+        assert np.all(np.isfinite(es.att[estimated]))
+        assert np.all(es.se[estimated] > 0)
+        assert es.cband_crit_value is None  # analytical fit: no simultaneous band
 
     def test_pretreatment_near_zero(self, simple_data):
         """Pre-treatment event study effects should be near zero."""
@@ -389,14 +412,13 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        for e, eff in res.event_study_effects.items():
-            if e < 0:
-                # Pre-treatment effects within 3 SE of zero
-                assert abs(eff["effect"]) < 3 * eff["se"], (
-                    f"Pre-treatment effect at e={e} is {eff['effect']:.3f} " f"(SE={eff['se']:.3f})"
-                )
+        es = res.aggregate("event_study")
+        pre = (es.event_time < 0) & ~es.is_reference
+        assert pre.any()
+        for e, att, se in zip(es.event_time[pre], es.att[pre], es.se[pre]):
+            # Pre-treatment effects within 3 SE of zero
+            assert abs(att) < 3 * se, f"Pre-treatment effect at e={e} is {att:.3f} (SE={se:.3f})"
 
     def test_posttreatment_positive(self, simple_data):
         """Post-treatment event study effects should be positive."""
@@ -408,11 +430,11 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        for e, eff in res.event_study_effects.items():
-            if e >= 0:
-                assert eff["effect"] > 0
+        es = res.aggregate("event_study")
+        post = (es.event_time >= 0) & ~es.is_reference
+        assert post.any()
+        assert np.all(es.att[post] > 0)
 
     def test_event_study_dataframe(self, simple_data):
         est = TripleDifference()
@@ -423,13 +445,19 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        df = res.to_dataframe("event_study")
-        assert "relative_period" in df.columns
-        assert "effect" in df.columns
+        es = res.aggregate("event_study")
+        df = es.to_dataframe()
+        for col in ("event_time", "att", "se", "conf_int_lower", "conf_int_upper", "is_reference"):
+            assert col in df.columns
+        assert len(df) == len(es.event_time)
+        np.testing.assert_allclose(df["att"].to_numpy(), es.att, rtol=0, atol=0)
+        # The fit-time event-study table is gone from the results container.
+        with pytest.raises(ValueError, match="not stored on 4.0 fits"):
+            res.to_dataframe("event_study")
 
-    def test_aggregate_all(self, simple_data):
+    def test_event_study_and_group_both_available(self, simple_data):
+        # The former aggregate='all' fit: both surfaces come from the same result.
         est = TripleDifference()
         res = est.fit(
             simple_data,
@@ -438,10 +466,14 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="all",
         )
-        assert res.event_study_effects is not None
-        assert res.group_effects is not None
+        es = res.aggregate("event_study")
+        g = res.aggregate("group")
+        assert len(es.event_time) > 0
+        assert len(g.att) == len(res.groups)
+        # Neither recompute populates the (None) fit-time carrier fields.
+        assert res.event_study_effects is None
+        assert res.group_effects is None
 
     def test_aggregate_group(self, simple_data):
         est = TripleDifference()
@@ -452,10 +484,20 @@ class TestStaggeredTripleDiffEventStudy:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="group",
         )
-        assert res.group_effects is not None
-        assert len(res.group_effects) > 0
+        assert res.group_effects is None  # not stored at fit time
+        g = res.aggregate("group")
+        assert isinstance(g, AggregationResult)
+        assert len(g.att) > 0
+        assert set(g.label) == set(res.groups)
+        assert np.all(np.isfinite(g.att))
+        assert np.all(g.se > 0)
+        assert np.all(g.conf_int_lower < g.att) and np.all(g.att < g.conf_int_upper)
+        df = g.to_dataframe()
+        assert "label" in df.columns and "att" in df.columns
+        assert len(df) == len(res.groups)
+        with pytest.raises(ValueError, match="not stored on 4.0 fits"):
+            res.to_dataframe("group")
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +575,9 @@ class TestStaggeredTripleDiffBootstrap:
         )
         assert res.bootstrap_results is not None
         assert res.bootstrap_results.n_bootstrap == n_boot
+        assert res.inference_method == "bootstrap"
+        assert res.n_bootstrap == n_boot
+        assert res.to_dict()["n_bootstrap"] == n_boot
 
     def test_bootstrap_with_event_study(self, simple_data, ci_params):
         n_boot = ci_params.bootstrap(199)
@@ -544,11 +589,21 @@ class TestStaggeredTripleDiffBootstrap:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
         assert res.bootstrap_results is not None
-        if res.cband_crit_value is not None:
-            assert res.cband_crit_value > 0
+        assert res.cband_crit_value is None  # no fit-time event-study surface
+        # aggregate('event_study') replays the fit-time multiplier bootstrap.
+        es = res.aggregate("event_study")
+        assert es.cband_crit_value is not None
+        assert es.cband_crit_value > 0
+        assert es.cband_lower is not None and es.cband_upper is not None
+        estimated = ~es.is_reference
+        assert np.all(np.isfinite(es.cband_lower[estimated]))
+        assert np.all(es.cband_lower[estimated] <= es.cband_upper[estimated])
+        # The replay is deterministic from the retained RNG state.
+        es_again = res.aggregate("event_study")
+        assert es_again.cband_crit_value == es.cband_crit_value
+        np.testing.assert_allclose(es_again.se, es.se, rtol=0, atol=0)
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +676,7 @@ class TestStaggeredTripleDiffEdgeCases:
                 first_treat="first_treat",
                 partition="eligibility",
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_survey_design_invalid_type_raises(self, simple_data):
         est = TripleDifference()
@@ -638,7 +693,8 @@ class TestStaggeredTripleDiffEdgeCases:
 
     def test_invalid_aggregate_raises(self, simple_data):
         est = TripleDifference()
-        with pytest.raises(ValueError, match="aggregate"):
+        # 4.0: fit() no longer takes aggregate= (or balance_e=) at all.
+        with pytest.raises(TypeError, match="aggregate"):
             est.fit(
                 simple_data,
                 outcome="outcome",
@@ -648,6 +704,26 @@ class TestStaggeredTripleDiffEdgeCases:
                 partition="eligibility",
                 aggregate="invalid",
             )
+        with pytest.raises(TypeError, match="balance_e"):
+            est.fit(
+                simple_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                partition="eligibility",
+                balance_e=1,
+            )
+        res = est.fit(
+            simple_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            partition="eligibility",
+        )
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            res.aggregate("invalid")
 
     def test_base_period_universal(self, simple_data):
         est = TripleDifference(base_period="universal")
@@ -659,8 +735,8 @@ class TestStaggeredTripleDiffEdgeCases:
             first_treat="first_treat",
             partition="eligibility",
         )
-        assert np.isfinite(res.overall_att)
-        assert abs(res.overall_att - 3.0) < 2 * res.overall_se
+        assert np.isfinite(res.att)
+        assert abs(res.att - 3.0) < 2 * res.se
 
     def test_to_dict(self, simple_data):
         est = TripleDifference()
@@ -673,9 +749,31 @@ class TestStaggeredTripleDiffEdgeCases:
             partition="eligibility",
         )
         d = res.to_dict()
-        assert "overall_att" in d
-        assert "n_obs" in d
-        assert "estimation_method" in d
+        for key in (
+            "att",
+            "se",
+            "t_stat",
+            "p_value",
+            "conf_int_lower",
+            "conf_int_upper",
+            "n_obs",
+            "estimation_method",
+            "design",
+            "n_groups",
+            "n_periods",
+            "groups",
+            "time_periods",
+        ):
+            assert key in d
+        assert d["att"] == res.att
+        assert d["se"] == res.se
+        assert d["design"] == "staggered"
+        assert d["n_groups"] == len(res.groups)
+        # Canonical names only: no 3.x overall_* keys, no fit-time surface keys.
+        assert not any(k.startswith("overall_") for k in d)
+        assert "event_study_effects" not in d
+        assert "group_effects" not in d
+        assert "n_bootstrap" not in d  # analytical fit
 
 
 # ---------------------------------------------------------------------------
@@ -709,7 +807,7 @@ class TestStaggeredTripleDiffRegressions:
             )
         base_period_warnings = [w for w in caught if "outside the observed panel" in str(w.message)]
         assert len(base_period_warnings) > 0, "Expected warning about base period"
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_empty_subgroup_warns(self):
         """Data where one (S,Q) cell is empty should warn, not crash."""
@@ -736,7 +834,7 @@ class TestStaggeredTripleDiffRegressions:
             )
         subgroup_warnings = [w for w in caught if "Empty subgroup" in str(w.message)]
         assert len(subgroup_warnings) > 0, "Expected warning about empty subgroup"
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_collinear_covariates_cached_ps_finite(self):
         """Collinear covariates with PS cache reuse should produce finite results."""
@@ -816,7 +914,7 @@ class TestStaggeredTripleDiffORSolveFallback:
         assert "(g, g_c, t) pair(s)" in msg
         assert "rank-guarded inverse" in msg
         # Point estimates should still be finite (rank-guard truncation).
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
     def test_collinear_covariates_emit_ps_hessian_warning(self):
         """Collinear propensity-score covariates should trigger the aggregate
@@ -923,9 +1021,8 @@ def alpha_fitted():
 class TestSummaryAlphaContract:
     """summary(alpha=...) never recomputes stored inference.
 
-    Family-wide guard (results_base._require_fit_alpha) - applies to this
-    results class even though the parent estimator is deprecated: the
-    summary surface is live through 3.x.
+    Family-wide guard (results_base._require_fit_alpha) on the unified
+    TripleDifferenceResults container's staggered summary.
     """
 
     @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])

@@ -82,7 +82,6 @@ Result containers returned by estimators:
    diff_diff.duration_did_results.DurationDiDResults
    diff_diff.duration_did_results.DurationDiDPretestResults
    diff_diff.Comparison2x2
-   diff_diff.StaggeredTripleDiffResults
    diff_diff.TWFEWeightsResult
    diff_diff.RegressionDiscontinuityResults
    diff_diff.RDPlotResult

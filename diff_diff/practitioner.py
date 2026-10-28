@@ -1228,6 +1228,10 @@ def _handle_continuous(results: Any):
 
 
 def _handle_triple(results: Any):
+    # One container serves both DDD designs since 4.0 (row M-014); the
+    # staggered design has post-fit event-study / cohort surfaces to point at.
+    if getattr(results, "design", None) == "staggered":
+        return _handle_triple_staggered(results)
     steps = [
         _step(
             baker_step=3,
@@ -1256,6 +1260,63 @@ def _handle_triple(results: Any):
                 "group structure rather than the treatment."
             ),
             code="# Re-estimate with a placebo eligibility group",
+            step_name="heterogeneity",
+        ),
+        _covariates_step(),
+    ]
+    warnings = _check_nan_att(results)
+    return steps, warnings
+
+
+def _handle_triple_staggered(results: Any):
+    """Staggered DDD design (``TripleDifference.fit(..., first_treat=)``)."""
+    is_bootstrap = getattr(results, "bootstrap_results", None) is not None
+    es_note = (
+        " This fit is BOOTSTRAPPED: aggregate() replays the fit-time multiplier "
+        "bootstrap post-fit (percentile inference; no refit needed)."
+        if is_bootstrap
+        else ""
+    )
+    steps = [
+        _step(
+            baker_step=3,
+            label="Inspect pre-treatment event-study horizons",
+            why=(
+                "The staggered DDD identifying assumption is the triple-difference "
+                "cancellation across cohorts; the pre-treatment ATT(g, t) horizons are "
+                "its placebo check. Aggregate the event study post-fit - the fit-time "
+                "aggregate= keyword was removed at 4.0." + es_note
+            ),
+            code=(
+                "es = results.aggregate('event_study')\n"
+                "print(es.to_dataframe())  # pre-treatment rows should be ~0"
+            ),
+            step_name="parallel_trends",
+        ),
+        _step(
+            baker_step=5,
+            label="Report cohort heterogeneity",
+            why=(
+                "Cohort-specific effects reveal whether the overall ATT masks "
+                "heterogeneity across enabling cohorts. Post-fit, no refit needed." + es_note
+            ),
+            code=(
+                "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+                "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects\n"
+                "# The paper's Eq. 4.14 overall (unweighted mean of post-treatment ES(e)):\n"
+                "print(results.aggregate('simple', weights='event_time').to_dataframe())"
+            ),
+            step_name="heterogeneity",
+        ),
+        _step(
+            baker_step=7,
+            label="Test placebo partition",
+            why=(
+                "Re-estimate using a placebo eligibility partition to check "
+                "whether the DDD result could be an artifact of the "
+                "partition structure rather than the treatment."
+            ),
+            code="# Re-estimate with a placebo eligibility partition",
             step_name="heterogeneity",
         ),
         _covariates_step(),

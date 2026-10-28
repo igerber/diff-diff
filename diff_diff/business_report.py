@@ -49,7 +49,11 @@ from typing import Any, Dict, FrozenSet, List, Optional, Union
 
 import numpy as np
 
-from diff_diff._reporting_helpers import describe_target_parameter
+from diff_diff._reporting_helpers import (
+    describe_target_parameter,
+    is_staggered_ddd,
+    results_design,
+)
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
 
@@ -605,6 +609,10 @@ class BusinessReport:
             "estimator": {
                 "class_name": estimator_name,
                 "display_name": estimator_name,
+                # Additive key (4.0, item 6): the fitted DESIGN of a container
+                # serving two designs from one class name ("2x2x2" /
+                # "staggered" for TripleDifferenceResults); None otherwise.
+                "design": results_design(self._results),
             },
             "context": {
                 "outcome_label": self._context.outcome_label,
@@ -841,11 +849,11 @@ class BusinessReport:
         # total was being narrated as "control". Surface
         # ``n_never_enabled`` instead on both the ``nevertreated`` and
         # the dynamic ``notyettreated`` modes.
-        if name == "StaggeredTripleDiffResults" and _canonical_control == "nevertreated":
+        if is_staggered_ddd(r) and _canonical_control == "nevertreated":
             n_never_enabled = _safe_int(getattr(r, "n_never_enabled", None))
             n_control = None
         if is_dynamic_control:
-            if name == "StaggeredTripleDiffResults":
+            if is_staggered_ddd(r):
                 n_never_enabled = _safe_int(getattr(r, "n_never_enabled", None))
                 n_control = None
             elif name == "StackedDiDResults":
@@ -1287,7 +1295,7 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "marginal effect ACRT(d), and cross-dose contrasts."
             ),
         }
-    if estimator_name in {"TripleDifferenceResults", "StaggeredTripleDiffResults"}:
+    if estimator_name == "TripleDifferenceResults":
         # Ortiz-Villavicencio & Sant'Anna (2025) — identification is the
         # triple-difference cancellation across the 2x2x2 cells, not
         # ordinary DiD parallel trends; see REGISTRY.md §TripleDifference
@@ -2525,6 +2533,13 @@ def _render_summary(schema: Dict[str, Any]) -> str:
     # for the per-estimator dynamic-control phrasing branch below.
     estimator_block = schema.get("estimator") or {}
     estimator = estimator_block.get("class_name") if isinstance(estimator_block, dict) else None
+    # The staggered DDD narration keys on the DESIGN (4.0, row M-014): one
+    # class name serves both DDD designs.
+    staggered_ddd = (
+        estimator == "TripleDifferenceResults"
+        and isinstance(estimator_block, dict)
+        and estimator_block.get("design") == "staggered"
+    )
     n_obs = sample.get("n_obs")
     n_t = sample.get("n_treated")
     n_c = sample.get("n_control")
@@ -2576,12 +2591,7 @@ def _render_summary(schema: Dict[str, Any]) -> str:
                     "dynamic not-yet-treated comparison group (the control set "
                     f"varies by cohort and period){subset_clause}."
                 )
-        elif (
-            estimator == "StaggeredTripleDiffResults"
-            and isinstance(n_t, int)
-            and isinstance(n_ne, int)
-            and n_ne > 0
-        ):
+        elif staggered_ddd and isinstance(n_t, int) and isinstance(n_ne, int) and n_ne > 0:
             # Round-38 P2 CI review on PR #318: StaggeredTripleDiff
             # under fixed ``control_group="never_treated"`` had the
             # schema moved to ``n_never_enabled`` (round-37) but the
@@ -2778,6 +2788,11 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
     estimator_name = (
         estimator_block.get("class_name") if isinstance(estimator_block, dict) else None
     )
+    md_staggered_ddd = (
+        estimator_name == "TripleDifferenceResults"
+        and isinstance(estimator_block, dict)
+        and estimator_block.get("design") == "staggered"
+    )
     cg = sample.get("control_group")
     # Panel-vs-RCS count-unit label for the full report. Mirrors the
     # summary path: CallawaySantAnna's ``panel=False`` mode stores
@@ -2792,7 +2807,7 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
     if isinstance(sample.get("n_control"), int):
         lines.append(f"- Control: {sample['n_control']:,}")
     elif (
-        estimator_name == "StaggeredTripleDiffResults"
+        md_staggered_ddd
         and isinstance(sample.get("n_never_enabled"), int)
         and sample["n_never_enabled"] > 0
         and not sample.get("dynamic_control")

@@ -19,9 +19,27 @@ Current contents:
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from diff_diff.results_base import Diagnostic
+
+
+def results_design(results: Any) -> Optional[str]:
+    """The fitted DESIGN of a results container that serves two designs from one class.
+
+    Scoped to ``TripleDifferenceResults`` (4.0, row M-014: ``"2x2x2"`` or
+    ``"staggered"``); ``None`` for every other class. Scoped on purpose - the
+    HAD containers carry an unrelated ``design`` field (their dose-support
+    mode), which must not leak into the report schemas' ``design`` key.
+    """
+    if type(results).__name__ != "TripleDifferenceResults":
+        return None
+    return getattr(results, "design", None)
+
+
+def is_staggered_ddd(results: Any) -> bool:
+    """True for a ``TripleDifferenceResults`` fitted in the staggered design."""
+    return results_design(results) == "staggered"
 
 
 def describe_target_parameter(results: Any) -> Dict[str, Any]:
@@ -423,6 +441,22 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         }
 
     if name == "TripleDifferenceResults":
+        # One container, two designs since 4.0 (row M-014): dispatch on the
+        # ``design`` discriminator, never on a class name.
+        if results_design(results) == "staggered":
+            return {
+                "name": "overall ATT (cohort-weighted staggered triple-difference)",
+                "definition": (
+                    "A cohort-weighted aggregate of per-(g, g_c, t) triple-"
+                    "difference ATTs ``DDD(g, g_c, t)`` via the GMM optimal-"
+                    "combination weighting. Extends the DDD cancellation to "
+                    "staggered adoption timing with a third (eligibility) "
+                    "dimension."
+                ),
+                "aggregation": "staggered_ddd",
+                "headline_attribute": "att",
+                "reference": "Ortiz-Villavicencio & Sant'Anna (2025); REGISTRY.md Sec. StaggeredTripleDifference",
+            }
         return {
             "name": "ATT (triple-difference)",
             "definition": (
@@ -435,21 +469,6 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "aggregation": "ddd",
             "headline_attribute": "att",
             "reference": "Ortiz-Villavicencio & Sant'Anna (2025); REGISTRY.md Sec. TripleDifference",
-        }
-
-    if name == "StaggeredTripleDiffResults":
-        return {
-            "name": "overall ATT (cohort-weighted staggered triple-difference)",
-            "definition": (
-                "A cohort-weighted aggregate of per-(g, g_c, t) triple-"
-                "difference ATTs ``DDD(g, g_c, t)`` via the GMM optimal-"
-                "combination weighting. Extends the DDD cancellation to "
-                "staggered adoption timing with a third (eligibility) "
-                "dimension."
-            ),
-            "aggregation": "staggered_ddd",
-            "headline_attribute": "overall_att",
-            "reference": "Ortiz-Villavicencio & Sant'Anna (2025); REGISTRY.md Sec. StaggeredTripleDifference",
         }
 
     if name == "ChaisemartinDHaultfoeuilleResults":

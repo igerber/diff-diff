@@ -30,7 +30,7 @@ groups:
     - diff_diff/staggered_bootstrap.py
     - diff_diff/staggered_results.py
   staggered_triple_diff:
-    - diff_diff/staggered_triple_diff_results.py
+    - diff_diff/triple_diff_results.py
     # The estimation engine relocated here in phase 3(b) (row M-013) and is
     # shared with TripleDifference's staggered mode. Private (leading
     # underscore), so tests/test_doc_deps_integrity.py exempts it from needing
@@ -257,15 +257,20 @@ sources:
         type: user_guide
 
   # ── staggered DDD engine (staggered_triple_diff group; the
-  # StaggeredTripleDifference class was removed at the 4.0 cut) ─────
+  # StaggeredTripleDifference class was removed at the 4.0 cut, and the
+  # unified TripleDifferenceResults container - both DDD designs - lives in
+  # triple_diff_results.py since item 6, row M-014) ─────
 
-  diff_diff/staggered_triple_diff_results.py:
-    drift_risk: low
+  diff_diff/triple_diff_results.py:
+    drift_risk: medium
     docs:
       - path: docs/methodology/REGISTRY.md
         section: "StaggeredTripleDifference"
         type: methodology
-      - path: docs/api/staggered.rst
+      - path: docs/methodology/REGISTRY.md
+        section: "TripleDifference"
+        type: methodology
+      - path: docs/api/triple_diff.rst
         type: api_reference
       - path: docs/tutorials/16_survey_did.ipynb
         type: tutorial

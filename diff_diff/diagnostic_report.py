@@ -44,12 +44,16 @@ constant below. The schema is marked experimental in v3.2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from diff_diff._reporting_helpers import describe_target_parameter  # noqa: E402 (top-level import)
+from diff_diff._reporting_helpers import (  # noqa: E402 (top-level import)
+    describe_target_parameter,
+    is_staggered_ddd,
+    results_design,
+)
 from diff_diff.results_base import Diagnostic, _coverage_pct
 
 DIAGNOSTIC_REPORT_SCHEMA_VERSION = "3.0"
@@ -89,7 +93,12 @@ _CHECK_NAMES: Tuple[str, ...] = (
 # imports across the result modules. Renaming or aliasing any result class
 # requires updating both this table and ``_PT_METHOD`` below; the
 # applicability-matrix test parametrized over all result types serves as the
-# regression guard.
+# regression guard. A class that serves two DESIGNS from one name
+# (``TripleDifferenceResults`` since 4.0, row M-014) keeps ONE class-name key
+# here - the exhaustiveness guard in tests/test_target_parameter.py builds a
+# stub from every key - and declares its design-specific sets in the
+# ``_DESIGN_*`` tables below, read through ``_applicability_for`` /
+# ``_pt_method_for``.
 # ``pretrends_power`` is restricted to the result families for which
 # ``compute_pretrends_power`` has an explicit adapter — see
 # ``diff_diff/pretrends.py`` around the result-type dispatch. Expanding
@@ -234,7 +243,6 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
     ),
     "ContinuousDiDResults": frozenset({"design_effect", "heterogeneity"}),
     "TripleDifferenceResults": frozenset({"design_effect", "epv"}),
-    "StaggeredTripleDiffResults": frozenset({"parallel_trends", "design_effect"}),
     "WooldridgeDiDResults": frozenset(
         {
             "parallel_trends",
@@ -253,6 +261,42 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
     ),
     "BaconDecompositionResults": frozenset({"bacon"}),
 }
+
+# Design-specific applicability for the containers that serve two designs
+# from one class name, keyed ``(class_name, design)``. ``TripleDifferenceResults``
+# (4.0, row M-014): the 2x2x2 design keeps the class-name row above (no
+# event-study surface, so no parallel-trends check); the staggered design
+# carries the former ``StaggeredTripleDiffResults`` sets.
+_DESIGN_APPLICABILITY: Dict[Tuple[str, str], FrozenSet[str]] = {
+    ("TripleDifferenceResults", "staggered"): frozenset({"parallel_trends", "design_effect"}),
+}
+
+
+def _applicability_for(results: Any) -> FrozenSet[str]:
+    """Type- and design-level applicability set for ``results``."""
+    name = type(results).__name__
+    design = results_design(results)
+    if design is not None and (name, design) in _DESIGN_APPLICABILITY:
+        return _DESIGN_APPLICABILITY[(name, design)]
+    return _APPLICABILITY.get(name, frozenset())
+
+
+# Design-specific parallel-trends method (see ``_DESIGN_APPLICABILITY``): the
+# staggered DDD design derives its surface post-fit through
+# ``results.aggregate('event_study')``; the 2x2x2 design has no PT row.
+_DESIGN_PT_METHOD: Dict[Tuple[str, str], str] = {
+    ("TripleDifferenceResults", "staggered"): "event_study",
+}
+
+
+def _pt_method_for(results: Any) -> Optional[str]:
+    """Type- and design-level parallel-trends method for ``results``."""
+    name = type(results).__name__
+    design = results_design(results)
+    if design is not None and (name, design) in _DESIGN_PT_METHOD:
+        return _DESIGN_PT_METHOD[(name, design)]
+    return _PT_METHOD.get(name)
+
 
 # Per-type parallel-trends method. The PT check dispatches internally on this.
 # Values:
@@ -273,7 +317,6 @@ _PT_METHOD: Dict[str, str] = {
     "StackedDiDResults": "event_study",
     "EfficientDiDResults": "hausman",
     "ContinuousDiDResults": "event_study",
-    "StaggeredTripleDiffResults": "event_study",
     "WooldridgeDiDResults": "event_study",
     "ChaisemartinDHaultfoeuilleResults": "event_study",
     "SyntheticDiDResults": "synthetic_fit",
@@ -721,8 +764,7 @@ class DiagnosticReport:
             opt-out. Checks that are not type-applicable for this estimator
             are omitted from both sets (not surfaced as "skipped").
         """
-        type_name = type(self._results).__name__
-        type_level = set(_APPLICABILITY.get(type_name, frozenset()))
+        type_level = set(_applicability_for(self._results))
         # A precomputed passthrough is a caller-supplied override, not
         # a claim about estimator-native applicability. Round-31 P1 CI
         # review on PR #318: when a caller passes
@@ -839,17 +881,6 @@ class DiagnosticReport:
                 "place; call it on the results object, then re-run the "
                 "report."
             )
-        elif name == "StaggeredTripleDiffResults":
-            # Fit-time aggregate= is the CANONICAL route here (ledger row
-            # M-140, not deprecated); the container gains post-fit
-            # aggregate() with the M-014 unification at 4.0.
-            why = (
-                f"{prefix}. Re-fit with fit(..., aggregate='event_study') on "
-                "TripleDifference's staggered mode to populate the "
-                "per-event-time output - the fit-time kwarg is the canonical "
-                "event-study route for staggered triple-difference (its "
-                "results container gains post-fit aggregate() at 4.0)."
-            )
         elif "event_study" not in getattr(type(r), "_AGGREGATE_SUPPORTED", ()):
             why = (
                 f"{prefix}, and {name} does not support post-fit "
@@ -934,7 +965,7 @@ class DiagnosticReport:
             # advertised but skipped before use.
             if "parallel_trends" in self._precomputed:
                 return None
-            method = _PT_METHOD.get(name)
+            method = _pt_method_for(r)
             if method == "two_x_two":
                 # Mirror the full argument contract of ``_pt_two_x_two``:
                 # the runner needs ``data`` AND all three column names to
@@ -1477,6 +1508,10 @@ class DiagnosticReport:
         schema: Dict[str, Any] = {
             "schema_version": DIAGNOSTIC_REPORT_SCHEMA_VERSION,
             "estimator": type(self._results).__name__,
+            # Additive key (4.0, item 6): the fitted DESIGN of a container that
+            # serves two designs from one class name ("2x2x2" / "staggered"
+            # for TripleDifferenceResults); None for every other estimator.
+            "design": results_design(self._results),
             "headline_metric": headline,
             "target_parameter": describe_target_parameter(self._results),
             "parallel_trends": sections["parallel_trends"],
@@ -1588,7 +1623,7 @@ class DiagnosticReport:
         if "parallel_trends" in self._precomputed:
             return self._format_precomputed_pt(self._precomputed["parallel_trends"])
 
-        method = _PT_METHOD.get(type(self._results).__name__)
+        method = _pt_method_for(self._results)
         if method == "two_x_two":
             return self._pt_two_x_two()
         if method == "event_study":
@@ -2192,12 +2227,11 @@ class DiagnosticReport:
             "SunAbrahamResults",
             "ImputationDiDResults",
             "StackedDiDResults",
-            "StaggeredTripleDiffResults",
             "WooldridgeDiDResults",
             "ChaisemartinDHaultfoeuilleResults",
             "EfficientDiDResults",
             "TwoStageDiDResults",
-        }
+        } or is_staggered_ddd(source_fit)
         has_full_es_vcov = (
             getattr(source_fit, "event_study_vcov", None) is not None
             and getattr(source_fit, "event_study_vcov_index", None) is not None
@@ -2629,7 +2663,7 @@ class DiagnosticReport:
             if bool(is_ref):
                 continue
             try:
-                rel = int(k)
+                rel = _event_time_value(k)
             except (TypeError, ValueError):
                 continue
             if rel < boundary:
@@ -3348,9 +3382,9 @@ class DiagnosticReport:
                 items = []
             for key, entry in items:
                 try:
-                    rel = int(key)
+                    rel = _event_time_value(key)
                 except (TypeError, ValueError):
-                    # Non-integer keys — unknown shape; skip conservatively
+                    # Non-numeric keys — unknown shape; skip conservatively
                     # rather than mixing into the dispersion summary.
                     continue
                 if rel < post_cutoff:
@@ -3374,8 +3408,10 @@ class DiagnosticReport:
         # (g, t) -> dict. Filter to t >= g (post-treatment cells); the
         # pre-treatment cells (t < g) are identification-deviation
         # placebos, not effect heterogeneity.
+        # Truthiness, not ``is not None``: the unified TripleDifferenceResults
+        # carries an EMPTY dict in its 2x2x2 design (no cells to read).
         gte = getattr(r, "group_time_effects", None)
-        if gte is not None:
+        if gte:
             post_cells: List[float] = []
             try:
                 items = list(gte.items())
@@ -3468,7 +3504,7 @@ class DiagnosticReport:
             return "event_study_effects_post"
         if getattr(r, "treatment_effects", None) is not None:
             return "treatment_effects"
-        if getattr(r, "group_time_effects", None) is not None:
+        if getattr(r, "group_time_effects", None):
             return "group_time_effects_post"
         return "unknown"
 
@@ -3845,9 +3881,9 @@ def _extract_scalar_headline(
     ``conf_int`` natively, so the table has a single row; the 3.x
     ``overall_*`` / ``overall_att_*`` row was deleted at the cut (reading it
     would now emit the containers' FutureWarning shims). The returned
-    ``name`` is therefore ``"att"`` for every scalar-headline estimator,
-    including ``StaggeredTripleDiffResults``, whose canonical names are
-    silent forwarding properties over its unflipped ``overall_*`` storage.
+    ``name`` is therefore ``"att"`` for every scalar-headline estimator (the
+    last ``overall_*`` container, ``StaggeredTripleDiffResults``, was retired
+    by the 4.0 DDD container unification, row M-014).
 
     Each row in the attribute-alias table below is tried in priority order.
     The first point-estimate attribute that resolves to a non-None value
@@ -4013,6 +4049,32 @@ def _pre_post_boundary(results: Any) -> int:
     return -k
 
 
+def _event_time_value(k: Any) -> float:
+    """Numeric value of an event-time label for pre/post comparisons.
+
+    Raises ``TypeError`` / ``ValueError`` for non-numeric or non-finite
+    labels (callers skip those rows). Never truncates: a fractional
+    horizon from a half-step calendar compares at its real value.
+    """
+    v = float(k)
+    if not np.isfinite(v):
+        raise ValueError(f"non-finite event-time label {k!r}")
+    return v
+
+
+def _event_time_key(k: Any) -> Union[int, float]:
+    """Hashable dict key for an event-time label, without truncation.
+
+    Integer-valued labels (``-2``, ``np.int64(-2)``, ``-2.0``) become Python
+    ``int``; fractional labels (``-0.5``) stay ``float``. Both hash-equal
+    their ``np.float64`` / ``np.int64`` counterparts, so a key built here
+    aligns with the surface's ``vcov_index`` labels under plain ``in`` /
+    dict lookups.
+    """
+    v = _event_time_value(k)
+    return int(v) if v.is_integer() else v
+
+
 def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
     """Adapt an ``EventStudyResults`` container to the legacy
     ``event_study_effects`` dict shape consumed by this module's readers.
@@ -4034,10 +4096,15 @@ def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
     PT to "inconclusive". NaN se/p on surviving rows pass through so the
     undefined-inference guards behave identically to the raw route.
 
-    Keys are Python ``int`` (matching the ImputationDiD/TwoStageDiD raw
-    key dtype exactly; the CS derived route orders numerically where its
-    raw ``np.int64`` keys str-sort — presentational only, the two routes
-    never coexist).
+    Keys go through ``_event_time_key``: integer-valued horizons become
+    Python ``int`` (matching the ImputationDiD/TwoStageDiD raw key dtype
+    exactly; the CS derived route orders numerically where its raw
+    ``np.int64`` keys str-sort — presentational only, the two routes never
+    coexist) and fractional horizons stay ``float``. A half-step calendar
+    (``e = t - g`` in ``-1.5, -1.0, -0.5, ...``) therefore keeps every
+    horizon distinct: the former ``int(k)`` truncation merged ``-1.5`` into
+    ``-1`` and ``-0.5`` into ``0``, silently dropping pre-periods from the
+    PT family (CI review on PR #878).
     """
     if getattr(surface, "time_scale", "relative") != "relative":
         raise ValueError(
@@ -4058,7 +4125,7 @@ def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
             continue
         if np.isfinite(n) and float(n) == 0.0:
             continue
-        out[int(k)] = {
+        out[_event_time_key(k)] = {
             "effect": float(att),
             "se": float(se),
             "p_value": float(p),
@@ -4145,9 +4212,14 @@ def _collect_pre_period_coefs(
             es = surface_dict
         es = es or {}
         for k, entry in es.items():
-            # Pre-period relative-time keys are negative (convention: e=-1, -2, ...).
+            # Pre-period relative-time keys are negative (convention: e=-1,
+            # -2, ...). Compare the NUMERIC value - never ``int(k)``, which
+            # truncates a fractional horizon toward zero (``-0.5`` -> ``0``)
+            # and reclassifies a pre-period as the treatment horizon. The
+            # key itself is kept verbatim as the row label so it stays
+            # hash-equal to the covariance index.
             try:
-                rel = int(k)
+                rel = _event_time_value(k)
             except (TypeError, ValueError):
                 continue
             if rel >= pre_cutoff:

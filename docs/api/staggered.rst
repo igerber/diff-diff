@@ -151,15 +151,3 @@ Bootstrap inference results for Sun-Abraham estimation.
    :undoc-members:
    :show-inheritance:
 
-StaggeredTripleDiffResults
---------------------------
-
-Results container for :class:`~diff_diff.TripleDifference`'s staggered mode
-(``fit(..., first_treat=, partition=)``; through 3.x also returned by the removed
-``StaggeredTripleDifference`` class).
-
-.. autoclass:: diff_diff.StaggeredTripleDiffResults
-   :no-index:
-   :members:
-   :undoc-members:
-   :show-inheritance:

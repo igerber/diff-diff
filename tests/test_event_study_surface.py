@@ -452,8 +452,11 @@ def surfaces():
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
+        # 4.0 (row M-014): the surface is post-fit; the native side is the same
+        # legacy stand-in the CallawaySantAnna entry uses.
+        assert sddd.event_study_effects is None
+        sddd = legacy_standin(sddd)
         out["TripleDifference_staggered"] = (sddd, build_event_study_surface(sddd))
 
         # 11. TWFE event-study mode (4.0 cut, PR 4c-i), pooled and within: the

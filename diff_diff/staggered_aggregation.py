@@ -33,8 +33,9 @@ class EventStudyAggregation:
     overall : dict or None
         Eq. (4.14) overall ATT (``att`` / ``se`` / ``effective_df``) - the
         unweighted mean of post-treatment ES(e). Consumed by
-        TripleDifference's staggered mode as ``overall_att_es``; CallawaySantAnna
-        leaves it unread. ``None`` when no post-treatment horizon qualifies.
+        TripleDifferenceResults.aggregate('simple', weights='event_time');
+        CallawaySantAnna leaves it unread. ``None`` when no post-treatment
+        horizon qualifies.
     df_used : float or None
         The ONE df every ES row's inference actually used, recorded iff it
         governs a t-reference (finite and > 0). Provenance for
@@ -1185,10 +1186,11 @@ class CallawaySantAnnaAggregationMixin:
         event_study_vcov_index = valid_event_times if event_study_vcov is not None else None
 
         # Eq. (4.14) overall ATT: the unweighted mean of the post-treatment
-        # event-study effects ES(e). Stashed on self (mirroring _event_study_vcov)
-        # so TripleDifference's staggered mode can expose it as overall_att_es;
-        # CallawaySantAnna leaves it unread. Post-treatment is the library predicate
-        # e >= -anticipation (matching _aggregate_simple and the default overall_att),
+        # event-study effects ES(e). Returned on the aggregation object so the
+        # unified TripleDifferenceResults can expose it post-fit as
+        # aggregate('simple', weights='event_time'); CallawaySantAnna leaves it
+        # unread. Post-treatment is the library predicate
+        # e >= -anticipation (matching _aggregate_simple and the default att),
         # NOT a hardcoded e >= 0.
         #
         # The POINT ESTIMATE averages EVERY finite post-treatment ES(e) effect (read

@@ -62,6 +62,14 @@ def plot_group_effects(
         raise TypeError(
             "results must be a CallawaySantAnnaResults (or subclass, e.g. " "DMLDiDResults) object"
         )
+    if not results.group_time_effects:
+        # The unified TripleDifferenceResults carries an EMPTY table in its
+        # 2x2x2 design (a single ATT, no cells) - nothing to plot.
+        raise ValueError(
+            f"{type(results).__name__} has no group-time cells to plot (a 2x2x2 "
+            "TripleDifference fit has a single ATT; the staggered design "
+            "(first_treat=) produces ATT(g, t) cells)."
+        )
 
     # Get groups to plot
     if groups is None:
@@ -363,6 +371,12 @@ def _extract_staircase_data(results, data, unit, time, first_treat):
             raise TypeError(
                 "results must be a CallawaySantAnnaResults (or subclass, e.g. "
                 "DMLDiDResults) object"
+            )
+        if not results.group_time_effects:
+            raise ValueError(
+                f"{type(results).__name__} has no group-time cells to plot (a 2x2x2 "
+                "TripleDifference fit has a single ATT; the staggered design "
+                "(first_treat=) produces ATT(g, t) cells)."
             )
 
         groups = sorted(results.groups)

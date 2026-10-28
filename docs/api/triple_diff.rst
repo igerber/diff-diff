@@ -55,14 +55,19 @@ numbers are identical to the removed class's.
        unit="unit",
        time="period",
        first_treat="first_treat",
-       aggregate="event_study",
    )
+   es = res.aggregate("event_study")          # post-fit, no refit
+   cohorts = res.aggregate("group")
+   eq414 = res.aggregate("simple", weights="event_time")  # paper Eq. 4.14 overall
 
-2x2x2 mode returns :class:`~diff_diff.TripleDifferenceResults`; staggered mode
-returns :class:`~diff_diff.StaggeredTripleDiffResults` (the containers unify at
-4.0, row M-014). ``cluster=`` gives Liang-Zeger CR1 in 2x2x2 mode and raises in
-staggered mode, where unit-level clustering is available through
-``n_bootstrap > 0``.
+Both designs return ONE :class:`~diff_diff.TripleDifferenceResults` (4.0, row M-014):
+``res.design`` is ``"2x2x2"`` or ``"staggered"``, the canonical ``att`` / ``se`` /
+``t_stat`` / ``p_value`` / ``conf_int`` are populated in both, and the staggered
+design's event-study and cohort surfaces are post-fit through ``aggregate()`` (the
+3.x fit-time ``aggregate=`` / ``balance_e=`` keywords were removed at 4.0, rows
+M-140 / M-141; ``balance_e`` is a keyword of ``aggregate()``). ``cluster=`` gives
+Liang-Zeger CR1 in 2x2x2 mode and raises in staggered mode, where unit-level
+clustering is available through ``n_bootstrap > 0``.
 
 .. autoclass:: diff_diff.TripleDifference
    :no-index:
@@ -82,7 +87,10 @@ staggered mode, where unit-level clustering is available through
 TripleDifferenceResults
 -----------------------
 
-Results container for Triple Difference estimation.
+Results container for Triple Difference estimation - one class for both designs
+(``design`` says which). ``aggregate()`` levels: ``'simple'`` (both designs; with
+``weights='event_time'`` the paper's Eq. 4.14 overall), ``'event_study'`` and
+``'group'`` (staggered design; bootstrapped fits replay the fit-time bootstrap).
 
 .. autoclass:: diff_diff.TripleDifferenceResults
    :no-index:
@@ -98,6 +106,8 @@ Results container for Triple Difference estimation.
       ~TripleDifferenceResults.print_summary
       ~TripleDifferenceResults.to_dict
       ~TripleDifferenceResults.to_dataframe
+      ~TripleDifferenceResults.aggregate
+      ~TripleDifferenceResults.epv_summary
 
 Estimation Methods
 ------------------

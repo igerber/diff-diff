@@ -26,7 +26,7 @@ resolves this engine's methodology docs.
 """
 
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -36,7 +36,8 @@ from diff_diff.linalg import (
     _rank_guarded_inv,
     solve_logit,
 )
-from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
+from diff_diff.staggered import _build_aggregation_kit
+from diff_diff.triple_diff_results import TripleDifferenceResults
 from diff_diff.utils import safe_inference, validate_anticipation
 
 if TYPE_CHECKING:
@@ -159,14 +160,12 @@ class _StaggeredTripleDiffEngineMixin:
         first_treat: str,
         partition: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Optional[str] = None,
-        balance_e: Optional[int] = None,
         survey_design: Optional["SurveyDesign"] = None,
         *,
         estimator_name: str,
         partition_label: str,
         _frame_offset: int = 0,
-    ) -> StaggeredTripleDiffResults:
+    ) -> TripleDifferenceResults:
         """Fit the staggered triple-difference estimator.
 
         The estimation body is the 3.x `StaggeredTripleDifference.fit` verbatim
@@ -206,16 +205,6 @@ class _StaggeredTripleDiffEngineMixin:
                         f"weight_type='pweight', got '{resolved_survey.weight_type}'. "
                         f"The survey variance math assumes probability weights."
                     )
-            if aggregate is not None and aggregate not in [
-                "event_study",
-                "group",
-                "simple",
-                "all",
-            ]:
-                raise ValueError(
-                    f"aggregate must be 'event_study', 'group', 'simple', or 'all', "
-                    f"got '{aggregate}'"
-                )
 
             df = data.copy()
             self._validate_inputs(
@@ -606,10 +595,12 @@ class _StaggeredTripleDiffEngineMixin:
                 group_time_effects, influence_func_info, df_agg, unit, precomputed_agg
             )
             # Preserve the ORIGINAL survey df before the simple-overall statistic mutates
-            # it below. The Eq. 4.14 overall (overall_att_es) must fall back to this
-            # original df, never to the simple overall's per-statistic replicate df — the
-            # two statistics can drop different replicate subsets, so reusing the simple
-            # overall's df would silently give overall_att_es the wrong p-value/CI.
+            # it below. The post-fit Eq. 4.14 overall (aggregate('simple',
+            # weights='event_time')) must fall back to this original df, never to the
+            # simple overall's per-statistic replicate df — the two statistics can drop
+            # different replicate subsets, so reusing the simple overall's df would
+            # silently give the Eq. 4.14 overall the wrong p-value/CI. Carried to the
+            # aggregation kit below.
             df_survey_original = df_survey
             # Use per-statistic effective df from replicate aggregation if available;
             # otherwise fall back to the original df from the survey design.
@@ -621,81 +612,10 @@ class _StaggeredTripleDiffEngineMixin:
                 overall_att, overall_se, alpha=self.alpha, df=df_survey
             )
 
-            # Aggregations
-            event_study_effects = None
-            group_effects = None
-            es_aggregation = None
-            if aggregate in ("event_study", "all"):
-                es_aggregation = self._aggregate_event_study(
-                    group_time_effects,
-                    influence_func_info,
-                    treatment_groups,
-                    time_periods,
-                    balance_e,
-                    df_agg,
-                    unit,
-                    precomputed_agg,
-                )
-                event_study_effects = es_aggregation.effects
-            if aggregate in ("group", "all"):
-                group_effects = self._aggregate_by_group(
-                    group_time_effects,
-                    influence_func_info,
-                    treatment_groups,
-                    precomputed_agg,
-                    df_agg,
-                    unit,
-                )
-
-            # Paper Eq. (4.14) overall ATT (event-study average): an opt-in summary
-            # alongside the default CS-simple ``overall_att``. ``_aggregate_event_study``
-            # RETURNS it on its aggregation object (it used to stash it on
-            # ``self._event_study_overall``); populated only when the event-study
-            # aggregation ran. Analytical inference here; the bootstrap block below
-            # overrides the SE when ``n_bootstrap > 0`` (mirroring ``overall_se``).
-            overall_att_es = None
-            overall_se_es = None
-            overall_t_stat_es = None
-            overall_p_value_es = None
-            overall_conf_int_es = None
-            # Whether the ANALYTICAL Eq. 4.14 SE was non-finite while its point estimate
-            # was finite (i.e. a contributing horizon's influence function was non-finite).
-            # Captured before any bootstrap override so the terminal warning below does not
-            # misdiagnose a bootstrap-side NaN SE (e.g. cluster-unidentified) as an
-            # analytical-IF failure (the bootstrap path emits its own warning).
-            analytical_overall_es_se_nonfinite = False
-            if aggregate in ("event_study", "all"):
-                es_overall = es_aggregation.overall if es_aggregation is not None else None
-                if es_overall is not None:
-                    overall_att_es = es_overall["att"]
-                    overall_se_es = es_overall["se"]
-                    analytical_overall_es_se_nonfinite = bool(
-                        np.isfinite(overall_att_es) and not np.isfinite(overall_se_es)
-                    )
-                    es_eff_df = es_overall.get("effective_df")
-                    # Fall back to the ORIGINAL survey df, not the simple-overall's mutated
-                    # per-statistic df (P1 fix): overall_att_es has its own replicate df.
-                    df_for_es = es_eff_df if es_eff_df is not None else df_survey_original
-                    overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
-                        overall_att_es, overall_se_es, alpha=self.alpha, df=df_for_es
-                    )
-                else:
-                    # Event-study aggregation was requested but yielded no post-treatment
-                    # horizon: this is "requested but undefined" -> NaN + warning (the
-                    # library's overall-aggregation contract, matching _aggregate_simple),
-                    # distinct from "not requested" which leaves the fields None.
-                    warnings.warn(
-                        "Event-study aggregation was requested but no post-treatment "
-                        "horizons are available for the Eq. 4.14 overall (overall_att_es); "
-                        "returning NaN.",
-                        UserWarning,
-                        stacklevel=2 + _frame_offset,
-                    )
-                    overall_att_es = np.nan
-                    overall_se_es = np.nan
-                    overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
-                        np.nan, np.nan, alpha=self.alpha, df=df_survey
-                    )
+            # Event-study / cohort aggregations and the paper's Eq. 4.14 overall are
+            # POST-FIT since 4.0 (rows M-014 / M-140 / M-141): results.aggregate()
+            # recomputes them from the retained kit (bootstrapped fits replay the
+            # multiplier bootstrap from the kit's RNG state).
 
             # Reject replicate-weight designs for bootstrap — replicate variance
             # is an analytical alternative, not compatible with bootstrap
@@ -718,8 +638,8 @@ class _StaggeredTripleDiffEngineMixin:
                 bootstrap_results = self._run_multiplier_bootstrap(
                     group_time_effects,
                     influence_func_info,
-                    aggregate,
-                    balance_e,
+                    None,
+                    None,
                     treatment_groups,
                     time_periods,
                     df_agg,
@@ -734,22 +654,6 @@ class _StaggeredTripleDiffEngineMixin:
                     )
                     overall_conf_int = bootstrap_results.overall_att_ci
                     overall_p_value = bootstrap_results.overall_att_p_value
-
-                    # Mirror the override for the Eq. (4.14) event-study-average overall
-                    # (only when event-study aggregation produced it). A NaN bootstrap SE
-                    # (e.g. cluster-unidentified) correctly NaNs the inference.
-                    if (
-                        overall_att_es is not None
-                        and bootstrap_results.overall_att_es_se is not None
-                    ):
-                        overall_se_es = bootstrap_results.overall_att_es_se
-                        overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
-                            overall_att_es, overall_se_es, alpha=self.alpha, df=df_survey
-                        )
-                        overall_conf_int_es = bootstrap_results.overall_att_es_ci
-                        overall_p_value_es = bootstrap_results.overall_att_es_p_value
-                    if bootstrap_results.cband_crit_value is not None:
-                        cband_crit_value = bootstrap_results.cband_crit_value
 
                     # Update group-time effects with bootstrap SEs
                     if bootstrap_results.group_time_ses:
@@ -772,104 +676,30 @@ class _StaggeredTripleDiffEngineMixin:
                                 )
                                 group_time_effects[gt_key]["t_stat"] = t_val
 
-                    if event_study_effects and bootstrap_results.event_study_ses:
-                        for e_key in event_study_effects:
-                            if e_key in bootstrap_results.event_study_ses:
-                                # ses/cis/p_values are populated together.
-                                assert (
-                                    bootstrap_results.event_study_cis is not None
-                                    and bootstrap_results.event_study_p_values is not None
-                                )
-                                event_study_effects[e_key]["se"] = (
-                                    bootstrap_results.event_study_ses[e_key]
-                                )
-                                event_study_effects[e_key]["conf_int"] = (
-                                    bootstrap_results.event_study_cis[e_key]
-                                )
-                                event_study_effects[e_key]["p_value"] = (
-                                    bootstrap_results.event_study_p_values[e_key]
-                                )
-                                t_val, _, _ = safe_inference(
-                                    event_study_effects[e_key]["effect"],
-                                    bootstrap_results.event_study_ses[e_key],
-                                    alpha=self.alpha,
-                                    df=df_survey,
-                                )
-                                event_study_effects[e_key]["t_stat"] = t_val
-                                if cband_crit_value is not None:
-                                    bs_se = bootstrap_results.event_study_ses[e_key]
-                                    eff = event_study_effects[e_key]["effect"]
-                                    event_study_effects[e_key]["cband_conf_int"] = (
-                                        eff - cband_crit_value * bs_se,
-                                        eff + cband_crit_value * bs_se,
-                                    )
-
-                    # Update group effects with bootstrap SEs
-                    if (
-                        group_effects
-                        and bootstrap_results.group_effect_ses is not None
-                        and bootstrap_results.group_effect_cis is not None
-                        and bootstrap_results.group_effect_p_values is not None
-                    ):
-                        grp_keys = [
-                            g for g in group_effects if g in bootstrap_results.group_effect_ses
-                        ]
-                        for g_key in grp_keys:
-                            group_effects[g_key]["se"] = bootstrap_results.group_effect_ses[g_key]
-                            group_effects[g_key]["conf_int"] = bootstrap_results.group_effect_cis[
-                                g_key
-                            ]
-                            group_effects[g_key]["p_value"] = (
-                                bootstrap_results.group_effect_p_values[g_key]
-                            )
-                            t_val, _, _ = safe_inference(
-                                group_effects[g_key]["effect"],
-                                bootstrap_results.group_effect_ses[g_key],
-                                alpha=self.alpha,
-                                df=df_survey,
-                            )
-                            group_effects[g_key]["t_stat"] = t_val
-                            # Bootstrap se/p/CI replaced the analytical ones, which
-                            # is what the retained df described - keeping it would
-                            # claim a t-reference that governed nothing.
-                            group_effects[g_key]["df_used"] = None
-
-            # Eq. 4.14 overall: an ANALYTICAL non-finite SE under a finite point estimate
-            # (a contributing horizon's influence function is non-finite, or the variance is
-            # unidentified — e.g. a single-PSU/cluster design). Surface it — never NaN the SE
-            # silently. Gated on the analytical-origin flag (captured before the bootstrap
-            # override) and the final state still being non-finite: a bootstrap that supplies a
-            # finite SE rescues it (no warning), and a bootstrap that NaNs the SE for unrelated
-            # reasons (e.g. cluster-unidentified) is reported by the bootstrap's own warning,
-            # not misdiagnosed here as an analytical-IF failure.
-            if (
-                analytical_overall_es_se_nonfinite
-                and overall_se_es is not None
-                and not np.isfinite(overall_se_es)
-            ):
-                warnings.warn(
-                    "Eq. 4.14 overall (overall_att_es) point estimate is defined but its "
-                    "standard error is undefined (NaN): either a contributing post-treatment "
-                    "event-study horizon has a non-finite influence function, or the variance "
-                    "is unidentified (e.g. a single-PSU/cluster survey design). overall_se_es "
-                    "and its inference fields are NaN.",
-                    UserWarning,
-                    stacklevel=2 + _frame_offset,
-                )
-
             n_treated_units = int(np.sum((unit_cohorts > 0) & (eligibility_per_unit == 1)))
             n_control_units = n_units - n_treated_units
             n_never_enabled = int(np.sum(unit_cohorts == 0))
             n_eligible = int(np.sum(eligibility_per_unit == 1))
             n_ineligible = int(np.sum(eligibility_per_unit == 0))
 
-            self.results_ = StaggeredTripleDiffResults(
+            results = TripleDifferenceResults(
+                att=overall_att,
+                se=overall_se,
+                t_stat=overall_t_stat,
+                p_value=overall_p_value,
+                conf_int=overall_conf_int,
+                n_obs=len(df),
+                estimation_method=self.estimation_method,
+                alpha=self.alpha,
+                inference_method="bootstrap" if bootstrap_results is not None else "analytical",
+                vcov_type=None,
+                n_bootstrap=self.n_bootstrap if bootstrap_results is not None else None,
+                survey_metadata=survey_metadata,
+                epv_diagnostics=epv_diagnostics if epv_diagnostics else None,
+                epv_threshold=self.epv_threshold,
+                pscore_fallback=self.pscore_fallback,
+                design="staggered",
                 group_time_effects=group_time_effects,
-                overall_att=overall_att,
-                overall_se=overall_se,
-                overall_t_stat=overall_t_stat,
-                overall_p_value=overall_p_value,
-                overall_conf_int=overall_conf_int,
                 # Cohorts that actually produced at least one (g, t) cell. A
                 # cohort can drop out for several reasons (no eligible treated
                 # units, no valid comparison cohort, every base period outside
@@ -879,34 +709,47 @@ class _StaggeredTripleDiffEngineMixin:
                 # order-preserving against the sorted input roster.
                 groups=[g for g in treatment_groups if g in {gt[0] for gt in group_time_effects}],
                 time_periods=time_periods,
-                n_obs=len(df),
                 n_treated_units=n_treated_units,
                 n_control_units=n_control_units,
                 n_never_enabled=n_never_enabled,
                 n_eligible=n_eligible,
                 n_ineligible=n_ineligible,
-                alpha=self.alpha,
                 control_group=self.control_group,
                 base_period=self.base_period,
                 anticipation=self.anticipation,
-                estimation_method=self.estimation_method,
-                event_study_effects=event_study_effects,
-                group_effects=group_effects,
+                pscore_trim=self.pscore_trim,
                 bootstrap_results=bootstrap_results,
                 cband_crit_value=cband_crit_value,
-                pscore_trim=self.pscore_trim,
-                survey_metadata=survey_metadata,
                 comparison_group_counts=comparison_group_counts,
                 gmm_weights=gmm_weights_store,
-                epv_diagnostics=epv_diagnostics if epv_diagnostics else None,
-                epv_threshold=self.epv_threshold,
-                pscore_fallback=self.pscore_fallback,
-                overall_att_es=overall_att_es,
-                overall_se_es=overall_se_es,
-                overall_t_stat_es=overall_t_stat_es,
-                overall_p_value_es=overall_p_value_es,
-                overall_conf_int_es=overall_conf_int_es,
             )
+            # Post-fit aggregation kit (spec section 6): built HERE because
+            # neither the eligibility-zeroed `precomputed_agg` nor
+            # `influence_func_info` survives fit(). The kit retains the ZEROED
+            # copy - the aggregation weights use the eligible-treated
+            # population P(S=g, Q=1), the REGISTRY "Deviation from R" - so a
+            # post-fit aggregate() reproduces the fit-time numbers. The builder
+            # is annotated for CallawaySantAnna but reads only alpha /
+            # anticipation / cband / _BOOTSTRAP_LABEL (the DMLDiD precedent).
+            kit = _build_aggregation_kit(
+                cast(Any, self),
+                precomputed_agg,
+                influence_func_info,
+                group_time_effects,
+                is_survey_fit=survey_metadata is not None,
+                bootstrap_results=bootstrap_results,
+                covariates=covariates,
+            )
+            if kit is not None:
+                # The Eq. 4.14 overall's df rule needs the fit's sentinelled,
+                # PRE-mutation survey df (None on plain fits -> normal
+                # reference; the survey df on survey fits; 0 on replicate
+                # designs with undefined df). The whitelisted `df_survey`
+                # bookkeeping key is the RAW precomputed value, so carry the
+                # engine's resolved one as a fit-time derived key.
+                kit.bookkeeping["ddd_df_survey_original"] = df_survey_original
+            results._aggregation_kit = kit
+            self.results_ = results
             self.is_fitted_ = True
             return self.results_
         finally:

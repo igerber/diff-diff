@@ -105,11 +105,13 @@ class TestSmokeSDDDSurvey:
             partition="eligibility",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
-    @pytest.mark.parametrize("agg", ["simple", "event_study", "group", "all"])
+    # The fit-time ``aggregate="all"`` option is gone at 4.0: both of its surfaces
+    # are the post-fit ``event_study`` / ``group`` levels parametrized here.
+    @pytest.mark.parametrize("agg", ["simple", "event_study", "group"])
     def test_aggregation(self, sddd_data, agg):
         sd = SurveyDesign(weights="weight")
         est = TripleDifference(estimation_method="reg")
@@ -120,14 +122,29 @@ class TestSmokeSDDDSurvey:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate=agg,
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        if agg in ("event_study", "all"):
-            assert res.event_study_effects is not None
-        if agg in ("group", "all"):
-            assert res.group_effects is not None
+        assert res.design == "staggered"
+        assert np.isfinite(res.att)
+        # Surfaces are post-fit: nothing is stored on the fit itself.
+        assert res.event_study_effects is None
+        assert res.group_effects is None
+        assert res.cband_crit_value is None
+        if agg == "simple":
+            simple = res.aggregate("simple")
+            assert len(simple.att) == 1
+            np.testing.assert_allclose(simple.att[0], res.att, rtol=0, atol=0)
+            np.testing.assert_allclose(simple.se[0], res.se, rtol=0, atol=0)
+        elif agg == "event_study":
+            es = res.aggregate("event_study")
+            assert len(es.event_time) > 0
+            assert len(es.att) == len(es.event_time)
+            assert np.all(np.isfinite(es.att))
+        else:
+            g = res.aggregate("group")
+            assert len(g.label) > 0
+            assert len(g.att) == len(g.label)
+            assert np.all(np.isfinite(g.att))
 
 
 # ---------------------------------------------------------------------------
@@ -168,14 +185,14 @@ class TestUniformWeightEquivalence:
         )
 
         np.testing.assert_allclose(
-            res_w.overall_att,
-            res_uw.overall_att,
+            res_w.att,
+            res_uw.att,
             atol=1e-10,
             err_msg=f"ATT mismatch for {method}",
         )
         np.testing.assert_allclose(
-            res_w.overall_se,
-            res_uw.overall_se,
+            res_w.se,
+            res_uw.se,
             rtol=1e-6,
             err_msg=f"SE mismatch for {method}",
         )
@@ -218,13 +235,13 @@ class TestScaleInvariance:
         )
 
         np.testing.assert_allclose(
-            res2.overall_att,
-            res1.overall_att,
+            res2.att,
+            res1.att,
             atol=1e-12,
         )
         np.testing.assert_allclose(
-            res2.overall_se,
-            res1.overall_se,
+            res2.se,
+            res1.se,
             rtol=1e-6,
         )
 
@@ -260,10 +277,9 @@ class TestNontrivialWeightsChangeSE:
             survey_design=sd,
         )
 
-        assert abs(res_w.overall_se - res_uw.overall_se) > 1e-6, (
-            f"Expected SEs to differ: weighted={res_w.overall_se}, "
-            f"unweighted={res_uw.overall_se}"
-        )
+        assert (
+            abs(res_w.se - res_uw.se) > 1e-6
+        ), f"Expected SEs to differ: weighted={res_w.se}, unweighted={res_uw.se}"
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +304,10 @@ class TestFullDesign:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
         assert res.survey_metadata is not None
         assert res.survey_metadata.df_survey is not None
         assert res.survey_metadata.df_survey > 0
@@ -336,7 +351,6 @@ class TestDesignBasedAggSE:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd_pw,
         )
 
@@ -353,22 +367,20 @@ class TestDesignBasedAggSE:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd_full,
         )
 
         # Point estimates should be identical (same weights)
         np.testing.assert_allclose(
-            res_full.overall_att,
-            res_pw.overall_att,
+            res_full.att,
+            res_pw.att,
             atol=1e-10,
         )
 
         # Aggregated SEs should differ (design-based variance)
-        assert abs(res_full.overall_se - res_pw.overall_se) > 1e-6, (
-            f"Expected aggregated SEs to differ: full={res_full.overall_se}, "
-            f"pweight-only={res_pw.overall_se}"
-        )
+        assert (
+            abs(res_full.se - res_pw.se) > 1e-6
+        ), f"Expected aggregated SEs to differ: full={res_full.se}, pweight-only={res_pw.se}"
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +419,11 @@ class TestReplicateWeights:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +509,6 @@ class TestReplicateScaleInvariance:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate=agg,
             survey_design=sd1,
         )
 
@@ -520,52 +530,62 @@ class TestReplicateScaleInvariance:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate=agg,
             survey_design=sd2,
         )
 
         np.testing.assert_allclose(
-            res2.overall_att,
-            res1.overall_att,
+            res2.att,
+            res1.att,
             atol=1e-12,
             err_msg=f"ATT changed with weight rescaling (agg={agg})",
         )
         np.testing.assert_allclose(
-            res2.overall_se,
-            res1.overall_se,
+            res2.se,
+            res1.se,
             rtol=1e-6,
             err_msg=f"SE changed with weight rescaling (agg={agg})",
         )
 
-        # Assert sub-aggregation outputs are also scale-invariant
-        if agg == "event_study" and res1.event_study_effects:
-            for e_key in res1.event_study_effects:
-                np.testing.assert_allclose(
-                    res2.event_study_effects[e_key]["effect"],
-                    res1.event_study_effects[e_key]["effect"],
-                    atol=1e-12,
-                    err_msg=f"Event study e={e_key} effect changed",
-                )
-                np.testing.assert_allclose(
-                    res2.event_study_effects[e_key]["se"],
-                    res1.event_study_effects[e_key]["se"],
-                    rtol=1e-6,
-                    err_msg=f"Event study e={e_key} SE changed",
-                )
-        if agg == "group" and res1.group_effects:
-            for g_key in res1.group_effects:
-                np.testing.assert_allclose(
-                    res2.group_effects[g_key]["effect"],
-                    res1.group_effects[g_key]["effect"],
-                    atol=1e-12,
-                    err_msg=f"Group g={g_key} effect changed",
-                )
-                np.testing.assert_allclose(
-                    res2.group_effects[g_key]["se"],
-                    res1.group_effects[g_key]["se"],
-                    rtol=1e-6,
-                    err_msg=f"Group g={g_key} SE changed",
-                )
+        # Assert the post-fit aggregation surfaces are also scale-invariant
+        if agg == "simple":
+            s1 = res1.aggregate("simple")
+            s2 = res2.aggregate("simple")
+            np.testing.assert_allclose(s2.att, s1.att, atol=1e-12)
+            np.testing.assert_allclose(s2.se, s1.se, rtol=1e-6)
+        if agg == "event_study":
+            es1 = res1.aggregate("event_study")
+            es2 = res2.aggregate("event_study")
+            assert len(es1.event_time) > 0
+            np.testing.assert_array_equal(es2.event_time, es1.event_time)
+            np.testing.assert_allclose(
+                es2.att,
+                es1.att,
+                atol=1e-12,
+                err_msg="Event study effects changed",
+            )
+            np.testing.assert_allclose(
+                es2.se,
+                es1.se,
+                rtol=1e-6,
+                err_msg="Event study SEs changed",
+            )
+        if agg == "group":
+            g1 = res1.aggregate("group")
+            g2 = res2.aggregate("group")
+            assert len(g1.label) > 0
+            np.testing.assert_array_equal(g2.label, g1.label)
+            np.testing.assert_allclose(
+                g2.att,
+                g1.att,
+                atol=1e-12,
+                err_msg="Group effects changed",
+            )
+            np.testing.assert_allclose(
+                g2.se,
+                g1.se,
+                rtol=1e-6,
+                err_msg="Group SEs changed",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +624,6 @@ class TestSurveyWeightedAggregation:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
         )
 
         # Skewed survey weights
@@ -616,18 +635,17 @@ class TestSurveyWeightedAggregation:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd,
         )
 
         # Both should be finite
-        assert np.isfinite(res_uw.overall_att)
-        assert np.isfinite(res_w.overall_att)
+        assert np.isfinite(res_uw.att)
+        assert np.isfinite(res_w.att)
 
         # Aggregated ATT should differ due to different cohort weighting
-        assert abs(res_w.overall_att - res_uw.overall_att) > 1e-6, (
+        assert abs(res_w.att - res_uw.att) > 1e-6, (
             f"Expected aggregate ATTs to differ with skewed weights: "
-            f"weighted={res_w.overall_att}, unweighted={res_uw.overall_att}"
+            f"weighted={res_w.att}, unweighted={res_uw.att}"
         )
 
 
@@ -694,12 +712,11 @@ class TestBootstrapSurvey:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd,
         )
         assert res.bootstrap_results is not None
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
 
 # ---------------------------------------------------------------------------
@@ -726,8 +743,8 @@ class TestControlGroupSurvey:
             partition="eligibility",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
 
 # ---------------------------------------------------------------------------
@@ -754,8 +771,8 @@ class TestBasePeriodSurvey:
             partition="eligibility",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
 
 
 # ---------------------------------------------------------------------------
@@ -780,9 +797,9 @@ class TestCovariateAdjustedSurvey:
             covariates=["x1"],
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
 
 # ---------------------------------------------------------------------------
@@ -820,12 +837,11 @@ class TestReplicateCombinedWeightsFalse:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="simple",
             survey_design=sd,
         )
-        assert np.isfinite(res.overall_att)
-        assert np.isfinite(res.overall_se)
-        assert res.overall_se > 0
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0
 
 
 # ---------------------------------------------------------------------------
@@ -861,7 +877,7 @@ class TestWeightedPscoreFallback:
                 covariates=["collinear_x"],
                 survey_design=sd,
             )
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +916,7 @@ class TestZeroMassSubgroupSkip:
         mass_warnings = [x for x in w if "mass=0" in str(x.message)]
         assert len(mass_warnings) > 0, "Expected zero-mass subgroup warning"
         # Result should still be finite (other cohorts contribute)
-        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.att)
 
 
 # ---------------------------------------------------------------------------
@@ -908,11 +924,18 @@ class TestZeroMassSubgroupSkip:
 # ---------------------------------------------------------------------------
 
 
+def _eq414_overall(res):
+    """The paper's Eq. 4.14 overall (the 3.x fit-time ``overall_att_es``), now the
+    post-fit ``aggregate("simple", weights="event_time")`` one-row table."""
+    return res.aggregate("simple", weights="event_time")
+
+
 class TestSurveyOverallAttEs:
-    """The opt-in ``overall_att_es`` (paper Eq. 4.14) honours survey weights: its
-    analytical SE routes through the same survey-aware variance estimator as the
-    per-event-time effects, so uniform weights reproduce the unweighted result,
-    nontrivial weights move the SE, and a full strata/PSU design stays finite.
+    """The Eq. 4.14 overall (``aggregate("simple", weights="event_time")``, the
+    former fit-time ``overall_att_es``) honours survey weights: its analytical SE
+    routes through the same survey-aware variance estimator as the per-event-time
+    effects, so uniform weights reproduce the unweighted result, nontrivial
+    weights move the SE, and a full strata/PSU design stays finite.
     """
 
     def test_uniform_weight_equivalence(self):
@@ -926,7 +949,6 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
             survey_design=sd,
         )
         res_u = TripleDifference(estimation_method="reg").fit(
@@ -936,12 +958,14 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        assert res_w.overall_att_es is not None and res_u.overall_att_es is not None
-        assert np.isclose(res_w.overall_att_es, res_u.overall_att_es, atol=1e-8)
-        assert res_w.overall_se_es is not None and res_u.overall_se_es is not None
-        assert np.isclose(res_w.overall_se_es, res_u.overall_se_es, atol=1e-8)
+        o_w = _eq414_overall(res_w)
+        o_u = _eq414_overall(res_u)
+        assert len(o_w.att) == 1 and len(o_u.att) == 1
+        assert np.isfinite(o_w.att[0]) and np.isfinite(o_u.att[0])
+        assert np.isclose(o_w.att[0], o_u.att[0], atol=1e-8)
+        assert np.isfinite(o_w.se[0]) and np.isfinite(o_u.se[0])
+        assert np.isclose(o_w.se[0], o_u.se[0], atol=1e-8)
 
     def test_nontrivial_weights_change_se(self):
         data = _make_staggered_ddd_data(n_units=200, seed=42)  # variable weights
@@ -953,7 +977,6 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
             survey_design=sd,
         )
         res_u = TripleDifference(estimation_method="reg").fit(
@@ -963,11 +986,12 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
         )
-        assert res_w.overall_se_es is not None and res_u.overall_se_es is not None
+        o_w = _eq414_overall(res_w)
+        o_u = _eq414_overall(res_u)
+        assert np.isfinite(o_w.se[0]) and np.isfinite(o_u.se[0])
         # Variable survey weights change the Eq-4.14 overall SE
-        assert not np.isclose(res_w.overall_se_es, res_u.overall_se_es, atol=1e-6)
+        assert not np.isclose(o_w.se[0], o_u.se[0], atol=1e-6)
 
     def test_full_design_overall_es_finite(self):
         data = _make_staggered_ddd_data(n_units=200, seed=42)
@@ -979,19 +1003,19 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
             survey_design=sd,
         )
-        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
-        assert res.overall_se_es is not None and np.isfinite(res.overall_se_es)
-        assert res.overall_se_es > 0
+        o = _eq414_overall(res)
+        assert np.isfinite(o.att[0])
+        assert np.isfinite(o.se[0])
+        assert o.se[0] > 0
 
     def test_replicate_weight_overall_es_finite(self):
-        """The Eq. 4.14 overall (overall_att_es) is computed and finite under a
-        replicate-weight (BRR) survey design, routing its SE through the replicate
-        variance path. Regression for the P1 fix that overall_att_es uses its OWN
-        per-statistic effective df (compute_replicate_if_variance), not the simple
-        overall's mutated df.
+        """The Eq. 4.14 overall (``aggregate("simple", weights="event_time")``) is
+        computed and finite under a replicate-weight (BRR) survey design, routing
+        its SE through the replicate variance path. Regression for the P1 fix that
+        the Eq. 4.14 overall uses its OWN per-statistic effective df
+        (compute_replicate_if_variance), not the simple overall's mutated df.
         """
         data = _make_staggered_ddd_data(n_units=200, seed=42)
         rng = np.random.default_rng(99)
@@ -1013,25 +1037,30 @@ class TestSurveyOverallAttEs:
             time="period",
             first_treat="first_treat",
             partition="eligibility",
-            aggregate="event_study",
             survey_design=sd,
         )
-        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
-        assert res.overall_se_es is not None and np.isfinite(res.overall_se_es)
-        assert res.overall_se_es > 0
-        # default overall_att (simple) also computed under the replicate design
-        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        o = _eq414_overall(res)
+        assert np.isfinite(o.att[0])
+        assert np.isfinite(o.se[0])
+        assert o.se[0] > 0
+        # the per-statistic replicate df governs the Eq. 4.14 inference row
+        assert np.isfinite(o.df[0]) and o.df[0] > 0
+        # default headline ATT (simple) also computed under the replicate design
+        assert np.isfinite(res.att) and np.isfinite(res.se)
 
     def test_single_psu_bootstrap_cluster_unidentified(self):
         """Under a single-PSU survey design with n_bootstrap>0, the Eq. 4.14 overall
         keeps its (analytical) point estimate but its SE is unidentified -> NaN, and
         the inference fields are NaN-consistent.
 
-        Regression for the P2 warning-misdiagnosis fix: when overall_se_es is NaN the
-        terminal warning must not attribute it *solely* to a non-finite influence
+        Regression for the P2 warning-misdiagnosis fix: when the Eq. 4.14 SE is NaN
+        the terminal warning must not attribute it *solely* to a non-finite influence
         function -- a single-PSU/cluster design is the actual cause here, and the
-        authoritative "variance unidentified" warning is raised by the bootstrap. The
-        Eq. 4.14 warning, when emitted, must name the unidentified-variance cause.
+        authoritative "variance unidentified" warning is raised by the bootstrap at
+        fit. The Eq. 4.14 warning is emitted by the
+        ``aggregate("simple", weights="event_time")`` call (which replays the
+        fit-time bootstrap) and, when emitted, must name the unidentified-variance
+        cause - so the recording block spans both the fit and the aggregate call.
         """
         data = _make_staggered_ddd_data(n_units=120, seed=42).copy()
         data["psu"] = 0  # collapse to a single PSU -> variance/cluster unidentified
@@ -1046,21 +1075,21 @@ class TestSurveyOverallAttEs:
                 time="period",
                 first_treat="first_treat",
                 partition="eligibility",
-                aggregate="event_study",
                 survey_design=sd,
             )
+            o = _eq414_overall(res)
         # Point estimate survives; SE + inference are NaN-consistent (never a stale value).
-        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
-        assert res.overall_se_es is not None and np.isnan(res.overall_se_es)
-        assert res.overall_t_stat_es is not None and np.isnan(res.overall_t_stat_es)
-        assert res.overall_p_value_es is not None and np.isnan(res.overall_p_value_es)
-        assert res.overall_conf_int_es is not None
-        assert np.isnan(res.overall_conf_int_es[0]) and np.isnan(res.overall_conf_int_es[1])
+        assert len(o.att) == 1
+        assert np.isfinite(o.att[0])
+        assert np.isnan(o.se[0])
+        assert np.isnan(o.t_stat[0])
+        assert np.isnan(o.p_value[0])
+        assert np.isnan(o.conf_int_lower[0]) and np.isnan(o.conf_int_upper[0])
         msgs = [str(w.message) for w in caught]
         # The bootstrap raises the authoritative "variance unidentified" warning.
         assert any("unidentified" in m for m in msgs)
         # The Eq. 4.14 overall warning is cause-accurate (would fail on the old wording
         # that attributed the NaN solely to a non-finite influence function).
-        es_warns = [m for m in msgs if "overall_att_es)" in m]
+        es_warns = [m for m in msgs if "weights='event_time'))" in m]
         assert es_warns, "expected the Eq. 4.14 overall warning under single-PSU bootstrap"
         assert all("unidentified" in m for m in es_warns)
