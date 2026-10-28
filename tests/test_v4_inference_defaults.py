@@ -27,13 +27,11 @@ the panel's unit count too).
 from __future__ import annotations
 
 import inspect
-import pathlib
 import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
-import yaml
 from scipy import stats
 
 from diff_diff import (
@@ -50,7 +48,10 @@ from diff_diff import (
 )
 from diff_diff.linalg import LinearRegression
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
+# The ledger is restricted YAML; the matrix gate parses it without pyyaml (not a
+# test dependency) and exposes the parsed rows.
+from tests.test_v4_matrix import ROWS as LEDGER_ROWS
+
 THIS_TEST_REF = "tests/test_v4_inference_defaults.py"
 
 FLIP_ROWS = {
@@ -383,8 +384,7 @@ class TestInertSurfaces:
 
 
 def test_ledger_rows_are_done_and_point_here():
-    ledger = yaml.safe_load((REPO / "docs" / "v4-deprecations.yaml").read_text())
-    rows = {r["id"]: r for r in ledger["rows"]}
+    rows = {r["id"]: r for r in LEDGER_ROWS}
     for rid, cls in FLIP_ROWS.items():
         row = rows[rid]
         assert row["kind"] == "default-flip"
