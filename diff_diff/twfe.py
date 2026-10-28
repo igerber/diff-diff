@@ -60,15 +60,17 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         auto-cluster is also preserved (routes to CR2-BM at unit).
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Inherited from :class:`DifferenceInDifferences`: df convention for
-        analytical t/p/CI. ``"residual"`` (default) uses the fitted
-        residual df; ``"cluster"`` uses the Stata/fixest ``G − 1`` on
-        clustered fits (no effect on unclustered or Conley fits);
+        analytical t/p/CI. ``"cluster"`` (default since 4.0) uses the
+        Stata/fixest ``G − 1`` on clustered fits (no effect on unclustered
+        or Conley fits); ``"residual"`` (the 3.x default) uses the fitted
+        residual df;
         ``"normal"`` deliberately uses normal-theory z inference at the
         fallback level on every fit, clustered or not. Survey df and
         per-coefficient Bell-McCaffrey DOF keep precedence under every
-        value. Default flips to ``"cluster"`` at v4.
+        value. The default flipped to ``"cluster"`` at 4.0 (row M-005);
+        pass ``df_convention="residual"`` to reproduce 3.x inference.
 
     Notes
     -----

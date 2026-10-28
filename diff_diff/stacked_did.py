@@ -138,21 +138,22 @@ class StackedDiD(BaseEstimator):
         raise a ``ValueError``), and does not support ``survey_design=``;
         matching-based balancing and the repeated-treatment extension are out of
         scope. Default ``"none"`` reproduces plain weighted stacked DID.
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for the analytical t/p/CI on the
         pooled stacked regression's event-study and overall-ATT inference.
-        ``"residual"`` (default) uses the pooled residual df
-        (``n_eff − k_kept``, positive-weight rows) — the 3.9 fix: the
+        ``"cluster"`` (default since 4.0) uses ``G − 1`` where G counts
+        positive-weight clusters (``effective_cluster_count`` — may differ
+        from the raw ``results.n_clusters`` when a cluster's composed weight
+        is zero); ``"residual"`` (the 3.x default) uses the pooled residual
+        df (``n_eff − k_kept``, positive-weight rows) — the 3.9 fix: the
         non-BM non-survey lane previously used silent normal-theory z;
-        ``"cluster"`` uses ``G − 1`` where G counts positive-weight
-        clusters (``effective_cluster_count`` — may differ from the raw
-        ``results.n_clusters`` when a cluster's composed weight is zero);
         ``"normal"`` deliberately uses normal-theory z at the fallback
         level. hc2_bm Bell-McCaffrey contrast DOF and survey/replicate df
         always take precedence. Note the stacked design's residual df is
         typically large (control rows replicate across sub-experiments), so
-        the default's numeric movement vs the old z is small — the change
-        is a convention alignment. The default flips to ``"cluster"`` at v4.
+        the 3.9 z -> t(residual) step was small and the 4.0 flip to
+        ``G − 1`` is the materially moving step (row M-130); pass
+        ``df_convention="residual"`` for 3.x inference.
 
     Attributes
     ----------
@@ -204,7 +205,7 @@ class StackedDiD(BaseEstimator):
         rank_deficient_action: str = "warn",
         vcov_type: str = "hc1",
         balance: str = "none",
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ):
         if weighting not in ("aggregate", "population", "sample_share"):
             raise ValueError(
@@ -945,7 +946,7 @@ class StackedDiD(BaseEstimator):
                 es_df_used[h] = float("nan")
             else:
                 # BM DOF > survey/replicate df > the knob-resolved
-                # analytical fallback (residual t by default; the
+                # analytical fallback (t(G-1) under the default; the
                 # replicate 0-sentinel is not None, so it keeps
                 # precedence over the fallback).
                 _df_eff = (

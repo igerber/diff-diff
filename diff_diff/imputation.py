@@ -148,21 +148,22 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         but are a library extension beyond the paper's derivation.
         Replicate-weight survey designs raise ``NotImplementedError`` (their
         variance bypasses the influence-function path where the rescale lives).
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for the PRETRENDS lead regression's
         per-lead t/p/CI — the one ImputationDiD surface running the shared
         clustered CR1 sandwich (``pretrends=True``, surfaced via
-        ``results.aggregate('event_study')``). ``"residual"`` (default) uses
-        the lead regression's residual df (``n − k_kept − absorbed
-        [time, unit] rank``) — the 3.9 fix: previously silent normal-theory
-        z on plain clustered fits; ``"cluster"`` uses ``G − 1``;
-        ``"normal"`` deliberately uses z. The full-design survey df keeps
+        ``results.aggregate('event_study')``). ``"cluster"`` (default since
+        4.0) uses ``G − 1``; ``"residual"`` (the 3.x default) uses the lead
+        regression's residual df (``n − k_kept − absorbed [time, unit]
+        rank``) — the 3.9 fix: previously silent normal-theory z on plain
+        clustered fits; ``"normal"`` deliberately uses z. The full-design survey df keeps
         precedence on survey fits. Everything else — the BJS Theorem-3
         overall/event-study inference and the joint pretrend Wald F (which
         keeps its cluster-robust ``F(q, G − 1)`` reference) — is
         knob-independent; an explicitly non-default value on a
         configuration that never surfaces the per-lead inference warns at
-        fit time. The default flips to ``"cluster"`` at v4.
+        fit time. The default flipped to ``"cluster"`` at 4.0 (row M-131);
+        pass ``df_convention="residual"`` for 3.x per-lead inference.
 
     Attributes
     ----------
@@ -219,7 +220,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         aux_partition: str = "cohort_horizon",
         pretrends: bool = False,
         leave_one_out: bool = False,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ):
         if rank_deficient_action not in ("warn", "error", "silent"):
             raise ValueError(
@@ -345,7 +346,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             survey_design is not None and survey_design.replicate_method is not None
         )
         _lead_inference_reachable = self.pretrends and not _is_replicate_design
-        if self.df_convention != "residual" and not _lead_inference_reachable:
+        if self.df_convention != "cluster" and not _lead_inference_reachable:
             warnings.warn(
                 f"df_convention={self.df_convention!r} affects only the "
                 "pretrends event-study per-lead inference (pretrends=True, "

@@ -194,8 +194,9 @@ class SunAbrahamResults(BaseResults):
     # p-value/CI's safe_inference actually received (the per-event
     # Bell-McCaffrey contrast df under hc2_bm; the survey design df -
     # post-drop under replicate refits - on survey fits; the
-    # df_convention-resolved fallback on plain analytic fits - FINITE
-    # residual df under the 3.9 default, G-1 under "cluster", NaN under
+    # df_convention-resolved fallback on plain analytic fits - G-1 under
+    # the 4.0 default "cluster", the FINITE residual df under "residual",
+    # NaN under
     # "normal" and on rows whose BM DOF was non-finite, where
     # safe_inference's non-finite-df guard yields all-NaN inference). None
     # under bootstrap: the stored percentile p/CIs never used a df (note
@@ -632,18 +633,20 @@ class SunAbraham(BaseEstimator):
         ``conley_cutoff_km`` / ``conley_lag_cutoff``); ``survey_design=`` /
         ``weights`` / ``n_bootstrap>0`` are rejected. See the ``vcov_type``
         parameter docs above.
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for analytical t/p/CI, applied to BOTH
         the per-cohort-cell inference and the aggregated event-study /
-        overall-ATT inference (one df source per fit). ``"residual"``
-        (default) uses the saturated regression's residual df — the 3.9 fix:
+        overall-ATT inference (one df source per fit). ``"cluster"``
+        (default since 4.0) uses the Stata/fixest cluster df ``G − 1``
+        (inert under ``vcov_type="conley"``); ``"residual"`` (the 3.x
+        default) uses the saturated regression's residual df — the 3.9 fix:
         aggregates previously dropped to normal theory on plain clustered
-        fits; ``"cluster"`` uses the Stata/fixest cluster df ``G − 1``
-        (inert under ``vcov_type="conley"``); ``"normal"`` deliberately uses
+        fits; ``"normal"`` deliberately uses
         normal-theory z at the fallback level everywhere (cells included).
         Survey/replicate df and hc2_bm Bell-McCaffrey contrast DOF always
         take precedence; bootstrap p/CI (``n_bootstrap>0``) are percentile-
-        based and unaffected. The default flips to ``"cluster"`` at v4.
+        based and unaffected. The default flipped to ``"cluster"`` at 4.0
+        (row M-128); pass ``df_convention="residual"`` for 3.x inference.
 
     Attributes
     ----------
@@ -727,7 +730,7 @@ class SunAbraham(BaseEstimator):
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ):
         if control_group not in ["never_treated", "not_yet_treated"]:
             raise ValueError(
@@ -1219,8 +1222,8 @@ class SunAbraham(BaseEstimator):
         # Per-row df PROVENANCE (spec section 5, row M-092): the df each
         # stored ES row's safe_inference actually received, recorded iff
         # finite and > 0 else NaN. Baseline = the knob-resolved fallback
-        # every _compute_iw_effects row used (the residual df on plain
-        # analytic fits under the default; G-1 under "cluster"; NaN under
+        # every _compute_iw_effects row used (G-1 under the default "cluster";
+        # the residual df under "residual"; NaN under
         # "normal"; the TSL design df on survey fits). Overwritten below at
         # the hc2_bm and replicate-refit override sites, and cleared under
         # bootstrap, whose stored percentile p/CIs never used a df.
@@ -1343,16 +1346,16 @@ class SunAbraham(BaseEstimator):
                         _overall_att_contrast_dof = float(dof_vec[-1])
                 except (ValueError, np.linalg.LinAlgError) as exc:
                     # Rank-deficient or other linalg issue: fall back to
-                    # the knob-resolved analytical df (residual t by
-                    # default). Emit a UserWarning so the deviation is
-                    # visible.
+                    # the knob-resolved analytical df (t(G-1) under the
+                    # default "cluster"; residual t under "residual"). Emit
+                    # a UserWarning so the deviation is visible.
                     warnings.warn(
                         f"SunAbraham(vcov_type='hc2_bm') aggregated inference "
                         f"could not compute Bell-McCaffrey contrast DOF "
                         f"({type(exc).__name__}: {exc}). Falling back to the "
                         "df_convention-resolved analytical df; aggregated "
-                        "p-values/CIs use t(residual df) under the default "
-                        "instead of t(BM DOF).",
+                        "p-values/CIs use the df_convention-resolved t df "
+                        "(t(G-1) under the default) instead of t(BM DOF).",
                         UserWarning,
                         stacklevel=2,
                     )
@@ -1874,8 +1877,8 @@ class SunAbraham(BaseEstimator):
         # aggregated inference layer to compute per-event-time and
         # overall-ATT Satterthwaite DOF on user-facing outputs. Under
         # other vcov_type values aggregated inference falls back to the
-        # knob-resolved analytical df (residual t by default; G−1 under
-        # df_convention="cluster"; z under "normal").
+        # knob-resolved analytical df (G−1 under the default "cluster";
+        # residual t under "residual"; z under "normal").
         if vcov_type == "hc2_bm":
             bread_matrix = X.T @ X
             bm_artifacts: Optional[Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]] = (

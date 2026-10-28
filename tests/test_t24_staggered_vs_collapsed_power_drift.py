@@ -231,12 +231,12 @@ def test_rendered_surface_quotes():
             "61.754",
             "94% / 80% / 61%",
             "~60% of the true lift",
-            "0.796",  # 2x2 coverage, fast
+            "0.800",  # 2x2 coverage, fast (4.0 df_convention flip: t(G-1) CIs; was 0.796)
             "0.004",  # 2x2 coverage, slow ("almost never")
             "0.924",  # CS coverage, fast (~95% regardless of speed)
             "~81%",  # "2x2 reports ~81% of CS's number"
             # Section 2 headline: paired power + the MDE crossover prose
-            "2x2 power = 0.90",
+            "2x2 power = 0.89",  # 4.0 df_convention flip (was 0.90 under residual df)
             "CS power = 0.75",
             "~0.37",  # 2x2 MDE, fast
             "~0.60",  # 2x2 MDE, slow (climbs)

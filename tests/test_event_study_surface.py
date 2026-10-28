@@ -1470,8 +1470,8 @@ def test_stacked_hc2_bm_per_row_df():
         if et in bm.event_study_df and np.isfinite(bm.event_study_df[et]):
             assert df_val == bm.event_study_df[et]
 
-    # hc1 non-survey (3.9 / M-127): the df_convention default resolves to
-    # t(pooled residual df), so every finite-p row now carries that df.
+    # hc1 non-survey (3.9 / M-127; 4.0 default G-1): the df_convention knob
+    # resolves one df per fit, so every finite-p row carries that df.
     s_hc1 = build_event_study_surface(hc1)
     finite_hc1 = np.isfinite(s_hc1.p_value)
     assert np.isfinite(s_hc1.df[finite_hc1]).all()

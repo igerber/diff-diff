@@ -1565,7 +1565,7 @@ class TestSunAbrahamVcovType:
         Distinct from the per-row NaN-DOF case above: when the helper RAISES,
         SA leaves the ``_compute_iw_effects`` output in place after warning.
         Since 3.9 (M-127) that output carries the df_convention-resolved
-        analytical df - FINITE t(residual df) under the default, recorded as
+        analytical df - FINITE t(G-1) under the 4.0 default, recorded as
         genuine provenance (previously normal theory with NaN provenance).
         """
         import diff_diff.linalg as _linalg
@@ -2094,20 +2094,28 @@ class TestSunAbrahamDfConvention:
 
     _kw = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
-    def test_residual_default_is_t_not_z(self):
-        """The D4/defect fix: aggregates use t(saturated residual df), not z."""
-        res = SunAbraham().fit(self._panel(), **self._kw)
+    def test_default_is_t_g_minus_1_not_z(self):
+        """The 4.0 default: aggregates use t(G-1) (M-128), not z and not the
+        residual df; explicit "residual" keeps the D4-fix t(saturated
+        residual df)."""
+        data = self._panel()
+        res = SunAbraham().fit(data, **self._kw)
         p_z = 2 * stats.norm.sf(abs(res.t_stat))
         assert res.p_value != p_z
-        dfres = res.inference_df
-        assert dfres is not None and dfres > 0
-        assert res.p_value == pytest.approx(2 * stats.t.sf(abs(res.t_stat), dfres), rel=1e-12)
-        # every ES row shares the same finite residual df (one df source)
-        assert set(res.event_study_df.values()) == {dfres}
+        G = data["unit"].nunique()
+        assert res.inference_df == G - 1
+        assert res.p_value == pytest.approx(2 * stats.t.sf(abs(res.t_stat), G - 1), rel=1e-12)
+        # every ES row shares the same G-1 df (one df source)
+        assert set(res.event_study_df.values()) == {float(G - 1)}
+        rr = SunAbraham(df_convention="residual").fit(data, **self._kw)
+        dfres = rr.inference_df
+        assert dfres is not None and dfres > G - 1
+        assert rr.p_value == pytest.approx(2 * stats.t.sf(abs(rr.t_stat), dfres), rel=1e-12)
+        assert set(rr.event_study_df.values()) == {dfres}
 
     def test_cluster_matches_hand_reconstructed_g_minus_1(self):
         data = self._panel()
-        r0 = SunAbraham().fit(data, **self._kw)
+        r0 = SunAbraham(df_convention="residual").fit(data, **self._kw)
         r1 = SunAbraham(df_convention="cluster").fit(data, **self._kw)
         G = data["unit"].nunique()
         assert r1.att == r0.att and r1.se == r0.se
@@ -2134,7 +2142,7 @@ class TestSunAbrahamDfConvention:
     def test_bm_dof_precedence_over_knob(self):
         """hc2_bm BM contrast DOF wins under every knob value."""
         data = self._panel()
-        r_res = SunAbraham(vcov_type="hc2_bm").fit(data, **self._kw)
+        r_res = SunAbraham(vcov_type="hc2_bm", df_convention="residual").fit(data, **self._kw)
         r_clu = SunAbraham(vcov_type="hc2_bm", df_convention="cluster").fit(data, **self._kw)
         assert r_res.p_value == r_clu.p_value
         assert r_res.conf_int == r_clu.conf_int
@@ -2174,7 +2182,7 @@ class TestSunAbrahamDfConvention:
         est = SunAbraham()
         with pytest.raises(ValueError, match="df_convention"):
             est.set_params(df_convention="bogus", alpha=0.10)
-        assert est.df_convention == "residual" and est.alpha == 0.05
+        assert est.df_convention == "cluster" and est.alpha == 0.05
         # Valid value + unknown key: the unknown-key rejection must also
         # leave the estimator fully unchanged (no partial application).
         before = est.get_params()
@@ -2183,15 +2191,15 @@ class TestSunAbrahamDfConvention:
         assert est.get_params() == before
 
     def test_get_params_roundtrip_and_repeat_fit(self):
-        est = SunAbraham(df_convention="cluster")
-        assert est.get_params()["df_convention"] == "cluster"
+        est = SunAbraham(df_convention="residual")
+        assert est.get_params()["df_convention"] == "residual"
         clone = SunAbraham(**est.get_params())
         data = self._panel()
         r1 = clone.fit(data, **self._kw)
         p1, d1 = r1.p_value, r1.inference_df
         r2 = clone.fit(data, **self._kw)
         assert r2.p_value == p1 and r2.inference_df == d1
-        assert clone.df_convention == "cluster"
+        assert clone.df_convention == "residual"
 
 
 @pytest.fixture(scope="module")

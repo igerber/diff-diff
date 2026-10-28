@@ -107,8 +107,8 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         ``safe_inference`` for its stored p-value/CI (per-event
         Bell-McCaffrey Satterthwaite df under ``hc2_bm``; the scalar survey
         df under survey designs; the ``df_convention``-resolved analytical
-        fallback otherwise — finite residual df under the 3.9 default,
-        ``G − 1`` under "cluster"), or NaN when the row used normal theory
+        fallback otherwise — ``G − 1`` under the 4.0 default "cluster",
+        the finite residual df under "residual"), or NaN when the row used normal theory
         (``df_convention="normal"``), the df was undefined, or hc2_bm
         failed closed. Always populated on 3.9+ fits (row M-024); None
         only on pre-3.9 pickles.

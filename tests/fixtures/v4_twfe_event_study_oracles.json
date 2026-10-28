@@ -93,7 +93,7 @@
    "echo": {
     "panel": "main",
     "survey_label": null,
-    "twfe_ctor": {"cluster": "unit"},
+    "twfe_ctor": {"cluster": "unit", "df_convention": "residual"},
     "twfe_fit": {
      "outcome": "outcome",
      "post_periods": [4, 5, 6, 7],
@@ -715,7 +715,7 @@
    "echo": {
     "panel": "main",
     "survey_label": null,
-    "twfe_ctor": {"cluster": "unit"},
+    "twfe_ctor": {"cluster": "unit", "df_convention": "residual"},
     "twfe_fit": {
      "outcome": "outcome",
      "post_periods": [4, 5, 6, 7],

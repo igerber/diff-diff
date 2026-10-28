@@ -210,8 +210,9 @@ class WooldridgeDiDResults(BaseResults):
     _df_analytic_fallback: Optional[float] = field(default=None, repr=False)
     """The RESOLVED analytical fallback df the fit's non-BM ``safe_inference``
     calls actually used (survey design df on surveyed fits; otherwise the
-    ``df_convention``-resolved value — residual df by default, ``G − 1``
-    under "cluster", None under "normal"; ``df_inf`` on GLM fits, whose
+    ``df_convention``-resolved value — ``G − 1`` under the 4.0 default
+    "cluster", the residual df under "residual", None under "normal";
+    ``df_inf`` on GLM fits, whose
     inference is knob-independent). ``aggregate()`` reads it so post-fit
     re-aggregation reproduces fit-time inference on every OLS arm — it
     stays LIVE on bootstrap fits, whose per-cell inference remains
@@ -243,7 +244,8 @@ class WooldridgeDiDResults(BaseResults):
         ``aggregate()`` on a legacy result reproduces its fit-time
         classical/hc2 inference (legacy hc1 pickles carried None there,
         which restores the pre-3.9 normal-theory aggregation for them).
-        ``df_convention`` (added 3.9) defaults to ``"residual"``.
+        A missing ``df_convention`` (added 3.9) is backfilled as ``"residual"``
+        - the convention every pre-3.9 fit ran under (NOT the 4.0 default).
         Missing ``unsupported_period_action`` defaults to ``"drop"``.
         Pickles written before the 4.0 storage flip (``docs/v4-design.md``
         section 5) carry the simple aggregate under ``overall_att`` /

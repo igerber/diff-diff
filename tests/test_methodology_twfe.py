@@ -490,13 +490,12 @@ class TestRBenchmarkTWFE:
     def test_pvalue_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """Both p-values are numerically zero at this effect size.
 
-        Python p ~1e-48 (t-dist at residual df=148) vs R ~4e-27 (fixest's
-        cluster df G-1=49): both sides use t-distributions, but the df
-        conventions differ — the documented clustered-CR1 inference-df
-        deviation (REGISTRY §TwoWayFixedEffects) — so at |t|~22 the tails
-        diverge by ~21 orders and a relative comparison is meaningless.
-        The assert pins that both are numerically zero (atol=1e-12,
-        ~15 orders of headroom above the larger tail)."""
+        Since the 4.0 df_convention flip both sides sit on fixest's cluster
+        df G-1=49 (Python ~4e-27 like R; under the 3.x residual-df default
+        it was ~1e-48 at t(148) - the convention itself is pinned by
+        test_moderate_t_pins_cluster_df_convention below, where the tails
+        are distinguishable). The assert pins that both are numerically
+        zero (atol=1e-12)."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -508,7 +507,7 @@ class TestRBenchmarkTWFE:
             err_msg=f"P-value mismatch: Python={py_results.p_value:.6f}, R={r_twfe_results['p_value']:.6f}",
         )
 
-    def test_moderate_t_pins_residual_df_convention(self):
+    def test_moderate_t_pins_cluster_df_convention(self):
         """Locks WHICH df convention clustered-CR1 inference follows, in a
         regime where the conventions are distinguishable.
 
@@ -516,12 +515,12 @@ class TestRBenchmarkTWFE:
         and cluster-df (G-1) p-values are numerically zero, so they cannot
         tell the conventions apart. This fixture is tuned to a moderate
         |t|~1.8, where t(residual df=148) and t(G-1=49) p-values differ by
-        ~5% relative: the estimator's p-value must match the residual-df
-        tail exactly AND differ measurably from the cluster-df tail — the
-        documented clustered-CR1 inference-df deviation (REGISTRY
-        §TwoWayFixedEffects). If the default convention ever flips to
-        cluster df (the planned opt-in knob's v4 default), this test fails
-        loudly and must be updated alongside the REGISTRY note."""
+        ~5% relative: since the 4.0 flip (rows M-004/M-005) the estimator's
+        default p-value must match the cluster-df (G-1) tail exactly AND
+        differ measurably from the residual-df tail, which explicit
+        df_convention="residual" restores (REGISTRY §TwoWayFixedEffects
+        clustered-CR1 inference-df note). If the default ever moves again,
+        this test fails loudly and must be updated alongside that note."""
         from scipy import stats as _stats
 
         rng = np.random.default_rng(42)
@@ -561,27 +560,32 @@ class TestRBenchmarkTWFE:
 
         np.testing.assert_allclose(
             res.p_value,
-            p_residual,
+            p_cluster,
             rtol=1e-10,
-            err_msg="clustered-CR1 p-value no longer follows the residual-df convention",
+            err_msg="clustered-CR1 p-value no longer follows the 4.0 cluster-df (G-1) convention",
         )
         rel_gap = abs(p_cluster - p_residual) / p_residual
         assert (
             rel_gap > 0.03
         ), f"fixture no longer distinguishes the df conventions (rel gap {rel_gap:.4f})"
         assert (
-            abs(res.p_value - p_cluster) / p_cluster > 0.03
-        ), "p-value matches the cluster-df convention — the documented deviation flipped"
+            abs(res.p_value - p_residual) / p_residual > 0.03
+        ), "p-value matches the residual-df convention — the 4.0 default flipped back"
+        # explicit "residual" restores the 3.x residual-df tail exactly
+        res_r = TwoWayFixedEffects(df_convention="residual").fit(
+            data, outcome="outcome", treatment="treated", post="post", unit="unit"
+        )
+        np.testing.assert_allclose(res_r.p_value, p_residual, rtol=1e-10)
 
     def test_ci_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """CI bounds within the remaining df-convention band (measured ~1.7e-3).
+        """CI bounds match fixest at machine precision since the 4.0 flip.
 
-        Post-K_reference the SE side matches fixest at machine precision, so
-        the bounds' residual gap through att ± crit*se is SOLELY the clustered
-        inference-df convention (Python t(residual df=148) critical value vs
-        fixest t(G−1=49); REGISTRY §TwoWayFixedEffects — PR C scope).
-        Tightened 0.005 → 0.003 accordingly (measured 1.7e-3/1.4e-3). The
-        ATT itself matches at machine precision."""
+        Post-K_reference the SE side matches fixest at machine precision, and
+        since the df_convention default flipped to "cluster" (M-005, item 7a)
+        the critical value is the same t(G−1=49) quantile fixest uses, so the
+        bounds through att ± crit*se agree to rounding (the 3.x residual-df
+        default left a ~1.7e-3 / 1.4e-3 band here, which is what the old
+        rtol=0.003 absorbed). The ATT itself matches at machine precision."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -589,13 +593,13 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.conf_int[0],
             r_twfe_results["ci_lower"],
-            rtol=0.003,
+            rtol=1e-9,
             err_msg=f"CI lower mismatch: Python={py_results.conf_int[0]:.6f}, R={r_twfe_results['ci_lower']:.6f}",
         )
         np.testing.assert_allclose(
             py_results.conf_int[1],
             r_twfe_results["ci_upper"],
-            rtol=0.003,
+            rtol=1e-9,
             err_msg=f"CI upper mismatch: Python={py_results.conf_int[1]:.6f}, R={r_twfe_results['ci_upper']:.6f}",
         )
 

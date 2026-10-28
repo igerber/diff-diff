@@ -8,10 +8,9 @@ provenance and AI-review deviation-documentation: a row here (or in
 - Shippable work lives in [TODO.md](TODO.md); the public feature roadmap in
   [ROADMAP.md](ROADMAP.md); monitoring and current-state notes in
   [docs/dev-status.md](docs/dev-status.md).
-- Version-gated lifecycle items (deprecated-kwarg removals, v4 default flips such as
-  `SyntheticDiD` `lambda_reg`/`zeta` and the clustered-df convention) are canonically
-  tracked in the CI-enforced ledger `docs/v4-deprecations.yaml`; rows here cross-link
-  their `M-xxx` ids where applicable.
+- Version-gated lifecycle items (deprecated-kwarg removals and default flips) are
+  canonically tracked in the CI-enforced ledger `docs/v4-deprecations.yaml`; rows here
+  cross-link their `M-xxx` ids where applicable.
 - The `PR` column points to the originating PR number or review tag.
 
 ---
@@ -130,7 +129,8 @@ here carry the remaining implementation work and cross-link their `M-xxx` ids.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| Clustered inference df **default flip at v4** (lifecycle + roster: docs/v4-deprecations.yaml M-004..M-006 + M-128..M-131; knob semantics: v4-design §7). Implementation work the ledger rows do not carry: the migration note, and flipping the test expectations that pin the current default (`TestDfConvention`, `test_moderate_t_pins_residual_df_convention`, the per-estimator knob suites). | `diff_diff/linalg.py::LinearRegression`, `diff_diff/estimators.py`, `diff_diff/twfe.py`, `diff_diff/sun_abraham.py`, `diff_diff/wooldridge.py`, `diff_diff/stacked_did.py`, `diff_diff/imputation.py` | — | Medium |
+
+No open rows: the clustered-df default flip shipped with the 4.0 cut.
 
 ## Decision record — won't-fix / waived
 
