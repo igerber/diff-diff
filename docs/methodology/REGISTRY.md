@@ -7074,10 +7074,12 @@ should be a deliberate user choice.
   shared `str | None | False` contract, [M-155]). Results report `cluster_name="unit"`
   / `n_clusters=G` on the default lane. Roster in
   `docs/methodology/variance-conventions.md` "Default clustering roster".
-- **Note:** inference df unchanged at 7b - `t(n_obs_eff - k_effective)` on every lane
-  INCLUDING the new default CR1 lane (SpilloverDiD has no `df_convention` knob yet, so
-  it is the one auto-clustered default not on t(G-1)); [M-154] / item 7c adds the knob
-  with the 4.0 default `"cluster"` (t(G-1) on the clustered lanes, inert on Conley).
+- **Note:** inference df unchanged at 7b - `t(n_obs_eff - k_effective)` on every
+  non-survey lane INCLUDING the new default CR1 lane (the survey-design df keeps its
+  precedence under `survey_design=`, as before); SpilloverDiD has no `df_convention`
+  knob yet, so it is the one auto-clustered default not on t(G-1); [M-154] / item 7c
+  adds the knob with the 4.0 default `"cluster"` (t(G-1) on the clustered lanes, inert
+  on Conley, survey df still first).
 - **Note (rank-guarded Wave D bread):** The Wave D variance bread `A_22 = (X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on the already-column-dropped kept submatrix. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular kept Gram would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0), re-inflated to (k, k) with NaN at the dropped positions, and warns. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
 
 **Identification spec (committed):**

@@ -1701,8 +1701,9 @@ class SpilloverDiD(BaseEstimator):
         on every lane: CR1, the combined Conley cluster product kernel when
         paired with ``vcov_type="conley"``, or the effective PSU under a
         ``survey_design`` without its own PSU. Column labels must be ``str``.
-        Inference uses the residual df on every lane (``df_convention``
-        arrives with [M-154]).
+        Inference uses the residual df on every non-survey lane, the
+        default CR1 lane included; under a ``survey_design`` the design df
+        takes precedence (``df_convention`` arrives with [M-154]).
     alpha : float, default=0.05
         Significance level for confidence intervals.
     anticipation : int, default=0
