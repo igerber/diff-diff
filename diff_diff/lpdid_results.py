@@ -199,7 +199,9 @@ class LPDiDResults(BaseResults):
         if self.df_convention is not None:
             result["df_convention"] = self.df_convention
         result["inference_method"] = (
-            "survey_tsl" if self.vcov_type == "survey_tsl" else "cluster_robust"
+            "survey_tsl"
+            if self.vcov_type == "survey_tsl"
+            else ("heteroskedasticity_robust" if self.cluster_name is None else "cluster_robust")
         )
         return result
 
@@ -262,6 +264,10 @@ class LPDiDResults(BaseResults):
             # (ImputationDiD/BJS family), not an OLS CR1 sandwich.
             g = f", G={self.n_clusters}" if self.n_clusters else ""
             vcov_label = f"Influence-function cluster-robust at {self.cluster_name}{g}"
+        elif self.vcov_type == "if_robust":
+            # Regression-adjustment path under cluster=False (4.0, M-080): the
+            # unclustered influence-function variance sum(phi_i^2)/n^2.
+            vcov_label = "Influence-function heteroskedasticity-robust (unclustered)"
         elif self.vcov_type == "survey_tsl":
             # Complex-survey path: stratified-PSU Taylor-linearization (Binder TSL)
             # sandwich. _format_vcov_label does not know "survey_tsl", so build the

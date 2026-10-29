@@ -63,7 +63,13 @@ from diff_diff.efficient_did_weights import (
     compute_omega_star_nocov,
     enumerate_valid_triples,
 )
-from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
+from diff_diff.utils import (
+    ClusterArg,
+    safe_inference,
+    validate_anticipation,
+    validate_cluster,
+    validate_n_bootstrap,
+)
 
 # Re-export for convenience
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
@@ -273,7 +279,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         (just-identified, single baseline, equivalent to CS).
     alpha : float, default 0.05
         Significance level.
-    cluster : str or None
+    cluster : str, None or False
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
         Column name for cluster-robust SEs.  When set, analytical SEs
         use the Liang-Zeger clustered sandwich estimator on EIF values.
         With ``n_bootstrap > 0``, bootstrap weights are generated at the
@@ -357,7 +366,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         self,
         pt_assumption: str = "all",
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         vcov_type: str = "hc1",
         control_group: str = "never_treated",
         n_bootstrap: int = 0,
@@ -372,7 +381,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
     ):
         self.pt_assumption = pt_assumption
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = vcov_type
         self.control_group = control_group
         validate_n_bootstrap(n_bootstrap)
@@ -549,8 +558,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             or PT-Post without a never-treated group.
         """
         self._validate_params()
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
-        if self.cluster is not None and survey_design is not None:
+        if user_cluster is not None and survey_design is not None:
             raise NotImplementedError(
                 "cluster and survey_design cannot both be set. "
                 "Use survey_design with PSU/strata for cluster-robust inference."
@@ -709,9 +724,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             self._unit_resolved_survey = None
 
         # Build cluster mapping if cluster-robust SEs requested
-        if self.cluster is not None:
+        if user_cluster is not None:
             unit_cluster_indices, n_clusters = _validate_and_build_cluster_mapping(
-                df, unit, self.cluster, all_units
+                df, unit, user_cluster, all_units
             )
             if n_clusters < 50:
                 warnings.warn(
@@ -1356,12 +1371,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             cluster_name=(
                 None
                 if resolved_survey is not None
-                else (self.cluster if self.cluster is not None else None)
+                else (user_cluster if user_cluster is not None else None)
             ),
             n_clusters=(
                 None
                 if resolved_survey is not None
-                else (n_clusters if self.cluster is not None else None)
+                else (n_clusters if user_cluster is not None else None)
             ),
             vcov_type=self.vcov_type,
             # Independent COPY, never the kit's arrays: the aggregation kit
@@ -1461,7 +1476,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         anticipation: int = 0,
         control_group: str = "never_treated",
         alpha: float = 0.05,
@@ -1478,8 +1493,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         ----------
         data, outcome, unit, time, first_treat, covariates
             Same as :meth:`fit`.
-        cluster : str, optional
+        cluster : str, None or False, optional
             Cluster column for cluster-robust covariance.
+            ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+            unit-level by construction, so there is nothing to switch off. Column
+            labels must be ``str``.
         anticipation : int
             Anticipation periods. Must be a non-negative integer; ``bool``
             is rejected.
@@ -1500,6 +1518,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         # constructed estimators — validate and normalize it here so an
         # unsigned numpy scalar cannot wrap the comparison.
         anticipation = validate_anticipation(anticipation)
+        # Same shared contract for the classmethod's own cluster argument
+        # (str | None | False, [M-155]); the normalized column feeds the
+        # covariance branch below, the raw value the two constructors.
+        cluster = validate_cluster(cluster)
+        cluster_col = None if cluster is False else cluster
 
         # Fit under both assumptions (analytical SEs only, no bootstrap)
         common_kwargs = dict(
@@ -1647,8 +1670,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         )
         cl_idx: Optional[np.ndarray] = None
         n_cl: Optional[int] = None
-        if cluster is not None:
-            cl_idx, n_cl = _validate_and_build_cluster_mapping(data, unit, cluster, all_units_list)
+        if cluster_col is not None:
+            cl_idx, n_cl = _validate_and_build_cluster_mapping(
+                data, unit, cluster_col, all_units_list
+            )
         if not np.all(row_finite):
             eif_all_mat = eif_all_mat[row_finite]
             eif_post_mat = eif_post_mat[row_finite]

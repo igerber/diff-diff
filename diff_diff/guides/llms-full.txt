@@ -53,7 +53,7 @@ Basic 2x2 Difference-in-Differences estimator.
 ```python
 DifferenceInDifferences(
     vcov_type: str | None = None,           # Variance family: "hc1" (default), "classical", "hc2", "hc2_bm", "hc3", "conley"
-    cluster: str | None = None,             # Column for cluster-robust SEs
+    cluster: str | None | False = None,  # Column for cluster-robust SEs; False = explicitly unclustered (no-op here: 2x2 DiD is HC-robust unless cluster= is given)
     alpha: float = 0.05,                    # Significance level
     inference: str = "analytical",          # "analytical" or "wild_bootstrap" (wild_bootstrap requires cluster=)
     n_bootstrap: int = 999,                 # Bootstrap replications; >= 2 under inference="wild_bootstrap"
@@ -106,7 +106,7 @@ Two-Way Fixed Effects estimator for panel data. Inherits from DifferenceInDiffer
 
 ```python
 TwoWayFixedEffects(
-    cluster: str | None = None,   # Auto-clusters at unit level if None
+    cluster: str | None | False = None,  # Auto-clusters at unit level if None; False = plain HC sandwich (4.0 off-switch; rejected under wild bootstrap)
     alpha: float = 0.05,
     df_convention: str = "cluster",   # Analytical t/p/CI df: "cluster" (G-1; default since 4.0), "residual" (n-K; 3.x default), or "normal" (z)
 )
@@ -143,7 +143,7 @@ results.print_summary()
 
 # Event-study mode (the MultiPeriodDiD class was removed at the 4.0 cut;
 # spec="pooled" runs its design; wild bootstrap raises in this mode; the
-# unit auto-cluster applies with the static carve-outs)
+# unit auto-cluster applies with the static carve-outs; cluster=False switches it off)
 es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
               event_study=True, time='period', post_periods=[4, 5, 6, 7])
 print(es.summary())
@@ -189,7 +189,7 @@ CallawaySantAnna(
     anticipation: int = 0,                       # Anticipation periods (non-negative integer; bool rejected)
     estimation_method: str = "dr",               # "dr", "ipw", or "reg"
     alpha: float = 0.05,
-    cluster: str | None = None,                  # Cluster col; activates CR1 on the IF via synthesized SurveyDesign(psu=col). None → per-unit IF.
+    cluster: str | None | False = None,  # Cluster col; activates CR1 on the IF via synthesized SurveyDesign(psu=col). None → per-unit IF; False = accepted no-op (unit-level by construction)
     n_bootstrap: int = 0,                        # 0 = analytical SEs, 999+ recommended
     bootstrap_weights: str | None = None,        # "rademacher", "mammen", or "webb"
     seed: int | None = None,
@@ -267,7 +267,7 @@ de Chaisemartin & D'Haultfœuille (2020/2022) estimator for **non-absorbing (rev
 ```python
 ChaisemartinDHaultfoeuille(
     alpha: float = 0.05,
-    cluster: str | None = None,                  # Must be None; non-None raises NotImplementedError
+    cluster: str | None | False = None,  # None or False (both the default group-level IF path; False is an accepted no-op); a column name raises NotImplementedError
     n_bootstrap: int = 0,                        # 0 = analytical SE only
     bootstrap_weights: str = "rademacher",       # "rademacher", "mammen", or "webb"
     seed: int | None = None,
@@ -366,7 +366,7 @@ SunAbraham(
     control_group: str = "never_treated",        # "never_treated" or "not_yet_treated"
     anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
-    cluster: str | None = None,                  # Defaults to unit-level clustering (dropped on explicit vcov_type='hc2' / 'classical')
+    cluster: str | None | False = None,  # Defaults to unit-level clustering (dropped on explicit vcov_type='hc2' / 'classical'); False = plain HC sandwich (4.0 off-switch; rejected with hc2_bm)
     n_bootstrap: int = 0,                        # 0 = analytical cluster-robust SEs
     seed: int | None = None,
     rank_deficient_action: str = "warn",
@@ -414,7 +414,7 @@ Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Efficient estimator pro
 ImputationDiD(
     anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
-    cluster: str | None = None,                  # Defaults to unit-level clustering
+    cluster: str | None | False = None,  # Defaults to unit-level clustering; False = accepted no-op (unit-level IF variance)
     vcov_type: str = "hc1",                      # {"hc1"} only — IF-based variance per Borusyak et al. (2024) Theorem 3
     n_bootstrap: int = 0,                        # 0 = analytical (Theorem 3 variance)
     bootstrap_weights: str = "rademacher",       # "rademacher", "mammen", or "webb"
@@ -467,7 +467,7 @@ Gardner (2022) two-stage DiD estimator. Point estimates match ImputationDiD; use
 TwoStageDiD(
     anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
-    cluster: str | None = None,
+    cluster: str | None | False = None,  # Defaults to unit-level clustering; False = accepted no-op (unit-level IF variance)
     n_bootstrap: int = 0,
     bootstrap_weights: str = "rademacher",
     seed: int | None = None,
@@ -514,12 +514,12 @@ Butts (2021) ring-indicator spillover-aware DiD. Augments two-stage Gardner with
 SpilloverDiD(
     rings: list[float],                  # K+1 sorted breakpoints; K rings
     d_bar: float | None = None,          # Far-away cutoff (defaults to max(rings))
-    vcov_type: str = "hc1",              # "hc1", "conley", or default cluster
+    vcov_type: str = "hc1",              # "hc1" (CR1 at unit by default since 4.0) or "conley"
     conley_coords: tuple[str, str] | None = None,  # (lat_col, lon_col), required
     conley_metric: str = "haversine",    # or "euclidean" / callable
     conley_cutoff_km: float | None = None,
     conley_lag_cutoff: int | None = None,
-    cluster: str | None = None,
+    cluster: str | None | False = None,  # None = auto-cluster at unit (4.0; dropped on Conley, never a survey PSU); False = observation-level HC1 (the 3.x default); str = that column
     alpha: float = 0.05,
     anticipation: int = 0,  # non-negative integer; bool rejected
     event_study: bool = False,           # Wave C: per-event-time × ring decomposition (Butts Table 2)
@@ -680,7 +680,7 @@ Triple Difference (DDD) estimator following Ortiz-Villavicencio & Sant'Anna (202
 ```python
 TripleDifference(
     estimation_method: str = "dr",            # "dr", "reg", or "ipw"
-    cluster: str | None = None,
+    cluster: str | None | False = None,  # 2x2x2: CR1 on that column (False = plain HC, a no-op); staggered mode: a column raises, False is a no-op
     vcov_type: str = "hc1",                   # {"hc1"} only — IF-based variance per Ortiz-Villavicencio & Sant'Anna (2025). Analytical-sandwich {classical, hc2, hc2_bm} and conley REJECTED at __init__ (see REGISTRY.md IF-vs-sandwich subsection).
     alpha: float = 0.05,
     pscore_trim: float = 0.01,
@@ -828,7 +828,7 @@ HeterogeneousAdoptionDiD(
     kernel: str = "epanechnikov",      # Local-linear kernel
     alpha: float = 0.05,
     vcov_type: str | None = None,      # Mass-point only: "classical" (default) or "hc1"
-    cluster: str | None = None,        # Cluster column for cluster-robust SEs (all designs; event-study adds a cluster-robust sup-t band). cluster= + survey_design= rejected
+    cluster: str | None | False = None,  # Cluster column for cluster-robust SEs (all designs; event-study adds a cluster-robust sup-t band); False = accepted no-op. cluster= + survey_design= rejected
     n_bootstrap: int = 999,            # Multiplier-bootstrap iterations for sup-t bands (event-study, when weighted/survey OR clustered)
     seed: int | None = None,
 )
@@ -1146,7 +1146,7 @@ Efficient DiD estimator (Chen, Sant'Anna & Xie 2025). Achieves the semiparametri
 EfficientDiD(
     pt_assumption: str = "all",              # "all" (overidentified) or "post" (just-identified)
     alpha: float = 0.05,
-    cluster: str | None = None,              # Column name for cluster-robust SEs (Liang-Zeger on EIF values); cluster-level multiplier bootstrap when n_bootstrap > 0
+    cluster: str | None | False = None,  # Column name for cluster-robust SEs (Liang-Zeger on EIF values); cluster-level multiplier bootstrap when n_bootstrap > 0; False = accepted no-op
     vcov_type: str = "hc1",                  # {"hc1"} only — IF-based variance per Chen-Sant'Anna-Xie (2025); analytical-sandwich families {classical, hc2, hc2_bm} and conley rejected at __init__/set_params
     n_bootstrap: int = 0,                    # Multiplier bootstrap iterations
     bootstrap_weights: str = "rademacher",   # "rademacher", "mammen", or "webb"
@@ -1200,7 +1200,7 @@ LPDiD(
     no_composition: bool = False,            # Hold the post-treatment composition fixed across post horizons
     pmd: str | int | None = None,            # Base period: None=first-lag (t-1), "max"=premean over all pretreatment periods, int=last-k premean
     alpha: float = 0.05,
-    cluster: str | None = None,              # Cluster column for cluster-robust SEs; defaults to the unit identifier
+    cluster: str | None | False = None,  # Cluster column for cluster-robust SEs; defaults to the unit identifier; False = unclustered per-horizon regressions (4.0 off-switch)
     rank_deficient_action: str = "warn",     # "warn", "error", or "silent"
     non_absorbing: str | None = None,        # None=absorbing; "first_entry" (Eq. 12); "effect_stabilization" (Eq. 13)
     stabilization_window: int | None = None, # The paper's L; required when non_absorbing="effect_stabilization"
@@ -1312,7 +1312,7 @@ LWDiD(
     rolling: str = "demean",             # "demean", "detrend", "demeanq", "detrendq" (q = seasonal variants). Demeaning needs >= 1 pre period per cohort; detrending >= 2. Detrending stays consistent under unit-specific linear trends (CHT) where demeaning is inconsistent.
     estimation_method: str = "reg",      # "reg" (papers' RA), "ipw", "dr" (papers' IPWRA, doubly robust), "psm" (LWDiD-only extra; POINT ONLY - inference is NaN, see below)
     vcov_type: str = "hc1",              # reg: {"classical", "hc1", "hc2", "hc3"} - "classical" enables the exact small-N t; ipw/dr: {"hc1"} only (influence-function variance); psm: {"hc1"} as configuration only. NO "cluster" value - clustering activates via cluster= below.
-    cluster: str | None = None,          # Unit-constant cluster column; CR1, composes with vcov_type="hc1" only; rejected for psm.
+    cluster: str | None | False = None,  # Unit-constant cluster column; CR1, composes with vcov_type="hc1" only; rejected for psm; False = accepted no-op
     control_group: str = "not_yet_treated",  # "not_yet_treated" (OVLS default) or "never_treated". All-eventually-treated designs raise under BOTH.
     alpha: float = 0.05,
     n_bootstrap: int = 0,                # 0 = analytical. Common timing: unit/cluster bootstrap for the HEADLINE inference AND a Rademacher multiplier bootstrap with sup-t bands for the post-period event-study surface. Staggered: multiplier bootstrap for the EVENT-STUDY surface only (overall/cohort stay analytical). Rejected (>0) for psm - the standard bootstrap is invalid for matching (Abadie & Imbens 2008).
@@ -1397,7 +1397,7 @@ DMLDiD(
     cband=True,                   # sup-t bands on the event-study replay
     pscore_trim=0.01,             # clip fitted propensities (never drop)
     panel=True,                   # False = declared repeated cross sections (Chang Case 2)
-    cluster=None,                 # coarser-than-unit clustering (variance/folds only)
+    cluster=None,                 # str | None | False: coarser-than-unit clustering (variance/folds only); False = accepted no-op
 ).fit(data, outcome, unit, time, first_treat, covariates, survey_design=None,
      bad_control=None,              # Caetano et al. (2026) bad-control lane: a covariate treatment can affect (NOT in covariates)
      bad_control_covariates=None,   # W for the bad control's unconfoundedness model; [outcome] = base-period outcome (Remark 5)
@@ -1591,7 +1591,7 @@ WooldridgeDiD(
     anticipation: int = 0,                  # Number of anticipation periods (non-negative integer; bool rejected)
     demean_covariates: bool = True,         # Demean covariates within cohort*period cells
     alpha: float = 0.05,
-    cluster: str | None = None,
+    cluster: str | None | False = None,  # Defaults to unit-level clustering; False = plain HC / QMLE sandwich (4.0 off-switch; rejected with n_bootstrap > 0 and hc2_bm)
     n_bootstrap: int = 0,
     bootstrap_weights: str = "rademacher",
     seed: int | None = None,
@@ -1768,7 +1768,7 @@ Returned by `DifferenceInDifferences.fit()` and `TwoWayFixedEffects.fit()`.
 | `r_squared` | `float` | R-squared |
 | `inference_method` | `str` | "analytical" or "wild_bootstrap" |
 | `n_bootstrap` | `int` | Number of bootstrap replications |
-| `n_clusters` | `int` | Number of clusters |
+| `n_clusters` | `int | None` | Number of clusters (the regression's effective count on non-survey analytical fits and the bootstrap count under wild; None on unclustered and survey fits) |
 | `bootstrap_distribution` | `np.ndarray` | Bootstrap ATT distribution |
 
 **Methods:** `summary(alpha=None)`, `print_summary()`, `to_dict()`, `to_dataframe()`
@@ -1834,6 +1834,8 @@ Returned by `SunAbraham.fit()`.
 | `cohort_effects` | `dict` | Cohort-level effects |
 | `df_convention` | `str | None` | The configured df convention echoed onto the results ("residual" | "cluster" | "normal"; 3.9) |
 | `inference_df` | `float | None` | The df the overall-ATT p/CI actually used (BM contrast df / survey df / knob-resolved fallback; None under bootstrap or "normal") |
+| `cluster_name` | `str | None` | Cluster ids the analytical regression received (`"unit"` on the default, the explicit column; 4.0); None on unclustered, survey and pairs-bootstrap fits |
+| `n_clusters` | `int | None` | Effective count of those clusters (4.0, appended field); None when `cluster_name` is None |
 | `event_study_df` | `dict[int, float] | None` | Per-event-time df provenance (G-1 on plain clustered analytic fits under the 4.0 default; the finite residual df under `df_convention="residual"`; None under bootstrap) |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")`

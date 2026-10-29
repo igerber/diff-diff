@@ -30,6 +30,7 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults
 from diff_diff.results_base import _EventStudyCorePayload
 from diff_diff.utils import (
+    ClusterArg,
     WildBootstrapResults,
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
@@ -41,6 +42,7 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
     validate_binary,
+    validate_cluster,
     validate_covariate_names,
     validate_design_term_names,
     validate_df_convention,
@@ -67,7 +69,11 @@ class DifferenceInDifferences(BaseEstimator):
     formula : str, optional
         R-style formula for the model (e.g., "outcome ~ treated * post").
         If provided, overrides column name parameters.
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is the uniform explicit off-switch and a no-op here:
+        the 2x2 fit is HC-robust unless ``cluster=`` is given.
+        ``inference="wild_bootstrap"`` rejects it (the resampler needs a cluster).
+        Column labels must be ``str``.
         Column name for cluster-robust standard errors. Combined with
         ``vcov_type``: with ``"hc1"`` dispatches to CR1 (Liang-Zeger); with
         ``"hc2_bm"`` dispatches to CR2 Bell-McCaffrey (Pustejovsky-Tipton 2018
@@ -226,7 +232,7 @@ class DifferenceInDifferences(BaseEstimator):
 
     def __init__(
         self,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         vcov_type: Optional[str] = None,
         alpha: float = 0.05,
         inference: str = "analytical",
@@ -255,7 +261,7 @@ class DifferenceInDifferences(BaseEstimator):
         if not isinstance(inference, str) or inference not in _INFERENCE_METHODS:
             raise ValueError(f"inference must be one of {_INFERENCE_METHODS}, got {inference!r}")
 
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = resolve_vcov_type(vcov_type)
         # Preserve the raw constructor arg (possibly None) alongside the
         # resolved `vcov_type`. `get_params()` returns the raw arg so
@@ -379,6 +385,12 @@ class DifferenceInDifferences(BaseEstimator):
         >>> did.fit(data, outcome='sales', treatment='treated', post='post',
         ...         absorb=['firm_id'])
         """
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
         # Body-local name for the post-period indicator column; the public
         # parameter is `post`.
         time = post
@@ -517,7 +529,7 @@ class DifferenceInDifferences(BaseEstimator):
                 conley_lag_cutoff=self.conley_lag_cutoff,
                 survey_design=survey_design,
                 inference=self.inference,
-                cluster=self.cluster,
+                cluster=user_cluster,
             )
 
         # Fail-closed wild-bootstrap coherence (M-096). Placed AFTER the
@@ -526,11 +538,14 @@ class DifferenceInDifferences(BaseEstimator):
         # wild+Conley fit would be contradictory guidance — Conley rejects
         # the combination regardless of cluster).
         if self.inference == "wild_bootstrap":
-            if self.cluster is None:
+            if user_cluster is None:
+                # cluster=None and cluster=False both leave this fit unclustered
+                # (DiD has no auto-cluster), so neither can feed the resampler.
                 raise ValueError(
-                    "inference='wild_bootstrap' requires cluster=. The wild cluster "
-                    "bootstrap resamples at the cluster level; pass cluster= or use "
-                    "inference='analytical'."
+                    "inference='wild_bootstrap' requires cluster=<col>. The wild cluster "
+                    "bootstrap resamples at the cluster level; cluster=None and "
+                    "cluster=False both leave a DifferenceInDifferences fit unclustered, "
+                    "so pass a cluster column or use inference='analytical'."
                 )
             if self.n_bootstrap < 2:
                 raise ValueError(
@@ -651,11 +666,11 @@ class DifferenceInDifferences(BaseEstimator):
 
         # Always use LinearRegression for initial fit (unified code path)
         # For wild bootstrap, we don't need cluster SEs from the initial fit
-        cluster_ids = data[self.cluster].values if self.cluster is not None else None
+        cluster_ids = data[user_cluster].values if user_cluster is not None else None
 
         # When survey PSU is present, it overrides cluster for variance estimation
         effective_cluster_ids = _resolve_effective_cluster(
-            resolved_survey, cluster_ids, self.cluster
+            resolved_survey, cluster_ids, user_cluster
         )
 
         # Inject cluster as effective PSU for survey variance estimation
@@ -851,7 +866,7 @@ class DifferenceInDifferences(BaseEstimator):
                 survey_metadata.df_survey = _df_rep if _df_rep > 0 else None
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=_df_rep)
             _inference_df_used = float(_df_rep) if _df_rep is not None and _df_rep > 0 else None
-        elif self.inference == "wild_bootstrap" and self.cluster is not None:
+        elif self.inference == "wild_bootstrap" and user_cluster is not None:
             # Override with wild cluster bootstrap inference (bootstrap
             # test-inversion based; no reference t-distribution, so no
             # effective inference df).
@@ -918,6 +933,12 @@ class DifferenceInDifferences(BaseEstimator):
             n_bootstrap_used = self._bootstrap_results.n_bootstrap
             n_clusters_used = self._bootstrap_results.n_clusters
             p_val_type_used = self._bootstrap_results.p_val_type
+        elif resolved_survey is None:
+            # 4.0 (M-080): the analytical regression's own effective cluster
+            # count (None when it ran unclustered). Survey fits keep None -
+            # the survey metadata owns PSU reporting, and under a PSU design
+            # the regression received PSU labels, not the user's cluster.
+            n_clusters_used = reg.n_clusters_
 
         # Store results
         self.results_ = DiDResults(
@@ -944,7 +965,7 @@ class DifferenceInDifferences(BaseEstimator):
             # the remapped "hc1" under a replicate-weight survey design, not
             # the stored `self.vcov_type`.
             vcov_type=_fit_vcov_type,
-            cluster_name=self.cluster,
+            cluster_name=user_cluster,
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
             df_convention=self.df_convention,
             inference_df=_inference_df_used,

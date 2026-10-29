@@ -40,9 +40,11 @@ from diff_diff.staggered_results import (
     GroupTimeEffect,
 )
 from diff_diff.utils import (
+    ClusterArg,
     safe_inference,
     safe_inference_batch,
     validate_anticipation,
+    validate_cluster,
     validate_n_bootstrap,
     validate_pscore_trim,
 )
@@ -349,7 +351,10 @@ class CallawaySantAnna(
         - "reg": Outcome regression
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
         Column name for cluster-robust standard errors. When set, the
         influence-function aggregator clusters at the named level via a
         synthesized ``SurveyDesign(psu=cluster_col)`` threaded through the
@@ -567,7 +572,7 @@ class CallawaySantAnna(
         anticipation: int = 0,
         estimation_method: str = "dr",
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 0,
         bootstrap_weights: Optional[str] = None,
         seed: Optional[int] = None,
@@ -635,7 +640,7 @@ class CallawaySantAnna(
         self.anticipation = validate_anticipation(anticipation)
         self.estimation_method = estimation_method
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = vcov_type
         # Track whether vcov_type was explicitly set (for future symmetry
         # with SA / StackedDiD / WooldridgeDiD set_params patterns; the
@@ -1914,6 +1919,12 @@ class CallawaySantAnna(
         # out-of-domain value silently changes the ESTIMAND); the assignment
         # also re-normalizes a mutated numpy scalar to a Python int.
         self.anticipation = validate_anticipation(self.anticipation)
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
         # --- allow_unbalanced_panel routing (RC-on-panel = R's allow_unbalanced_panel) ---
         # Detect an unbalanced panel (some units unobserved in some periods).
@@ -2029,12 +2040,12 @@ class CallawaySantAnna(
                         f"cohort ('{first_treat}') per unit; unit(s) {_bad} have a changing "
                         f"first_treat."
                     )
-            if self.cluster is not None and self.cluster in data.columns:
-                _cl_counts = data.groupby(unit)[self.cluster].nunique()
+            if user_cluster is not None and user_cluster in data.columns:
+                _cl_counts = data.groupby(unit)[user_cluster].nunique()
                 if (_cl_counts > 1).any():
                     _bad = list(_cl_counts.index[_cl_counts > 1][:5])
                     raise ValueError(
-                        f"allow_unbalanced_panel=True with cluster='{self.cluster}' "
+                        f"allow_unbalanced_panel=True with cluster='{user_cluster}' "
                         f"requires a time-invariant cluster per unit; unit(s) {_bad} "
                         f"have a changing cluster value."
                     )
@@ -2086,16 +2097,16 @@ class CallawaySantAnna(
         # transparently activates the same code paths used when the user
         # passes SurveyDesign(psu=X) explicitly.
         effective_survey_design = survey_design  # refreshed below if synthesized
-        if self.cluster is not None:
-            if self.cluster not in data.columns:
-                raise ValueError(f"cluster column '{self.cluster}' not found in data")
+        if user_cluster is not None:
+            if user_cluster not in data.columns:
+                raise ValueError(f"cluster column '{user_cluster}' not found in data")
             # Pre-validate cluster NaN with a cluster-domain error message.
             # Without this, SurveyDesign.resolve() raises "PSU column ...
             # contains missing values" — wrong domain for the user-facing
             # cluster= API.
-            if data[self.cluster].isna().any():
+            if data[user_cluster].isna().any():
                 raise ValueError(
-                    f"cluster column '{self.cluster}' contains missing "
+                    f"cluster column '{user_cluster}' contains missing "
                     "values. All observations must have valid cluster "
                     "identifiers."
                 )
@@ -2111,7 +2122,7 @@ class CallawaySantAnna(
                 and getattr(survey_design, "replicate_weights", None) is not None
             ):
                 raise NotImplementedError(
-                    f"CallawaySantAnna(cluster={self.cluster!r}) is not "
+                    f"CallawaySantAnna(cluster={user_cluster!r}) is not "
                     "supported with replicate-weight survey designs. "
                     "Replicate-weight variance is computed by replicate "
                     "reweighting (BRR / Fay / JK1 / JKn / SDR) and ignores "
@@ -2121,14 +2132,14 @@ class CallawaySantAnna(
                     "structure implicitly) or use a non-replicate survey "
                     "design (with explicit strata/psu/fpc)."
                 )
-            cluster_ids = data[self.cluster].values
+            cluster_ids = data[user_cluster].values
 
             if resolved_survey is None:
                 # Bare cluster=, no survey: synthesize minimal
                 # SurveyDesign(psu=...). Activates the same survey-PSU
                 # aggregator + bootstrap machinery already used when the
                 # user passes SurveyDesign(psu=X) explicitly.
-                synthetic_design = SurveyDesign(psu=self.cluster, weight_type="pweight")
+                synthetic_design = SurveyDesign(psu=user_cluster, weight_type="pweight")
                 (
                     resolved_survey,
                     survey_weights,
@@ -2149,7 +2160,7 @@ class CallawaySantAnna(
                 # User provided survey_design (weights/strata/etc.) without
                 # PSU AND cluster=X. Inject cluster as PSU into the resolved
                 # survey. Construct effective_survey_design with
-                # psu=self.cluster (via dataclasses.replace) so the
+                # psu=user_cluster (via dataclasses.replace) so the
                 # downstream _validate_unit_constant_survey catches movers
                 # on panel data (otherwise the validator runs on the user-
                 # provided design which has no PSU column).
@@ -2162,7 +2173,7 @@ class CallawaySantAnna(
 
                 # This branch is only reached with a survey design present.
                 assert survey_design is not None
-                effective_survey_design = replace(survey_design, psu=self.cluster)
+                effective_survey_design = replace(survey_design, psu=user_cluster)
                 resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids)
                 # Recompute survey_metadata to reflect the new effective PSU
                 # (so n_psu / df_survey on Results reflect the injected
@@ -2183,7 +2194,7 @@ class CallawaySantAnna(
                 # is already resolved_survey.psu (no rewrite needed).
                 from diff_diff.survey import _resolve_effective_cluster
 
-                _resolve_effective_cluster(resolved_survey, cluster_ids, self.cluster)
+                _resolve_effective_cluster(resolved_survey, cluster_ids, user_cluster)
 
         # allow_unbalanced_panel (RC-routing) with NO user cluster=: cluster the
         # per-observation RC influence function by the ORIGINAL unit so the SE
@@ -2192,7 +2203,7 @@ class CallawaySantAnna(
         # → the same PSU-meat aggregator + PSU multiplier bootstrap used for an
         # explicit cluster=. When the user set cluster=X the block above already
         # synthesized psu=X (their choice); do NOT double-cluster here.
-        if _route_as_rc and self.cluster is None and resolved_survey is None:
+        if _route_as_rc and user_cluster is None and resolved_survey is None:
             _unit_psu_design = SurveyDesign(psu=unit, weight_type="pweight")
             (
                 resolved_survey,
@@ -2837,8 +2848,8 @@ class CallawaySantAnna(
         # set (a UserWarning would have fired above if partitions differed).
         if survey_design is not None and getattr(survey_design, "psu", None) is not None:
             cluster_name_for_results: Optional[str] = survey_design.psu
-        elif self.cluster is not None:
-            cluster_name_for_results = self.cluster
+        elif user_cluster is not None:
+            cluster_name_for_results = user_cluster
         elif _route_as_rc:
             # RC-on-panel auto-synthesizes SurveyDesign(psu=unit); surface the
             # effective unit-level clustering so introspection / summaries don't

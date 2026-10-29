@@ -8,10 +8,12 @@ from diff_diff._base import BaseEstimator
 from diff_diff.linalg import InvalidClusterKAdjustment, _rank_guarded_inv, solve_ols
 from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.utils import (
+    ClusterArg,
     absorbed_fe_rank,
     cluster_nested_fe_dims,
     resolve_tail_df,
     safe_inference,
+    validate_cluster,
     validate_df_convention,
 )
 
@@ -28,7 +30,7 @@ class LPDiD(BaseEstimator):
         no_composition: bool = False,
         pmd: Optional[Union[str, int]] = None,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         rank_deficient_action: str = "warn",
         non_absorbing: Optional[str] = None,
         stabilization_window: Optional[int] = None,
@@ -41,7 +43,7 @@ class LPDiD(BaseEstimator):
         self.no_composition = no_composition
         self.pmd = pmd
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.rank_deficient_action = rank_deficient_action
         self.non_absorbing = non_absorbing
         self.stabilization_window = stabilization_window
@@ -710,12 +712,13 @@ class LPDiD(BaseEstimator):
         effect = float(treated_residual.mean())
         se = np.nan
         cluster_ids = sample["_cluster"].to_numpy()
-        n_clusters = len(pd.unique(cluster_ids))
+        unclustered = self.cluster is False
+        n_clusters: Optional[int] = None if unclustered else len(pd.unique(cluster_ids))
         # Hoisted above the branch: the "residual" df resolution below needs
         # n_total on every lane (including G>=2 with a non-finite effect,
         # where today's G-1 df is still reported alongside the NaN se).
         n_total = len(sample)
-        if n_clusters >= 2 and np.isfinite(effect):
+        if (unclustered or (n_clusters is not None and n_clusters >= 2)) and np.isfinite(effect):
             n_treated = len(treated)
             q0_inv, _, _ = _rank_guarded_inv(control_design.T @ control_design)
             mu_treated = treated_design.mean(axis=0)
@@ -729,8 +732,14 @@ class LPDiD(BaseEstimator):
             )
             phi[~treated_mask] = -n_total * control_projection * control_residual
 
-            cluster_scores = pd.Series(phi).groupby(cluster_ids).sum().to_numpy(dtype=float)
-            vcov_scalar = float(cluster_scores @ cluster_scores) / float(n_total**2)
+            if unclustered:
+                # 4.0 (M-080): cluster=False - the unclustered IF variance
+                # sum(phi_i^2) / n^2 (no small-sample factor, like the clustered
+                # lane; REGISTRY LPDiD Note 2).
+                vcov_scalar = float(phi @ phi) / float(n_total**2)
+            else:
+                cluster_scores = pd.Series(phi).groupby(cluster_ids).sum().to_numpy(dtype=float)
+                vcov_scalar = float(cluster_scores @ cluster_scores) / float(n_total**2)
             if np.isfinite(vcov_scalar) and vcov_scalar >= 0:
                 se = float(np.sqrt(vcov_scalar))
 
@@ -745,11 +754,11 @@ class LPDiD(BaseEstimator):
         # kept nuisance coefficients PLUS the ATT (library convention, no
         # external anchor - Stata teffects ra reports z; see the REGISTRY
         # LPDiD note for the derivation).
-        if n_clusters >= 2:
+        if unclustered or (n_clusters is not None and n_clusters >= 2):
             df = resolve_tail_df(
                 self.df_convention,
                 residual_df=float(n_total - k0_kept - 1),
-                n_clusters=n_clusters,
+                n_clusters=None if unclustered else n_clusters,
             )
         else:
             df = None
@@ -863,6 +872,7 @@ class LPDiD(BaseEstimator):
         design = np.column_stack(design_columns)
         response = sample[response_column].to_numpy(dtype=float)
         cluster_ids = sample["_cluster"].to_numpy()
+        unclustered = self.cluster is False
         weights = None if weight_column is None else sample[weight_column].to_numpy(dtype=float)
         if survey_design is not None:
             # Complex-survey path: WLS point estimate weighted by the survey design,
@@ -889,13 +899,25 @@ class LPDiD(BaseEstimator):
                 "conf_low": np.nan,
                 "conf_high": np.nan,
                 "n_obs": n_obs,
-                "n_clusters": len(pd.unique(cluster_ids)),
+                "n_clusters": None if unclustered else len(pd.unique(cluster_ids)),
                 "df": np.nan,
             }
 
-        use_cluster_vcov = len(pd.unique(cluster_ids)) >= 2
+        use_cluster_vcov = (not unclustered) and len(pd.unique(cluster_ids)) >= 2
         vcov = None
-        if use_cluster_vcov:
+        if unclustered:
+            # 4.0 (M-080): cluster=False - the plain HC1 sandwich on this explicit-
+            # dummy design (no absorbed FE here, so no full-K rescale is needed);
+            # the tail df is the residual df below.
+            coef, _, vcov = solve_ols(
+                design,
+                response,
+                return_vcov=True,
+                rank_deficient_action=self.rank_deficient_action,
+                column_names=column_names,
+                weights=weights,
+            )
+        elif use_cluster_vcov:
             # Clustered-CR1 K_reference adjustment (variance-conventions.md
             # D1 family): LPDiD's built-in `_event_time` dummies ARE its time
             # FE (the authors' reference recipe absorbs time FE), and inline
@@ -954,7 +976,7 @@ class LPDiD(BaseEstimator):
         if vcov is not None and vcov.shape[0] > 1 and np.isfinite(vcov[1, 1]) and vcov[1, 1] >= 0:
             se = float(np.sqrt(vcov[1, 1]))
 
-        n_clusters = len(pd.unique(cluster_ids))
+        n_clusters: Optional[int] = None if unclustered else len(pd.unique(cluster_ids))
         # Tail df: the resolver runs only on the healthy clustered lane —
         # matching today's expression `n_clusters - 1 if vcov is not None
         # and n_clusters > 1 else None` — so the default "cluster"
@@ -965,7 +987,7 @@ class LPDiD(BaseEstimator):
         # above, or G<=1) keep the literal df=None (normal theory + NaN
         # provenance) under ALL conventions and never touch the resolver.
         # "residual" = n_eff - k_kept of this per-horizon design.
-        if vcov is not None and n_clusters >= 2:
+        if vcov is not None and (unclustered or (n_clusters is not None and n_clusters >= 2)):
             _n_eff_lp = (
                 int(np.count_nonzero(np.asarray(weights, dtype=float) > 0))
                 if weights is not None
@@ -974,7 +996,7 @@ class LPDiD(BaseEstimator):
             df = resolve_tail_df(
                 self.df_convention,
                 residual_df=float(_n_eff_lp - int(np.count_nonzero(np.isfinite(coef)))),
-                n_clusters=n_clusters,
+                n_clusters=None if unclustered else n_clusters,
             )
         else:
             df = None
@@ -1015,17 +1037,21 @@ class LPDiD(BaseEstimator):
                 "ignore", message="pweight weights normalized", category=UserWarning
             )
             resolved = survey_design.resolve(sample)
-        if resolved.psu is None:
+        unclustered = self.cluster is False
+        if resolved.psu is None and not unclustered:
             # No explicit PSU: cluster LP-DiD's unit (the default cluster) as the
             # effective PSU. The rebind is load-bearing -- _inject_cluster_as_psu
             # returns a NEW object; dropping it would leave each observation its own
-            # PSU and silently deflate the SE.
+            # PSU and silently deflate the SE. Under cluster=False (4.0, M-080)
+            # that implicit per-observation PSU IS the requested off-switch.
             resolved = _inject_cluster_as_psu(resolved, cluster_ids)
-        else:
+        elif resolved.psu is not None:
             # Explicit survey PSU wins; warn only if the user ALSO set an explicit
-            # cluster that partitions differently (self.cluster is None under the
-            # default unit clustering, which suppresses the warning).
-            _resolve_effective_cluster(resolved, cluster_ids, cluster_name=self.cluster)
+            # cluster that partitions differently (None under the default unit
+            # clustering and under cluster=False, which suppresses the warning).
+            _resolve_effective_cluster(
+                resolved, cluster_ids, cluster_name=None if unclustered else self.cluster
+            )
 
         weights = resolved.weights
         # solve_ols returns the original-scale residuals computed on the IDENTIFIED
@@ -1075,7 +1101,7 @@ class LPDiD(BaseEstimator):
             "conf_low": conf_int[0],
             "conf_high": conf_int[1],
             "n_obs": n_obs,
-            "n_clusters": int(resolved.n_psu),
+            "n_clusters": None if unclustered else int(resolved.n_psu),
             # df provenance for the unified surface: recorded iff the value
             # governed a t-reference (finite, > 0; the df<=0 sentinel and
             # None both yield non-t inference).
@@ -1404,7 +1430,7 @@ class LPDiD(BaseEstimator):
             required.extend(covariates)
         if absorb:
             required.extend(absorb)
-        if self.cluster:
+        if isinstance(self.cluster, str):
             required.append(self.cluster)
         missing = [col for col in required if col not in data.columns]
         if missing:
@@ -1449,12 +1475,19 @@ class LPDiD(BaseEstimator):
                 stacklevel=2,
             )
 
-        cluster = self.cluster or unit
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]). cluster=False (4.0, M-080) is the explicit off-switch: every
+        # per-horizon regression runs unclustered (plain HC1 / unclustered IF
+        # variance / implicit per-observation survey PSUs); `panel["_cluster"]`
+        # keeps the unit for bookkeeping only and is never read on that lane.
+        validate_cluster(self.cluster)
+        unclustered = self.cluster is False
+        cluster = unit if (self.cluster is None or self.cluster is False) else self.cluster
 
         survey_metadata = None
         survey_n_strata = None
         survey_n_psu = None
-        survey_cluster_name = cluster
+        survey_cluster_name: Optional[str] = None if unclustered else cluster
         if survey_design is not None:
             from diff_diff.survey import (
                 SurveyDesign,
@@ -1497,7 +1530,7 @@ class LPDiD(BaseEstimator):
             # per-observation PSUs). The per-horizon SE uses each realized sample's own
             # resolved design (see _estimate_survey_sample); the headline G in the
             # SE-family line is the realized pooled-post PSU count.
-            if resolved_panel.psu is None:
+            if resolved_panel.psu is None and not unclustered:
                 resolved_panel = _inject_cluster_as_psu(resolved_panel, data[cluster].to_numpy())
             raw_weights = (
                 data[survey_design.weights].to_numpy(dtype=float)
@@ -1506,8 +1539,15 @@ class LPDiD(BaseEstimator):
             )
             survey_metadata = compute_survey_metadata(resolved_panel, raw_weights)
             survey_n_strata = int(resolved_panel.n_strata)
-            survey_n_psu = int(resolved_panel.n_psu)
-            survey_cluster_name = survey_design.psu or cluster
+            # Under cluster=False no PSU was injected: follow the metadata's
+            # implicit per-observation-PSU convention (n_psu = n_obs; the
+            # resolved design itself carries n_psu=0 when psu is None).
+            survey_n_psu = (
+                int(survey_metadata.n_psu)
+                if (unclustered and survey_metadata.n_psu is not None)
+                else int(resolved_panel.n_psu)
+            )
+            survey_cluster_name = survey_design.psu or (None if unclustered else cluster)
 
         pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
         post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
@@ -1639,7 +1679,7 @@ class LPDiD(BaseEstimator):
         # Headline G = realized clusters in the pooled-post (headline ATT) sample
         # when computed; otherwise the panel-level cluster count. Per-horizon rows
         # carry their own realized n_clusters in the event_study/pooled tables.
-        headline_n_clusters = int(panel["_cluster"].nunique())
+        headline_n_clusters: Optional[int] = int(panel["_cluster"].nunique())
         if survey_n_psu is not None:
             # Under a survey design the effective variance cluster is the PSU, and
             # cluster_name reports the PSU column. Use the panel-level PSU count so the
@@ -1651,6 +1691,9 @@ class LPDiD(BaseEstimator):
             _post = pooled.loc[pooled["window"] == "post", "n_clusters"]
             if not _post.empty and pd.notna(_post.iloc[0]):
                 headline_n_clusters = int(_post.iloc[0])
+        if unclustered:
+            # 4.0 (M-080): an unclustered fit reports no cluster count.
+            headline_n_clusters = None
 
         self.results_ = LPDiDResults(
             event_study=event_study,
@@ -1674,7 +1717,7 @@ class LPDiD(BaseEstimator):
                 "survey_tsl"
                 if survey_design is not None
                 else (
-                    "if_cluster"
+                    ("if_robust" if unclustered else "if_cluster")
                     if (self.reweight and bool(covariates or ylags or dylags or absorb))
                     else "hc1"
                 )

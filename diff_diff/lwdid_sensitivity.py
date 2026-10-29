@@ -34,6 +34,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.utils import ClusterArg, validate_cluster
+
 # =============================================================================
 # Constants
 # =============================================================================
@@ -318,7 +320,7 @@ def _fit_single_spec(
     }
     if cohort is not None:
         required["cohort"] = cohort
-    if cluster is not None:
+    if isinstance(cluster, str):
         required["cluster"] = cluster
     missing = [f"{role}={name!r}" for role, name in required.items() if name not in data.columns]
     if controls is not None:
@@ -451,7 +453,7 @@ def robustness_pre_periods(
     rolling: str = "demean",
     estimation_method: str = "reg",
     vcov_type: str = "hc1",
-    cluster: Optional[str] = None,
+    cluster: ClusterArg = None,
     controls: Optional[List[str]] = None,
     control_group: str = "not_yet_treated",
     k_min: int = 2,
@@ -494,8 +496,11 @@ def robustness_pre_periods(
         Estimation method.
     vcov_type : str, default 'hc1'
         Variance-covariance family.
-    cluster : str, optional
+    cluster : str, None or False, optional
         Cluster variable for standard errors.
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
     controls : list of str, optional
         Control variable column names.
     k_min : int, default 2
@@ -535,6 +540,7 @@ def robustness_pre_periods(
     # RAISE here instead of being swallowed as per-spec "failed fits"
     # inside _fit_single_spec (campaign finding: a string covariate's
     # ValueError became a silent NaN spec).
+    cluster = validate_cluster(cluster)  # str | None | False ([M-155]); False = no-op
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
 
     for name, value in (("k_min", k_min), ("k_max", k_max)):
@@ -707,7 +713,7 @@ def sensitivity_no_anticipation(
     rolling: str = "demean",
     estimation_method: str = "reg",
     vcov_type: str = "hc1",
-    cluster: Optional[str] = None,
+    cluster: ClusterArg = None,
     controls: Optional[List[str]] = None,
     control_group: str = "not_yet_treated",
     # lwdid-py compatible aliases
@@ -752,8 +758,11 @@ def sensitivity_no_anticipation(
         Estimation method.
     vcov_type : str, default 'hc1'
         Variance-covariance family.
-    cluster : str, optional
+    cluster : str, None or False, optional
         Cluster variable for standard errors.
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
     controls : list of str, optional
         Control variable column names.
 
@@ -785,6 +794,7 @@ def sensitivity_no_anticipation(
     if treatment is None:
         raise ValueError("'treatment' (or 'd') parameter is required")
 
+    cluster = validate_cluster(cluster)  # str | None | False ([M-155]); False = no-op
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
 
     if exclude_periods is None:

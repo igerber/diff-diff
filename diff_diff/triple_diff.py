@@ -49,9 +49,11 @@ from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
 # is the class path 3.x pickles and existing readers use.
 from diff_diff.triple_diff_results import TripleDifferenceResults  # noqa: F401
 from diff_diff.utils import (
+    ClusterArg,
     safe_inference,
     staggered_ddd_ctor_offenders,
     validate_anticipation,
+    validate_cluster,
     validate_n_bootstrap,
     validate_pscore_trim,
 )
@@ -97,7 +99,10 @@ class TripleDifference(
           model or propensity score model is correctly specified.
         - "reg": Regression adjustment (outcome regression).
         - "ipw": Inverse probability weighting.
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is an accepted explicit no-op on both modes (the
+        2x2x2 fit is HC-robust unless ``cluster=`` is given; the staggered mode
+        still rejects a column name). Column labels must be ``str``.
         Column name for cluster-robust standard errors. When provided,
         SEs are computed using the Liang-Zeger cluster-robust variance
         estimator on the influence function.
@@ -273,7 +278,7 @@ class TripleDifference(
     def __init__(
         self,
         estimation_method: str = "dr",
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         vcov_type: str = "hc1",
         alpha: float = 0.05,
         pscore_trim: float = 0.01,
@@ -347,7 +352,7 @@ class TripleDifference(
         self._validate_vcov_type(vcov_type)
 
         self.estimation_method = estimation_method
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = vcov_type
         self.alpha = alpha
         self.pscore_trim = pscore_trim
@@ -454,6 +459,12 @@ class TripleDifference(
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
         """
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
         # ---- Step 1: staggered mode ---------------------------------------
         # Raw sentinels forwarded: the 2x2x2 `time=` check must not run, because
         # `time=` is the calendar column on this path.
@@ -569,9 +580,9 @@ class TripleDifference(
         T = data[time].values.astype(float)
 
         # Store cluster IDs for SE computation
-        self._cluster_ids = data[self.cluster].values if self.cluster is not None else None
-        if self._cluster_ids is not None and np.any(pd.isna(data[self.cluster])):
-            raise ValueError(f"Cluster column '{self.cluster}' contains missing values")
+        self._cluster_ids = data[user_cluster].values if user_cluster is not None else None
+        if self._cluster_ids is not None and np.any(pd.isna(data[user_cluster])):
+            raise ValueError(f"Cluster column '{user_cluster}' contains missing values")
 
         # Reject replicate-weight + cluster=: replicate IF variance is
         # computed by replicate reweighting (BRR / Fay / JK1 / JKn / SDR)
@@ -582,12 +593,12 @@ class TripleDifference(
         # dishonestly. Fail-closed per feedback_no_silent_failures.
         # Mirrors CallawaySantAnna guard at staggered.py:1705-1719.
         if (
-            self.cluster is not None
+            user_cluster is not None
             and survey_design is not None
             and getattr(survey_design, "replicate_weights", None) is not None
         ):
             raise NotImplementedError(
-                f"TripleDifference(cluster={self.cluster!r}) is not "
+                f"TripleDifference(cluster={user_cluster!r}) is not "
                 "supported with replicate-weight survey designs. "
                 "Replicate-weight variance is computed by replicate "
                 "reweighting (BRR / Fay / JK1 / JKn / SDR) and ignores "
@@ -601,7 +612,7 @@ class TripleDifference(
         # Resolve effective cluster and inject cluster-as-PSU for survey variance
         if resolved_survey is not None:
             effective_cluster_ids = _resolve_effective_cluster(
-                resolved_survey, self._cluster_ids, self.cluster
+                resolved_survey, self._cluster_ids, user_cluster
             )
             if effective_cluster_ids is not None:
                 resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
@@ -702,9 +713,9 @@ class TripleDifference(
         if resolved_survey is not None:
             cluster_name_for_results: Optional[str] = None
             n_clusters: Optional[int] = None
-        elif self.cluster is not None:
-            cluster_name_for_results = self.cluster
-            n_clusters = data[self.cluster].nunique()
+        elif user_cluster is not None:
+            cluster_name_for_results = user_cluster
+            n_clusters = data[user_cluster].nunique()
         else:
             cluster_name_for_results = None
             n_clusters = None
@@ -807,7 +818,7 @@ class TripleDifference(
         # no clustered analytical path. The removed StaggeredTripleDifference
         # class accepted-then-warned-then-ignored it; this surface raises rather
         # than shipping an accepted-but-unhonored parameter (3(a)'s precedent).
-        if self.cluster is not None:
+        if self.cluster is not None and self.cluster is not False:
             raise ValueError(
                 "cluster= is not supported in staggered DDD mode: cluster-robust ANALYTICAL "
                 "SEs are not implemented for the staggered engine. Use n_bootstrap > 0 for "
@@ -848,7 +859,7 @@ class TripleDifference(
         required_cols = [outcome, group, partition, time]
         if covariates:
             required_cols.extend(covariates)
-        if self.cluster is not None:
+        if isinstance(self.cluster, str):
             required_cols.append(self.cluster)
 
         missing_cols = [col for col in required_cols if col not in data.columns]

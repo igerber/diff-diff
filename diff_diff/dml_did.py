@@ -81,8 +81,10 @@ from diff_diff.staggered import (
 from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
 from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
 from diff_diff.utils import (
+    ClusterArg,
     safe_inference,
     validate_anticipation,
+    validate_cluster,
     validate_covariate_names,
     validate_n_bootstrap,
     validate_pscore_trim,
@@ -353,7 +355,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         and treatment effects are expected, not violations), which is not
         data-checkable — ``fit()`` warns. ``aggregate('total')`` is unavailable on RCS fits (fails
         closed, the library-wide RC convention).
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
         Column name for COARSER-than-unit clustering. The column is
         synthesized into a ``SurveyDesign(psu=cluster)`` (or injected as
         the PSU of a declared PSU-less design): it drives PSU-cohesive
@@ -382,7 +387,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         cband: bool = True,
         pscore_trim: float = 0.01,
         panel: bool = True,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
     ) -> None:
         # Raw assignment, then ONE shared validator (also re-run at the top
         # of fit() as the direct-mutation defense) validates and normalizes
@@ -474,11 +479,9 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 "would silently select the panel lane"
             )
         self.panel = bool(self.panel)
-        if self.cluster is not None and not isinstance(self.cluster, str):
-            raise ValueError(
-                f"cluster must be a column name (str) or None, got "
-                f"{self.cluster!r} (type {type(self.cluster).__name__})"
-            )
+        # Shared cluster contract (str | None | False, [M-155]) - the pre-4.0
+        # DMLDiD-local str check generalized to every estimator.
+        validate_cluster(self.cluster)
 
     # ------------------------------------------------------------------
     # Input validation
@@ -2794,6 +2797,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         """
         self.results_ = None
         self.is_fitted_ = False
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
         df, covariates, w_names = self._validate_and_prepare(
             data,
             outcome,
@@ -2855,13 +2864,13 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         effective_survey_design = survey_design
         cluster_ids_for_check: Optional[np.ndarray] = None
-        if self.cluster is not None:
-            if self.cluster not in data.columns:
-                raise ValueError(f"cluster column '{self.cluster}' not found in data")
-            _cluster_col = data[self.cluster]
+        if user_cluster is not None:
+            if user_cluster not in data.columns:
+                raise ValueError(f"cluster column '{user_cluster}' not found in data")
+            _cluster_col = data[user_cluster]
             if _cluster_col.isna().any():
                 raise ValueError(
-                    f"cluster column '{self.cluster}' contains missing values; "
+                    f"cluster column '{user_cluster}' contains missing values; "
                     "drop or impute them before fitting"
                 )
             cluster_ids_for_check = _cluster_col.to_numpy()
@@ -2874,7 +2883,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             # paths below would violate that mutual exclusion.
             if resolved_survey is not None and resolved_survey.uses_replicate_variance:
                 raise NotImplementedError(
-                    f"DMLDiD(cluster={self.cluster!r}) is not "
+                    f"DMLDiD(cluster={user_cluster!r}) is not "
                     "supported with replicate-weight survey designs. "
                     "Replicate-weight variance is computed by replicate "
                     "reweighting (BRR / Fay / JK1 / JKn / SDR) and ignores "
@@ -2889,7 +2898,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 # stays None DELIBERATELY (it is the declared-survey marker:
                 # the aggregate('total') gate and the weighted-kernel gate
                 # both key on it); df carried on Results.df_inference instead.
-                effective_survey_design = SurveyDesign(psu=self.cluster, weight_type="pweight")
+                effective_survey_design = SurveyDesign(psu=user_cluster, weight_type="pweight")
                 (
                     resolved_survey,
                     _survey_weights_resolved,
@@ -2903,14 +2912,14 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 assert survey_design is not None
                 from dataclasses import replace as _dc_replace
 
-                effective_survey_design = _dc_replace(survey_design, psu=self.cluster)
+                effective_survey_design = _dc_replace(survey_design, psu=user_cluster)
                 resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids_for_check)
                 assert raw_obs_weights is not None
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_obs_weights)
             else:
                 # Both supplied: the design's PSU wins (warn on differing
                 # partitions); the return value is intentionally unused.
-                _resolve_effective_cluster(resolved_survey, cluster_ids_for_check, self.cluster)
+                _resolve_effective_cluster(resolved_survey, cluster_ids_for_check, user_cluster)
 
         if resolved_survey is not None:
             if self.panel:
@@ -3271,8 +3280,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         if resolved_survey_unit is not None:
             if survey_design is not None and survey_design.psu is not None:
                 cluster_name = survey_design.psu
-            elif self.cluster is not None:
-                cluster_name = self.cluster
+            elif user_cluster is not None:
+                cluster_name = user_cluster
             if resolved_survey_unit.psu is not None:
                 n_clusters = int(np.unique(resolved_survey_unit.psu).size)
             if survey_metadata is None and df_survey is not None:

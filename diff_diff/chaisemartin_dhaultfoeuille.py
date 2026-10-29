@@ -45,7 +45,7 @@ from diff_diff.chaisemartin_dhaultfoeuille_results import (
     DCDHBootstrapResults,
 )
 from diff_diff.linalg import solve_ols
-from diff_diff.utils import safe_inference, validate_n_bootstrap
+from diff_diff.utils import ClusterArg, safe_inference, validate_cluster, validate_n_bootstrap
 
 __all__ = [
     "ChaisemartinDHaultfoeuille",
@@ -407,12 +407,14 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     ----------
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    cluster : str, optional, default=None
-        Must be ``None`` (the default). User-specified clustering via
-        this kwarg is not supported — passing any non-``None`` value
-        raises ``NotImplementedError`` at construction time (and the
-        same gate fires from ``set_params``). The effective clustering
-        depends on how you call ``fit()``:
+    cluster : str, None or False, optional, default=None
+        ``None`` (the default) and ``False`` (4.0, M-080: an accepted explicit
+        no-op - the variance is group-level by construction) both select the
+        default path. User-specified clustering via this kwarg is not
+        supported — a column name raises ``NotImplementedError`` at
+        construction time (and the same gate fires from ``set_params``);
+        other values raise the shared ``ValueError`` (labels must be ``str``).
+        The effective clustering depends on how you call ``fit()``:
 
         - **Default (no survey_design)**: clustered at the group level
           via the cohort-recentered influence-function plug-in
@@ -731,7 +733,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     def __init__(
         self,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
@@ -778,7 +780,12 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
                 "paths_of_interest=[(...), ...] for explicit user-"
                 "specified paths. Set one and leave the other as None."
             )
-        if cluster is not None:
+        # Shared cluster contract first ([M-155]): True / non-str labels raise the
+        # shared ValueError; False is an accepted explicit no-op ([M-080] category
+        # b: the variance is unit-level by construction); a column name is
+        # the unsupported custom clustering below.
+        cluster = validate_cluster(cluster)
+        if cluster is not None and cluster is not False:
             raise NotImplementedError(
                 f"cluster={cluster!r}: user-specified clustering is not "
                 f"supported in ChaisemartinDHaultfoeuille. dCDH clusters at "
@@ -787,8 +794,9 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
                 f"multiplier bootstrap. Under survey_design with strictly-"
                 f"coarser PSUs, bootstrap clustering automatically upgrades "
                 f"to PSU-level Hall-Mammen wild. To use the default path, "
-                f"pass cluster=None (the "
-                f"default). Custom clustering is reserved for a future "
+                f"pass cluster=None (the default) or cluster=False (an accepted "
+                f"no-op: the variance is unit-level by construction). Custom "
+                f"clustering is reserved for a future "
                 f"phase. See REGISTRY.md ChaisemartinDHaultfoeuille section "
                 f"for the full contract."
             )
@@ -853,14 +861,16 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
                 "paths_of_interest=[(...), ...] for explicit user-"
                 "specified paths. Set one and leave the other as None."
             )
-        if self.cluster is not None:
+        validate_cluster(self.cluster)
+        if self.cluster is not None and self.cluster is not False:
             raise NotImplementedError(
                 f"cluster={self.cluster!r}: user-specified clustering is "
                 f"not supported in ChaisemartinDHaultfoeuille. dCDH clusters "
                 f"at the group level by default; under survey_design with "
                 f"strictly-coarser PSUs the bootstrap automatically upgrades "
                 f"to PSU-level Hall-Mammen wild clustering. Pass cluster=None "
-                f"(the default) to use this path. User-specified custom "
+                f"(the default) or cluster=False (accepted no-op) to use this "
+                f"path. User-specified custom "
                 f"clustering is reserved for a future phase. See REGISTRY.md "
                 f"ChaisemartinDHaultfoeuille section for the full contract."
             )
@@ -1041,6 +1051,9 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         # public parameters are unit/covariates.
         group = unit
         controls = covariates
+        # Fit-time re-check of the shared cluster contract ([M-155]; the
+        # custom-clustering NotImplementedError lives in __init__).
+        validate_cluster(self.cluster)
         # ------------------------------------------------------------------
         # Step 1: Column validation
         # ------------------------------------------------------------------

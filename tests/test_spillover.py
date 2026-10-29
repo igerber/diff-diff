@@ -3579,6 +3579,10 @@ class TestSpilloverDiDEventStudyBackwardCompat:
             d_bar=200.0,
             conley_coords=("lat", "lon"),
             event_study=False,
+            # 4.0 (M-080): the default now auto-clusters at unit; these goldens
+            # were captured on the observation-level HC1 lane, which
+            # cluster=False pins explicitly.
+            cluster=False,
         )
         import warnings as _w
 
@@ -3669,6 +3673,10 @@ class TestSpilloverDiDEventStudyBackwardCompat:
             d_bar=200.0,
             conley_coords=("lat", "lon"),
             event_study=False,
+            # 4.0 (M-080): the default now auto-clusters at unit; these goldens
+            # were captured on the observation-level HC1 lane, which
+            # cluster=False pins explicitly.
+            cluster=False,
         )
         import warnings as _w
 
@@ -4476,18 +4484,27 @@ class TestSpilloverDiDWaveDPublicVarianceContract:
 
         with _w.catch_warnings():
             _w.simplefilter("ignore", UserWarning)
-            est_hc1 = SpilloverDiD(**common)  # vcov_type="hc1" default, no cluster
+            # 4.0 (M-080): cluster=False is the explicit observation-level HC1 lane
+            # (the 3.x default); the default and cluster="unit" are both CR1 at unit.
+            est_hc1 = SpilloverDiD(cluster=False, **common)
             res_hc1 = est_hc1.fit(df, outcome="y", unit="unit", time="time", treatment="D")
             est_cr1 = SpilloverDiD(cluster="unit", **common)
             res_cr1 = est_cr1.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+            res_default = SpilloverDiD(**common).fit(
+                df, outcome="y", unit="unit", time="time", treatment="D"
+            )
 
         # Point estimates match (cluster kwarg only affects variance).
-        assert res_hc1.att == res_cr1.att
+        assert res_hc1.att == res_cr1.att == res_default.att
         # SE values must DIFFER — if equal, the cluster kwarg was a no-op.
         assert res_hc1.se != res_cr1.se, (
             f"HC1 SE {res_hc1.se!r} == CR1 SE {res_cr1.se!r}; "
             f"cluster=<col> appears to be silently ignored"
         )
+        # The 4.0 default IS the unit auto-cluster: bit-equal to cluster="unit".
+        np.testing.assert_allclose(res_default.se, res_cr1.se, rtol=1e-14, atol=1e-14)
+        assert res_default.cluster_name == "unit" and res_default.n_clusters == res_cr1.n_clusters
+        assert res_hc1.cluster_name is None and res_hc1.n_clusters is None
 
     def test_single_cluster_sample_raises(self):
         """CR1 path on a single-cluster sample raises ValueError per

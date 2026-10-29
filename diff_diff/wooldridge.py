@@ -22,6 +22,7 @@ import pandas as pd
 
 from diff_diff._base import BaseEstimator
 from diff_diff.linalg import (
+    _absorbed_fe_vcov_scale,
     compute_robust_vcov,
     effective_cluster_count,
     solve_logit,
@@ -29,6 +30,7 @@ from diff_diff.linalg import (
     solve_poisson,
 )
 from diff_diff.utils import (
+    ClusterArg,
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     pre_demean_norms,
@@ -36,6 +38,7 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
     validate_anticipation,
+    validate_cluster,
     validate_df_convention,
     validate_n_bootstrap,
     within_transform,
@@ -886,9 +889,16 @@ class WooldridgeDiD(BaseEstimator):
         replicate jwdid's ``xasis`` option.
     alpha : float
         Significance level for confidence intervals.
-    cluster : str or None
+    cluster : str, None or False
         Column name to use for cluster-robust SEs.  Defaults to the ``unit``
-        identifier passed to ``fit()``.
+        identifier passed to ``fit()``. ``False`` (4.0, M-080) switches the
+        clustering off explicitly: the plain heteroskedasticity-robust
+        sandwich on the OLS arms (within-transform hc1 carries the
+        absorbed-FE full-K rescale; residual-df t inference) and the plain
+        QMLE sandwich on the logit/poisson arms; rejected with
+        ``n_bootstrap > 0`` (the multiplier bootstrap draws at the cluster)
+        and with ``vcov_type="hc2_bm"`` (cluster-only Bell-McCaffrey DOF).
+        Column labels must be ``str``.
     n_bootstrap : int
         Number of bootstrap replications.  0 disables bootstrap.
     bootstrap_weights : {"rademacher", "webb", "mammen"}
@@ -995,7 +1005,7 @@ class WooldridgeDiD(BaseEstimator):
         anticipation: int = 0,
         demean_covariates: bool = True,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
@@ -1024,7 +1034,7 @@ class WooldridgeDiD(BaseEstimator):
         self.anticipation = validate_anticipation(anticipation)
         self.demean_covariates = demean_covariates
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
@@ -1161,6 +1171,12 @@ class WooldridgeDiD(BaseEstimator):
         # assignment also re-normalizes a mutated numpy scalar to int.
         self.anticipation = validate_anticipation(self.anticipation)
         self._validate_unsupported_period_action(self.unsupported_period_action)
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
         df = data.copy()
         df = _warn_and_fill_nan_cohort(df, cohort, stacklevel=2)
@@ -1268,6 +1284,23 @@ class WooldridgeDiD(BaseEstimator):
         # error, so reject at the estimator boundary across both. The user
         # must drop bootstrap (``n_bootstrap=0``) or pick a cluster-compatible
         # ``vcov_type`` (``hc1`` or ``hc2_bm``).
+        # 4.0 (M-080): cluster=False switches the analytical clustering off, but
+        # the multiplier bootstrap draws one weight per analytical cluster - the
+        # combination is incoherent; and the Bell-McCaffrey DOF lane is
+        # cluster-only (TODO.md tracks the one-way BM DOF port).
+        if self.cluster is False and self.n_bootstrap > 0:
+            raise ValueError(
+                f"WooldridgeDiD(cluster=False, n_bootstrap={self.n_bootstrap}) is not "
+                "supported: the multiplier bootstrap draws one weight per cluster, so "
+                "it cannot run unclustered. Set n_bootstrap=0 for the plain HC sandwich, "
+                "or keep clustering (cluster=None auto-clusters at unit)."
+            )
+        if self.cluster is False and self.vcov_type == "hc2_bm":
+            raise ValueError(
+                "WooldridgeDiD(cluster=False, vcov_type='hc2_bm') is not supported: the "
+                "Bell-McCaffrey DOF lane is cluster-only. Use vcov_type='hc2' or 'hc1' "
+                "with cluster=False, or keep clustering (cluster=None auto-clusters at unit)."
+            )
         if self.n_bootstrap > 0 and self.vcov_type in ("hc2", "classical"):
             raise ValueError(
                 f"WooldridgeDiD(vcov_type={self.vcov_type!r}, "
@@ -1299,7 +1332,7 @@ class WooldridgeDiD(BaseEstimator):
                 conley_lag_cutoff=self.conley_lag_cutoff,
                 survey_design=survey_design,
                 inference="analytical",
-                cluster=self.cluster,
+                cluster=user_cluster,
             )
             if self.n_bootstrap > 0:
                 raise ValueError(
@@ -2085,9 +2118,17 @@ class WooldridgeDiD(BaseEstimator):
         # "classical"}`` explicitly (one-way families don't compose with
         # cluster_ids per the linalg validator). Explicit ``self.cluster=X``
         # always wins. Mirrors SunAbraham PR #472 at ``sun_abraham.py:792-797``.
-        if self.cluster is not None:
-            cluster_col: Optional[str] = self.cluster
-            cluster_ids: Optional[np.ndarray] = sample[cluster_col].values
+        user_cluster = None if self.cluster is False else self.cluster
+        if self.cluster is False:
+            # 4.0 (M-080): the uniform explicit off-switch - plain HC sandwich
+            # (absorbed-FE full-K rescale below on the within lane), no
+            # auto-cluster, no survey PSU injection. Bootstrap / hc2_bm were
+            # rejected at fit().
+            cluster_col: Optional[str] = None
+            cluster_ids: Optional[np.ndarray] = None
+        elif user_cluster is not None:
+            cluster_col = user_cluster
+            cluster_ids = sample[cluster_col].values
         elif self.vcov_type == "conley":
             # Conley: never auto-cluster at unit (a unit-cluster product kernel
             # would zero every between-unit spatial pair). Explicit cluster=
@@ -2109,13 +2150,13 @@ class WooldridgeDiD(BaseEstimator):
         # unit only kicks in when the user explicitly set ``cluster=X``
         # (already handled above) — in that explicit-one-way + explicit-cluster
         # case the bootstrap matches the analytical cluster too.
-        bootstrap_cluster_col = self.cluster if self.cluster else unit
+        bootstrap_cluster_col = user_cluster if user_cluster else unit
         cluster_ids_bootstrap = sample[bootstrap_cluster_col].values
 
         # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
-        survey_cluster_ids = cluster_ids if self.cluster else None
+        survey_cluster_ids = cluster_ids if user_cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, user_cluster)
         )
 
         # Branch design build on vcov_type. ``hc1`` keeps within-transform
@@ -2323,6 +2364,32 @@ class WooldridgeDiD(BaseEstimator):
             conley_lag_cutoff=self.conley_lag_cutoff,
         )
 
+        # 4.0 (M-080): the unclustered hc1 within-transform lane (cluster=False)
+        # carries the absorbed-FE full-K rescale, so its SE equals the explicit
+        # full-dummy HC1 sandwich (fixest vcov="hetero") and matches the
+        # library's other within surfaces (LinearRegression, the TWFE
+        # event-study core). Conley also runs the within solve but is never
+        # rescaled (linalg's classical/hc1 gate); clustered and survey lanes
+        # carry their own K accounting. NaN-void on a non-positive full-K df.
+        _fe_rank_within: Optional[int] = None
+        if (
+            vcov is not None
+            and cluster_ids is None
+            and resolved is None
+            and not use_full_dummy
+            and self.vcov_type == "hc1"
+        ):
+            _fe_rank_within = absorbed_fe_rank(
+                sample, [unit, time], has_intercept_col=False, weights=survey_weights
+            )
+            _fe_scale_w = _absorbed_fe_vcov_scale(
+                float(X.shape[0]), int((~np.isnan(coefs)).sum()), _fe_rank_within
+            )
+            if np.isnan(_fe_scale_w):
+                vcov = np.full_like(vcov, np.nan)
+            elif _fe_scale_w != 1.0:
+                vcov = vcov * _fe_scale_w
+
         # Extract cohort-trend coefficients (paper W2025 Eq. 8.1 ``δ_g``).
         # Trend columns live at the tail of the full-dummy design after
         # the unit + time dummies. Empty dict when cohort_trends=False
@@ -2458,11 +2525,15 @@ class WooldridgeDiD(BaseEstimator):
                 df_res = float(
                     X.shape[0]
                     - n_kept
-                    - absorbed_fe_rank(
-                        sample,
-                        [unit, time],
-                        has_intercept_col=False,
-                        weights=survey_weights,
+                    - (
+                        _fe_rank_within
+                        if _fe_rank_within is not None
+                        else absorbed_fe_rank(
+                            sample,
+                            [unit, time],
+                            has_intercept_col=False,
+                            weights=survey_weights,
+                        )
                     )
                 )
             _g_eff_w = (
@@ -2800,13 +2871,19 @@ class WooldridgeDiD(BaseEstimator):
                 f"method='logit' requires outcomes in [0, 1]. "
                 f"Got range [{y.min():.4f}, {y.max():.4f}]."
             )
-        cluster_col = self.cluster if self.cluster else unit
-        cluster_ids = sample[cluster_col].values
+        user_cluster = None if self.cluster is False else self.cluster
+        # 4.0 (M-080): cluster=False -> the plain QMLE HC1 sandwich
+        # (compute_robust_vcov with cluster_ids=None); inference stays
+        # normal-theory (or the survey df) - only the SE moves.
+        cluster_col: Optional[str] = None if self.cluster is False else (user_cluster or unit)
+        cluster_ids: Optional[np.ndarray] = (
+            sample[cluster_col].values if cluster_col is not None else None
+        )
 
         # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
-        survey_cluster_ids = cluster_ids if self.cluster else None
+        survey_cluster_ids = cluster_ids if user_cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, user_cluster)
         )
         _has_survey = resolved is not None
 
@@ -3006,7 +3083,9 @@ class WooldridgeDiD(BaseEstimator):
             # design-side structure instead.
             vcov_type=self.vcov_type,
             cluster_name=(None if _has_survey else cluster_col),
-            n_clusters=(None if _has_survey else int(np.unique(cluster_ids).size)),
+            n_clusters=(
+                None if (_has_survey or cluster_ids is None) else int(np.unique(cluster_ids).size)
+            ),
             _gt_weights=gt_weights,
             _n_g_per_cohort={
                 g: int(sample[sample[cohort] == g][unit].nunique())
@@ -3062,13 +3141,19 @@ class WooldridgeDiD(BaseEstimator):
                 f"method='poisson' requires non-negative outcomes. "
                 f"Got minimum value {y.min():.4f}."
             )
-        cluster_col = self.cluster if self.cluster else unit
-        cluster_ids = sample[cluster_col].values
+        user_cluster = None if self.cluster is False else self.cluster
+        # 4.0 (M-080): cluster=False -> the plain QMLE HC1 sandwich
+        # (compute_robust_vcov with cluster_ids=None); inference stays
+        # normal-theory (or the survey df) - only the SE moves.
+        cluster_col: Optional[str] = None if self.cluster is False else (user_cluster or unit)
+        cluster_ids: Optional[np.ndarray] = (
+            sample[cluster_col].values if cluster_col is not None else None
+        )
 
         # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
-        survey_cluster_ids = cluster_ids if self.cluster else None
+        survey_cluster_ids = cluster_ids if user_cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, user_cluster)
         )
         _has_survey = resolved is not None
 
@@ -3268,7 +3353,9 @@ class WooldridgeDiD(BaseEstimator):
             # that wasn't actually applied.
             vcov_type=self.vcov_type,
             cluster_name=(None if _has_survey else cluster_col),
-            n_clusters=(None if _has_survey else int(np.unique(cluster_ids).size)),
+            n_clusters=(
+                None if (_has_survey or cluster_ids is None) else int(np.unique(cluster_ids).size)
+            ),
             _gt_weights=gt_weights,
             _n_g_per_cohort={
                 g: int(sample[sample[cohort] == g][unit].nunique())

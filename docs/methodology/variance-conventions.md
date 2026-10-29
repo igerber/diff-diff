@@ -192,27 +192,31 @@ and the out-of-scope roster (IF-based estimators, TripleDifference/TROP,
 Wooldridge GLM arms) is enumerated in the REGISTRY TwoWayFixedEffects
 deviation note.
 
-## Default clustering roster (decided 2026-10-18, [M-080])
+## Default clustering roster (decided 2026-10-18, [M-080]; shipped item 7b, 2026-10-29)
 
 Measured by execution at v3.13.0 for the 4.0-cut framing (50 units x 8 periods,
 `cluster=` omitted vs `cluster="unit"`). The ledger row M-080 was written on the
 premise that static `TwoWayFixedEffects` runs HC-robust by default; it has
 auto-clustered at unit since 2026-01, so the row was re-scoped to this roster
-(spec `docs/v4-design.md` section 7). Categories: **a** default SE moves at
+(spec `docs/v4-design.md` section 7). Categories: **a** default SE moved at
 4.0; **b** unit-level by construction with a `cluster` param; **c1** already
 clusters at unit by a regression-level default; **c2** defaults to unit inside
 unit-level influence-function machinery; **c3** clusters by construction with a
 restricted `cluster` vocabulary; **d** no `cluster` param; **n/a**
-cross-sectional or no clustering support.
+cross-sectional or no clustering support. The shared argument contract since 4.0
+is `str | None | False` ([M-155], `diff_diff.utils.validate_cluster`): `True` and
+non-`str` labels raise one `ValueError` everywhere (StackedDiD keeps its own
+vocabulary validator), and `False` is normalized locally so it never reaches a
+column lookup.
 
-| Class | `cluster` param? | Default when omitted (v3.13.0) | `cluster=False` at 4.0 | Category |
+| Class | `cluster` param? | Default when omitted (v3.13.0 -> 4.0) | `cluster=False` since 4.0 | Category |
 |---|---|---|---|---|
-| SpilloverDiD | yes | observation-level HC1 | plain HC SE (= 3.x default) | **a** - default flips to unit |
-| TwoWayFixedEffects (static) | yes | CR1 at unit (`cluster_name="unit"`, `n_clusters=None` on the analytical path - gap closed at 4.0) | plain HC sandwich (new behaviour) | c1 |
-| TwoWayFixedEffects (event-study) | yes | CR1 at unit since 3.9 (M-010) | plain HC sandwich (new behaviour) | c1 |
-| SunAbraham | yes | CR1 at unit (reports `cluster_name=None`, no `n_clusters` field - gap closed at 4.0) | plain HC sandwich (new behaviour) | c1 |
-| WooldridgeDiD | yes | CR1 at unit (`"unit"`, G) | plain HC sandwich (new behaviour) | c1 |
-| LPDiD | yes | CR1 at unit (`self.cluster or unit`; `False` currently treated as auto-cluster - bug fixed at 4.0) | plain HC sandwich (new behaviour) | c1 |
+| SpilloverDiD | yes | observation-level HC1 -> **CR1 at unit since 4.0** (`"unit"`, G; TWFE's carve-outs mirrored; inference df still the residual df until [M-154]) | plain HC1 SE (= the 3.x default) | **a** - default flipped to unit |
+| TwoWayFixedEffects (static) | yes | CR1 at unit (`cluster_name="unit"`; reports `n_clusters` since 4.0 on non-survey analytical fits; the survey-lane auto label is None since 4.0) | plain HC sandwich (absorbed-FE full-K rescale, residual-df t; one-way CR2-BM under `hc2_bm`); rejected under `inference="wild_bootstrap"` | c1 |
+| TwoWayFixedEffects (event-study) | yes | CR1 at unit since 3.9 (M-010) | plain HC sandwich (the core's unclustered lanes) | c1 |
+| SunAbraham | yes | CR1 at unit (reports `cluster_name="unit"` and the appended `n_clusters` since 4.0) | plain HC sandwich (residual-df t); no unit PSU under `survey_design=`; pairs bootstrap unaffected; rejected with `hc2_bm` | c1 |
+| WooldridgeDiD | yes | CR1 at unit (`"unit"`, G) | plain HC sandwich (OLS within lane carries the absorbed-FE full-K rescale; GLM arms the plain QMLE sandwich); rejected with `n_bootstrap > 0` and with `hc2_bm` | c1 |
+| LPDiD | yes | CR1 at unit (`False` was treated as the auto-cluster before 4.0) | plain HC1 per horizon; `if_robust` unclustered IF variance on the RA path; implicit per-observation PSUs under a survey design | c1 |
 | ImputationDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
 | TwoStageDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
 | StackedDiD | yes (`'unit'`/`'unit_subexp'` only) | CR1 at unit (`"unit"`, G) | REJECTED (validator) | c3 |
@@ -235,6 +239,15 @@ metadata - `cluster_name` stays `None` where the field exists and no field is
 added where it does not. Their SE formulas lack the G/(G-1) factor the explicit
 `cluster="unit"` path applies (verified: CS and EDiD `se(cluster="unit")^2 /
 se(default)^2 = 50/49` on the probe), so labelling them `"unit"` would misstate
-the formula. The 4.0 flip is therefore the SpilloverDiD default, the uniform
-`cluster=False` off-switch on categories a/b/c1/c2, and the metadata gaps named
-in the c1 rows.
+the formula. The 4.0 flip SHIPPED as item 7b (2026-10-29): the SpilloverDiD
+default, the uniform `cluster=False` off-switch on categories a/b/c1/c2 (an
+accepted bit-identical no-op on b/c2 and on the 2x2 surfaces, incl. the CS
+RC auto-PSU path, `EfficientDiD.hausman_pretest` and the LWDiD sensitivity
+helpers), and the metadata gaps named in the c1 rows; pinned by
+`tests/test_v4_cluster_policy.py`. Two c1 lanes reject the off-switch rather
+than open an unverified variance: `cluster=False` + `vcov_type="hc2_bm"` on
+SunAbraham / WooldridgeDiD (their Bell-McCaffrey DOF helper is cluster-only; the
+one-way port is a `TODO.md` row - TWFE's one-way CR2-BM lane already exists), and
+the bootstraps that draw AT the analytical cluster (DiD/TWFE wild, WooldridgeDiD
+multiplier). SpilloverDiD's new default lane keeps residual-df inference until
+[M-154] (item 7c) adds its `df_convention` knob.

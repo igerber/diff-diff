@@ -853,7 +853,29 @@ domain vocabulary, not drift.
   and DiD report `n_clusters=None` on the analytical path; SunAbraham
   auto-clusters but reports `cluster_name=None` and has no `n_clusters`
   field). The [M-080] row's locator and `code_refs` were re-pointed
-  accordingly.
+  accordingly. (SHIPPED, item 7b, 2026-10-29: SpilloverDiD auto-clusters at
+  unit with the carve-outs mirrored; the uniform `cluster=False` via the shared
+  `utils.validate_cluster` - the contract is `str | None | False` [M-155], so
+  non-`str` column labels are rejected everywhere (DMLDiD's rule generalized);
+  plain HC on a/c1 incl. the new LPDiD and Wooldridge-GLM unclustered lanes,
+  the Wooldridge within-transform absorbed-FE full-K rescale and TWFE's one-way
+  hc2_bm lane; accepted no-op on b/c2 and the 2x2 surfaces; rejected on
+  StackedDiD, under the DiD/TWFE wild and Wooldridge multiplier bootstraps, and
+  with `hc2_bm` on SunAbraham/WooldridgeDiD pending the one-way BM DOF port
+  (TODO.md); DiD/TWFE analytical `n_clusters`, `SunAbrahamResults.n_clusters`
+  + `cluster_name`, the TWFE survey auto-label corrected to None; pinned by
+  `tests/test_v4_cluster_policy.py`. SpilloverDiD's default CR1 lane keeps
+  residual-df inference until [M-154].)
+- **SpilloverDiD df_convention** [M-154] (item 7c, the PR after 7b; user
+  decision 2026-10-29): SpilloverDiD gains the three-value `df_convention` knob
+  with the 4.0 default `"cluster"` - t(G-1) on its clustered analytical lanes
+  (the unit auto-cluster and explicit `cluster=`), residual df under
+  `"residual"` and on unclustered (`cluster=False`) fits, z under `"normal"`;
+  inert on Conley (G forced to None even with an explicit product-kernel
+  cluster, the SunAbraham precedent); survey df keeps precedence. Closes the
+  one gap 7b leaves: at 7b the default CR1 lane runs t(n_obs_eff -
+  k_effective) while every other auto-clustered default runs t(G-1). Moves
+  p/CI on clustered SpilloverDiD fits; notebook 23 is re-executed again there.
 - **df_convention default flip** [M-004]..[M-006] + [M-128]..[M-131]:
   `"residual"` -> `"cluster"` (G-1) at 4.0 - the locked #663 direction.
   PR C ([M-127], 3.9) resolved the "evaluate extending the knob" item EARLY:
@@ -1016,7 +1038,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] + its results-field mirror [M-143] (shipped: tests/test_v4_merge_cic.py; method= is keyword-only and lowercase-only, the QDiD CLASS is deprecated while the METHOD is not, and ChangesInChangesResults.estimator -> .method carries a dual-key to_dict() window through 3.9) |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (warn-and-discard shims at 4.0 once the donor weights moved to an exact NNLS, removal at 5.0); the LWDiD result-alias pair [M-151] [M-152] (FutureWarning shims at 4.0, removal at 5.0); docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (warn-and-discard shims at 4.0 once the donor weights moved to an exact NNLS, removal at 5.0); the LWDiD result-alias pair [M-151] [M-152] (FutureWarning shims at 4.0, removal at 5.0); docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -1208,7 +1230,10 @@ tests-first PR that flips no rows).
 7. Inference defaults: the df_convention flips + [M-080] as re-scoped +
    the uniform `cluster=False` off-switch. (7a SHIPPED 2026-10-28: the
    df_convention flips [M-004]..[M-006] + [M-128]..[M-131], pinned by
-   `tests/test_v4_inference_defaults.py`; 7b = [M-080] pending.)
+   `tests/test_v4_inference_defaults.py`; 7b SHIPPED 2026-10-29: [M-080] +
+   the shared cluster contract [M-155], pinned by
+   `tests/test_v4_cluster_policy.py`, notebook 23 re-executed; 7c = [M-154]
+   SpilloverDiD df_convention, the next PR.)
 8. [M-093] sentinel retirement + event-study schema enforcement.
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
@@ -1219,12 +1244,15 @@ tests-first PR that flips no rows).
     04_parallel_trends, 05_honest_did, 07_pretrends_power,
     09_real_world_examples, 11_imputation_did, 13_stacked_did,
     16_wooldridge_etwfe (NOT 16_survey_did: the survey df wins) - plus any
-    7b/8/9 movers; 24 is handled in 7a and 23 in 7b (each re-executed there
-    if its outputs moved).
+    7c/8/9 movers; 24 is handled in 7a and 23 in 7b and again in 7c (each
+    re-executed there). 7b's label changes also drift every committed tutorial
+    that renders an analytical DiD/TWFE summary (", G=" on the variance line)
+    or a SunAbraham summary (the new "Std. errors:" line, e.g. 02) - all
+    within the nine-notebook set above.
 
 Ordering constraints: 4a before 4b before 4c-i before 4c-ii; 4 before 5 and 6; 5 before 6
-(the unified DDD container is born canonical); 7 and 8 independent; 9 after
-4/6; 10 last.
+(the unified DDD container is born canonical); 7a before 7b before 7c; 7 and 8
+independent; 9 after 4/6; 10 last.
 Waves 2 and 3 are independent of each other and of 4.
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`

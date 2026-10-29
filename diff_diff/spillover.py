@@ -42,7 +42,13 @@ from diff_diff.conley import (
 from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
 from diff_diff.two_stage import _compute_gmm_corrected_meat, _LSMRUnconvergedError
-from diff_diff.utils import _iterative_fe_solve, safe_inference, validate_anticipation
+from diff_diff.utils import (
+    ClusterArg,
+    _iterative_fe_solve,
+    safe_inference,
+    validate_anticipation,
+    validate_cluster,
+)
 
 if TYPE_CHECKING:
     from diff_diff.survey import SurveyDesign
@@ -1686,9 +1692,17 @@ class SpilloverDiD(BaseEstimator):
     conley_lag_cutoff : int, optional
         Within-unit Bartlett max lag. Required when ``vcov_type="conley"``.
         Use ``0`` to suppress the serial-component sandwich.
-    cluster : str, optional
-        Column name for cluster-robust variance, or the combined Conley
-        cluster product kernel when paired with ``vcov_type="conley"``.
+    cluster : str, None or False, optional
+        ``None`` (default; 4.0, M-080) clusters at ``unit`` - CR1 at the unit
+        level, mirroring ``TwoWayFixedEffects``: the auto-cluster is dropped
+        on the Conley path and is never injected as a survey PSU. ``False``
+        switches clustering off explicitly (the observation-level HC1
+        sandwich - the 3.x default). A column name clusters on that column
+        on every lane: CR1, the combined Conley cluster product kernel when
+        paired with ``vcov_type="conley"``, or the effective PSU under a
+        ``survey_design`` without its own PSU. Column labels must be ``str``.
+        Inference uses the residual df on every lane (``df_convention``
+        arrives with [M-154]).
     alpha : float, default=0.05
         Significance level for confidence intervals.
     anticipation : int, default=0
@@ -1748,7 +1762,7 @@ class SpilloverDiD(BaseEstimator):
         conley_metric: SpilloverMetric = "haversine",
         conley_cutoff_km: Optional[float] = None,
         conley_lag_cutoff: Optional[int] = None,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         alpha: float = 0.05,
         anticipation: int = 0,
         event_study: bool = False,
@@ -1790,7 +1804,7 @@ class SpilloverDiD(BaseEstimator):
         self.conley_metric = conley_metric
         self.conley_cutoff_km = conley_cutoff_km
         self.conley_lag_cutoff = conley_lag_cutoff
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.alpha = alpha
         self.anticipation = validate_anticipation(anticipation)
         self.event_study = event_study
@@ -2054,7 +2068,7 @@ class SpilloverDiD(BaseEstimator):
         # path, not just conley. Missing cluster ids would produce wrong
         # SEs (NaN counted as its own cluster by np.unique() but dropped
         # by pandas groupby() in the cluster meat).
-        if self.cluster is not None:
+        if isinstance(self.cluster, str):
             if self.cluster not in data.columns:
                 raise ValueError(f"cluster column '{self.cluster}' not in data.")
             cluster_nan_mask = data[self.cluster].isna()
@@ -2219,6 +2233,9 @@ class SpilloverDiD(BaseEstimator):
         # `-1 - self.anticipation` and would otherwise raise a raw TypeError
         # on non-numeric input (PR #456 R2 fix).
         self.anticipation = validate_anticipation(self.anticipation)
+        # Same direct-mutation defense for the shared cluster contract
+        # (str | None | False, [M-155]); the lane resolution lives below.
+        validate_cluster(self.cluster)
         # Wave C: event-study path is now supported. Validate horizon_max
         # up front (fail-fast before any stage-1 work).
         if self.horizon_max is not None:
@@ -2361,6 +2378,25 @@ class SpilloverDiD(BaseEstimator):
         # Step 1: front-door validation (rings, d_bar, timing-kwargs XOR,
         # coords, panel structure — all on COERCED time/first_treat labels).
         self._validate_spillover_inputs(data, treatment, first_treat, time, unit, outcome)
+
+        # Step 1a (4.0, M-080): resolve the ONE cluster column every variance
+        # lane below reads. Explicit `cluster=` wins on every lane (incl. the
+        # Conley product kernel and survey PSU injection); `False` is the
+        # uniform explicit off-switch (observation-level HC - the 3.x default);
+        # `None` auto-clusters at `unit` with TWFE's carve-outs mirrored: the
+        # auto-cluster is dropped on the Conley path (a unit mask would zero
+        # every between-unit spatial pair) and is never injected as a survey
+        # PSU (the documented implicit-per-observation-PSU rule).
+        if self.cluster is False:
+            cluster_col: Optional[str] = None
+        elif self.cluster is not None:
+            cluster_col = self.cluster
+        elif self.vcov_type == "conley":
+            cluster_col = None
+        elif survey_design is not None:
+            cluster_col = None
+        else:
+            cluster_col = unit
 
         # Step 1b (Wave E.1): survey-design resolution + validation.
         #
@@ -2879,9 +2915,7 @@ class SpilloverDiD(BaseEstimator):
         # `imputation.py:2175-2183` precedent). Under no-survey, keep the
         # historic finite_mask subset so downstream CR1 sample-size matches
         # X_2_fit.
-        cluster_ids_full = (
-            np.asarray(data[self.cluster].values) if self.cluster is not None else None
-        )
+        cluster_ids_full = np.asarray(data[cluster_col].values) if cluster_col is not None else None
         if n_nan > 0:
             X_2_fit = X_2[finite_mask]
             y_tilde_fit = y_tilde[finite_mask]
@@ -2963,7 +2997,7 @@ class SpilloverDiD(BaseEstimator):
             effective_cluster_ids = _resolve_effective_cluster(
                 resolved_survey_fit,
                 cluster_ids_fit,
-                self.cluster if self.cluster is not None else None,
+                cluster_col,
             )
             if effective_cluster_ids is not None:
                 # Wave E.1 R11 fix: when `cluster=<col>` becomes the effective
@@ -2977,7 +3011,7 @@ class SpilloverDiD(BaseEstimator):
                 # via `survey_design.psu=` would be rejected by the panel-
                 # survey validator at `survey.py:1015`.
                 if (
-                    self.cluster is not None
+                    cluster_col is not None
                     and resolved_survey is not None
                     and resolved_survey.psu is None
                 ):
@@ -3000,7 +3034,7 @@ class SpilloverDiD(BaseEstimator):
                     if len(nonconstant) > 0:
                         bad_units = list(nonconstant.index[:5])
                         raise ValueError(
-                            f"`cluster='{self.cluster}'` is being used as the "
+                            f"`cluster='{cluster_col}'` is being used as the "
                             f"effective PSU under survey_design= (no explicit "
                             f"survey_design.psu provided), but the cluster "
                             f"column varies within unit for "
@@ -3610,7 +3644,7 @@ class SpilloverDiD(BaseEstimator):
                     and resolved_survey_fit is not None
                     and resolved_survey_fit.psu is not None
                 )
-                else self.cluster
+                else cluster_col
             ),
             conley_lag_cutoff=(self.conley_lag_cutoff if self.vcov_type == "conley" else None),
             spillover_effects=spillover_df,
