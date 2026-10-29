@@ -592,17 +592,19 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   converged separately in 3.9 (M-127: the three-value `df_convention` knob below — the
   SE-scale `k` here and the inference df are independent accountings). `hc2`/`hc2_bm`
   use leverage / Satterthwaite DOF and are unaffected.
-- **Note (deviation from R — clustered CR1 inference df):** under unit clustering, Python's
-  CR1 t-statistics/p-values/CIs use the **residual df** from the fitted design
-  (`n − K_full`, e.g. 148 on the live-R benchmark panel: n=200, 50 unit FE + time + treatment),
-  while `fixest::feols(cluster=...)` uses the **cluster df** `G − 1` (49 on the same panel;
-  Stata's `min(G−1)` convention). Both sides use t-distributions. At moderate |t| the CIs and
-  p-values are close; at large |t| the tails diverge by orders of magnitude (measured on the
-  live-R benchmark: |t|≈22 → Python `p≈1e-48` at t(148) vs fixest `p≈4e-27` at t(49) — both
-  numerically zero, which is what `tests/test_methodology_twfe.py::test_pvalue_matches_r_twfe`
-  pins; the convention itself is locked at a distinguishable moderate |t|~1.8 by
-  `tests/test_methodology_twfe.py::test_moderate_t_pins_residual_df_convention`, where the
-  t(148) and t(49) tails differ by ~5%). The SE itself matches fixest under the K_reference
+- **Note (clustered CR1 inference df — the `df_convention` knob):** under unit clustering,
+  Python's CR1 t-statistics/p-values/CIs use the **cluster df** `G − 1` since 4.0 (49 on the
+  live-R benchmark panel: n=200, 50 unit FE + time + treatment) — the same reference
+  `fixest::feols(cluster=...)` and Stata's `min(G−1)` convention use — while the 3.x default
+  used the **residual df** from the fitted design (`n − K_full`, 148 on that panel), still
+  available as `df_convention="residual"` (the remaining deviation from R when chosen). Both
+  conventions use t-distributions. At moderate |t| the CIs and p-values are close; at large
+  |t| the tails diverge by orders of magnitude (measured on the live-R benchmark: |t|≈22 →
+  `p≈4e-27` at t(49), the fixest value, vs `p≈1e-48` at t(148) — both numerically zero, which
+  is what `tests/test_methodology_twfe.py::test_pvalue_matches_r_twfe` pins; the convention
+  itself is locked at a distinguishable moderate |t|~1.8 by
+  `tests/test_methodology_twfe.py::test_moderate_t_pins_cluster_df_convention`, where the
+  t(49) and t(148) tails differ by ~5%). The SE itself matches fixest under the K_reference
   convergence above (the historical ~0.25% non-nested-FE band is closed). **Three-value knob
   (2026-07, widened 3.9 / M-127):** `df_convention ∈ {"residual", "cluster", "normal"}` on the
   library-wide knob roster — `DifferenceInDifferences` / `TwoWayFixedEffects` /
@@ -614,16 +616,19 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   unclustered, and conley alike — on lanes that were already t it is a new deliberate option,
   not a compatibility path). Fallback-level only under every value: survey/replicate df and
   per-coefficient Bell-McCaffrey DOF keep precedence, and point estimates/SEs/t-statistics
-  never move. The default remains `"residual"` on every surface except LPDiD and flips at v4
-  (lifecycle: `docs/v4-deprecations.yaml` M-004..M-006 + M-128..M-131; work row in
-  `DEFERRED.md` → Version-gated (v4); flipping moves every clustered p-value/CI, so it is a
-  major-version change). **Out of the knob's scope** (own inference stacks): the IF-based
+  never move. **Since 4.0 the default is `"cluster"` on every surface** (LPDiD adopted it at
+  3.9; the other seven flipped at the 4.0 cut, item 7a, 2026-10-28 — lifecycle rows
+  `docs/v4-deprecations.yaml` M-004..M-006 + M-128..M-131, pinned by
+  `tests/test_v4_inference_defaults.py`; the flip moved every clustered p-value/CI, which is
+  why it waited for a major version), and `"residual"` restores the 3.x residual-df inference
+  bit-for-bit. **Out of the knob's scope** (own inference stacks): the IF-based
   family — `CallawaySantAnna`, `TwoStageDiD`, `ChaisemartinDHaultfoeuille`, `EfficientDiD`,
   `ContinuousDiD`, `ChangesInChanges`, `SyntheticDiD`, `HeterogeneousAdoptionDiD` — and the
   OLS-based `TripleDifference` / `TROP` (own `safe_inference` df conventions, outside the
   variance-conventions audit matrix's shared-CR1 scope), plus `WooldridgeDiD`'s
   logit/poisson arms (survey df or normal theory, knob-independent). Locked by
-  `tests/test_estimators_vcov_type.py::TestDfConvention` (G−1 tail match, precedence, no-op default). The full-dummy (`fixed_effects=`) idiom carries
+  `tests/test_estimators_vcov_type.py::TestDfConvention` (G−1 default tail match, precedence,
+  the explicit `"residual"` baseline). The full-dummy (`fixed_effects=`) idiom carries
   `df_adjustment == 0` and is unchanged — its residual t-df already matched fixest's
   full-K count because every FE column sits in `k_visible`. **That claim is scoped to
   the residual df and the non-clustered variance families; the clustered CR1
@@ -1993,16 +1998,16 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   `LinearRegression.get_inference()` inside `_fit_saturated_regression`.
   If the linalg helper fails (rank-deficient design, singular bread),
   the aggregated inference falls back to the `df_convention`-resolved
-  analytical df (t(residual) under the default) with an explicit
+  analytical df (t(G − 1) under the 4.0 default) with an explicit
   `UserWarning`.
 - **Note:** Provenance exposure (4.0 program row M-092; df values updated by
   the 3.9 M-127 tail-df fix): `SunAbrahamResults.event_study_df` records,
   per relative time, the df each stored event-study row's `safe_inference`
   actually received - the per-event BM contrast DOF above under `hc2_bm`,
   the survey design df (post-drop under a replicate refit) on survey fits,
-  the `df_convention`-resolved fallback on plain analytic fits (FINITE
-  residual df under the 3.9 default; `G − 1` under `"cluster"`; NaN under
-  `"normal"`), and NaN on rows whose BM DOF was non-finite, where
+  the `df_convention`-resolved fallback on plain analytic fits (`G − 1`
+  under the 4.0 default `"cluster"`; the FINITE residual df under
+  `"residual"`; NaN under `"normal"`), and NaN on rows whose BM DOF was non-finite, where
   `safe_inference`'s own non-finite-df guard already yields all-NaN
   inference. Note the two failure modes differ and are both faithfully
   recorded: a helper-level failure warns and falls back to the resolved
@@ -2064,24 +2069,26 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   theory inside the same fit):
   - Cohort-level p-values: t-distribution via
     `LinearRegression.get_inference()`, following the `df_convention` knob
-    (residual df by default; `G − 1` under `"cluster"`; z under `"normal"`).
+    (`G − 1` under the 4.0 default `"cluster"`; the residual df under
+    `"residual"`; z under `"normal"`).
   - Aggregated event study and overall ATT p-values:
     - Under `vcov_type="hc2_bm"`: t-distribution with CR2 Bell-McCaffrey
       contrast DOF per aggregated effect (see "Phase 1b aggregated BM
       contrast DOF" Note above). Matches `clubSandwich::Wald_test(
       test="HTZ")$df_denom`.
     - Under `vcov_type ∈ {"classical","hc1","hc2","conley"}` (no survey):
-      the SAME `df_convention`-resolved df as the cells — t(residual df of
-      the saturated regression) by default, t(G − 1) under `"cluster"`
-      (inert under conley), z under `"normal"`.
+      the SAME `df_convention`-resolved df as the cells — t(G − 1) under the
+      4.0 default `"cluster"` (inert under conley, which keeps the residual
+      df), t(residual df of the saturated regression) under `"residual"`,
+      z under `"normal"`.
     - Under replicate-weight survey: t-distribution with replicate-derived
       DOF (`survey_metadata.df_survey`).
-  - **Deviation from R**: R's fixest uses t-distribution at all levels with
-    the CLUSTER df `G − 1` on clustered fits; the 3.9 default uses the
-    residual df instead (the library-wide `df_convention` deviation
-    documented in the TwoWayFixedEffects section — `df_convention=
-    "cluster"` opts into the fixest convention today, and the default flips
-    at v4). The `hc2_bm` aggregated path matches clubSandwich exactly.
+  - **Note:** R's fixest uses t-distribution at all levels with the CLUSTER
+    df `G − 1` on clustered fits — the 4.0 default matches it (M-128, item
+    7a); the 3.9 default used the residual df instead (the library-wide
+    `df_convention` convention documented in the TwoWayFixedEffects
+    section — `df_convention="residual"` restores it). The `hc2_bm`
+    aggregated path matches clubSandwich exactly.
 
 **Reference implementation(s):**
 - R: `fixest::sunab()` (Laurent Bergé's implementation)
@@ -2192,16 +2199,17 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 - **Note (pretrends lead-regression tail df, 3.9 / M-127):** the per-lead
   `gamma_h` t/p/CI previously used silent normal-theory z on plain clustered
   fits (the tail-df defect family); they now follow the `df_convention`
-  knob — t(residual df `n − k_kept − rank(absorbed [time, unit])` on the
-  Omega_0 lead design) under the default `"residual"`, t(G − 1) under
-  `"cluster"`, z under `"normal"` — with the full-design survey df keeping
+  knob — t(G − 1) under the 4.0 default `"cluster"` (M-131, item 7a),
+  t(residual df `n − k_kept − rank(absorbed [time, unit])` on the Omega_0
+  lead design) under `"residual"` (the 3.9 default), z under `"normal"` —
+  with the full-design survey df keeping
   precedence. This is the ONE ImputationDiD surface on the shared clustered
   CR1 sandwich; the BJS Theorem-3 overall/post-treatment inference is
   knob-independent (L3), and the JOINT pretrend Wald F deliberately keeps
   its cluster-robust `F(q, max(G − 1, 1))` denominator (the standard
   joint-test convention; it consumes gamma/V_gamma, not the per-lead t's,
-  coheres with `df_convention="cluster"`, and converges with the t's at the
-  v4 flip) — the per-lead-t vs joint-F pairing is a stated convention, not
+  and coheres with the 4.0 default `df_convention="cluster"`, whose per-lead
+  t(G − 1) it now shares) — the per-lead-t vs joint-F pairing is a stated convention, not
   a silent split. Since the M-021 post-fit migration the
   inert-config warning predicate is REACHABILITY-based, no longer
   aggregate-keyed: an explicitly non-default value warns iff the per-lead
@@ -2412,17 +2420,18 @@ Estimated via WLS with Q-weights. The delta_h coefficients identify theta_kappa^
 
 **Note (tail df, 3.9 / M-127):** the `hc1` analytical t/p/CI previously used
 silent normal-theory z on the non-survey lane (the tail-df defect family);
-they now follow the library-wide `df_convention` knob — t(pooled residual df
-`n_eff − k_kept`, positive-weight rows) under the default `"residual"`,
-t(G − 1) under `"cluster"`, z under `"normal"` — with hc2_bm BM contrast DOF
+they now follow the library-wide `df_convention` knob — t(G − 1) under the
+4.0 default `"cluster"` (M-130, item 7a), t(pooled residual df `n_eff −
+k_kept`, positive-weight rows) under `"residual"` (the 3.9 default), z under
+`"normal"` — with hc2_bm BM contrast DOF
 and survey/replicate df keeping precedence. Two StackedDiD-specific caveats:
 (a) the `"cluster"` G counts POSITIVE-WEIGHT clusters
 (`effective_cluster_count`), while the reported `results.n_clusters` keeps
 the raw unique count — the two diverge only when a cluster's total composed
 weight is zero; (b) the stacked design replicates control units across
-sub-experiments, so the pooled residual df is typically large and the
-default's z → t movement is a convention alignment with near-zero numeric
-effect — the materially moving step on this surface is the v4 flip to
+sub-experiments, so the pooled residual df is typically large and the 3.9
+z → t(residual) movement was a convention alignment with near-zero numeric
+effect — the materially moving step on this surface was the 4.0 flip to
 `G − 1` (M-130). No public per-row df channel changes: `event_study_df`
 records the resolved df per event time as before.
 
@@ -2594,11 +2603,12 @@ where `g(·)` is the link inverse (logistic or exp), `η_i` is the individual li
   aggregated t/p/CI now consume ONE `df_convention`-resolved fallback df —
   the default-`hc1` arms (within-transform AND `hc1`+`cohort_trends`
   full-dummy) previously used silent normal-theory z (the tail-df defect
-  family), and now use t(residual df): `n − k_kept − rank(absorbed
-  [unit, time])` on the within arm, the historical `n − rank(X)` on the
-  full-dummy arms (`classical`/`hc2` values bit-identical). `"cluster"`
-  gives t(G − 1) on hc1-clustered fits (inert on one-way/conley families);
-  `"normal"` gives z. Survey design df and hc2_bm BM DOF keep precedence;
+  family), and now use t(G − 1) on hc1-clustered fits under the 4.0 default
+  `"cluster"` (M-129, item 7a; inert on one-way/conley families, which
+  keep the residual df); `"residual"` (the 3.9 default) gives t(residual
+  df): `n − k_kept − rank(absorbed [unit, time])` on the within arm, the
+  historical `n − rank(X)` on the full-dummy arms (`classical`/`hc2` values
+  bit-identical); `"normal"` gives z. Survey design df and hc2_bm BM DOF keep precedence;
   the logit/poisson arms are knob-INDEPENDENT (survey df when present,
   normal theory otherwise — an explicitly non-default `df_convention`
   warns at fit time). Post-fit `aggregate()` reproduces fit-time inference
@@ -2769,7 +2779,7 @@ Eq. 12 reuses the absorbing clean control and only restricts the treated set (a 
 
 The paper specifies no standard-error formula (Section 1 defers to "standard, well-understood techniques"); the reference Stata `lpdid` uses `vce(cluster unit)`. The entries below document diff-diff's inference and scope choices.
 
-1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)` - measured on the Stata-anchored surfaces (absorbing via the R/`teffects` arms; non-absorbing per Deviation 4's scoping: Eq. 12 everywhere, Eq. 13 post + pooled-post on the convention-neutral subsample; elsewhere the two implementations' clean-sample conventions differ, see Deviation 4); the paper prescribes no SE. **Since 3.9 (M-127) the reference is the `df_convention` knob's `"cluster"` value — LPDiD's DEFAULT, so nothing moved**: `"residual"` opts into t(per-horizon residual df `n_eff − k_kept`; on the RA path `n_total − k0_kept − 1`, the pooled M-estimator's parameter count — nuisance coefficients plus the ATT — a library convention with no external anchor since Stata `teffects ra` reports z), and `"normal"` into z. The G here stays the RAW unique cluster count (deliberately not `effective_cluster_count`: LPDiD's reweights are strictly positive and there is no user weight column, so the two cannot diverge). **Carve-out to the flat `t(G-1)` claim:** the degenerate lanes — the unclustered-refit fallback when the clustered solve fails, the RA `G<=1` lane, and the saturated-design early return (`n_obs <= k`) — keep the literal `df=None` (normal theory, NaN provenance) under ALL knob values, exactly as before 3.9.
+1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)` - measured on the Stata-anchored surfaces (absorbing via the R/`teffects` arms; non-absorbing per Deviation 4's scoping: Eq. 12 everywhere, Eq. 13 post + pooled-post on the convention-neutral subsample; elsewhere the two implementations' clean-sample conventions differ, see Deviation 4); the paper prescribes no SE. **Since 3.9 (M-127) the reference is the `df_convention` knob's `"cluster"` value — LPDiD's DEFAULT, so nothing moved; since the 4.0 flip (item 7a) it is the library-wide default too**: `"residual"` opts into t(per-horizon residual df `n_eff − k_kept`; on the RA path `n_total − k0_kept − 1`, the pooled M-estimator's parameter count — nuisance coefficients plus the ATT — a library convention with no external anchor since Stata `teffects ra` reports z), and `"normal"` into z. The G here stays the RAW unique cluster count (deliberately not `effective_cluster_count`: LPDiD's reweights are strictly positive and there is no user weight column, so the two cannot diverge). **Carve-out to the flat `t(G-1)` claim:** the degenerate lanes — the unclustered-refit fallback when the clustered solve fails, the RA `G<=1` lane, and the saturated-design early return (`n_obs <= k`) — keep the literal `df=None` (normal theory, NaN provenance) under ALL knob values, exactly as before 3.9.
 2. **Note:** The regression-adjustment (RA) covariate path (`reweight=True` with covariates/absorb) reports an **influence-function cluster variance** `sum_c (sum_{i in c} psi_i)^2 / n^2`, in the same family as `ImputationDiD`'s Theorem-3 / BJS variance (see "IF-based variance estimators vs analytical-sandwich estimators" above). Its single Gram inversion is routed through `linalg._rank_guarded_inv` (finite SE on the identified subspace under near-collinearity; NaN at rank 0). Unlike the default/weighted `solve_ols` `hc1`-cluster path - which applies the `(G/(G-1))*((n-1)/(n-K_reference))` finite-sample factor (see the nested-dummy Note below) - the RA IF variance carries **no finite-sample factor**, while both paths share the `t(G-1)` reference. **PR-B2 validated this asymmetry as faithful to the authors' own tooling**, not a defect: the no-factor RA convention matches the canonical Stata `teffects ra ... atet vce(cluster)`, while the default path matches `feols`/`reghdfe`. **Originally inferred from the authors' `lpdid_regression_adjustment.do` degrees-of-freedom comments, this is now MEASURED against a runnable `teffects`:** `benchmarks/stata/generate_lpdid_ra_golden.do` runs `teffects ra (Dy x i.time) (tdiff), atet vce(cluster unit)` on an independently reconstructed clean sample (a Stata port of the `generate_lpdid_golden.R` `prep`/`clean_h` recipe), and the library RA IF SE matches it to **~1e-16 at all 7 event-study horizons** - the SE ratio is a flat 1.0 (no `G/(G-1)`, no `(n-1)/(n-k)`), directly confirming the no-finite-sample-factor convention (golden `benchmarks/data/lpdid_ra_stata_golden.json`; test `tests/test_lpdid_ra_stata_parity.py`, which also gates the Stata clean sample's realized size and cluster count `(e(N), e(N_clust))` against the library's `(n_obs, n_clusters)`). The RA *point* estimate is triple-anchored: Python == R full-interaction (`i.dtreat##(i.time c.x)`) == Stata `teffects`, to ~1e-10..1e-13 (`tests/test_methodology_lpdid.py::test_ra_covariate_point`). Because Stata is node-locked and cannot run in CI (goldens are committed, exactly like the R arm), the CI-runnable guards remain the regression pin (`test_ra_covariate_se_regression_pin` / `RA_SE_PIN`) and the ungated Monte-Carlo coverage study `benchmarks/python/coverage_lpdid_ra.py` (~0.95 empirical coverage of the true effect at cluster counts G in {30, 100, 300}).
 3. **Note:** Direct covariate inclusion (`reweight=False` with covariates/absorb) emits a `UserWarning`: per online Appendix B.2.2 it preserves the non-negative LP-DiD weighting result only under linear and homogeneous covariate effects, so the regression-adjustment path (`reweight=True`) is preferred.
 4. **Deviation from R:** Scope - non-absorbing treatment (Section 4.2) implements the **entry-effect** estimands (`non_absorbing="first_entry"` / `"effect_stabilization"`, PR-C1). **PR-C2 R-parity-validated both modes against an INDEPENDENT `fixest::feols` reconstruction of the paper's Eq. 12 / Eq. 13 clean-sample restrictions** (point and SE match to ~1e-13/~1e-15 for the variance-weighted variants; the `effect_stabilization` reweighted point matches and its SE is pinned as a regression guard - a small weighted-cluster convention difference vs feols; `tests/test_methodology_lpdid.py::TestLPDiDNonAbsorbingParityR`). The recipe's independence was demonstrated when an earlier draft's Eq. 12 control off-by-one diverged from the already-correct library and was corrected against the paper, plus a hand-computed Python micro-check. **`alexCardazzi/lpdid`'s `nonabsorbing_lag` is NOT a faithful Eq. 13** (it clamps `treat_diff[<0]<-0`, so its clean-control window blocks only treatment turn-*ons* - a violation of Eq. 13's stated `Delta-D = 0` both-directions control condition; it also holds two convention differences on surfaces Eq. 13 does not specify: a forward placebo window, and NA-exclusion of pre-panel-treated rows where the library clamps pre-`min_t` to untreated): it diverges ~0.01-0.05 from Eq. 13 even on a monotone no-off-switch panel, so it is **recorded in the golden `meta` as a divergent third-party reference, not a parity gate** (the alexCardazzi-pooled precedent; the golden's `meta.alex_note`/`meta.boundary_note` strings predate this two-tier framing and are generation-time text - this entry is the living statement). `first_entry` (Eq. 12) has no R-package analogue (anchored on the independent feols recipe, and - since the Stata non-absorbing arm - on the authors' Stata `lpdid` package end-to-end via `nonabsorbing(, firsttreat notyet)`). **The Stata canonical SE is now MEASURED against the authors' `lpdid` package (SSC, v1.0.3) end-to-end** - the first external anchor for the non-absorbing reweighted SE, the non-absorbing pooled windows (points and SEs), and the Eq. 12 reweighted point: Eq. 12 agrees on the full committed panel at every surface (all event-study horizons incl. placebos + both pooled windows; att ~1e-14 vw / ~1.3e-8 rw, SE ~6e-17 vw / ~2.3e-9 rw), and Eq. 13 agrees at post horizons + pooled post on a convention-neutral subsample (att ~1.1e-14 vw / ~1.9e-8 rw, SE ~1.8e-16 vw / ~1.6e-9 rw; golden `benchmarks/data/lpdid_nonabsorbing_stata_golden.json`, test `tests/test_lpdid_nonabsorbing_stata_parity.py`). **Three measured convention differences vs the package**, adjudicated against the paper's stated Eq. 13 restriction (verified against the open-access working-paper text, whose Eq. 18 is the published JAE Eq. 13): (a) *exact-L re-entry spells* - Eq. 13's treated condition is a LEVELS condition (`D = 0` on `[t-L, t-1]`), which the library implements; the package's switch-free lag window additionally excludes an exit AT `t-L`, effectively requiring `L+1` untreated periods - **the package is stricter than the paper here**; (b) *pre-panel boundary handling* - the package's missing-lag semantics admit always-treated units as controls at early `t` where the library's clamp excludes them (a paper-silent surface; both are documented conventions); (c) *placebo windows* - the package builds `h<0` clean samples by recursive lagged intersection of its `CCS_0` indicator, the library uses the backward window `[t-max(L,-h), t-1]` (also paper-silent; both are conventions). The full-panel Eq. 13 divergence from (a)+(b) and the placebo/pooled-pre divergence from (c) are recorded in the golden and locked by divergence-documentation gates (att floors + sample-size mismatch asserts), so parity claims stay scoped: Eq. 13 full-panel and placebo/pooled-pre inference remain OUTSIDE the Stata anchor (the full-panel reweighted SEs stay pinned via `RW_SE_PIN`; the pooled-pre SE has no pin or anchor). Appendix-C exit-event dynamics and the non-absorbing RA path (the package's RA engine is `listreg`, and the committed non-absorbing panel has no covariate) remain deferred follow-ups.

@@ -301,8 +301,42 @@ and `BUSINESS_REPORT_SCHEMA_VERSION` is `"4.0"` (its `headline` block carries no
 
 Two changes alter results without changing any call:
 
-- **`df_convention` flips to `"cluster"`** on seven estimators. Pass `df_convention="residual"`
-  to reproduce 3.x numbers exactly.
+- **`df_convention` flips to `"cluster"`** on seven estimators (rows M-004..M-006 and
+  M-128..M-131): `DifferenceInDifferences`, `TwoWayFixedEffects`, `LinearRegression`,
+  `SunAbraham`, `WooldridgeDiD` (OLS arms), `StackedDiD` and `ImputationDiD` (pretrends
+  leads); `LPDiD` was already there. Clustered analytical p-values and confidence intervals
+  now use the Stata/fixest `t(G − 1)` reference instead of the fitted residual df
+  `t(n − K)`; point estimates, standard errors and t-statistics never move.
+
+  ```python
+  TwoWayFixedEffects().fit(df, outcome="y", treatment="d", post="post", unit="unit")
+  # 4.0: p-values / CIs at t(G - 1) on the auto-clustered fit
+  TwoWayFixedEffects(df_convention="residual").fit(
+      df, outcome="y", treatment="d", post="post", unit="unit"
+  )  # 3.x inference, bit-identical
+  ```
+
+  **Which fits move.** Every fit whose analytical sandwich is clustered: `TwoWayFixedEffects`
+  (static and event-study with `unit=`), `SunAbraham`, `WooldridgeDiD` OLS arms and
+  `StackedDiD` cluster at `unit` by default, so their default fits move; `ImputationDiD`
+  moves only on the `pretrends=True` lead rows; `DifferenceInDifferences` and
+  `LinearRegression` move only when you pass `cluster=` / `cluster_ids=`. The analytical
+  lanes that survive inside a bootstrapped fit move too: `WooldridgeDiD`'s per-cell inference
+  and its post-fit `aggregate()`, and `ImputationDiD`'s bootstrapped pretrends leads. Code that
+  relays these p-values moves with them: the fake-timing / fake-group placebo diagnostics
+  (when `estimator_kwargs` carries `cluster=`) and the power simulators
+  (`simulate_power` / `simulate_mde` / `simulate_sample_size`) on `TwoWayFixedEffects`,
+  `SunAbraham` and `StackedDiD` profiles.
+
+  **Which fits do not move.** Unclustered and Conley fits (the knob is inert without a
+  cluster count), survey-design fits (the survey df keeps precedence), `vcov_type="hc2_bm"`
+  (Bell-McCaffrey DOF keep precedence), bootstrap percentile p-values and CIs, the BJS
+  overall/post inference of `ImputationDiD`, `WooldridgeDiD`'s logit/poisson arms, the
+  permutation and leave-one-out diagnostics (they use only the point estimates), and every
+  estimator without the knob. On the surfaces where the knob is a documented no-op —
+  non-`pretrends` `ImputationDiD` fits and `WooldridgeDiD` logit/poisson fits — passing
+  `df_convention="residual"` emits the inert-config `UserWarning` (there is nothing to
+  restore there).
 - **`SpilloverDiD` auto-clusters at `unit`** when `cluster=` is omitted — it is the one
   estimator whose default standard errors move. Pass **`cluster=False`** for the 3.x
   observation-level HC numbers; `None` and omission both mean "auto-cluster", so

@@ -188,57 +188,60 @@ class Capture:
 ROWS = [
     dict(
         key="did_absorb_hc1_cluster_unit",
-        fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
-        ),
+        fit=lambda df: diff_diff.DifferenceInDifferences(
+            cluster="unit", df_convention="residual"
+        ).fit(df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]),
         cr1_k=(7,),
         tail_df=(294.0,),
         status="legitimate",
         reason=(
             "K_reference (D2 fixed): k = 2 visible + rank(time given unit) = 5; "
-            "matches reghdfe/fixest ssc(K.fixef='nested')"
+            "matches reghdfe/fixest ssc(K.fixef='nested') Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="did_fixed_effects_hc1_cluster_unit",
-        fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "time"]
-        ),
+        fit=lambda df: diff_diff.DifferenceInDifferences(
+            cluster="unit", df_convention="residual"
+        ).fit(df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "time"]),
         cr1_k=(7,),
         tail_df=(294.0,),
         status="legitimate",
         reason=(
             "K_reference (D1 fixed): 66 visible minus the 59 cluster-nested "
             "unit dummies -> identical SE to did_absorb (documented deviation "
-            "from a literal explicit-dummy R comparison, which counts all 66)"
+            "from a literal explicit-dummy R comparison, which counts all 66) Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="did_plain_hc1_cluster_unit",
-        fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", post="post"
-        ),
+        fit=lambda df: diff_diff.DifferenceInDifferences(
+            cluster="unit", df_convention="residual"
+        ).fit(df, outcome="y", treatment="grp", post="post"),
         cr1_k=(4,),
         tail_df=(356.0,),
         status="legitimate",
-        reason="no absorbed FE: visible k is the whole design; nothing is omitted",
+        reason=(
+            "no absorbed FE: visible k is the whole design; nothing is omitted."
+            " Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
+        ),
     ),
     dict(
         key="twfe_hc1_cluster_unit_time_post",
-        fit=lambda df: diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
-            df, outcome="y", treatment="grp", post="post", unit="unit"
-        ),
+        fit=lambda df: diff_diff.TwoWayFixedEffects(
+            vcov_type="hc1", cluster="unit", df_convention="residual"
+        ).fit(df, outcome="y", treatment="grp", post="post", unit="unit"),
         cr1_k=(3,),
         tail_df=(298.0,),
         status="legitimate",
         reason=(
             "K_reference (D2 fixed): 2 visible + rank(post given unit) = 1; "
-            "matches fixest cluster arm at rel 0 (committed golden)"
+            "matches fixest cluster arm at rel 0 (committed golden) Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="wooldridge_hc1_within",
-        fit=lambda df: diff_diff.WooldridgeDiD(method="ols").fit(
+        fit=lambda df: diff_diff.WooldridgeDiD(method="ols", df_convention="residual").fit(
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(15,),
@@ -249,12 +252,12 @@ ROWS = [
             "col -> +1 term; jwdid arms at ratio 1.0); tail df converged in "
             "3.9 (M-127): the default-hc1 arms use t(residual df = n - "
             "k_kept - absorbed rank) via the df_convention knob (was silent "
-            "normal theory); G-1 under 'cluster', z under 'normal'"
+            "normal theory); G-1 under 'cluster', z under 'normal' Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="sun_abraham_hc1",
-        fit=lambda df: diff_diff.SunAbraham().fit(
+        fit=lambda df: diff_diff.SunAbraham(df_convention="residual").fit(
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(21,),
@@ -265,12 +268,12 @@ ROWS = [
             "fixest sunab parity ~5e-15); D4 fixed in 3.9 (M-127): cells AND "
             "aggregates share the saturated fit's residual df under the "
             "df_convention knob (aggregates previously dropped to normal "
-            "theory inside the same fit)"
+            "theory inside the same fit) Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="stacked_did_hc1",
-        fit=lambda df: diff_diff.StackedDiD().fit(
+        fit=lambda df: diff_diff.StackedDiD(df_convention="residual").fit(
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(6,),
@@ -285,7 +288,7 @@ ROWS = [
             "pins vcovCR(type='CR1S') at atol=1e-10); tail df converged in "
             "3.9 (M-127): t(pooled residual df n_eff - k_kept) via the "
             "df_convention knob (was silent normal theory; stacked rows make "
-            "the residual df large, so z -> t is a convention alignment)"
+            "the residual df large, so z -> t is a convention alignment) Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
@@ -298,13 +301,13 @@ ROWS = [
         status="legitimate",
         reason=(
             "L2: G-1 tail df (Stata/fixest convention) — since 3.9 the "
-            "df_convention='cluster' DEFAULT on LPDiD (bit-identical; the "
-            "one surface already at the v4 target)"
+            "df_convention='cluster' DEFAULT on LPDiD (bit-identical; adopted "
+            "at 3.9, the library-wide default since the 4.0 flip)"
         ),
     ),
     dict(
         key="twfe_es_within_hc1_cluster_unit",
-        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="unit").fit(
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="unit", df_convention="residual").fit(
             df,
             outcome="y",
             treatment="grp",
@@ -324,12 +327,12 @@ ROWS = [
             "TWFE event-study, within spec (4.0 cut, PR 4c-i): K_reference = 6 "
             "visible (intercept + 5 interactions) + rank(time given the "
             "absorbed, cluster-nested unit FE) = 5, i.e. 11; the full-dummy form "
-            "would read 70 visible minus the 59 cluster-nested unit dummies = 11"
+            "would read 70 visible minus the 59 cluster-nested unit dummies = 11 Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
         key="twfe_es_pooled_hc1_cluster_time",
-        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="time").fit(
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="time", df_convention="residual").fit(
             df,
             outcome="y",
             treatment="grp",
@@ -346,7 +349,7 @@ ROWS = [
             "TWFE event-study, pooled spec (4.0 cut, PR 4c-i): the NESTED "
             "orientation of the built-in period dummies under a time cluster - 12 "
             "visible minus their rank 5 = 7 (under-subtraction is caught here; the "
-            "unit-cluster within row catches over-)"
+            "unit-cluster within row catches over-) Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
         ),
     ),
     dict(
@@ -383,14 +386,16 @@ ROWS = [
         key="imputation_pretrends_event_study",
         # The pretrends lead regression runs on the post-fit event-study
         # route (4.0: no fit-time aggregate=), so the row spies fit + aggregate.
-        fit=lambda df: diff_diff.ImputationDiD(pretrends=True)
+        fit=lambda df: diff_diff.ImputationDiD(pretrends=True, df_convention="residual")
         .fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
         .aggregate("event_study"),
         cr1_k=None,  # contract row: shared CR1 REACHED; exact k is config-detail
         # Pinned since 3.9 (M-127): the three lead calls carry the knob-
         # resolved residual df (157 = n_untreated - k_kept - absorbed rank
-        # on the audit panel); the None entries are the knob-INDEPENDENT
-        # BJS overall/event-study calls (L3) captured by the same spy.
+        # on the audit panel; explicit 'residual' since the 4.0 default is
+        # G-1 - see the _default_df twin); the None entries are the
+        # knob-INDEPENDENT BJS overall/event-study calls (L3) captured by
+        # the same spy.
         tail_df=(157.0,) * 3 + (None,) * 5,
         # The increment IS pinned even though k is not: every clustered-hc1
         # call on this surface must carry the [time, unit] no-intercept
@@ -540,6 +545,133 @@ ROWS = [
             "no CR1 sandwich, normal-theory safe_inference gate only"
         ),
     ),
+    # ---- 4.0 default twins: identical fits WITHOUT the explicit knob, so the
+    # tail df is G-1 (G = clusters with positive weight on each surface's
+    # clustered sample). The cr1_k literals are copied from the residual twins
+    # (the knob never touches the sandwich).
+    dict(
+        key="did_absorb_hc1_cluster_unit_default_df",
+        fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
+            df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
+        ),
+        cr1_k=(7,),
+        tail_df=(59.0,),
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="twfe_hc1_cluster_unit_default_df",
+        fit=lambda df: diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
+            df, outcome="y", treatment="grp", post="post", unit="unit"
+        ),
+        cr1_k=(3,),
+        tail_df=(59.0,),
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="wooldridge_hc1_within_default_df",
+        fit=lambda df: diff_diff.WooldridgeDiD(method="ols").fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        ),
+        cr1_k=(15,),
+        tail_df=(59.0,) * 10,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="sun_abraham_hc1_default_df",
+        fit=lambda df: diff_diff.SunAbraham().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        ),
+        cr1_k=(21,),
+        tail_df=(59.0,) * 23,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="stacked_did_hc1_default_df",
+        fit=lambda df: diff_diff.StackedDiD().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        ),
+        cr1_k=(6,),
+        tail_df=(59.0,) * 3,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="twfe_es_within_hc1_cluster_unit_default_df",
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="unit").fit(
+            df,
+            outcome="y",
+            treatment="grp",
+            unit="unit",
+            time="time",
+            event_study=True,
+            spec="within",
+            post_periods=[4, 5, 6],
+            reference_period=1,
+        ),
+        cr1_k=(11,),
+        tail_df=(59.0,) * 5,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="twfe_es_pooled_hc1_cluster_time_default_df",
+        fit=lambda df: diff_diff.TwoWayFixedEffects(cluster="time").fit(
+            df,
+            outcome="y",
+            treatment="grp",
+            time="time",
+            event_study=True,
+            spec="pooled",
+            post_periods=[4, 5, 6],
+            reference_period=1,
+        ),
+        cr1_k=(7,),
+        tail_df=(5.0,) * 5,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
+    dict(
+        key="imputation_pretrends_event_study_default_df",
+        fit=lambda df: diff_diff.ImputationDiD(pretrends=True)
+        .fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
+        .aggregate("event_study"),
+        cr1_k=None,
+        # G-1 of the lead regression's untreated sample (59 on the audit
+        # panel: every unit has untreated rows); the None entries are the
+        # knob-independent BJS calls, exactly as on the residual twin.
+        tail_df=(59.0,) * 3 + (None,) * 5,
+        expected_adjustment=6,
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - "
+            "same CR1 k as the explicit-'residual' twin, tail df G-1"
+        ),
+    ),
 ]
 
 _FAST_KEYS = {
@@ -548,6 +680,9 @@ _FAST_KEYS = {
     "did_fixed_effects_hc1_cluster_unit",
     "twfe_hc1_cluster_unit_time_post",
     "wooldridge_hc1_within",
+    "did_absorb_hc1_cluster_unit_default_df",
+    "twfe_hc1_cluster_unit_default_df",
+    "wooldridge_hc1_within_default_df",
     "lpdid_pre2_post2",
     "callaway_santanna_default",
 }
@@ -970,15 +1105,21 @@ class TestAbsorbedFeRank:
         df = self._disconnected(effect=0.5)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            tw = diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
+            tw = diff_diff.TwoWayFixedEffects(
+                vcov_type="hc1", cluster="unit", df_convention="residual"
+            ).fit(df, outcome="y", treatment="grp", post="time", unit="unit")
+            tw_default = diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
                 df, outcome="y", treatment="grp", post="time", unit="unit"
             )
         assert np.isfinite(tw.se)
-        # Discriminating df pin: the C=2 rank lowers the absorbed adjustment
-        # by 1, so the reported residual df moves off the legacy value -
-        # reverting the caller to sum(levels-1) reads 114.0 on this fixture
-        # and fails here.
+        # Discriminating df pin (explicit 'residual' since the 4.0 default is
+        # G-1): the C=2 rank lowers the absorbed adjustment by 1, so the
+        # reported residual df moves off the legacy value - reverting the
+        # caller to sum(levels-1) reads 114.0 on this fixture and fails here.
         assert tw.inference_df == 115.0
+        # The 4.0 default on the same fit: t(G-1), G = unique units.
+        assert tw_default.inference_df == df["unit"].nunique() - 1
+        assert tw_default.se == tw.se
 
     def test_fail_closed_boundary_moves_both_directions(self):
         """Lowering the absorbed df by C-1 moves the n - k - adj boundary.

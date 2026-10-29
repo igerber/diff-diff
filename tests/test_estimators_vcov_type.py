@@ -2265,12 +2265,14 @@ class TestAbsorbedFEFullKParity:
 
 
 class TestDfConvention:
-    """`df_convention="cluster"` (opt-in Stata/fixest G-1 inference df on
-    clustered analytical fits; REGISTRY clustered-CR1 inference-df deviation
-    note). The knob changes ONLY the reference t-distribution for t/p/CI —
-    never the point estimate, SE, or t-statistic — and sits at the fallback
-    level of the df resolution (survey df and per-coefficient Bell-McCaffrey
-    DOF always win). Default stays "residual" until the v4 flip."""
+    """`df_convention` (Stata/fixest G-1 inference df on clustered analytical
+    fits under the 4.0 default "cluster"; "residual" restores the 3.x
+    residual-df tail; REGISTRY clustered-CR1 inference-df note). The knob
+    changes ONLY the reference t-distribution for t/p/CI — never the point
+    estimate, SE, or t-statistic — and sits at the fallback level of the df
+    resolution (survey df and per-coefficient Bell-McCaffrey DOF always
+    win). The default flipped from "residual" to "cluster" at 4.0 (rows
+    M-004/M-005), so every "off" baseline below is an EXPLICIT "residual"."""
 
     @staticmethod
     def _clustered_panel(n_units=50, seed=42):
@@ -2295,15 +2297,17 @@ class TestDfConvention:
                 )
         return pd.DataFrame(rows)
 
-    def test_default_residual_is_noop(self):
-        """Explicit df_convention="residual" is byte-identical to the default."""
+    def test_default_cluster_is_g_minus_1(self):
+        """The 4.0 default: explicit df_convention="cluster" is byte-identical
+        to the default, the default p-value IS the t(G-1) tail, and the 3.x
+        residual-df tail is only reachable through explicit "residual"."""
         from scipy import stats
 
         data = self._clustered_panel()
         r0 = DifferenceInDifferences(cluster="unit").fit(
             data, outcome="y", treatment="group", post="post", unit="unit"
         )
-        r1 = DifferenceInDifferences(cluster="unit", df_convention="residual").fit(
+        r1 = DifferenceInDifferences(cluster="unit", df_convention="cluster").fit(
             data, outcome="y", treatment="group", post="post", unit="unit"
         )
         assert (r0.att, r0.se, r0.t_stat, r0.p_value, r0.conf_int) == (
@@ -2313,17 +2317,25 @@ class TestDfConvention:
             r1.p_value,
             r1.conf_int,
         )
-        # and the default really is the residual-df tail, not G-1
-        assert abs(r0.p_value - 2 * stats.t.sf(abs(r0.t_stat), 49)) > 1e-4
+        G = data["unit"].nunique()
+        assert r0.inference_df == G - 1
+        np.testing.assert_allclose(r0.p_value, 2 * stats.t.sf(abs(r0.t_stat), G - 1), rtol=1e-12)
+        # and the residual-df tail (the 3.x default) differs measurably
+        rr = DifferenceInDifferences(cluster="unit", df_convention="residual").fit(
+            data, outcome="y", treatment="group", post="post", unit="unit"
+        )
+        assert rr.inference_df > G - 1
+        assert abs(r0.p_value - rr.p_value) > 1e-4
 
     @pytest.mark.parametrize("estimator_cls", [DifferenceInDifferences])
     def test_cluster_convention_matches_g_minus_1(self, estimator_cls):
-        """Knob on: p/CI follow t(G-1) exactly; att/SE/t unchanged."""
+        """Knob on: p/CI follow t(G-1) exactly; att/SE/t unchanged vs the
+        explicit "residual" baseline (the 3.x default)."""
         from scipy import stats
 
         data = self._clustered_panel()
         kw = dict(outcome="y", treatment="group", post="post", unit="unit")
-        r0 = estimator_cls(cluster="unit").fit(data, **kw)
+        r0 = estimator_cls(cluster="unit", df_convention="residual").fit(data, **kw)
         r1 = estimator_cls(cluster="unit", df_convention="cluster").fit(data, **kw)
         assert r0.att == r1.att and r0.se == r1.se and r0.t_stat == r1.t_stat
         G = data["unit"].nunique()
@@ -2342,9 +2354,10 @@ class TestDfConvention:
         data = self._clustered_panel()
         data["treated"] = data["group"] * data["post"]
         kw = dict(outcome="y", treatment="treated", post="post", unit="unit")
-        r0 = TwoWayFixedEffects().fit(data, **kw)
+        r0 = TwoWayFixedEffects(df_convention="residual").fit(data, **kw)
         r1 = TwoWayFixedEffects(df_convention="cluster").fit(data, **kw)
         assert r0.se == r1.se and r0.t_stat == r1.t_stat
+        assert r0.p_value != r1.p_value
         G = data["unit"].nunique()
         np.testing.assert_allclose(r1.p_value, 2 * stats.t.sf(abs(r1.t_stat), G - 1), rtol=1e-12)
 
@@ -2363,7 +2376,7 @@ class TestDfConvention:
             spec="pooled",
             post_periods=[2, 3],
         )
-        m0 = TwoWayFixedEffects(cluster="unit").fit(data, **kw)
+        m0 = TwoWayFixedEffects(cluster="unit", df_convention="residual").fit(data, **kw)
         m1 = TwoWayFixedEffects(cluster="unit", df_convention="cluster").fit(data, **kw)
         G = data["unit"].nunique()
         for i in np.where(~m1.is_reference)[0]:
@@ -2409,7 +2422,7 @@ class TestDfConvention:
             conley_cutoff_km=100.0,
             conley_lag_cutoff=0,
         )
-        r0 = DifferenceInDifferences(**common).fit(data, **kw)
+        r0 = DifferenceInDifferences(**common, df_convention="residual").fit(data, **kw)
         r1 = DifferenceInDifferences(**common, df_convention="cluster").fit(data, **kw)
         assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)
 
@@ -2421,7 +2434,9 @@ class TestDfConvention:
         kw = dict(outcome="y", treatment="group", post="post", unit="unit")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r0 = DifferenceInDifferences(cluster="unit", vcov_type="hc2_bm").fit(data, **kw)
+            r0 = DifferenceInDifferences(
+                cluster="unit", vcov_type="hc2_bm", df_convention="residual"
+            ).fit(data, **kw)
             r1 = DifferenceInDifferences(
                 cluster="unit", vcov_type="hc2_bm", df_convention="cluster"
             ).fit(data, **kw)
@@ -2578,22 +2593,22 @@ class TestDfConvention:
         est = DifferenceInDifferences()
         with pytest.raises(ValueError, match="df_convention"):
             est.set_params(df_convention="bogus")
-        assert est.df_convention == "residual"  # unchanged after failed set
-        est.set_params(df_convention="cluster")
-        assert est.df_convention == "cluster"
+        assert est.df_convention == "cluster"  # the 4.0 default, unchanged after failed set
+        est.set_params(df_convention="residual")
+        assert est.df_convention == "residual"
 
     def test_get_params_roundtrip(self):
-        est = DifferenceInDifferences(cluster="unit", df_convention="cluster")
+        est = DifferenceInDifferences(cluster="unit", df_convention="residual")
         params = est.get_params()
-        assert params["df_convention"] == "cluster"
+        assert params["df_convention"] == "residual"
         clone = DifferenceInDifferences(**params)
-        assert clone.df_convention == "cluster"
+        assert clone.df_convention == "residual"
 
     def test_unclustered_fit_knob_is_inert(self):
         """No cluster -> n_clusters_ is None -> knob has zero effect."""
         data = self._clustered_panel()
         kw = dict(outcome="y", treatment="group", post="post")
-        r0 = DifferenceInDifferences().fit(data, **kw)
+        r0 = DifferenceInDifferences(df_convention="residual").fit(data, **kw)
         r1 = DifferenceInDifferences(df_convention="cluster").fit(data, **kw)
         assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)
 

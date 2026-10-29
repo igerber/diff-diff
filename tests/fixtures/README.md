@@ -64,7 +64,11 @@ route was closed at capture): the contract test pins reference MEMBERSHIP
 against it, so a surface that mis-marks an estimated horizon as reference
 fails instead of having that row skipped. Re-capturing
 on a post-removal tree is NOT a substitute: the fit-time route is gone, so
-nothing independent remains to disagree with.
+nothing independent remains to disagree with. The ImputationDiD
+`pretrends_all` lanes (analytic and boot) were captured under the 3.x
+`df_convention="residual"` default (lead rows at t(residual df)); since the
+4.0 flip to `"cluster"` (item 7a) the contract tests fit those lanes with
+`df_convention="residual"` explicitly, so the oracle numbers are untouched.
 
 ## `v4_twfe_event_study_oracles.json` - TWFE event-study decoupling oracles (4.0 PR 4c-i)
 
@@ -76,7 +80,12 @@ built its surface through an internal `MultiPeriodDiDResults` and
 `results_base._from_mpd`, and while `MultiPeriodDiD` still existed as the
 independent twin of every lane. Per-lane capture SHAs: 11 lanes at `68e383bd`
 (top-level `provenance`), the two cluster + hc2_bm lanes at `d45d5316`
-(`provenance.lane_additions`). Layout:
+(`provenance.lane_additions`). The two unit-clustered analytical lanes
+(`pooled_cluster_unit`, `within_cluster_unit`) were captured under the 3.x
+`df_convention="residual"` default; since the 4.0 flip to `"cluster"` (item
+7a) their lane definitions and `echo.twfe_ctor` carry
+`"df_convention": "residual"` explicitly - a metadata-only change, no
+numeric field was touched. Layout:
 
 - `provenance` - capture SHA, `diff_diff.__version__`, weight backend,
   numpy/scipy/pandas/python versions, plus `lane_additions.<lane>` with the

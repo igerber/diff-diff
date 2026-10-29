@@ -163,9 +163,13 @@ def _within(ctor: Dict[str, Any], survey_label: Optional[str] = None) -> Lane:
 
 LANES: Dict[str, Lane] = {
     "pooled_default": _pooled({}),
-    "pooled_cluster_unit": _pooled({"cluster": "unit"}),
+    # The two unit-clustered analytical lanes were captured under the 3.x
+    # df_convention="residual" default; since the 4.0 flip (G-1 default)
+    # they pin the captured convention explicitly (metadata-only change -
+    # the oracle numbers are untouched).
+    "pooled_cluster_unit": _pooled({"cluster": "unit", "df_convention": "residual"}),
     "pooled_hc2_bm": _pooled({"vcov_type": "hc2_bm"}),
-    "within_cluster_unit": _within({"cluster": "unit"}),
+    "within_cluster_unit": _within({"cluster": "unit", "df_convention": "residual"}),
     "within_hc2": _within({"vcov_type": "hc2"}),
     # Cluster + hc2_bm: the CR2 Bell-McCaffrey bypass that no other lane
     # reaches; captured at d45d5316 (PR 4c-ii, before the core's post-average

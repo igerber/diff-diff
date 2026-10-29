@@ -95,8 +95,8 @@ class LPDiD(BaseEstimator):
                 "(the estimand becomes ambiguous); use control_group='clean' (the default)"
             )
         # LPDiD's DEFAULT is "cluster" — its t(G-1) reference is the Stata
-        # lpdid convention and already the library-wide 4.0 target, so the
-        # default moves nothing (unlike the "residual"-default estimators).
+        # lpdid convention; since the 4.0 flip it is the library-wide default
+        # too (LPDiD adopted it at 3.9, ahead of the other knob surfaces).
         validate_df_convention(self.df_convention)
 
     def _rhs_column_names(self, covariates=None, ylags=0, dylags=0):

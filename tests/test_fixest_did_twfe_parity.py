@@ -183,8 +183,9 @@ class TestFixestTailDfParity:
     since it was generated, but nothing asserted them until the tail-df
     consolidation. Two lanes:
 
-    - iid arms under the DEFAULT `df_convention="residual"`: fixest's iid
-      t-reference is the residual df, so Python matches directly (measured
+    - iid arms (unclustered, so the `df_convention` knob is inert and the
+      residual df applies under every value): fixest's iid t-reference is
+      the residual df, so Python matches directly (measured
       during plan review: Python residual df == fixest implied df on all four
       arms — did 396, twfe 148, did_hetero 209, twfe_hetero 125; p/CI agree
       to ~1e-13 relative).
@@ -206,7 +207,7 @@ class TestFixestTailDfParity:
             df, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
-    def test_iid_p_and_ci_match_fixest_under_residual_default(self):
+    def test_iid_p_and_ci_match_fixest_on_the_knob_inert_iid_lane(self):
         golden = _load_golden()
         for key, tol in self._P_TOL.items():
             res = self._fit(key, golden, vcov_type="classical")

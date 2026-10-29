@@ -3214,16 +3214,26 @@ class TestImputationDfConvention:
         h = min(k for k in effects if k < -1)
         return h, effects[h]
 
-    def test_leads_are_t_residual_not_z(self):
-        res = ImputationDiD(pretrends=True).fit(self._panel(), **self._kw)
+    def test_leads_are_t_g_minus_1_not_z(self):
+        """The 4.0 default (M-131): the lead rows use t(G-1); explicit
+        "residual" keeps the 3.9 t(lead-regression residual df)."""
+        data = self._panel()
+        res = ImputationDiD(pretrends=True).fit(data, **self._kw)
         h, e = self._lead(res)
         assert e["p_value"] != self._z_p(e["t_stat"])
+        G = data["unit"].nunique()
         match = [d for d in range(2, 600) if abs(e["p_value"] - self._t_p(e["t_stat"], d)) < 1e-13]
-        assert len(match) == 1
+        assert match == [G - 1], match
+        rr = ImputationDiD(pretrends=True, df_convention="residual").fit(data, **self._kw)
+        _, er = self._lead(rr)
+        match_r = [
+            d for d in range(2, 600) if abs(er["p_value"] - self._t_p(er["t_stat"], d)) < 1e-13
+        ]
+        assert len(match_r) == 1 and match_r[0] > G - 1, match_r
 
     def test_cluster_matches_g_minus_1_on_leads_only(self):
         data = self._panel()
-        r0 = ImputationDiD(pretrends=True).fit(data, **self._kw)
+        r0 = ImputationDiD(pretrends=True, df_convention="residual").fit(data, **self._kw)
         rc = ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
         h, e0 = self._lead(r0)
         es0, esc = es_dict(r0), es_dict(rc)
@@ -3246,7 +3256,11 @@ class TestImputationDfConvention:
 
     def test_pretrend_wald_f_is_knob_independent(self):
         data = self._panel()
-        pt0 = ImputationDiD(pretrends=True).fit(data, **self._kw).pretrend_test()
+        pt0 = (
+            ImputationDiD(pretrends=True, df_convention="residual")
+            .fit(data, **self._kw)
+            .pretrend_test()
+        )
         ptc = (
             ImputationDiD(pretrends=True, df_convention="cluster")
             .fit(data, **self._kw)
@@ -3286,17 +3300,22 @@ class TestImputationDfConvention:
         data = self._panel()
         base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         with pytest.warns(UserWarning, match="affects only the pretrends"):
-            ImputationDiD(df_convention="cluster").fit(data, **base)
+            ImputationDiD(df_convention="residual").fit(data, **base)
+        # the default itself never warns (it is not an explicitly non-default value)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ImputationDiD().fit(data, **base)
+        assert not any("affects only the pretrends" in str(w.message) for w in caught)
         # pretrends=True, analytical: reachable post-fit -> no warning.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **base)
+            ImputationDiD(pretrends=True, df_convention="residual").fit(data, **base)
         assert not any("affects only the pretrends" in str(w.message) for w in caught)
         # pretrends=True + bootstrap: the lead surface is materialized at
         # fit (analytical lead inference) and relayed -> no warning.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            ImputationDiD(pretrends=True, df_convention="cluster", n_bootstrap=9, seed=1).fit(
+            ImputationDiD(pretrends=True, df_convention="residual", n_bootstrap=9, seed=1).fit(
                 data, **base
             )
         assert not any("affects only the pretrends" in str(w.message) for w in caught)
@@ -3310,7 +3329,7 @@ class TestImputationDfConvention:
             weight_type="pweight",
         )
         with pytest.warns(UserWarning, match="affects only the pretrends"):
-            ImputationDiD(pretrends=True, df_convention="cluster").fit(
+            ImputationDiD(pretrends=True, df_convention="residual").fit(
                 rep_data, survey_design=design, **base
             )
 
@@ -3320,7 +3339,7 @@ class TestImputationDfConvention:
         est = ImputationDiD()
         with pytest.raises(ValueError, match="df_convention"):
             est.set_params(df_convention="bogus", alpha=0.10)
-        assert est.df_convention == "residual" and est.alpha == 0.05
+        assert est.df_convention == "cluster" and est.alpha == 0.05
         # Valid value + unknown key: the unknown-key rejection must also
         # leave the estimator fully unchanged (no partial application).
         before = est.get_params()

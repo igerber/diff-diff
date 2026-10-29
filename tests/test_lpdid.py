@@ -1979,8 +1979,9 @@ class TestLPDiDDfConvention:
     """The three-value df_convention knob on LPDiD (3.9 / M-127).
 
     LPDiD's DEFAULT is "cluster" — the pre-existing Stata lpdid t(G-1)
-    reference — so the default moves NOTHING (unlike the "residual"-default
-    estimators). "residual"/"normal" are new opt-ins; the degenerate lanes
+    reference, adopted at 3.9 ahead of the library-wide 4.0 flip — so the
+    3.9 knob introduction moved NOTHING here. "residual"/"normal" are
+    opt-ins; the degenerate lanes
     (unclustered refit, RA G<=1, saturated early return) keep literal
     df=None under every value.
     """

@@ -3724,7 +3724,12 @@ class TestImputationAggregate:
         )
 
     def test_pretrends_arm_matches_oracle(self, imputation_panel):
-        plain = _fit_imputation(imputation_panel, est_kw={"pretrends": True})
+        # The oracle was captured under the 3.x df_convention="residual"
+        # default (lead rows at t(residual df)); the 4.0 default is G-1, so
+        # the lane names the captured convention explicitly.
+        plain = _fit_imputation(
+            imputation_panel, est_kw={"pretrends": True, "df_convention": "residual"}
+        )
         es = plain.aggregate("event_study")
         _assert_es_matches_oracle(es, _im_oracle("pretrends_all"), **ANALYTIC_TOL, name="imp/pre")
         assert (np.asarray(es.event_time) < -1).any()  # leads present
@@ -3741,7 +3746,7 @@ class TestImputationAggregate:
         object.__setattr__(res, "anticipation", 3)
         # Imputation-only public config fields the kit snapshots:
         object.__setattr__(res, "leave_one_out", True)
-        object.__setattr__(res, "df_convention", "cluster")
+        object.__setattr__(res, "df_convention", "residual")
         pd.testing.assert_frame_equal(res.aggregate("event_study").to_dataframe(), base_es)
         pd.testing.assert_frame_equal(res.aggregate("group").to_dataframe(), base_gr)
         pd.testing.assert_frame_equal(res.aggregate("simple").to_dataframe(), base_sm)
@@ -3786,7 +3791,12 @@ class TestImputationAggregate:
         _assert_bootstrap_simple_relay(res)
 
     def test_bootstrap_pretrends_relay_matches_oracle(self, imputation_panel):
-        res = _fit_imputation(imputation_panel, est_kw={**_IM_BOOT_KW, "pretrends": True})
+        # Lead rows stay analytical under bootstrap and were captured under
+        # the 3.x df_convention="residual" default (see the analytic arm).
+        res = _fit_imputation(
+            imputation_panel,
+            est_kw={**_IM_BOOT_KW, "pretrends": True, "df_convention": "residual"},
+        )
         es = res.aggregate("event_study")
         _assert_es_matches_oracle(
             es, _im_boot_oracle("pretrends_all"), **BOOT_TOL, p_atol=_IM_P_ATOL, name="imp/boot/pre"

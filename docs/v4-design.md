@@ -862,8 +862,15 @@ domain vocabulary, not drift.
   ImputationDiD-pretrends (their 4.0 flips are [M-128]..[M-131]) and LPDiD
   (default already `"cluster"`, no flip row). The flip moves every clustered
   p-value/CI; the flip PR updates `TestDfConvention` /
-  `test_moderate_t_pins_residual_df_convention` / the per-estimator knob
-  suites' expectations and adds the migration-guide entry.
+  `test_moderate_t_pins_cluster_df_convention` / the per-estimator knob
+  suites' expectations and adds the migration-guide entry. (SHIPPED, item
+  7a, 2026-10-28: the six signature defaults - TWFE inherits DiD's - read
+  `"cluster"`; `TestDfConvention`, `test_moderate_t_pins_cluster_df_convention`
+  and the per-estimator knob suites pin the G-1 default with explicit
+  `"residual"` baselines; the variance-conventions matrix keeps its
+  residual-df rows as explicit `"residual"` arms and gains G-1 `_default_df`
+  twins; the committed oracle lanes that embed residual-df inference name
+  that convention explicitly. Pinned by `tests/test_v4_inference_defaults.py`.)
 - **Fast-path default** [M-008]: decided 2026-10-18 (4.0-cut framing, user
   decision) - evaluated, KEPT OFF. No opt-in telemetry was ever collected in
   the 3.9 -> 3.13 gap and the golden recapture never ran, so there is no
@@ -1199,12 +1206,21 @@ tests-first PR that flips no rows).
    report schemas gain an additive `design` key under the unshipped DR 3.0 /
    BR 4.0 numbers. Pinned by `tests/test_v4_unify_ddd.py`.)
 7. Inference defaults: the df_convention flips + [M-080] as re-scoped +
-   the uniform `cluster=False` off-switch.
+   the uniform `cluster=False` off-switch. (7a SHIPPED 2026-10-28: the
+   df_convention flips [M-004]..[M-006] + [M-128]..[M-131], pinned by
+   `tests/test_v4_inference_defaults.py`; 7b = [M-080] pending.)
 8. [M-093] sentinel retirement + event-study schema enforcement.
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
-    migration-guide retitle, due gate green.
+    migration-guide retitle, due gate green; re-execute (Rust backend) the
+    tutorials whose clustered-default outputs moved at item 7a and were
+    deliberately left stale - 01_basic_did, 02_staggered_did,
+    04_parallel_trends, 05_honest_did, 07_pretrends_power,
+    09_real_world_examples, 11_imputation_did, 13_stacked_did,
+    16_wooldridge_etwfe (NOT 16_survey_did: the survey df wins) - plus any
+    7b/8/9 movers; 24 is handled in 7a and 23 in 7b (each re-executed there
+    if its outputs moved).
 
 Ordering constraints: 4a before 4b before 4c-i before 4c-ii; 4 before 5 and 6; 5 before 6
 (the unified DDD container is born canonical); 7 and 8 independent; 9 after

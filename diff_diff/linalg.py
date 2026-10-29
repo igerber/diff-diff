@@ -4419,18 +4419,19 @@ class LinearRegression:
         neither is formally PSD-guaranteed in the radial pairwise form
         (Conley 1999's explicit PSD Bartlett formula is the 2-D separable
         product window, Eq 3.14, not the 1-D radial pairwise form).
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for ``get_inference`` t/p/CI.
-        ``"residual"`` uses the fitted residual df; ``"cluster"`` uses the
-        Stata/fixest cluster df ``G − 1`` (from ``n_clusters_``) —
+        ``"cluster"`` (default since 4.0) uses the Stata/fixest cluster df
+        ``G − 1`` (from ``n_clusters_``); ``"residual"`` (the 3.x default)
+        uses the fitted residual df —
         ``"cluster"`` has no effect on unclustered fits or
         ``vcov_type="conley"`` (no documented ``G − 1`` reference for the
         Conley+cluster product kernel); ``"normal"`` deliberately uses
         normal-theory z inference at the fallback level on every fit,
         clustered or not. Fallback-level only under every value: survey df
         and per-coefficient Bell-McCaffrey DOF always take precedence. No
-        effect on coefficients, SEs, or t-statistics. Default flips to
-        ``"cluster"`` at v4.
+        effect on coefficients, SEs, or t-statistics. The default flipped
+        to ``"cluster"`` at 4.0 (row M-006).
 
     Attributes
     ----------
@@ -4500,7 +4501,7 @@ class LinearRegression:
         conley_time: Optional[np.ndarray] = None,
         conley_unit: Optional[np.ndarray] = None,
         conley_lag_cutoff: Optional[int] = None,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ):
         # Inline validation (not utils.validate_df_convention): diff_diff.utils
         # imports diff_diff.linalg at module level, so importing back would be
@@ -4528,13 +4529,13 @@ class LinearRegression:
         self.conley_unit = conley_unit
         self.conley_lag_cutoff = conley_lag_cutoff
         # Inference df convention for clustered analytical fits:
-        # "residual" (default) keeps the fitted residual df `n - K_full` for
-        # t/p/CI; "cluster" uses the Stata/fixest cluster df `G - 1` instead.
+        # "cluster" (default since 4.0) uses the Stata/fixest cluster df
+        # `G - 1` for t/p/CI; "residual" (the 3.x default) keeps the fitted
+        # residual df `n - K_full` instead.
         # Applies ONLY at the fallback level of the `get_inference` df
         # resolution: survey df and per-coefficient Bell-McCaffrey DOF (which
-        # are more refined small-sample corrections) always take precedence.
-        # The default flips to "cluster" at v4 (see REGISTRY clustered-CR1
-        # inference-df deviation note).
+        # are more refined small-sample corrections) always take precedence
+        # (see the REGISTRY clustered-CR1 inference-df note).
         self.df_convention = df_convention
         # Resolve/validate vcov_type via the shared helper.
         self.vcov_type = resolve_vcov_type(vcov_type)
@@ -5149,7 +5150,9 @@ class LinearRegression:
         alpha : float, optional
             Significance level for CI. Defaults to instance-level alpha.
         df : int, optional
-            Degrees of freedom. Defaults to fitted df (n - k - df_adjustment).
+            Degrees of freedom. Defaults to the ``df_convention``-resolved
+            df: ``G - 1`` on clustered fits under the default ``"cluster"``,
+            the fitted residual df (n - k - df_adjustment) otherwise.
             Set to None explicitly to use normal distribution instead of t.
 
         Returns
@@ -5220,15 +5223,15 @@ class LinearRegression:
             and self.n_clusters_ is not None
             and self.vcov_type != "conley"
         ):
-            # Opt-in Stata/fixest cluster-df convention for clustered
-            # analytical fits: t/p/CI at df = G - 1 instead of the residual
-            # df. conley is excluded: the combined Conley+cluster product
+            # Stata/fixest cluster-df convention (the 4.0 default) for
+            # clustered analytical fits: t/p/CI at df = G - 1 instead of the
+            # residual df. conley is excluded: the combined Conley+cluster product
             # kernel is a diff-diff convention with no documented G-1 df
             # reference (REGISTRY Conley section); it keeps the residual df.
             # Deliberately the LAST branch before the residual fallback:
             # survey df and per-coefficient Bell-McCaffrey DOF are more
-            # refined small-sample corrections and always win. Default flips
-            # at v4 (REGISTRY clustered-CR1 inference-df deviation note).
+            # refined small-sample corrections and always win (REGISTRY
+            # clustered-CR1 inference-df note).
             if self.n_clusters_ <= 1:
                 # Cluster df G - 1 is undefined for an effectively
                 # one-cluster fit (e.g. weighted fit where only one cluster
@@ -5310,7 +5313,9 @@ class LinearRegression:
         alpha : float, optional
             Significance level for CIs. Defaults to instance-level alpha.
         df : int, optional
-            Degrees of freedom. Defaults to fitted df.
+            Degrees of freedom. Defaults to the ``df_convention``-resolved df
+            (``G - 1`` on clustered fits under the default ``"cluster"``, the
+            fitted residual df otherwise).
 
         Returns
         -------
@@ -5340,7 +5345,9 @@ class LinearRegression:
         alpha : float, optional
             Significance level for CIs. Defaults to instance-level alpha.
         df : int, optional
-            Degrees of freedom. Defaults to fitted df.
+            Degrees of freedom. Defaults to the ``df_convention``-resolved df
+            (``G - 1`` on clustered fits under the default ``"cluster"``, the
+            fitted residual df otherwise).
 
         Returns
         -------

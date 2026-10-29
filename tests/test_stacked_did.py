@@ -1964,18 +1964,30 @@ class TestStackedDfConvention:
 
         return 2 * stats.norm.sf(abs(t_stat))
 
-    def test_residual_default_is_t_with_pinned_df(self):
-        """The defect fix: hc1 lane moved z -> t(pooled residual df). Assert
-        the RESOLVED df value directly (a p-movement assertion is vacuous on
-        stacked designs: the residual df is large, t ~= z)."""
+    def test_default_is_t_g_minus_1_with_pinned_df(self):
+        """The 4.0 default (M-130): the hc1 lane uses t(G-1). Assert the
+        RESOLVED df value directly (a p-movement assertion is vacuous on
+        stacked designs for the residual arm: that df is large, t ~= z)."""
         res = StackedDiD(kappa_pre=2, kappa_post=2).fit(self._panel(), **self._kw)
+        assert res.inference_df == res.n_clusters - 1
+        assert res.p_value == pytest.approx(self._t_p(res.t_stat, res.n_clusters - 1), rel=1e-12)
+        finite = {v for v in res.event_study_df.values() if np.isfinite(v)}
+        assert finite == {float(res.n_clusters - 1)}
+
+    def test_residual_is_t_with_pinned_df(self):
+        """The 3.9 defect fix, now behind explicit "residual": the hc1 lane
+        uses t(pooled residual df), asserted through the RESOLVED df value
+        (that df is large, so t ~= z and a p-movement assertion is vacuous)."""
+        res = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="residual").fit(
+            self._panel(), **self._kw
+        )
         dfres = res.inference_df
         assert dfres is not None and dfres > res.n_clusters
         assert res.p_value == pytest.approx(self._t_p(res.t_stat, dfres), rel=1e-12)
         finite = {v for v in res.event_study_df.values() if np.isfinite(v)}
         assert finite == {dfres}
 
-    def test_small_n_residual_default_moves_off_z(self):
+    def test_small_n_default_moves_off_z(self):
         """On a SMALL stacked design the z -> t movement is measurable."""
         res = StackedDiD(kappa_pre=1, kappa_post=1).fit(self._panel(n_units=12), **self._kw)
         assert np.isfinite(res.p_value)
@@ -1983,7 +1995,7 @@ class TestStackedDfConvention:
 
     def test_cluster_matches_g_minus_1_effective_count(self):
         data = self._panel()
-        r0 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **self._kw)
+        r0 = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="residual").fit(data, **self._kw)
         r1 = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="cluster").fit(data, **self._kw)
         G = r1.n_clusters
         assert r1.att == r0.att and r1.se == r0.se
@@ -2020,7 +2032,9 @@ class TestStackedDfConvention:
 
     def test_bm_dof_precedence_over_knob(self):
         data = self._panel()
-        r_res = StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc2_bm").fit(data, **self._kw)
+        r_res = StackedDiD(
+            kappa_pre=2, kappa_post=2, vcov_type="hc2_bm", df_convention="residual"
+        ).fit(data, **self._kw)
         r_clu = StackedDiD(
             kappa_pre=2, kappa_post=2, vcov_type="hc2_bm", df_convention="cluster"
         ).fit(data, **self._kw)
@@ -2056,7 +2070,7 @@ class TestStackedDfConvention:
         est = StackedDiD()
         with pytest.raises(ValueError, match="df_convention"):
             est.set_params(df_convention="bogus", alpha=0.10)
-        assert est.df_convention == "residual" and est.alpha == 0.05
+        assert est.df_convention == "cluster" and est.alpha == 0.05
         # Valid value + unknown key: the unknown-key rejection must also
         # leave the estimator fully unchanged (no partial application).
         before = est.get_params()

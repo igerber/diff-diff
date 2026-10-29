@@ -158,22 +158,24 @@ class DifferenceInDifferences(BaseEstimator):
         path — absent ``cluster=``, pure Conley spatial HAC applies.
         ``survey_design=`` + Conley and ``inference='wild_bootstrap'`` +
         Conley both raise ``NotImplementedError``.
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for analytical t-statistics, p-values,
-        and CIs. ``"residual"`` (default) uses the fitted residual df
-        (``n − K_full``); ``"cluster"`` uses the Stata/fixest cluster df
-        ``G − 1`` on clustered fits — it has no effect on unclustered fits
+        and CIs. ``"cluster"`` (default since 4.0) uses the Stata/fixest
+        cluster df ``G − 1`` on clustered fits — it has no effect on unclustered fits
         or on ``vcov_type="conley"`` (the combined Conley+cluster product
         kernel has no documented ``G − 1`` df reference and keeps the
-        residual df); ``"normal"`` deliberately uses normal-theory z
-        inference at the fallback level on every fit, clustered or not.
+        residual df); ``"residual"`` (the 3.x default) uses the fitted
+        residual df (``n − K_full``); ``"normal"`` deliberately uses
+        normal-theory z inference at the fallback level on every fit,
+        clustered or not.
         Applies only at the fallback level of the df resolution under every
         value: survey df and per-coefficient Bell-McCaffrey DOF
         (``vcov_type="hc2_bm"``) are more refined small-sample corrections
         and always take precedence. Point estimates, SEs, and t-statistics
         are unaffected — only the reference distribution changes. The
-        default flips to ``"cluster"`` at v4 (see the REGISTRY clustered-CR1
-        inference-df deviation note).
+        default flipped from ``"residual"`` to ``"cluster"`` at 4.0 (rows
+        M-004/M-005; pass ``df_convention="residual"`` to reproduce 3.x
+        inference; see the REGISTRY clustered-CR1 inference-df note).
 
     Attributes
     ----------
@@ -238,7 +240,7 @@ class DifferenceInDifferences(BaseEstimator):
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ):
         # Resolve/validate vcov_type via the shared helper so __init__ and
         # set_params use identical validation logic.
@@ -282,12 +284,11 @@ class DifferenceInDifferences(BaseEstimator):
         # arrays are auto-derived from data[time].values + data[unit].values
         # at fit-time (panel estimators already take time/unit as column names).
         self.conley_lag_cutoff = conley_lag_cutoff
-        # Inference df convention for clustered analytical fits: "residual"
-        # (default; t/p/CI at the fitted residual df) or "cluster" (the
-        # Stata/fixest G-1 convention). Survey df and per-coefficient
-        # Bell-McCaffrey DOF always take precedence over either. The default
-        # flips to "cluster" at v4 (REGISTRY clustered-CR1 inference-df
-        # deviation note).
+        # Inference df convention for clustered analytical fits: "cluster"
+        # (default since 4.0; the Stata/fixest G-1 convention) or
+        # "residual" (the 3.x default; t/p/CI at the fitted residual df).
+        # Survey df and per-coefficient Bell-McCaffrey DOF always take
+        # precedence over either (REGISTRY clustered-CR1 inference-df note).
         self.df_convention = df_convention
 
         self.is_fitted_ = False
@@ -2009,7 +2010,8 @@ class DifferenceInDifferences(BaseEstimator):
             n_eff_df = int(round(np.sum(survey_weights)))
         df = n_eff_df - k_effective - n_absorbed_effects
         _df_cluster_knob_invalid = False
-        # Opt-in Stata/fixest cluster-df convention (df_convention="cluster"):
+        # Stata/fixest cluster-df convention (df_convention="cluster", the 4.0
+        # default):
         # the shared analytical df becomes G - 1 on a clustered fit. Placed
         # BEFORE the survey/replicate overrides below (which overwrite df, so
         # survey df keeps precedence) and upstream of the per-period BM-DOF

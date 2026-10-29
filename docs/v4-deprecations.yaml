@@ -79,12 +79,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/estimators.py, diff_diff/linalg.py]
-    notes: "Locked #663 direction; moves every clustered p-value/CI. Migration note + flip TestDfConvention expectations."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: Locked #663 direction; moves every clustered p-value/CI. Migration note + flip TestDfConvention expectations."
   - id: M-005
     kind: default-flip
     group: df-convention-flip
@@ -92,12 +93,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/twfe.py, diff_diff/linalg.py]
-    notes: "MultiPeriodDiD's knob is subsumed by its class removal [M-010]; merged event-study mode inherits this row."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: MultiPeriodDiD's knob is subsumed by its class removal [M-010]; merged event-study mode inherits this row."
   - id: M-006
     kind: default-flip
     group: df-convention-flip
@@ -105,12 +107,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/linalg.py]
-    notes: "The 'evaluate extending the knob to standalone CR1-t estimators' item was resolved EARLY by PR C ([M-127], 3.9): the knob now lives on SunAbraham/WooldridgeDiD/StackedDiD/ImputationDiD (their flips are [M-128]..[M-131]) and LPDiD (already at 'cluster', no flip row)."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: The 'evaluate extending the knob to standalone CR1-t estimators' item was resolved EARLY by PR C ([M-127], 3.9): the knob now lives on SunAbraham/WooldridgeDiD/StackedDiD/ImputationDiD (their flips are [M-128]..[M-131]) and LPDiD (already at 'cluster', no flip row)."
   - id: M-007
     kind: warning-retirement
     group: obligation-warning-retirements
@@ -1555,12 +1558,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/sun_abraham.py]
-    notes: "PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0 (G-1 = the fixest/Stata clustered convention). Moves every clustered p-value/CI on this surface; covered by the same migration note."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0 (G-1 = the fixest/Stata clustered convention). Moves every clustered p-value/CI on this surface; covered by the same migration note."
   - id: M-129
     kind: default-flip
     group: df-convention-flip
@@ -1568,12 +1572,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/wooldridge.py]
-    notes: "PR C ([M-127]) extended the knob here with default 'residual' (OLS arms only; GLM arms are knob-independent); flips with [M-004]..[M-006] at 4.0. Moves every clustered OLS p-value/CI on this surface; covered by the same migration note."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: PR C ([M-127]) extended the knob here with default 'residual' (OLS arms only; GLM arms are knob-independent); flips with [M-004]..[M-006] at 4.0. Moves every clustered OLS p-value/CI on this surface; covered by the same migration note."
   - id: M-130
     kind: default-flip
     group: df-convention-flip
@@ -1581,12 +1586,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/stacked_did.py]
-    notes: "PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0. The stacked residual df is typically large (t ~= z), so the flip to G-1 is the materially moving step on this surface; covered by the same migration note."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0. The stacked residual df is typically large (t ~= z), so the flip to G-1 is the materially moving step on this surface; covered by the same migration note."
   - id: M-131
     kind: default-flip
     group: df-convention-flip
@@ -1594,12 +1600,13 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/imputation.py]
-    notes: "PR C ([M-127]) extended the knob here with default 'residual' (pretrends lead regression only; BJS overall inference and the joint pretrend Wald F are knob-independent); flips with [M-004]..[M-006] at 4.0; covered by the same migration note."
+    test_ref: tests/test_v4_inference_defaults.py
+    notes: "DONE at the 4.0 cut (item 7a, 2026-10-28): default flipped from 'residual' to 'cluster' (t(G-1) on clustered analytical fits; df_convention='residual' restores the 3.x inference; point estimates, SEs and t-statistics never move); pinned by tests/test_v4_inference_defaults.py. Original: PR C ([M-127]) extended the knob here with default 'residual' (pretrends lead regression only; BJS overall inference and the joint pretrend Wald F are knob-independent); flips with [M-004]..[M-006] at 4.0; covered by the same migration note."
 
   # ---- Alias diet (2026-07-31 consolidation-scope decision) ----------------
   - id: M-132

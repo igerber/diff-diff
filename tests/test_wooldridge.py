@@ -4662,21 +4662,29 @@ class TestWooldridgeDfConvention:
 
         return 2 * stats.norm.sf(abs(t_stat))
 
-    def test_default_hc1_is_t_residual_not_z(self):
-        """The defect fix: the auto-clustered hc1 arm moved z -> t(residual)."""
-        res = WooldridgeDiD().fit(self._panel(), **self._kw)
+    def test_default_hc1_is_t_g_minus_1_not_z(self):
+        """The 4.0 default (M-129): the auto-clustered hc1 arm uses t(G-1) -
+        not z (the pre-3.9 defect) and not the residual df (the 3.x default)."""
+        data = self._panel()
+        res = WooldridgeDiD().fit(data, **self._kw)
         assert res.p_value != self._z_p(res.t_stat)
-        # residual df = n - k_kept - absorbed [unit, time] rank; recover it
+        G = res.n_clusters
+        assert G == data["unit"].nunique()
+        # recover the df the p-value was computed at: it is exactly G-1
         n = 300
         match = [d for d in range(2, n) if abs(res.p_value - self._t_p(res.t_stat, d)) < 1e-13]
-        assert len(match) == 1, match
+        assert match == [G - 1], match
         # per-cell inference shares the same df
         _, eff = next(iter(res.group_time_effects.items()))
-        assert eff["p_value"] == pytest.approx(self._t_p(eff["t_stat"], match[0]), rel=1e-12)
+        assert eff["p_value"] == pytest.approx(self._t_p(eff["t_stat"], G - 1), rel=1e-12)
+        # explicit "residual" is the 3.x residual df (n - k_kept - absorbed rank)
+        rr = WooldridgeDiD(df_convention="residual").fit(data, **self._kw)
+        match_r = [d for d in range(2, n) if abs(rr.p_value - self._t_p(rr.t_stat, d)) < 1e-13]
+        assert len(match_r) == 1 and match_r[0] > G - 1, match_r
 
     def test_cluster_matches_g_minus_1(self):
         data = self._panel()
-        r0 = WooldridgeDiD().fit(data, **self._kw)
+        r0 = WooldridgeDiD(df_convention="residual").fit(data, **self._kw)
         r1 = WooldridgeDiD(df_convention="cluster").fit(data, **self._kw)
         G = data["unit"].nunique()
         assert r1.att == r0.att and r1.se == r0.se
@@ -4707,10 +4715,12 @@ class TestWooldridgeDfConvention:
 
     def test_hc1_cohort_trends_uses_full_dummy_residual_df(self):
         """The easy-to-miss lane: hc1 + cohort_trends routes FULL-DUMMY, so
-        its residual df is n - k_kept (no absorbed-rank subtraction)."""
+        its residual df is n - k_kept (no absorbed-rank subtraction). Both
+        arms pin the explicit "residual" branch (the 3.x default); the
+        default twin at the end pins G-1 on the same full-dummy lane."""
         data = self._panel()
-        res = WooldridgeDiD(cohort_trends=True).fit(data, **self._kw)
-        res_within = WooldridgeDiD().fit(data, **self._kw)
+        res = WooldridgeDiD(cohort_trends=True, df_convention="residual").fit(data, **self._kw)
+        res_within = WooldridgeDiD(df_convention="residual").fit(data, **self._kw)
         _, eff = next(iter(res.group_time_effects.items()))
         n = len(data)
         # full-dummy residual df: recover as n - k_kept
@@ -4727,6 +4737,12 @@ class TestWooldridgeDfConvention:
             d for d in range(2, n) if abs(effw["p_value"] - self._t_p(effw["t_stat"], d)) < 1e-13
         ]
         assert match_w and (n - match_fd[0]) != match_w[0]
+        # default twin: the full-dummy lane also honours the 4.0 G-1 default
+        res_def = WooldridgeDiD(cohort_trends=True).fit(data, **self._kw)
+        _, eff_def = next(iter(res_def.group_time_effects.items()))
+        assert eff_def["p_value"] == pytest.approx(
+            self._t_p(eff_def["t_stat"], res_def.n_clusters - 1), rel=1e-12
+        )
 
     def test_postfit_aggregate_reproduces_fit_time_convention(self):
         """aggregate() consumes the stored resolved fallback on every OLS arm."""
@@ -4754,7 +4770,7 @@ class TestWooldridgeDfConvention:
         data["bin"] = (data["outcome"] > data["outcome"].median()).astype(int)
         kw = dict(outcome="bin", unit="unit", time="time", first_treat="cohort")
         with pytest.warns(UserWarning, match="no effect on the logit/poisson"):
-            WooldridgeDiD(method="logit", df_convention="cluster").fit(data, **kw)
+            WooldridgeDiD(method="logit", df_convention="residual").fit(data, **kw)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             WooldridgeDiD(method="logit").fit(data, **kw)
@@ -4808,11 +4824,11 @@ class TestWooldridgeDfConvention:
         est = WooldridgeDiD()
         with pytest.raises(ValueError, match="df_convention"):
             est.set_params(df_convention="bogus", alpha=0.10)
-        assert est.df_convention == "residual" and est.alpha == 0.05
+        assert est.df_convention == "cluster" and est.alpha == 0.05
         # Valid value + unknown key: the unknown-key rejection must also
         # leave the estimator fully unchanged (no partial application).
         before = est.get_params()
         with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(df_convention="normal", nonexistent_param=1)
         assert est.get_params() == before
-        assert WooldridgeDiD(df_convention="cluster").get_params()["df_convention"] == "cluster"
+        assert WooldridgeDiD(df_convention="residual").get_params()["df_convention"] == "residual"

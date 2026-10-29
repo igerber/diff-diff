@@ -958,18 +958,19 @@ class WooldridgeDiD(BaseEstimator):
         The Section 8 trend specification is therefore unidentified on this
         branch. Use ``control_group="not_yet_treated"`` (the default) for
         the cohort_trends surface.
-    df_convention : {"residual", "cluster", "normal"}, default "residual"
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
         Degrees-of-freedom convention for the OLS analytical t/p/CI (per-cell
-        and aggregated). ``"residual"`` (default) uses the fitted residual df
-        — the 3.9 fix: the default hc1 arms previously used silent
-        normal-theory z; classical/hc2 keep their historical ``n − rank(X)``
-        values bit-for-bit; ``"cluster"`` uses the Stata/fixest cluster df
-        ``G − 1`` on hc1-clustered fits (inert on one-way and conley
-        families); ``"normal"`` deliberately uses normal-theory z at the
+        and aggregated). ``"cluster"`` (default since 4.0) uses the
+        Stata/fixest cluster df ``G − 1`` on hc1-clustered fits (inert on
+        one-way and conley families); ``"residual"`` (the 3.x default) uses
+        the fitted residual df — the 3.9 fix: the hc1 arms previously used
+        silent normal-theory z; classical/hc2 keep their historical
+        ``n − rank(X)`` values bit-for-bit; ``"normal"`` deliberately uses normal-theory z at the
         fallback level. Survey design df and hc2_bm Bell-McCaffrey DOF
         always take precedence; the logit/poisson arms are knob-independent
         (survey df or normal theory — an explicitly non-default value warns
-        at fit time). The default flips to ``"cluster"`` at v4.
+        at fit time). The default flipped to ``"cluster"`` at 4.0 (row
+        M-129); pass ``df_convention="residual"`` for 3.x OLS inference.
     unsupported_period_action : {"drop", "error"}, default "drop"
         How to handle periods lacking the required comparison support.
         ``"drop"`` removes those periods before estimation and warns;
@@ -1006,7 +1007,7 @@ class WooldridgeDiD(BaseEstimator):
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
         unsupported_period_action: str = "drop",
     ) -> None:
         self._validate_constructor_args(
@@ -1064,7 +1065,7 @@ class WooldridgeDiD(BaseEstimator):
         bootstrap_weights: str,
         vcov_type: str,
         cohort_trends: bool = False,
-        df_convention: str = "residual",
+        df_convention: str = "cluster",
     ) -> None:
         """Shared validation for both ``__init__`` and ``set_params``.
 
@@ -1964,7 +1965,7 @@ class WooldridgeDiD(BaseEstimator):
         # paths use the survey design df when present and normal theory
         # otherwise, independent of the knob — an explicitly non-default
         # value would be silently ignored there.
-        if self.method != "ols" and self.df_convention != "residual":
+        if self.method != "ols" and self.df_convention != "cluster":
             warnings.warn(
                 f"df_convention={self.df_convention!r} has no effect on the "
                 "logit/poisson arms — their inference uses the survey design "
@@ -2438,10 +2439,11 @@ class WooldridgeDiD(BaseEstimator):
         # so classical/hc2 stay bit-identical under the default; the
         # within-transform arm (hc1/conley) additionally subtracts the
         # absorbed [unit, time] rank. Survey df keeps precedence (df_inf);
-        # otherwise resolve through the ``df_convention`` knob — residual t
-        # by default (the 3.9 fix: hc1 arms previously dropped to silent
-        # normal theory), ``G − 1`` under "cluster" (hc1-clustered only;
-        # conley has no documented G−1 reference and passes
+        # otherwise resolve through the ``df_convention`` knob — ``G − 1``
+        # under the 4.0 default "cluster" (hc1-clustered only; conley has
+        # no documented G−1 reference and passes ``n_clusters=None``),
+        # residual t under "residual" (the 3.9 fix: hc1 arms previously
+        # dropped to silent normal theory; conley stays at
         # ``n_clusters=None``), z under "normal". ``resolve_tail_df``'s
         # guard returns None on a non-positive residual df, reproducing the
         # old ``df_one_way = NaN → df_inf`` degenerate lane.
@@ -2584,8 +2586,9 @@ class WooldridgeDiD(BaseEstimator):
             else:
                 # Every non-BM arm consumes the ONE knob-resolved fallback:
                 # survey df on surveyed fits, else the df_convention-resolved
-                # analytical df (residual t by default; classical/hc2
-                # reproduce the historical df_one_way values bit-for-bit).
+                # analytical df (t(G-1) under the default on hc1-clustered
+                # fits; classical/hc2 reproduce the historical df_one_way
+                # values bit-for-bit).
                 t_stat, p_value, conf_int = safe_inference(
                     eff["att"], eff["se"], alpha=self.alpha, df=df_fallback
                 )
