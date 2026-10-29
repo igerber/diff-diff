@@ -25,6 +25,7 @@ from diff_diff.utils import (
     fe_dummy_names,
     pre_demean_norms,
     snap_absorbed_regressors,
+    validate_cluster,
     validate_covariate_names,
     validate_design_term_names,
 )
@@ -42,7 +43,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
     Parameters
     ----------
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) switches the unit auto-cluster off explicitly on
+        both modes: the plain HC sandwich (absorbed-FE full-K rescale, residual-df
+        t; one-way Bell-McCaffrey df under ``vcov_type="hc2_bm"``). Rejected with
+        ``inference="wild_bootstrap"``. Column labels must be ``str``.
         Column name for cluster-robust standard errors.
         If None, automatically clusters at the unit level (the `unit`
         parameter passed to `fit()`). This differs from
@@ -258,6 +263,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             ``inference="wild_bootstrap"`` is combined with event-study mode
             (the wild cluster bootstrap covers the static ATT only).
         """
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
         # Per-fit bootstrap state: cleared up front so the result builder
         # labels inference from THIS fit only (see the matching reset in
         # DifferenceInDifferences.fit).
@@ -356,7 +367,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 conley_lag_cutoff=self.conley_lag_cutoff,
                 survey_design=survey_design,
                 inference=self.inference,
-                cluster=self.cluster,
+                cluster=user_cluster,
             )
 
         # Check for staggered treatment timing and warn if detected
@@ -428,6 +439,15 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 f"for bootstrap inference; use inference='analytical' for "
                 f"analytical SEs."
             )
+        # 4.0 (M-080): cluster=False switches the clustering off, but the wild
+        # CLUSTER bootstrap draws at the cluster level - the combination is
+        # incoherent (same fail-closed rule as DiD's cluster=None guard).
+        if self.inference == "wild_bootstrap" and self.cluster is False:
+            raise ValueError(
+                "inference='wild_bootstrap' requires a cluster: the wild cluster "
+                "bootstrap resamples at the cluster level. Pass cluster=<col>, leave "
+                "cluster=None for the unit auto-cluster, or use inference='analytical'."
+            )
 
         # Unit-level clustering is the TWFE default when `cluster` is not
         # explicitly provided. But the one-way ``classical`` and ``hc2``
@@ -444,8 +464,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # regardless of ``vcov_type`` (bootstrap consumes cluster structure
         # for resampling, independent of the analytical sandwich).
         # ``hc2_bm`` also keeps the auto-cluster (routes to CR2-BM at unit).
-        if self.cluster is not None:
-            cluster_var: Optional[str] = self.cluster
+        if self.cluster is False:
+            # 4.0 (M-080): the uniform explicit off-switch - the plain HC
+            # sandwich, no auto-cluster on any lane (wild rejected above).
+            cluster_var: Optional[str] = None
+        elif user_cluster is not None:
+            cluster_var = user_cluster
         elif (
             self.vcov_type in ("classical", "hc2", "hc3")
             and self._vcov_type_explicit
@@ -605,13 +629,13 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         # When survey PSU is present, it overrides cluster for variance estimation
         effective_cluster_ids = _resolve_effective_cluster(
-            resolved_survey, cluster_ids, self.cluster
+            resolved_survey, cluster_ids, user_cluster
         )
 
         # For survey variance: only inject user-explicit cluster as PSU.
         # TWFE's default unit clustering should not override the documented
         # no-PSU survey path (implicit per-observation PSUs).
-        if resolved_survey is not None and self.cluster is None:
+        if resolved_survey is not None and user_cluster is None:
             survey_cluster_ids = None
         else:
             survey_cluster_ids = effective_cluster_ids
@@ -674,7 +698,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # Users who want the combined kernel must pass an above-unit
             # cluster (e.g. region) explicitly.
             _conley_cluster_override = (
-                data[self.cluster].values if self.cluster is not None else None
+                data[user_cluster].values if user_cluster is not None else None
             )
         else:
             _conley_coords_arr = None
@@ -924,9 +948,15 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             n_bootstrap_used = self._bootstrap_results.n_bootstrap
             n_clusters_used = self._bootstrap_results.n_clusters
             p_val_type_used = self._bootstrap_results.p_val_type
+        elif resolved_survey is None:
+            # 4.0 (M-080): the analytical regression's own effective cluster
+            # count (None when it ran unclustered). Survey fits keep None -
+            # the survey metadata owns PSU reporting, and under a PSU design
+            # the regression received PSU labels, not the user's cluster.
+            n_clusters_used = reg.n_clusters_
 
         # Cluster label for summary: TWFE auto-clusters at unit level when
-        # `self.cluster is None` AND the vcov family is cluster-compatible.
+        # `user_cluster is None` AND the vcov family is cluster-compatible.
         # One-way families (`classical`, `hc2`) disable the auto-cluster (see
         # the `cluster_var` block above); report None so summary() labels the
         # one-way family instead of "CR1 cluster-robust at unit". On the
@@ -938,11 +968,16 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Either way, the cluster_name reflects the cluster IDs actually
         # passed to LinearRegression.
         if _fit_vcov_type == "conley":
-            _twfe_cluster_label: Optional[str] = self.cluster if self.cluster is not None else None
-        elif self.cluster is not None:
-            _twfe_cluster_label = self.cluster
+            _twfe_cluster_label: Optional[str] = user_cluster if user_cluster is not None else None
+        elif user_cluster is not None:
+            _twfe_cluster_label = user_cluster
         elif cluster_var is None:
-            # One-way family path: auto-cluster was intentionally dropped.
+            # One-way family path or cluster=False: no cluster ids were passed.
+            _twfe_cluster_label = None
+        elif resolved_survey is not None:
+            # 4.0 (M-080): under a survey design the auto-cluster is NOT
+            # injected (survey_cluster_ids=None above), so the regression
+            # received no cluster ids - the former "unit" label was false.
             _twfe_cluster_label = None
         else:
             _twfe_cluster_label = unit
@@ -1101,8 +1136,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # passes through on every lane; when survey_design carries its own
         # PSU the shared resolver still gives the PSU precedence (identical
         # on every class).
-        if self.cluster is not None:
-            cluster_override: Optional[str] = self.cluster
+        if self.cluster is False:
+            # 4.0 (M-080): explicit off - the core's unclustered lanes (plain
+            # HC sandwich, residual df, one-way hc2_bm BM df) do the rest.
+            cluster_override: Optional[str] = None
+        elif self.cluster is not None:
+            cluster_override = self.cluster
         elif self.vcov_type == "conley":
             # Static mirror: the implicit unit auto-cluster is silently
             # dropped on the Conley path - combining Conley with unit-level

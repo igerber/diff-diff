@@ -6,7 +6,7 @@ import inspect
 import os
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -501,6 +501,42 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
         raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
     if n_bootstrap < 0:
         raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
+
+
+#: The shared ``cluster`` constructor-argument contract (4.0, [M-155]): a column
+#: name, ``None`` (the estimator's default clustering - unit auto-cluster where
+#: one exists) or ``False`` (explicitly unclustered: the plain heteroskedasticity-
+#: robust sandwich on the estimators whose clustering is a choice, an accepted
+#: no-op on the by-construction unit-level estimators).
+ClusterArg = Union[str, Literal[False], None]
+
+
+def validate_cluster(cluster: object) -> ClusterArg:
+    """Validate the shared ``cluster`` constructor parameter and return it unchanged.
+
+    Accepted values: ``None`` (the estimator's default clustering), ``False``
+    (explicitly unclustered - the uniform 4.0 off-switch, [M-080]) or a column
+    name (``str``). Everything else - ``True``, numpy bools, integers or other
+    non-``str`` column labels, lists - raises ``ValueError`` with one shared
+    message ([M-155]; DMLDiD's pre-4.0 ``str``-only rule generalized).
+
+    Adopted at ``__init__`` by every estimator exposing ``cluster`` except
+    ``StackedDiD`` (own ``'unit'``/``'unit_subexp'`` vocabulary validator) and
+    RE-RUN at the top of each ``fit()`` as the direct-mutation defense (the
+    :func:`validate_anticipation` pattern); ``BaseEstimator.set_params`` is
+    covered through its probe re-init. Callers normalize ``False`` to ``None``
+    LOCALLY (``user_cluster = None if self.cluster is False else self.cluster``)
+    before any column lookup, so ``False`` never reaches ``data[...]``; the
+    stored attribute keeps the raw value so ``get_params`` round-trips.
+    """
+    if cluster is None or cluster is False:
+        return cluster
+    if isinstance(cluster, str):
+        return cluster
+    raise ValueError(
+        "cluster must be a column name (str), None (the estimator's default clustering) "
+        f"or False (explicitly unclustered), got {cluster!r} (type {type(cluster).__name__})"
+    )
 
 
 def validate_pscore_trim(value: Any) -> float:

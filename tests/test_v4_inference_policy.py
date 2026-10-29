@@ -63,9 +63,10 @@ N_BOOTSTRAP_MSG_PREFIX = "n_bootstrap must be a non-negative integer"
 INFERENCE_MSG = "inference must be one of ('analytical', 'wild_bootstrap'), got {value!r}"
 
 CLUSTER_REQUIRED_MSG = (
-    "inference='wild_bootstrap' requires cluster=. The wild cluster "
-    "bootstrap resamples at the cluster level; pass cluster= or use "
-    "inference='analytical'."
+    "inference='wild_bootstrap' requires cluster=<col>. The wild cluster "
+    "bootstrap resamples at the cluster level; cluster=None and "
+    "cluster=False both leave a DifferenceInDifferences fit unclustered, "
+    "so pass a cluster column or use inference='analytical'."
 )
 
 
@@ -354,11 +355,12 @@ class TestInferenceSelector:
 
         did.set_params(inference="analytical")
         analytical = _fit_did(did, clustered_panel)
-        # All four metadata fields flow from the one _bootstrap_results
-        # conditional - pin the full set.
+        # The bootstrap-only metadata clears; n_clusters is re-filled from the
+        # analytical regression's own cluster count (4.0, M-080), not left over
+        # from the wild fit.
         assert analytical.inference_method == "analytical"
         assert analytical.n_bootstrap is None
-        assert analytical.n_clusters is None
+        assert analytical.n_clusters == clustered_panel["cluster"].nunique()
         assert analytical.p_val_type is None
         _assert_finite_quintet(analytical)
 
@@ -377,7 +379,8 @@ class TestInferenceSelector:
         analytical = _fit_twfe(twfe, clustered_panel)
         assert analytical.inference_method == "analytical"
         assert analytical.n_bootstrap is None
-        assert analytical.n_clusters is None
+        # 4.0 (M-080): the analytical refit reports the unit auto-cluster's count.
+        assert analytical.n_clusters == clustered_panel["unit"].nunique()
         assert analytical.p_val_type is None
 
         twfe.set_params(inference="wild_bootstrap")

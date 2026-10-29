@@ -466,9 +466,10 @@ class TestEstimatorIntegration:
         with pytest.raises(
             ValueError,
             match=re.escape(
-                "inference='wild_bootstrap' requires cluster=. The wild cluster "
-                "bootstrap resamples at the cluster level; pass cluster= or use "
-                "inference='analytical'."
+                "inference='wild_bootstrap' requires cluster=<col>. The wild cluster "
+                "bootstrap resamples at the cluster level; cluster=None and "
+                "cluster=False both leave a DifferenceInDifferences fit unclustered, "
+                "so pass a cluster column or use inference='analytical'."
             ),
         ):
             did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")

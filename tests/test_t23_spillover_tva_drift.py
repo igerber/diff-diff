@@ -172,6 +172,16 @@ def spillover_fit(panel):
 
 
 @pytest.fixture(scope="module")
+def spillover_hc1_fit(panel):
+    """The observation-level HC1 lane (the 3.x default): ``cluster=False`` is the
+    4.0 off-switch; the module's ``spillover_fit`` is the 4.0 default (CR1 at unit)."""
+    est = SpilloverDiD(rings=[0.0, D_BAR_KM], conley_coords=("lat", "lon"), cluster=False)
+    with warnings.catch_warnings():
+        _silence_spillover_matmul_warnings()
+        return est.fit(panel, outcome="y", unit="unit", time="time", treatment="D")
+
+
+@pytest.fixture(scope="module")
 def spillover_conley_lag0_fit(panel):
     est = SpilloverDiD(
         rings=[0.0, D_BAR_KM],
@@ -383,19 +393,67 @@ def test_rings_grid_d_bar_100_to_200_identical(panel):
     np.testing.assert_allclose(results, results[0] * np.ones(3), atol=1e-10)
 
 
-def test_conley_se_differs_from_hc1(spillover_fit, spillover_conley_lag0_fit):
-    """§6 sanity: Conley vcov produces a different SE than HC1 by more than
-    floating-point noise. Pairs with `test_conley_se_less_than_hc1` which
-    pins the direction of the difference for this specific DGP."""
+def test_conley_se_differs_from_default(
+    spillover_fit, spillover_hc1_fit, spillover_conley_lag0_fit
+):
+    """§6 sanity: Conley vcov produces a different SE than both the default
+    (CR1 at unit, 4.0) and the HC1 lane by more than floating-point noise."""
     assert abs(spillover_conley_lag0_fit.se - spillover_fit.se) > 1e-6
+    assert abs(spillover_conley_lag0_fit.se - spillover_hc1_fit.se) > 1e-6
 
 
-def test_conley_se_less_than_hc1(spillover_fit, spillover_conley_lag0_fit):
+def test_conley_se_less_than_default_cr1(
+    spillover_fit, spillover_hc1_fit, spillover_conley_lag0_fit
+):
     """§6 prose claim: 'on this DGP, the Conley spatial-HAC SE comes in
-    *lower* than HC1'. Pin the direction so the narrative doesn't go
-    stale if a future library change flips the sign of the per-pair
-    score covariance and reverses the inequality."""
+    *lower* than both HC1 and the unit-clustered default'. Pin the direction
+    so the narrative doesn't go stale if a future library change flips the
+    sign of the per-pair score covariance and reverses the inequality."""
+    assert spillover_conley_lag0_fit.se < spillover_hc1_fit.se
     assert spillover_conley_lag0_fit.se < spillover_fit.se
+
+
+def test_cr1_unit_default_exceeds_hc1(spillover_fit, spillover_hc1_fit):
+    """§6 table ordering: on this DGP the 4.0 default (CR1 at unit) is wider
+    than the observation-level HC1 lane; point estimates identical."""
+    assert spillover_fit.att == spillover_hc1_fit.att
+    assert spillover_fit.se > spillover_hc1_fit.se
+
+
+def test_default_reports_unit_cluster(spillover_fit, spillover_hc1_fit, panel):
+    """4.0 (M-080): the default fit is CR1 at unit and says so; the HC1 lane
+    carries no cluster metadata."""
+    assert spillover_fit.cluster_name == "unit"
+    assert spillover_fit.n_clusters == panel["unit"].nunique() == N_TREATED + N_NEAR + N_FAR
+    assert spillover_hc1_fit.cluster_name is None and spillover_hc1_fit.n_clusters is None
+
+
+def test_notebook_section6_source_pins():
+    """The §6 comparison cell must build the four-row table (CR1 at unit = the 4.0
+    default, HC1 via ``cluster=False``, Conley lag 0, Conley lag 1) - source-level
+    pins so a notebook-only edit cannot silently drop the off-switch row. Skips
+    without source-tree access (see the DGP-constants guard below)."""
+    import json
+    from pathlib import Path
+
+    nb_path = Path(__file__).resolve().parents[1] / "docs" / "tutorials" / "23_spillover_tva.ipynb"
+    if not nb_path.exists():
+        pytest.skip("Notebook source not found; meaningful only in local dev.")
+    with nb_path.open() as f:
+        nb = json.load(f)
+    cells = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    matches = [c for c in cells if "def fit_with(" in c]
+    assert len(matches) == 1, "exactly one §6 comparison cell expected"
+    src = matches[0]
+    assert "cluster=None" in src and "cluster=cluster" in src
+    assert 'fit_with("hc1", cluster=False)' in src
+    for label in (
+        "CR1 at unit (4.0 default)",
+        "HC1 (cluster=False)",
+        "Conley (lag=0, spatial only)",
+        "Conley (lag=1, spatial + serial)",
+    ):
+        assert label in src, label
 
 
 def test_conley_se_point_estimates_invariant(

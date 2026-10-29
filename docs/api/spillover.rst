@@ -177,7 +177,8 @@ and planned follow-up enhancements:
 - **Gardner GMM first-stage correction at stage 2** — SHIPPED in Wave D.
   Stage-2 variance now applies the influence-function-based correction
   for stage-1 FE estimation uncertainty across all three ``vcov_type``
-  paths (HC1, Conley, cluster) on both ``event_study=False`` AND
+  paths (the default CR1 at ``unit`` since 4.0 or an explicit ``cluster=``,
+  HC1 via ``cluster=False``, Conley) on both ``event_study=False`` AND
   ``event_study=True``. The IF formula is
   ``psi_i = gamma_hat' * X_{10,i} * eps_{10,i} - X_{2,i} * eps_{2,i}``
   with ``gamma_hat = (X_10' X_10)^{-1} (X_1' X_2)``; the meat is

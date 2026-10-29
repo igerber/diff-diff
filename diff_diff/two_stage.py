@@ -50,7 +50,13 @@ from diff_diff.two_stage_results import (
     TwoStageBootstrapResults,  # noqa: F401
     TwoStageDiDResults,
 )  # noqa: F401 (re-export)
-from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
+from diff_diff.utils import (
+    ClusterArg,
+    safe_inference,
+    validate_anticipation,
+    validate_cluster,
+    validate_n_bootstrap,
+)
 
 if TYPE_CHECKING:
     # Forward reference for the Wave E.1 survey-design path. Imported under
@@ -1239,7 +1245,10 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the default
+        ``cluster_var = unit`` lives inside the unit-level influence-function
+        variance, so no unclustered variance exists. Column labels must be ``str``.
         Column name for cluster-robust standard errors.
         If None, clusters at the unit level by default.
     n_bootstrap : int, default=0
@@ -1318,7 +1327,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         self,
         anticipation: int = 0,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
@@ -1341,7 +1350,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
 
         self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = vcov_type
         validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
@@ -1407,6 +1416,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         # out-of-domain value silently changes the ESTIMAND); the assignment
         # also re-normalizes a mutated numpy scalar to a Python int.
         self.anticipation = validate_anticipation(self.anticipation)
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
         # ---- Data validation ----
         required_cols = [outcome, unit, time, first_treat]
@@ -1438,7 +1453,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                 "Cannot use n_bootstrap > 0 with replicate-weight survey designs. "
                 "Replicate weights provide their own variance estimation."
             )
-        if _uses_replicate_ts and self.cluster is not None:
+        if _uses_replicate_ts and user_cluster is not None:
             raise NotImplementedError(
                 "TwoStageDiD(cluster=...) with a replicate-weight survey design "
                 "is not supported: replicate-weight variance "
@@ -1575,10 +1590,10 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         n_control_units = len(units_in_omega_0)
 
         # Cluster variable
-        cluster_var = self.cluster if self.cluster is not None else unit
-        if self.cluster is not None and self.cluster not in df.columns:
+        cluster_var = user_cluster if user_cluster is not None else unit
+        if user_cluster is not None and user_cluster not in df.columns:
             raise ValueError(
-                f"Cluster column '{self.cluster}' not found in data. "
+                f"Cluster column '{user_cluster}' not found in data. "
                 f"Available columns: {list(df.columns)}"
             )
 
@@ -1599,7 +1614,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
             effective_cluster_ids = _resolve_effective_cluster(
                 resolved_survey,
                 cluster_ids_raw,
-                cluster_var if self.cluster is not None else None,
+                cluster_var if user_cluster is not None else None,
             )
             resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
             # When survey PSU is present, use it as the effective cluster for
@@ -2036,14 +2051,14 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         #   - `np.unique` (not `Series.nunique()`, which drops NaN) keeps the
         #     same single NaN group the variance forms, so missing cluster IDs
         #     cannot make the metadata undercount.
-        # `cluster_var` is `self.cluster`, or the `unit` column when
+        # `cluster_var` is `user_cluster`, or the `unit` column when
         # `cluster=None` (the Gardner sandwich always clusters at unit by
         # default), so the summary renders the unit-cluster CR1 label, not HC1.
         if resolved_survey is not None:
             _cluster_name_for_results: Optional[str] = None
             _n_clusters_for_results: Optional[int] = None
         else:
-            _cluster_name_for_results = self.cluster if self.cluster is not None else unit
+            _cluster_name_for_results = user_cluster if user_cluster is not None else unit
             _n_clusters_for_results = int(np.unique(df[cluster_var].values).size)
 
         # Event-study VCV / df persistence, gated by inference mode (spec

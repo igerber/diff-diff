@@ -27,7 +27,13 @@ from scipy import linalg as scipy_linalg
 from diff_diff._base import BaseEstimator
 from diff_diff.linalg import _detect_rank_deficiency, solve_logit, solve_ols
 from diff_diff.lwdid_results import LWDiDResults
-from diff_diff.utils import safe_inference, validate_binary, validate_pscore_trim
+from diff_diff.utils import (
+    ClusterArg,
+    safe_inference,
+    validate_binary,
+    validate_cluster,
+    validate_pscore_trim,
+)
 
 _VALID_ROLLING = ("demean", "detrend", "demeanq", "detrendq")
 _VALID_ESTIMATION_METHODS = ("reg", "ipw", "dr", "psm")
@@ -444,7 +450,10 @@ class LWDiD(BaseEstimator):
         Cluster-robust (CR1) inference activates via the ``cluster=``
         parameter, not through a ``vcov_type`` value, composes only with
         'hc1', and is rejected for 'psm'.
-    cluster : str or None, default None
+    cluster : str, None or False, default None
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
         Column name for cluster-robust (CR1) standard errors. When set,
         clustered inference is active for the whole fit.
     control_group : {'never_treated', 'not_yet_treated'}, default 'not_yet_treated'
@@ -558,7 +567,7 @@ class LWDiD(BaseEstimator):
         rolling: str = "demean",
         estimation_method: str = "reg",
         vcov_type: str = "hc1",
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         control_group: str = "not_yet_treated",
         alpha: float = 0.05,
         n_bootstrap: int = 0,
@@ -588,7 +597,10 @@ class LWDiD(BaseEstimator):
             )
         if vcov_type not in _VALID_VCOV_TYPES:
             raise ValueError(f"vcov_type must be one of {_VALID_VCOV_TYPES}, got '{vcov_type}'")
-        self._validate_vcov_config(vcov_type, estimation_method, cluster)
+        cluster = validate_cluster(cluster)
+        self._validate_vcov_config(
+            vcov_type, estimation_method, None if cluster is False else cluster
+        )
         # Validate control_group
         if control_group not in _VALID_CONTROL_GROUPS:
             raise ValueError(
@@ -699,7 +711,10 @@ class LWDiD(BaseEstimator):
         """
         # --- Input validation ---
         df = data.copy()
-        cluster = self.cluster
+        # Fit-time re-check of the shared cluster contract ([M-155]); False is
+        # an accepted no-op here (category b) and is normalized to None.
+        validate_cluster(self.cluster)
+        cluster = None if self.cluster is False else self.cluster
         # Re-check the vcov configuration at fit time (set_params probe
         # re-init covers most mutations; this closes direct-attribute edits).
         self._validate_vcov_config(self.vcov_type, self.estimation_method, cluster)
@@ -1010,7 +1025,7 @@ class LWDiD(BaseEstimator):
         required_cols = [outcome, unit, time, treatment]
         if cohort is not None:
             required_cols.append(cohort)
-        if cluster is not None:
+        if isinstance(cluster, str):
             required_cols.append(cluster)
         if controls:
             required_cols.extend(controls)
@@ -1167,7 +1182,7 @@ class LWDiD(BaseEstimator):
                     "column to one value per unit (e.g. its pre-treatment "
                     "value) before fitting."
                 )
-        if cluster is not None and cluster != unit:
+        if isinstance(cluster, str) and cluster != unit:
             n_missing = int(df[cluster].isna().sum())
             if n_missing > 0:
                 raise ValueError(
@@ -3980,7 +3995,7 @@ class LWDiD(BaseEstimator):
         # Post fix-wave WS6, the config validator guarantees cluster only
         # composes with hc1, so the requested family IS the resolved family
         # on every path (no silent remap can occur).
-        if self.cluster is not None:
+        if isinstance(self.cluster, str):
             assert self.vcov_type == "hc1", "validator invariant violated"
         return self.vcov_type
 

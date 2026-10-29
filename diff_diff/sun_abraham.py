@@ -41,6 +41,7 @@ from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, _coverage_pct, _require_fit_alpha
 from diff_diff.utils import (
+    ClusterArg,
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     pre_demean_norms,
@@ -48,6 +49,7 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
     validate_anticipation,
+    validate_cluster,
     validate_df_convention,
     validate_n_bootstrap,
 )
@@ -171,10 +173,11 @@ class SunAbrahamResults(BaseResults):
     # in ``event_study_vcov_index``.
     event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
     event_study_vcov_index: Optional[list] = field(default=None, repr=False)
-    # Conley spatial-HAC metadata (populated only when vcov_type == "conley").
-    # ``conley_lag_cutoff`` carries the within-unit Bartlett max lag; ``cluster_name``
-    # records an explicit cluster= column (enables the spatial+cluster product-kernel
-    # summary label). Both None on non-conley fits.
+    # ``conley_lag_cutoff`` carries the within-unit Bartlett max lag (None off the
+    # Conley path). ``cluster_name`` names the cluster ids the analytical regression
+    # received (4.0, M-080): the unit auto-cluster or an explicit cluster= column
+    # (on Conley: the explicit product-kernel column); None on unclustered,
+    # survey and pairs-bootstrap fits. ``n_clusters`` (appended below) is its count.
     conley_lag_cutoff: Optional[int] = None
     cluster_name: Optional[str] = None
     # The normalization reference relative time (e = -1 - anticipation, the
@@ -220,6 +223,13 @@ class SunAbrahamResults(BaseResults):
     df on survey fits, else the ``df_convention``-resolved analytical
     fallback (None under "normal" = normal theory). None on bootstrap fits,
     whose overall p/CI are percentile-based and never used a df."""
+
+    n_clusters: Optional[int] = None
+    """Effective cluster count of the ids the analytical regression
+    clustered on (4.0, M-080): G under the unit auto-cluster or an explicit
+    ``cluster=`` (incl. the Conley product-kernel column); None on
+    unclustered (``cluster=False`` / one-way) fits, under a survey design
+    (the survey block owns PSU reporting) and on pairs-bootstrap fits."""
 
     # --- Deprecated 3.x storage names (ledger row M-051) ---
     # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
@@ -314,15 +324,20 @@ class SunAbrahamResults(BaseResults):
             sm = self.survey_metadata
             lines.extend(_format_survey_block(sm, 85))
 
-        # Conley spatial-HAC variance label (rendered only on the conley path;
-        # a full vcov-family label for all families is a separate follow-up).
-        if self.vcov_type == "conley":
+        # Variance-family label (4.0, M-080): rendered on the Conley path and on
+        # every analytical non-survey fit (CR1 at unit with G, the plain HC
+        # families, CR2-BM). Survey fits keep the survey block alone and
+        # bootstrap fits their bootstrap line alone - `vcov_type` still names
+        # the configured analytical family there, which would mislabel the SE.
+        if self.vcov_type == "conley" or (
+            self.bootstrap_results is None and self.survey_metadata is None
+        ):
             from diff_diff.results import _format_vcov_label
 
             _vlabel = _format_vcov_label(
                 self.vcov_type,
                 cluster_name=self.cluster_name,
-                n_clusters=None,
+                n_clusters=self.n_clusters,
                 n_obs=self.n_obs,
                 conley_lag_cutoff=self.conley_lag_cutoff,
             )
@@ -417,6 +432,8 @@ class SunAbrahamResults(BaseResults):
         }
         if self.cluster_name is not None:
             result["cluster_name"] = self.cluster_name
+        if self.n_clusters is not None:
+            result["n_clusters"] = self.n_clusters
         if self.conley_lag_cutoff is not None:
             result["conley_lag_cutoff"] = self.conley_lag_cutoff
         if self.df_convention is not None:
@@ -556,8 +573,15 @@ class SunAbraham(BaseEstimator):
         Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    cluster : str, optional
-        Column name for cluster-robust standard errors.
+    cluster : str, None or False, optional
+        Column name for cluster-robust standard errors. ``False`` (4.0,
+        M-080) switches clustering off explicitly: the plain
+        heteroskedasticity-robust sandwich on the saturated regression
+        (residual-df t inference; rejected with ``vcov_type="hc2_bm"``,
+        whose Bell-McCaffrey DOF lane is cluster-only; an accepted no-op
+        for the pairs bootstrap, which resamples units regardless; under a
+        survey design it means no unit PSU is injected). Column labels must
+        be ``str``.
         If None, clusters at the unit level by default — UNLESS
         ``vcov_type`` is explicitly set to ``"hc2"`` or ``"classical"``,
         in which case the unit auto-cluster is dropped (both are
@@ -720,7 +744,7 @@ class SunAbraham(BaseEstimator):
         control_group: str = "never_treated",
         anticipation: int = 0,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 0,
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
@@ -755,7 +779,7 @@ class SunAbraham(BaseEstimator):
         self.control_group = control_group
         self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.seed = seed
@@ -828,6 +852,12 @@ class SunAbraham(BaseEstimator):
         # — an out-of-domain value silently changes the ESTIMAND. The
         # assignment also re-normalizes a mutated numpy scalar to int.
         self.anticipation = validate_anticipation(self.anticipation)
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
@@ -843,10 +873,10 @@ class SunAbraham(BaseEstimator):
         # and silently downgrade clustered inference to one-way (HC1 →
         # heteroskedasticity-only; HC2-BM → singleton CR2-BM). Explicit
         # user input must error, not silently weaken the SE convention.
-        if self.cluster is not None:
-            if self.cluster not in data.columns:
+        if user_cluster is not None:
+            if user_cluster not in data.columns:
                 raise ValueError(
-                    f"cluster column {self.cluster!r} not found in data; "
+                    f"cluster column {user_cluster!r} not found in data; "
                     f"available columns: {list(data.columns)}"
                 )
             # NA cluster labels are silently dropped by the meat-side
@@ -854,10 +884,10 @@ class SunAbraham(BaseEstimator):
             # in `n_clusters`, producing malformed cluster-robust SEs. Reject
             # explicitly so the user fixes the cluster column rather than
             # consuming silently-wrong inference.
-            if data[self.cluster].isna().any():
-                n_na = int(data[self.cluster].isna().sum())
+            if data[user_cluster].isna().any():
+                n_na = int(data[user_cluster].isna().sum())
                 raise ValueError(
-                    f"cluster column {self.cluster!r} contains {n_na} "
+                    f"cluster column {user_cluster!r} contains {n_na} "
                     "NA/NaN values. Cluster labels must be non-missing for "
                     "all observations to produce well-formed cluster-robust "
                     "standard errors. Drop or impute the NA rows before fit."
@@ -880,7 +910,7 @@ class SunAbraham(BaseEstimator):
                 conley_lag_cutoff=self.conley_lag_cutoff,
                 survey_design=survey_design,
                 inference="analytical",
-                cluster=self.cluster,
+                cluster=user_cluster,
             )
             if self.n_bootstrap > 0:
                 raise ValueError(
@@ -889,6 +919,18 @@ class SunAbraham(BaseEstimator):
                     "analytical Conley sandwich. Use n_bootstrap=0 for the "
                     "analytical Conley SE, or vcov_type='hc1' with the bootstrap."
                 )
+
+        # 4.0 (M-080): the Bell-McCaffrey DOF lane is cluster-only (its contrast
+        # helper takes a cluster array), so the unclustered off-switch cannot pair
+        # with hc2_bm here; TODO.md tracks the one-way BM DOF port. The pairs
+        # bootstrap is NOT rejected: it resamples units on every lane regardless
+        # of `cluster` (the explicit-hc2 precedent), so False is a no-op there.
+        if self.cluster is False and self.vcov_type == "hc2_bm":
+            raise ValueError(
+                "SunAbraham(cluster=False, vcov_type='hc2_bm') is not supported: the "
+                "Bell-McCaffrey DOF lane is cluster-only. Use vcov_type='hc2' or 'hc1' "
+                "with cluster=False, or keep clustering (cluster=None auto-clusters at unit)."
+            )
 
         # Resolve survey design if provided
         from diff_diff.survey import (
@@ -1031,8 +1073,13 @@ class SunAbraham(BaseEstimator):
         # structure of the main fit. So the SA guard simplifies to
         # "explicit-vcov-only", without TWFE's `inference == "analytical"`
         # subguard.
-        if self.cluster is not None:
-            cluster_var: Optional[str] = self.cluster
+        if self.cluster is False:
+            # 4.0 (M-080): the uniform explicit off-switch - the plain HC
+            # sandwich (absorbed-FE full-K rescale inside LinearRegression),
+            # no auto-cluster, no survey PSU injection.
+            cluster_var: Optional[str] = None
+        elif user_cluster is not None:
+            cluster_var = user_cluster
         elif self.vcov_type == "conley":
             # Conley: never auto-cluster at unit. A unit-cluster product kernel
             # would zero every between-unit spatial pair, collapsing the spatial
@@ -1061,7 +1108,7 @@ class SunAbraham(BaseEstimator):
         else:
             cluster_ids_raw = None
         effective_cluster_ids = _resolve_effective_cluster(
-            resolved_survey, cluster_ids_raw, cluster_var if self.cluster is not None else None
+            resolved_survey, cluster_ids_raw, cluster_var if user_cluster is not None else None
         )
         if resolved_survey is not None and effective_cluster_ids is not None:
             from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
@@ -1552,6 +1599,24 @@ class SunAbraham(BaseEstimator):
             _overall_df_final = float(_overall_df_used) if np.isfinite(_overall_df_used) else None
 
         # Store results
+        # 4.0 (M-080): cluster metadata describes the cluster ids actually
+        # passed to the analytical regression - None under a survey design
+        # (the survey block owns PSU reporting), under the pairs bootstrap
+        # (unit resampling, no analytical cluster) and on unclustered fits;
+        # Conley keeps the explicit product-kernel column (and its count).
+        if resolved_survey is not None or bootstrap_results is not None:
+            _sa_cluster_name: Optional[str] = None
+            _sa_n_clusters: Optional[int] = None
+        elif self.vcov_type == "conley":
+            _sa_cluster_name = user_cluster
+            _sa_n_clusters = _sa_fit_stats.n_clusters if user_cluster is not None else None
+        elif cluster_var is not None:
+            _sa_cluster_name = cluster_var
+            _sa_n_clusters = _sa_fit_stats.n_clusters
+        else:
+            _sa_cluster_name = None
+            _sa_n_clusters = None
+
         self.results_ = SunAbrahamResults(
             event_study_effects=event_study_effects,
             att=overall_att,
@@ -1576,11 +1641,12 @@ class SunAbraham(BaseEstimator):
             event_study_vcov_index=es_vcov_index,
             event_study_df=es_df_final,
             conley_lag_cutoff=(self.conley_lag_cutoff if self.vcov_type == "conley" else None),
-            cluster_name=(self.cluster if self.vcov_type == "conley" else None),
+            cluster_name=_sa_cluster_name,
             reference_period=self._reference_period,
             reference_observed=self._reference_observed,
             df_convention=self.df_convention,
             inference_df=_overall_df_final,
+            n_clusters=_sa_n_clusters,
         )
 
         self.is_fitted_ = True

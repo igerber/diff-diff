@@ -46,8 +46,10 @@ from diff_diff.imputation_results import (  # noqa: F401 (re-export)
     ImputationDiDResults,
 )
 from diff_diff.utils import (
+    ClusterArg,
     safe_inference,
     validate_anticipation,
+    validate_cluster,
     validate_df_convention,
     validate_n_bootstrap,
 )
@@ -85,7 +87,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
-    cluster : str, optional
+    cluster : str, None or False, optional
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the default
+        ``cluster_var = unit`` lives inside the unit-level influence-function
+        variance, so no unclustered variance exists. Column labels must be ``str``.
         Column name for cluster-robust standard errors.
         If None, clusters at the unit level by default.
     vcov_type : str, default="hc1"
@@ -210,7 +215,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         self,
         anticipation: int = 0,
         alpha: float = 0.05,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         vcov_type: str = "hc1",
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
@@ -243,7 +248,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
 
         self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         self.vcov_type = vcov_type
         validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
@@ -316,6 +321,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         # out-of-domain value silently changes the ESTIMAND); the assignment
         # also re-normalizes a mutated numpy scalar to a Python int.
         self.anticipation = validate_anticipation(self.anticipation)
+        # Fit-time re-check of the shared cluster contract (str | None | False,
+        # [M-155]): __init__ and set_params validate eagerly, so this only
+        # catches DIRECT attribute mutation. `False` is normalized to None
+        # locally so it never reaches a column lookup ([M-080]).
+        validate_cluster(self.cluster)
+        user_cluster = None if self.cluster is False else self.cluster
 
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
@@ -387,12 +398,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         # variance while populating cluster_name/n_clusters on Results
         # dishonestly. Fail-closed mirroring CallawaySantAnna.
         if (
-            self.cluster is not None
+            user_cluster is not None
             and survey_design is not None
             and getattr(survey_design, "replicate_weights", None) is not None
         ):
             raise NotImplementedError(
-                f"ImputationDiD(cluster={self.cluster!r}) is not supported "
+                f"ImputationDiD(cluster={user_cluster!r}) is not supported "
                 "with replicate-weight survey designs. Replicate-weight "
                 "variance is computed by replicate reweighting (BRR / Fay / "
                 "JK1 / JKn / SDR) and ignores PSU/cluster entirely — setting "
@@ -518,10 +529,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         n_control_units = len(units_in_omega_0)
 
         # Cluster variable
-        cluster_var = self.cluster if self.cluster is not None else unit
-        if self.cluster is not None and self.cluster not in df.columns:
+        cluster_var = user_cluster if user_cluster is not None else unit
+        if user_cluster is not None and user_cluster not in df.columns:
             raise ValueError(
-                f"Cluster column '{self.cluster}' not found in data. "
+                f"Cluster column '{user_cluster}' not found in data. "
                 f"Available columns: {list(df.columns)}"
             )
 
@@ -531,7 +542,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             effective_cluster_ids = _resolve_effective_cluster(
                 resolved_survey,
                 cluster_ids_raw,
-                cluster_var if self.cluster is not None else None,
+                cluster_var if user_cluster is not None else None,
             )
             resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
             # When survey PSU is present, use it as the effective cluster for
@@ -999,9 +1010,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         if resolved_survey is not None:
             _cluster_name_for_results: Optional[str] = None
             _n_clusters_for_results: Optional[int] = None
-        elif self.cluster is not None:
-            _cluster_name_for_results = self.cluster
-            _n_clusters_for_results = int(data[self.cluster].nunique())
+        elif user_cluster is not None:
+            _cluster_name_for_results = user_cluster
+            _n_clusters_for_results = int(data[user_cluster].nunique())
         else:
             _cluster_name_for_results = unit
             _n_clusters_for_results = int(data[unit].nunique())

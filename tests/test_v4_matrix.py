@@ -142,11 +142,12 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # shipped by #838 without extending this floor) = 131; + the Wooldridge
 # to_dataframe level twin (M-150, 4.0-cut framing) = 132; + the LWDiD
 # results-contract rows (M-151/M-152 alias deprecations, M-153 to_dataframe
-# reshape; 4.0-cut PR 1) = 135.
+# reshape; 4.0-cut PR 1) = 135; + the 7b cluster-policy pair (M-154 SpilloverDiD
+# df_convention, planned for 7c; M-155 the shared cluster contract) = 137.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 135
+ROW_COUNT_FLOOR = 137
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -205,7 +206,7 @@ _INITIAL_ID_RANGES = [
     (147, 147),
     (148, 149),
     (150, 150),
-    (151, 153),
+    (151, 155),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -710,10 +711,10 @@ def test_initial_ids_never_deleted():
     M-136..M-138 + M-139 + M-140..M-142 + M-143 + M-144 + M-145/M-146 + M-147 +
     M-148/M-149 (shipped by #838 without extending the snapshot; added at the
     4.0-cut framing) + M-150 + M-151..M-153 (the LWDiD results-contract rows,
-    4.0-cut PR 1))."""
+    4.0-cut PR 1) + M-154/M-155 (the 7b cluster-policy pair))."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 135
+    assert len(EXPECTED_INITIAL_IDS) == 137
 
 
 def test_version_tuple_pads_to_three_components():
@@ -1367,18 +1368,19 @@ def _changes_at_4_0(row):
 
     Keyed on the two LIFECYCLE version fields only - a symbol removed at 4.0, or one
     whose deprecation warning starts firing at 4.0 (the ``field-flip`` family, removed
-    at 5.0). 113 of the 135 rows qualify.
+    at 5.0). 113 of the 137 rows qualify.
 
-    The 22 that do not, and why (this enumeration is the contract - a reader of the
+    The 24 that do not, and why (this enumeration is the contract - a reader of the
     guide must be able to trust that nothing 4.0-relevant was dropped):
 
     - 12 ``behavior`` rows with ``introduced_in: 3.9`` and no dep/rem: already shipped
       in 3.9, so there is no 4.0 action. They get their own guide section, not an
       appendix row.
-    - 5 ``behavior`` rows with ``introduced_in: 4.0`` and no deprecation/removal
+    - 7 ``behavior`` rows with ``introduced_in: 4.0`` and no deprecation/removal
       fields (``M-144`` anticipation validation, ``M-145`` pscore_trim validation,
       ``M-146`` summary-alpha guard, ``M-147`` ETWFE unsupported-period policy,
-      ``M-153`` LWDiD to_dataframe reshape - the post-cut behavior changes): they land
+      ``M-153`` LWDiD to_dataframe reshape, ``M-154`` SpilloverDiD df_convention (7c),
+      ``M-155`` the shared cluster contract - the post-cut behavior changes): they land
       AT 4.0 but remove/deprecate nothing, so they appear in the guide's
       "Remaining 4.0 changes" prose, not the ledger-derived appendix.
     - ``M-062``, ``M-063``: aliases, introduce-only / all lifecycle fields null.

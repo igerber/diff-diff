@@ -89,7 +89,7 @@ from diff_diff.survey import (
     SurveyMetadata,
     compute_survey_metadata,
 )
-from diff_diff.utils import safe_inference, validate_n_bootstrap
+from diff_diff.utils import ClusterArg, safe_inference, validate_cluster, validate_n_bootstrap
 
 __all__ = [
     "HeterogeneousAdoptionDiD",
@@ -2847,7 +2847,10 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         the CCT-2014 robust SE from Phase 1c); passing a non-default
         ``vcov_type`` on a continuous path emits a ``UserWarning`` per fit
         call.
-    cluster : str or None
+    cluster : str, None or False
+        ``False`` (4.0, M-080) is an accepted explicit no-op: the variance is
+        unit-level by construction, so there is nothing to switch off. Column
+        labels must be ``str``.
         Column name for cluster-robust SE. On the mass-point path this is
         the 2SLS CR1 sandwich; on the continuous (``continuous_at_zero`` /
         ``continuous_near_d_lower``) paths (Phase 2a) it threads the cluster
@@ -2958,7 +2961,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         kernel: str = "epanechnikov",
         alpha: float = 0.05,
         vcov_type: Optional[str] = None,
-        cluster: Optional[str] = None,
+        cluster: ClusterArg = None,
         n_bootstrap: int = 999,
         seed: Optional[int] = None,
     ) -> None:
@@ -2967,7 +2970,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         self.kernel = kernel
         self.alpha = alpha
         self.vcov_type = vcov_type
-        self.cluster = cluster
+        self.cluster = validate_cluster(cluster)
         # Event-study sup-t simultaneous-CI support. ``n_bootstrap`` =
         # number of multiplier-bootstrap replicates for the sup-t band;
         # ``seed`` = reproducibility seed for the multiplier draws. Both are
@@ -3297,7 +3300,8 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         design_arg = self.design
         d_lower_arg = self.d_lower
         vcov_type_arg = self.vcov_type
-        cluster_arg = self.cluster
+        validate_cluster(self.cluster)  # shared contract re-check ([M-155])
+        cluster_arg = None if self.cluster is False else self.cluster  # False = no-op
 
         # ---- Validate panel contract ----
         t_pre, t_post = _validate_had_panel(
@@ -4124,7 +4128,8 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         design_arg = self.design
         d_lower_arg = self.d_lower
         vcov_type_arg = self.vcov_type
-        cluster_arg = self.cluster
+        validate_cluster(self.cluster)  # shared contract re-check ([M-155])
+        cluster_arg = None if self.cluster is False else self.cluster  # False = no-op
         n_bootstrap_eff = int(self.n_bootstrap)
         seed_eff = None if self.seed is None else int(self.seed)
 
