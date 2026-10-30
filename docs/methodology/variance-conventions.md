@@ -19,6 +19,11 @@ y = N(0,1) + 0.3 unit + 0.2 t + 2 treated; n = 360, G = 60 under
 cluster="unit". Each row's exact fit kwargs are in the test file — the
 k values and SEs in any claim below come from the SAME fit (mixing panels
 produced wrong figures three separate times while this inventory was drafted).
+The two SpilloverDiD rows fit the same panel with a deterministic coordinate
+overlay (`_with_coords`): ever-treated units at lat = 0.001 x unit, lon = 0 (a
+~7 km cluster), never-treated units alternately at lat 0.5 (~55 km, inside the
+100 km ring) and lat 3.0 (~330 km, the far-away Omega_0 controls);
+rings=[0, 100].
 
 | surface | CR1 `k` (multiset) | tail df (multiset) | status | reason |
 |---|---|---|---|---|
@@ -41,6 +46,7 @@ produced wrong figures three separate times while this inventory was drafted).
 | `dml_did_bad_control` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Caetano et al. (2026) Eq. 11 augmented-score plug-in variance (same psi_bar - D*theta/pi centering as Chang Thm 2; per-unit influence function; normal-theory safe_inference on no-design fits; cluster= fits use the CR1 per-cell variance with df=df_survey t-inference) and the per-cell ATT_X diagnostic tuple sharing the same branch and df (one extra safe_inference call per retained cell) |
 | `dml_did_rcs` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 lambda-corrected augmented-score plug-in variance (Case 2; per-observation influence function; normal-theory safe_inference on no-design fits; survey_design=/cluster= fits use the design-based CR1/weighted-IF per-cell variance — replicate designs the IF-reweighting per-cell variance — with df=df_survey t-inference outside the shared CR1 sandwich) |
 | `duration_did` | — | None, None | **legitimate** | L3: Deaner & Ku (2026) whole-individual pooled bootstrap (centered absolute-deviation pointwise and simultaneous bands); no CR1 sandwich, normal-theory safe_inference gate only |
+| `spillover_cluster_unit` | — | 358, 358 | **legitimate** | L3: Wave D Gardner-GMM two-stage sandwich with its own CR1 multiplier G/(G-1)*(n-1)/(n-p_2) (two_stage meat, never the shared CR1). Explicit df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin). |
 | `did_absorb_hc1_cluster_unit_default_df` | 7 | 59 | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
 | `twfe_hc1_cluster_unit_default_df` | 3 | 59 | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
 | `wooldridge_hc1_within_default_df` | 15 | 59, 59, 59, 59, 59, 59, 59, 59, 59, 59 | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
@@ -49,6 +55,7 @@ produced wrong figures three separate times while this inventory was drafted).
 | `twfe_es_within_hc1_cluster_unit_default_df` | 11 | 59, 59, 59, 59, 59 | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
 | `twfe_es_pooled_hc1_cluster_time_default_df` | 7 | 5, 5, 5, 5, 5 | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
 | `imputation_pretrends_event_study_default_df` | unpinned | 59, 59, 59, None, None, None, None, None | **legitimate** | t(G-1): the 4.0 df_convention default (M-004..M-006, M-128..M-131) - same CR1 k as the explicit-'residual' twin, tail df G-1 |
+| `spillover_cluster_unit_default_df` | — | 59, 59 | **legitimate** | t(G-1): the 4.0 df_convention default (M-154 - SpilloverDiD gained the knob at the cut) - no shared-CR1 call, as the explicit-'residual' twin; tail df G-1 |
 
 cr1_k is the sorted multiset of K_reference counts reaching the shared
 clustered CR1 denominator — visible columns + the signed cluster_k_adjustment
@@ -139,11 +146,15 @@ output).
   library-wide 4.0 flip — bit-identical, no numbers moved there), with
   "residual"/"normal" as opt-ins; the degenerate lanes (unclustered refit,
   RA G<=1, saturated early return) keep literal df=None under every value.
-- **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / ImputationDiD (default) /
-  DurationDiD**: different variance theory (influence functions / Chang (2020)
-  augmented-score plug-in / two-stage / BJS imputation / Deaner & Ku (2026)
-  whole-individual pooled bootstrap with centered absolute-deviation bands),
-  never the shared CR1 sandwich. DurationDiD is bootstrap-only: its single
+- **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / SpilloverDiD / ImputationDiD
+  (default) / DurationDiD**: different variance theory (influence functions / Chang
+  (2020) augmented-score plug-in / two-stage / Gardner two-stage + Wave D GMM
+  first-stage correction / BJS imputation / Deaner & Ku (2026) whole-individual
+  pooled bootstrap with centered absolute-deviation bands), never the shared CR1
+  sandwich. SpilloverDiD's CR1 lane applies its own `G/(G-1) * (n-1)/(n-p_2)`
+  multiplier inside `two_stage._compute_gmm_corrected_meat`, outside the shared
+  sandwich, and since 4.0 ([M-154]) resolves its tail df through the shared
+  `df_convention` knob (its two matrix rows). DurationDiD is bootstrap-only: its single
   `safe_inference` + `safe_inference_batch` gate passes `df=None` and the
   centered-bootstrap p-values/intervals override the normal-theory values. CS is
   anchored to Stata csdid outright; DMLDiD's panel lane to DoubleML at
@@ -172,7 +183,12 @@ ONE three-value knob (`df_convention ∈ {"residual", "cluster", "normal"}`)
 now governs the analytical fallback df on every shared-CR1 surface:
 DiD/TWFE/LinearRegression + SunAbraham/WooldridgeDiD-OLS/StackedDiD/
 ImputationDiD-pretrends and LPDiD, all at the default "cluster" (the
-Stata-anchored t(G−1); LPDiD since 3.9, the rest since the 4.0 cut) with
+Stata-anchored t(G−1); LPDiD since 3.9, the rest since the 4.0 cut) - plus,
+since the 4.0 cut (item 7c, [M-154]), SpilloverDiD, whose Wave D GMM sandwich
+lanes make no shared-CR1 call (`cr1_k=()`) but resolve the same fallback df
+through `resolve_tail_df`: G−1 on the unit auto-cluster / an explicit cluster=,
+inert on Conley (an explicit product-kernel cluster included) and on
+cluster=False - with
 "residual" restoring the 3.x residual df. Survey/replicate df and hc2_bm Bell-McCaffrey
 DOF keep precedence under every value; "cluster" fails closed warn+NaN at
 G<=1 and is inert on unclustered/conley fits; "normal" is deliberate z at
@@ -211,7 +227,7 @@ column lookup.
 
 | Class | `cluster` param? | Default when omitted (v3.13.0 -> 4.0) | `cluster=False` since 4.0 | Category |
 |---|---|---|---|---|
-| SpilloverDiD | yes | observation-level HC1 -> **CR1 at unit since 4.0** (`"unit"`, G; TWFE's carve-outs mirrored; inference df still the residual df until [M-154]) | plain HC1 SE (= the 3.x default) | **a** - default flipped to unit |
+| SpilloverDiD | yes | observation-level HC1 -> **CR1 at unit since 4.0** (`"unit"`, G; TWFE's carve-outs mirrored; inference df t(G-1) since 4.0, [M-154]) | plain HC1 SE (= the 3.x default) | **a** - default flipped to unit |
 | TwoWayFixedEffects (static) | yes | CR1 at unit (`cluster_name="unit"`; reports `n_clusters` since 4.0 on non-survey analytical fits; the survey-lane auto label is None since 4.0) | plain HC sandwich (absorbed-FE full-K rescale, residual-df t; one-way CR2-BM under `hc2_bm`); rejected under `inference="wild_bootstrap"` | c1 |
 | TwoWayFixedEffects (event-study) | yes | CR1 at unit since 3.9 (M-010) | plain HC sandwich (the core's unclustered lanes) | c1 |
 | SunAbraham | yes | CR1 at unit (reports `cluster_name="unit"` and the appended `n_clusters` since 4.0) | plain HC sandwich (residual-df t); no unit PSU under `survey_design=`; pairs bootstrap unaffected; rejected with `hc2_bm` | c1 |
@@ -249,5 +265,5 @@ than open an unverified variance: `cluster=False` + `vcov_type="hc2_bm"` on
 SunAbraham / WooldridgeDiD (their Bell-McCaffrey DOF helper is cluster-only; the
 one-way port is a `TODO.md` row - TWFE's one-way CR2-BM lane already exists), and
 the bootstraps that draw AT the analytical cluster (DiD/TWFE wild, WooldridgeDiD
-multiplier). SpilloverDiD's new default lane keeps residual-df inference until
-[M-154] (item 7c) adds its `df_convention` knob.
+multiplier). SpilloverDiD's default lane moved from residual-df to t(G-1)
+inference when [M-154] (item 7c, 2026-10-29) added its `df_convention` knob.

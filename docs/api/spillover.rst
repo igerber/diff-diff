@@ -57,6 +57,11 @@ SpilloverDiDResults
 
 Results container with per-ring spillover-effect table.
 
+Inference df: ``df_convention`` echoes the estimator's knob and ``inference_df``
+the df the reported t / p / CI used (``G - 1`` on the clustered lanes under the
+4.0 default, the residual df under ``"residual"`` and on ``cluster=False`` /
+Conley fits, ``None`` under ``"normal"``; the survey design df takes precedence).
+
 .. autoclass:: diff_diff.SpilloverDiDResults
    :no-index:
    :members:
@@ -493,9 +498,10 @@ and planned follow-up enhancements:
 - **Data-driven d_bar selection** — Butts (2021b) / Butts (2023) JUE
   Insight propose cross-validation under stronger parallel-trends
   assumptions. Not in this PR.
-- **HC2 / HC2_BM (Bell-McCaffrey / CR2) variance** — current stage-2
-  inference uses a generic residual-df (n - effective rank) for
-  t-distribution lookups. ``vcov_type="hc2"`` / ``"hc2_bm"`` require
+- **HC2 / HC2_BM (Bell-McCaffrey / CR2) variance** — stage-2 inference
+  uses one fallback df per fit (the ``df_convention``-resolved df: t(G-1)
+  on clustered lanes by default, the residual df otherwise) rather than
+  per-coefficient DOF. ``vcov_type="hc2"`` / ``"hc2_bm"`` require
   per-coefficient BM / CR2 DOF and raise ``NotImplementedError``.
   Routing stage 2 through ``LinearRegression`` (which supplies the
   per-coefficient DOF metadata) is queued.

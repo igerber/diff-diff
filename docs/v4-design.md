@@ -864,18 +864,22 @@ domain vocabulary, not drift.
   with `hc2_bm` on SunAbraham/WooldridgeDiD pending the one-way BM DOF port
   (TODO.md); DiD/TWFE analytical `n_clusters`, `SunAbrahamResults.n_clusters`
   + `cluster_name`, the TWFE survey auto-label corrected to None; pinned by
-  `tests/test_v4_cluster_policy.py`. SpilloverDiD's default CR1 lane keeps
-  residual-df inference until [M-154].)
-- **SpilloverDiD df_convention** [M-154] (item 7c, the PR after 7b; user
-  decision 2026-10-29): SpilloverDiD gains the three-value `df_convention` knob
+  `tests/test_v4_cluster_policy.py`. SpilloverDiD's default CR1 lane kept
+  residual-df inference until [M-154] shipped in 7c.)
+- **SpilloverDiD df_convention** [M-154] (SHIPPED item 7c, 2026-10-29; pinned by
+  `tests/test_v4_spillover_df_convention.py` and the variance-conventions rows
+  `spillover_cluster_unit` / `spillover_cluster_unit_default_df`; notebook 23
+  re-validated - it prints no p-values or CIs): SpilloverDiD gained the three-value
+  `df_convention` knob
   with the 4.0 default `"cluster"` - t(G-1) on its clustered analytical lanes
   (the unit auto-cluster and explicit `cluster=`), residual df under
   `"residual"` and on unclustered (`cluster=False`) fits, z under `"normal"`;
   inert on Conley (G forced to None even with an explicit product-kernel
   cluster, the SunAbraham precedent); survey df keeps precedence. Closes the
   one gap 7b leaves: at 7b the default CR1 lane runs t(n_obs_eff -
-  k_effective) while every other auto-clustered default runs t(G-1). Moves
-  p/CI on clustered SpilloverDiD fits; notebook 23 is re-executed again there.
+  k_effective) while every other auto-clustered default ran t(G-1). Moved
+  p/CI on clustered SpilloverDiD fits; the saturated-sample all-NaN contract is
+  knob-independent (ladder: survey df -> saturation -> `utils.resolve_tail_df`).
 - **df_convention default flip** [M-004]..[M-006] + [M-128]..[M-131]:
   `"residual"` -> `"cluster"` (G-1) at 4.0 - the locked #663 direction.
   PR C ([M-127], 3.9) resolved the "evaluate extending the knob" item EARLY:
@@ -1232,8 +1236,9 @@ tests-first PR that flips no rows).
    df_convention flips [M-004]..[M-006] + [M-128]..[M-131], pinned by
    `tests/test_v4_inference_defaults.py`; 7b SHIPPED 2026-10-29: [M-080] +
    the shared cluster contract [M-155], pinned by
-   `tests/test_v4_cluster_policy.py`, notebook 23 re-executed; 7c = [M-154]
-   SpilloverDiD df_convention, the next PR.)
+   `tests/test_v4_cluster_policy.py`, notebook 23 re-executed; 7c SHIPPED
+   2026-10-29: [M-154] SpilloverDiD df_convention, pinned by
+   `tests/test_v4_spillover_df_convention.py`; item 7 complete.)
 8. [M-093] sentinel retirement + event-study schema enforcement.
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
@@ -1244,8 +1249,8 @@ tests-first PR that flips no rows).
     04_parallel_trends, 05_honest_did, 07_pretrends_power,
     09_real_world_examples, 11_imputation_did, 13_stacked_did,
     16_wooldridge_etwfe (NOT 16_survey_did: the survey df wins) - plus any
-    7c/8/9 movers; 24 is handled in 7a and 23 in 7b and again in 7c (each
-    re-executed there). 7b's label changes also drift every committed tutorial
+    8/9 movers; 24 is handled in 7a and 23 in 7b and re-validated in 7c (it
+    prints no p-values or CIs, so 7c moved no committed output). 7b's label changes also drift every committed tutorial
     that renders an analytical DiD/TWFE summary (", G=" on the variance line)
     or a SunAbraham summary (the new "Std. errors:" line, e.g. 02) - all
     within the nine-notebook set above.

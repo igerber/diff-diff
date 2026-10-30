@@ -555,6 +555,7 @@ class TestSpilloverDiDInitGetParamsSetParams:
             "conley_cutoff_km",
             "conley_lag_cutoff",
             "cluster",
+            "df_convention",
             "alpha",
             "anticipation",
             "event_study",
