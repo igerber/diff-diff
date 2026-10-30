@@ -494,6 +494,13 @@ def test_plot_extractor_never_treats_zero_count_as_reference():
 
 
 def test_honest_plot_anchor_from_key_and_all_undefined_guard(cs_universal_regular):
+    # matplotlib is an optional dependency (the CI test legs install only the
+    # core stack), so the plotting test skips without it - the
+    # test_event_study_consumers.py::TestPlotting convention.
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     from diff_diff.visualization._event_study import plot_honest_event_study
 
     standin = legacy_standin(cs_universal_regular)
@@ -508,6 +515,7 @@ def test_honest_plot_anchor_from_key_and_all_undefined_guard(cs_universal_regula
     assert fig is not None
     with pytest.raises(ValueError, match="No valid data to plot"):
         plot_honest_event_study(h, periods=[-1], show=False)
+    plt.close("all")
 
 
 def test_honest_and_pretrends_raw_route_parity(cs_universal_regular):
