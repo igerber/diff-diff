@@ -520,6 +520,7 @@ SpilloverDiD(
     conley_cutoff_km: float | None = None,
     conley_lag_cutoff: int | None = None,
     cluster: str | None | False = None,  # None = auto-cluster at unit (4.0; dropped on Conley, never a survey PSU); False = observation-level HC1 (the 3.x default); str = that column
+    df_convention: str = "cluster",   # Analytical t/p/CI df (4.0, M-154): "cluster" (G-1 on the unit auto-cluster / explicit cluster=; default), "residual" (n-k; the 3.x inference), "normal" (z); "cluster" falls back to n-k on Conley and cluster=False ("normal" still z there); survey df keeps precedence under every value; results carry df_convention / inference_df
     alpha: float = 0.05,
     anticipation: int = 0,  # non-negative integer; bool rejected
     event_study: bool = False,           # Wave C: per-event-time × ring decomposition (Butts Table 2)

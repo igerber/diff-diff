@@ -644,8 +644,12 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   (2026-07, widened 3.9 / M-127):** `df_convention ∈ {"residual", "cluster", "normal"}` on the
   library-wide knob roster — `DifferenceInDifferences` / `TwoWayFixedEffects` /
   `LinearRegression` (the TWFE event-study mode included) plus (since 3.9) `SunAbraham`, `WooldridgeDiD` (OLS
-  arms), `StackedDiD`, `ImputationDiD` (pretrends lead regression), and `LPDiD` (default
-  `"cluster"`, its Stata-anchored convention). `"cluster"` switches clustered analytical
+  arms), `StackedDiD`, `ImputationDiD` (pretrends lead regression), `LPDiD` (default
+  `"cluster"`, its Stata-anchored convention) and, since the 4.0 cut (item 7c, [M-154]),
+  `SpilloverDiD` - its Wave D GMM sandwich lanes make no shared-CR1 call but resolve the same
+  fallback df through `utils.resolve_tail_df`: `G − 1` on the unit auto-cluster / an explicit
+  `cluster=`, inert on Conley (an explicit product-kernel cluster included) and on
+  `cluster=False`. `"cluster"` switches clustered analytical
   t/p/CI to the Stata/fixest `G − 1` convention and is inert on unclustered and conley fits;
   `"normal"` is deliberate normal-theory z at the fallback level on EVERY fit (clustered,
   unclustered, and conley alike — on lanes that were already t it is a new deliberate option,
@@ -656,8 +660,7 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   `docs/v4-deprecations.yaml` M-004..M-006 + M-128..M-131, pinned by
   `tests/test_v4_inference_defaults.py`; the flip moved every clustered p-value/CI, which is
   why it waited for a major version), and `"residual"` restores the 3.x residual-df inference
-  bit-for-bit. **Out of the knob's scope** (own inference stacks): `SpilloverDiD`
-  (until [M-154], item 7c - its default CR1 lane runs residual-df t at 7b), the IF-based
+  bit-for-bit. **Out of the knob's scope** (own inference stacks): the IF-based
   family — `CallawaySantAnna`, `TwoStageDiD`, `ChaisemartinDHaultfoeuille`, `EfficientDiD`,
   `ContinuousDiD`, `ChangesInChanges`, `SyntheticDiD`, `HeterogeneousAdoptionDiD` — and the
   OLS-based `TripleDifference` / `TROP` (own `safe_inference` df conventions, outside the
@@ -7074,12 +7077,27 @@ should be a deliberate user choice.
   shared `str | None | False` contract, [M-155]). Results report `cluster_name="unit"`
   / `n_clusters=G` on the default lane. Roster in
   `docs/methodology/variance-conventions.md` "Default clustering roster".
-- **Note:** inference df unchanged at 7b - `t(n_obs_eff - k_effective)` on every
-  non-survey lane INCLUDING the new default CR1 lane (the survey-design df keeps its
-  precedence under `survey_design=`, as before); SpilloverDiD has no `df_convention`
-  knob yet, so it is the one auto-clustered default not on t(G-1); [M-154] / item 7c
-  adds the knob with the 4.0 default `"cluster"` (t(G-1) on the clustered lanes, inert
-  on Conley, survey df still first).
+- **Note (inference df, [M-154], item 7c, 2026-10-29):** ONE df feeds every
+  `safe_inference` call (aggregate `tau_total`, per-ring `delta_j`, event-study per-cell
+  `tau_k` / `delta_jk` and the scalar lincom `att`), resolved by the pure helper
+  `_resolve_inference_df` (`diff_diff/spillover.py`) with the precedence ladder: (1) a
+  `survey_design` df (`ResolvedSurveyDesign.df_survey`) wins under every knob value; (2) a
+  saturated stage-2 sample (`n_obs_eff - k_effective <= 0`) warns and forces the `df = 0`
+  all-NaN sentinel under every value (never normal theory); (3) otherwise the shared
+  three-value `df_convention` knob via `utils.resolve_tail_df` - `"cluster"` (the 4.0
+  default) = `t(G − 1)` with `G` the effective cluster count of the Wave D `"cluster"`
+  variance mode (the unit auto-cluster or an explicit `cluster=`; reported as
+  `n_clusters`), `G` forced to `None` (residual df) on EVERY Conley fit - an explicit
+  product-kernel `cluster=` included, the SunAbraham precedent - and on the `cluster=False`
+  HC1 lane; `"residual"` = `t(n_obs_eff - k_effective)` (the 3.x and 7b inference);
+  `"normal"` = z. Point estimates, SEs and t-statistics never move. Results carry
+  `df_convention` (the configuration) and `inference_df` (the df actually used; `None`
+  under z and the NaN sentinel). Pre-existing provenance gap, unchanged here: the
+  event-study container's `results_base._resolve_scalar_df_survey` reads a `df_inference`
+  attribute while `DiDResults` carriers expose `inference_df`, so a non-survey Spillover
+  event-study container reports `df_survey=None` (tracked in `TODO.md`, the df-provenance
+  completion row). Pinned by `tests/test_v4_spillover_df_convention.py` and the
+  variance-conventions rows `spillover_cluster_unit` / `spillover_cluster_unit_default_df`.
 - **Note (rank-guarded Wave D bread):** The Wave D variance bread `A_22 = (X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on the already-column-dropped kept submatrix. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular kept Gram would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0), re-inflated to (k, k) with NaN at the dropped positions, and warns. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
 
 **Identification spec (committed):**
@@ -7187,7 +7205,7 @@ The correction applies unconditionally (no opt-out kwarg). Point estimates (`tau
 
 The `_compute_stratified_meat_from_psu_scores` helper at `diff_diff/survey.py` implements the Binder TSL formula and handles `lonely_psu ∈ {"remove", "certainty", "adjust"}` and FPC consistently across the package.
 
-Degrees of freedom for the t-distribution lookup use `ResolvedSurveyDesign.df_survey` (the standard survey 4-way branch: PSU+strata → `n_PSU - n_strata`; PSU only → `n_PSU - 1`; strata only → `n_obs - n_strata`; neither → `n_obs - 1`). Threaded through all four `safe_inference` call sites: aggregate `tau_total`, per-ring `delta_j`, event-study per-event-time `tau_k` / `delta_jk`, and the scalar `att` lincom in event-study mode.
+Degrees of freedom for the t-distribution lookup use `ResolvedSurveyDesign.df_survey` (precedence over the `df_convention` knob under every value, [M-154]; the standard survey 4-way branch: PSU+strata → `n_PSU - n_strata`; PSU only → `n_PSU - 1`; strata only → `n_obs - n_strata`; neither → `n_obs - 1`). Threaded through all four `safe_inference` call sites: aggregate `tau_total`, per-ring `delta_j`, event-study per-event-time `tau_k` / `delta_jk`, and the scalar `att` lincom in event-study mode.
 
 - **Note (documented synthesis):** Wave E.1 composes Gerber (2026, arXiv:2605.04124) Proposition 1 — Binder Taylor Series Linearization for IF representations of smooth functionals; explicitly derived for TwoStageDiD in the paper's Appendix — with the Wave D Gardner GMM first-stage uncertainty correction (Butts 2021 §3.1 + Gardner 2022 §4) applied to SpilloverDiD's ring-indicator stage-2 design. The composition is mechanical: SpilloverDiD's Wave D Psi is aggregated to PSU level and passed to the audited Binder TSL meat helper. Survey weights enter via Hájek normalization at the gamma_hat solve, eps construction, and bread inversion. No reference software combines all ingredients; Wave E.2 extends with the Conley × survey product-kernel composition (cross-sectional `conley_lag_cutoff = 0`) — see "Variance (Wave E.2)" subsection below; Wave E.2 follow-up further extends with the within-PSU serial Bartlett HAC for `conley_lag_cutoff > 0` — see "Variance (Wave E.2 follow-up)" subsection below.
 - **Note (warn-and-use-PSU for cluster + survey):** when both `cluster=<col>` and `survey_design.psu` are supplied with **different groupings**, the cluster argument emits a `UserWarning` and is overridden by PSU (mirrors `TwoStageDiD._resolve_effective_cluster`). PSU is the design-relevant cluster on survey panels; `cluster=<col>` on SpilloverDiD is more often a spatial / unit-level label, so the design constraint wins. When both knobs are supplied with the **same** groupings, no warning fires and PSU still takes precedence (the inference is unchanged either way).
@@ -7273,7 +7291,7 @@ Degrees of freedom for the t-distribution lookup use `ResolvedSurveyDesign.df_su
 - **Restrictions / unchanged from Wave E.1/E.2/follow-up:**
   - Replicate-weight variance (BRR / Fay / JK1 / JKn / SDR) raises `NotImplementedError` (Wave E.1 gate at `spillover.py:2400` inherited; per-replicate refit + subpopulation is a separate follow-up).
   - TwoStageDiD's analogous always-treated design-subset pattern was shipped in a follow-up PR (TwoStageDiD Wave E.3 parity) — see "Note (documented synthesis — Wave E.3 parity, full-domain survey design under always-treated drop)" in the TwoStageDiD section above. The two estimators now share the full-design retention contract; the trigger differs (TwoStageDiD: always-treated unit detection; SpilloverDiD: `finite_mask` warn-and-drop / subpopulation zero-weight rows) but the invariant is identical (zero-pad scores at the meat-helper boundary; retain full-domain `resolved_survey.psu / strata / fpc`).
-  - `df_for_inference` at `spillover.py:3229-3234` reads `resolved_survey_fit.df_survey` which is the full-domain value under Wave E.3 (since `resolved_survey_fit = resolved_survey`). All four `safe_inference` call sites (aggregate `tau_total`, per-ring `delta_j`, event-study per-event-time `tau_k` / `delta_jk`, scalar `att` lincom) inherit the full-domain df.
+  - the shared df ladder `_resolve_inference_df` (`diff_diff/spillover.py`) reads `resolved_survey_fit.df_survey` first, which is the full-domain value under Wave E.3 (since `resolved_survey_fit = resolved_survey`). All four `safe_inference` call sites (aggregate `tau_total`, per-ring `delta_j`, event-study per-event-time `tau_k` / `delta_jk`, scalar `att` lincom) inherit the full-domain df.
 
 **Implementation:** `spillover.py:2845-2896` design-subset block deleted; `survey_weights_fit = survey_weights[finite_mask]` retained for the stage-2 OLS solve (which still operates on the fit sample); `cluster_ids_full[finite_mask]` subset dropped on the survey path (`cluster_ids_fit = cluster_ids_full` under survey). The `_compute_gmm_corrected_meat` call at `spillover.py:3163` is rewired to receive SURVEY-FINITE-MASK gamma_hat-construction inputs (`X_1_sparse_fit`, `X_10_sparse_fit`, `eps_10_fit` built on `survey_finite_mask`; `X_2_kept_gamma`, `eps_2_fit_gamma`, `survey_weights_fit_gamma` projected from the fit-sample frame down to survey_finite_mask) plus FULL-LENGTH kernel-dispatch arrays (`cluster_ids_for_meat`, `conley_coords_for_meat`, `conley_time_for_meat`, `conley_unit_for_meat`, `resolved_survey_fit`) plus the new `score_pad_mask=survey_finite_mask` kwarg; no-survey path passes `score_pad_mask=None` and uses fit-length variables throughout (bit-identical to pre-E.3). `_compute_gmm_corrected_meat` at `two_stage.py` adds one new optional kwarg `score_pad_mask: Optional[np.ndarray] = None` and one post-Psi-construction zero-pad block; the `_validate_conley_kwargs` call uses `n_for_conley = len(score_pad_mask)` when the kwarg is set. Within-unit-constancy validator at `spillover.py:2913` updated to operate on full-length unit array (matches full-length cluster array under Wave E.3). Second `compute_survey_metadata` recompute at `spillover.py:2954-2959` now uses full-length `raw_w` (no `[finite_mask]` subset). Tests: `TestSpilloverDiDWaveE3SubpopulationFullDesign` + `TestSpilloverDiDWaveE3SubpopulationFullDesignEventStudy` at `tests/test_spillover.py`.
 
@@ -7295,7 +7313,7 @@ Degrees of freedom for the t-distribution lookup use `ResolvedSurveyDesign.df_su
 - `survey_design=` for `vcov_type ∈ {"hc1"}` (plus `cluster=<col>` for CR1) SHIPPED in Wave E.1 — see "Variance (Wave E.1)" subsection below. Threads Hájek-normalized survey weights through stage-1 FE estimation, gamma_hat solve, eps construction, and bread inversion; aggregates the Wave D Psi to PSU totals and routes through the audited `_compute_stratified_meat_from_psu_scores` Binder TSL meat helper. `vcov_type="conley"` combined with `survey_design=` SHIPPED in Wave E.2 for cross-sectional Conley (`conley_lag_cutoff = 0`) — see "Variance (Wave E.2)" subsection below (stratified-Conley sandwich on PSU totals). Wave E.2 follow-up adds the panel-block composition (`conley_lag_cutoff > 0`) via spatial + serial Bartlett HAC — see "Variance (Wave E.2 follow-up)" subsection below. `SurveyDesign.subpopulation()` and warn-and-drop full-design retention via zero-pad scores SHIPPED in Wave E.3 — see "Variance (Wave E.3)" subsection below (matches R `survey::svyrecvar(subset())` + in-library precedent at `imputation.py:2175-2183` and `prep.py:1401-1432`). Replicate-weight variance (BRR / Fay / JK1 / JKn / SDR) raises `NotImplementedError` — Gerber (2026) Appendix A notes the IF-reweighting shortcut does NOT apply to TwoStageDiD-class estimators because `gamma_hat` is weight-sensitive; correct support requires per-replicate full re-fit and is queued as a follow-up.
 - `covariates=` raises `NotImplementedError` — Gardner-style stage-1 residualization not yet wired through; planned follow-up.
 - `ring_method="count"` not exposed — only the nearest-treated-ring specification.
-- `vcov_type` ∈ {`"hc2"`, `"hc2_bm"`, `"hc3"`, `"classical"`} raises `NotImplementedError` — `hc2`/`hc2_bm` (at construction) because current stage-2 inference uses generic residual df rather than per-coefficient Bell-McCaffrey / CR2 DOF; `hc3` (at construction) because it is not implemented for the two-stage spillover variance; `classical` (at fit) because the Wave D Gardner GMM first-stage correction has not been derived for the classical homoskedastic variance (different meat structure `sigma_hat^2 * (X_10' X_10)` vs the Wave D IF outer product `Psi' Psi`). Use `"hc1"` or `"conley"`, or pair with `cluster=` for CR1 — all three apply the Wave D GMM correction.
+- `vcov_type` ∈ {`"hc2"`, `"hc2_bm"`, `"hc3"`, `"classical"`} raises `NotImplementedError` — `hc2`/`hc2_bm` (at construction) because stage-2 inference uses one fallback df per fit (the `df_convention`-resolved df, [M-154]) rather than per-coefficient Bell-McCaffrey / CR2 DOF; `hc3` (at construction) because it is not implemented for the two-stage spillover variance; `classical` (at fit) because the Wave D Gardner GMM first-stage correction has not been derived for the classical homoskedastic variance (different meat structure `sigma_hat^2 * (X_10' X_10)` vs the Wave D IF outer product `Psi' Psi`). Use `"hc1"` or `"conley"`, or pair with `cluster=` for CR1 — all three apply the Wave D GMM correction.
 - **`rings[0]` must equal 0** — the partition must cover treated locations (`d_it = 0` belongs to Ring 1). Rings starting at a nonzero inner edge would leave units in `0 <= d_it < rings[0]` as exposed-but-unmodeled, silently biasing the estimator. Validator rejects such inputs.
 - **Balanced panel required (Wave B MVP)** — every unit must observe every period. An unbalanced (unit, time) Ω₀ bipartite graph can produce disconnected FE components and unidentified stage-1 residuals on treated rows. Exact graph-connectivity-based identification (which would relax this to a strictly weaker condition) is queued as a follow-up extension. Validator rejects unbalanced inputs.
 - **One row per `(unit, time)` cell required** — duplicate cells silently re-weight stage-1 FE estimation AND stage-2 OLS. Validator rejects duplicate cells.

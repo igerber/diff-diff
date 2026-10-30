@@ -679,7 +679,8 @@ def resolve_tail_df(
 
     The single implementation of the ``df_convention`` knob's fallback slot
     for the standalone estimators (SunAbraham aggregates, WooldridgeDiD OLS,
-    StackedDiD, ImputationDiD pretrends leads, LPDiD). Survey/replicate df
+    StackedDiD, ImputationDiD pretrends leads, LPDiD, SpilloverDiD (4.0,
+    [M-154])). Survey/replicate df
     and per-coefficient Bell-McCaffrey DOF keep precedence at the CALL SITE
     under every value — callers consult this helper only when no
     higher-precedence df applies. ``LinearRegression.get_inference`` and

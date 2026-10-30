@@ -78,6 +78,21 @@ def make_panel() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _with_coords(df: pd.DataFrame) -> pd.DataFrame:
+    """Deterministic coordinate overlay for the SpilloverDiD rows (documented in
+    docs/methodology/variance-conventions.md "Shared DGP"): ever-treated units sit
+    in a ~7 km cluster at lat = 0.001 * unit, lon = 0; never-treated units alternate
+    between a near band (lat 0.5, ~55 km, inside the 100 km ring) and a far band
+    (lat 3.0, ~330 km, the Omega_0 far-away controls present in every period)."""
+    out = df.copy()
+    ever = out["first_treat"] > 0
+    out["lat"] = np.where(
+        ever, 0.001 * out["unit"], np.where((out["unit"] // 4) % 2 == 0, 0.5, 3.0)
+    )
+    out["lon"] = 0.0
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Programmatic discovery of instrumentation targets.
 # ---------------------------------------------------------------------------
@@ -545,6 +560,22 @@ ROWS = [
             "no CR1 sandwich, normal-theory safe_inference gate only"
         ),
     ),
+    dict(
+        key="spillover_cluster_unit",
+        fit=lambda df: diff_diff.SpilloverDiD(
+            rings=[0.0, 100.0], conley_coords=("lat", "lon"), df_convention="residual"
+        ).fit(_with_coords(df), outcome="y", unit="unit", time="time", first_treat="first_treat"),
+        cr1_k=(),
+        # Two safe_inference calls (aggregate tau_total + the one ring), both at
+        # the stage-2 residual df n - k = 360 - 2.
+        tail_df=(358.0, 358.0),
+        status="legitimate",
+        reason=(
+            "L3: Wave D Gardner-GMM two-stage sandwich with its own CR1 multiplier "
+            "G/(G-1)*(n-1)/(n-p_2) (two_stage meat, never the shared CR1). Explicit "
+            "df_convention='residual' since the 4.0 default is G-1 (see the _default_df twin)."
+        ),
+    ),
     # ---- 4.0 default twins: identical fits WITHOUT the explicit knob, so the
     # tail df is G-1 (G = clusters with positive weight on each surface's
     # clustered sample). The cr1_k literals are copied from the residual twins
@@ -672,6 +703,20 @@ ROWS = [
             "same CR1 k as the explicit-'residual' twin, tail df G-1"
         ),
     ),
+    dict(
+        key="spillover_cluster_unit_default_df",
+        fit=lambda df: diff_diff.SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon")).fit(
+            _with_coords(df), outcome="y", unit="unit", time="time", first_treat="first_treat"
+        ),
+        cr1_k=(),
+        # G-1 with G = 60 units (the 4.0 unit auto-cluster), on both calls.
+        tail_df=(59.0, 59.0),
+        status="legitimate",
+        reason=(
+            "t(G-1): the 4.0 df_convention default (M-154 - SpilloverDiD gained the knob at the "
+            "cut) - no shared-CR1 call, as the explicit-'residual' twin; tail df G-1"
+        ),
+    ),
 ]
 
 _FAST_KEYS = {
@@ -685,6 +730,8 @@ _FAST_KEYS = {
     "wooldridge_hc1_within_default_df",
     "lpdid_pre2_post2",
     "callaway_santanna_default",
+    "spillover_cluster_unit",
+    "spillover_cluster_unit_default_df",
 }
 
 

@@ -45,9 +45,11 @@ from diff_diff.two_stage import _compute_gmm_corrected_meat, _LSMRUnconvergedErr
 from diff_diff.utils import (
     ClusterArg,
     _iterative_fe_solve,
+    resolve_tail_df,
     safe_inference,
     validate_anticipation,
     validate_cluster,
+    validate_df_convention,
 )
 
 if TYPE_CHECKING:
@@ -827,7 +829,7 @@ def _extract_event_study_results(
     rectangular_grid: List[Tuple[str, Optional[str], int]],
     n_obs_per_col: np.ndarray,
     ref_period: int,
-    df_resid: int,
+    df_resid: Optional[float],
     alpha: float,
     ring_labels: List[str],
     weight_sum_per_col: Optional[np.ndarray] = None,
@@ -1078,6 +1080,80 @@ def _extract_event_study_results(
         event_study_effects,
         coefficients_full,
     )
+
+
+def _resolve_inference_df(
+    *,
+    df_convention: str,
+    n_obs_eff: int,
+    k_effective: int,
+    n_clusters: Optional[int],
+    vcov_mode: str,
+    survey_df: Optional[int],
+    has_survey: bool,
+) -> Optional[float]:
+    """Resolve the ONE tail df every SpilloverDiD ``safe_inference`` call uses.
+
+    Precedence ladder (4.0, [M-154]):
+
+    1. ``survey_design`` present: ``ResolvedSurveyDesign.df_survey`` (the
+       standard survey DOF; ``None`` -> the ``0`` fail-closed sentinel). The
+       survey df beats every ``df_convention`` value, ``"normal"`` included.
+    2. Saturated stage-2 sample (``n_obs_eff - k_effective <= 0``): the
+       residual df itself, which the guard below turns into the ``0.0``
+       all-NaN sentinel under every knob value (``resolve_tail_df`` would
+       fall through to normal theory here - misleading on a degenerate
+       sample, so it is never consulted).
+    3. Otherwise ``diff_diff.utils.resolve_tail_df``: ``"cluster"`` ->
+       ``G - 1`` with ``G`` the effective cluster count of the Wave D
+       ``"cluster"`` variance mode (the 4.0 unit auto-cluster or an explicit
+       ``cluster=``); ``G`` is forced to ``None`` (residual df) on EVERY
+       Conley fit - including one with an explicit product-kernel
+       ``cluster=`` - and on the observation-level HC1 lane
+       (``cluster=False``), the SunAbraham precedent; ``"residual"`` ->
+       ``n_obs_eff - k_effective``; ``"normal"`` -> ``None`` (z).
+
+    Returns the value handed to ``safe_inference``: a positive float,
+    ``None`` (normal theory) or ``0.0`` (all-NaN inference). A non-positive
+    df warns with the saturation message (``stacklevel=3``: the helper is
+    called from ``fit``, so the warning points at the user's call site).
+    """
+    df_resid = n_obs_eff - k_effective
+    df: Optional[float]
+    if has_survey:
+        df = float(survey_df) if survey_df is not None else 0.0
+    elif df_resid <= 0:
+        df = float(df_resid)
+    else:
+        df = resolve_tail_df(
+            df_convention,
+            residual_df=float(df_resid),
+            n_clusters=(n_clusters if vcov_mode == "cluster" else None),
+        )
+    if df is not None and df <= 0:
+        # Saturated. Either OLS-saturated (n - k <= 0) or
+        # survey-saturated (df_survey = 0; lonely_psu='remove' may
+        # have removed all strata). Force NaN inference by setting
+        # df = 0 (safe_inference treats df = 0 as no usable degrees
+        # of freedom). Distinct from df = None which would fall
+        # through to a normal-distribution approximation -
+        # misleading on a degenerate sample.
+        survey_note = (
+            " (survey-saturated: df_survey = "
+            f"{int(survey_df) if survey_df is not None else 0}; "
+            "lonely_psu='remove' may have removed all strata)"
+            if has_survey
+            else ""
+        )
+        warnings.warn(
+            f"SpilloverDiD inference df = {int(df)} (n_obs="
+            f"{n_obs_eff}, effective_rank={k_effective}{survey_note}). "
+            "Inference (t-stat, p-value, CI) will be NaN.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return 0.0
+    return df
 
 
 def _build_ring_indicators(
@@ -1701,9 +1777,25 @@ class SpilloverDiD(BaseEstimator):
         on every lane: CR1, the combined Conley cluster product kernel when
         paired with ``vcov_type="conley"``, or the effective PSU under a
         ``survey_design`` without its own PSU. Column labels must be ``str``.
-        Inference uses the residual df on every non-survey lane, the
-        default CR1 lane included; under a ``survey_design`` the design df
-        takes precedence (``df_convention`` arrives with [M-154]).
+        Inference df: see ``df_convention``.
+    df_convention : {"residual", "cluster", "normal"}, default "cluster"
+        Degrees-of-freedom convention for the analytical t-statistics,
+        p-values and CIs (4.0, row M-154). ``"cluster"`` (default) uses the
+        Stata/fixest cluster df ``G - 1`` on the clustered lanes - the 4.0
+        ``unit`` auto-cluster or an explicit ``cluster=`` column, with ``G``
+        the effective cluster count reported as ``n_clusters``; it is inert
+        (residual df) on ``cluster=False`` and on EVERY ``vcov_type="conley"``
+        fit, including one with an explicit ``cluster=`` (the combined
+        Conley+cluster product kernel has no documented ``G - 1`` df
+        reference). ``"residual"`` uses the stage-2 residual df
+        ``n_obs_eff - k_effective`` (the 3.x inference, and the 7b inference
+        on the default lane); ``"normal"`` deliberately uses normal-theory z
+        inference at the fallback level on every fit. Applies only at the
+        fallback level: a ``survey_design`` df always takes precedence, and
+        a saturated stage-2 sample is all-NaN under every value. Point
+        estimates, SEs and t-statistics never move - only the reference
+        distribution does. Results report the configuration as
+        ``df_convention`` and the df actually used as ``inference_df``.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     anticipation : int, default=0
@@ -1764,6 +1856,7 @@ class SpilloverDiD(BaseEstimator):
         conley_cutoff_km: Optional[float] = None,
         conley_lag_cutoff: Optional[int] = None,
         cluster: ClusterArg = None,
+        df_convention: str = "cluster",
         alpha: float = 0.05,
         anticipation: int = 0,
         event_study: bool = False,
@@ -1782,8 +1875,9 @@ class SpilloverDiD(BaseEstimator):
         if vcov_type in ("hc2", "hc2_bm"):
             raise NotImplementedError(
                 f"SpilloverDiD does not yet support vcov_type='{vcov_type}'. "
-                "The current stage-2 inference uses a generic residual df "
-                "(n - effective_rank) for t-distribution lookups, but "
+                "The stage-2 inference uses one fallback df per fit (the "
+                "df_convention-resolved df: t(G-1) on clustered lanes by "
+                "default, the residual df otherwise), but "
                 "hc2 / hc2_bm require per-coefficient Bell-McCaffrey / CR2 "
                 "degrees of freedom for correct p-values and CIs. Routing "
                 "stage 2 through LinearRegression (which supplies the "
@@ -1798,6 +1892,7 @@ class SpilloverDiD(BaseEstimator):
                 "vcov_type='hc1' or 'conley', or leave default; combine "
                 "with cluster=<col> for CR1."
             )
+        validate_df_convention(df_convention)
         self.rings = rings
         self.d_bar = d_bar
         self.vcov_type = vcov_type
@@ -1806,6 +1901,7 @@ class SpilloverDiD(BaseEstimator):
         self.conley_cutoff_km = conley_cutoff_km
         self.conley_lag_cutoff = conley_lag_cutoff
         self.cluster = validate_cluster(cluster)
+        self.df_convention = df_convention
         self.alpha = alpha
         self.anticipation = validate_anticipation(anticipation)
         self.event_study = event_study
@@ -2237,6 +2333,8 @@ class SpilloverDiD(BaseEstimator):
         # Same direct-mutation defense for the shared cluster contract
         # (str | None | False, [M-155]); the lane resolution lives below.
         validate_cluster(self.cluster)
+        # ... and for the df_convention knob ([M-154]); resolved in Step 16a.
+        validate_df_convention(self.df_convention)
         # Wave C: event-study path is now supported. Validate horizon_max
         # up front (fail-fast before any stage-1 work).
         if self.horizon_max is not None:
@@ -2312,8 +2410,9 @@ class SpilloverDiD(BaseEstimator):
         if self.vcov_type in ("hc2", "hc2_bm"):
             raise NotImplementedError(
                 f"SpilloverDiD does not yet support vcov_type='{self.vcov_type}'. "
-                "The current stage-2 inference uses a generic residual df "
-                "(n - effective_rank) for t-distribution lookups, but "
+                "The stage-2 inference uses one fallback df per fit (the "
+                "df_convention-resolved df: t(G-1) on clustered lanes by "
+                "default, the residual df otherwise), but "
                 "hc2 / hc2_bm require per-coefficient Bell-McCaffrey / CR2 "
                 "degrees of freedom for correct p-values and CIs. Routing "
                 "stage 2 through LinearRegression (which supplies the "
@@ -3455,16 +3554,28 @@ class SpilloverDiD(BaseEstimator):
         else:
             vcov = vcov_kept
 
-        # Step 16a: shared df_for_inference computation.
+        # Step 16a: shared df_for_inference computation - ONE df for every
+        # safe_inference call below (aggregate tau_total, per-ring delta_j,
+        # event-study per-cell tau_k / delta_jk and the scalar lincom att).
         #
-        # Wave D (non-survey): df = n_obs - effective_rank (OLS residual df).
-        # Wave E.1 (survey): df = resolved_survey_fit.df_survey, which
-        # encodes the standard survey-statistics DOF
-        # (PSU + strata → n_PSU - n_strata; PSU only → n_PSU - 1;
-        #  strata only → n_obs - n_strata; neither → n_obs - 1; see
-        #  `ResolvedSurveyDesign.df_survey` at survey.py:619-627). The
-        # Binder TSL meat is design-consistent; the OLS residual df is
-        # no longer the right t-distribution DOF.
+        # Precedence ladder in `_resolve_inference_df` (4.0, [M-154]):
+        #   1. Wave E.1 (survey): df = resolved_survey_fit.df_survey, the
+        #      standard survey-statistics DOF (PSU + strata -> n_PSU - n_strata;
+        #      PSU only -> n_PSU - 1; strata only -> n_obs - n_strata; neither
+        #      -> n_obs - 1; see `ResolvedSurveyDesign.df_survey`). The Binder
+        #      TSL meat is design-consistent; the OLS residual df is no longer
+        #      the right t-distribution DOF - and the survey df beats every
+        #      df_convention value.
+        #   2. Saturated stage-2 sample (n_obs_eff - k_effective <= 0): warn +
+        #      the df = 0 all-NaN sentinel under every knob value.
+        #   3. Otherwise the shared `df_convention` knob via
+        #      `utils.resolve_tail_df`: "cluster" (the 4.0 default) -> G - 1 on
+        #      the Wave D "cluster" variance mode (the unit auto-cluster or an
+        #      explicit cluster=), residual df on the hc1 lane (cluster=False)
+        #      and on EVERY Conley fit (G forced to None, the SunAbraham
+        #      precedent); "residual" -> n_obs_eff - k_effective (the 3.x / 7b
+        #      inference); "normal" -> None (z).
+        #
         # Wave E.3 (codex R8 P2 fix): under the survey path, the effective
         # estimation sample EXCLUDES zero-weight subpop rows because they
         # are filtered out of the gamma_hat / Psi construction sample by
@@ -3476,35 +3587,29 @@ class SpilloverDiD(BaseEstimator):
         count_mask = survey_finite_mask if resolved_survey_fit is not None else finite_mask
         n_obs_eff = int(count_mask.sum())
         k_effective = int(np.isfinite(coef).sum())
-        df_resid = n_obs_eff - k_effective
-        if resolved_survey_fit is not None:
-            df_survey_val = resolved_survey_fit.df_survey
-            df_for_inference: int = int(df_survey_val) if df_survey_val is not None else 0
-        else:
-            df_for_inference = df_resid
-        if df_for_inference <= 0:
-            # Saturated. Either OLS-saturated (n - k <= 0) or
-            # survey-saturated (df_survey = 0; lonely_psu='remove' may
-            # have removed all strata). Force NaN inference by setting
-            # df = 0 (safe_inference treats df = 0 as no usable degrees
-            # of freedom). Distinct from df = None which would fall
-            # through to a normal-distribution approximation —
-            # misleading on a degenerate sample.
-            survey_note = (
-                " (survey-saturated: df_survey = "
-                f"{int(df_survey_val) if df_survey_val is not None else 0}; "
-                "lonely_psu='remove' may have removed all strata)"
-                if resolved_survey_fit is not None
-                else ""
-            )
-            warnings.warn(
-                f"SpilloverDiD inference df = {df_for_inference} (n_obs="
-                f"{n_obs_eff}, effective_rank={k_effective}{survey_note}). "
-                "Inference (t-stat, p-value, CI) will be NaN.",
-                UserWarning,
-                stacklevel=2,
-            )
-            df_for_inference = 0
+        # Effective cluster count of the ids the Wave D meat received (G on
+        # the default lane, the PSU count under a PSU survey design, None on
+        # Conley-auto / cluster=False); feeds both the df ladder and the
+        # results' `n_clusters`.
+        _n_clusters_fit: Optional[int] = (
+            int(len(np.unique(cluster_ids_fit))) if cluster_ids_fit is not None else None
+        )
+        df_for_inference = _resolve_inference_df(
+            df_convention=self.df_convention,
+            n_obs_eff=n_obs_eff,
+            k_effective=k_effective,
+            n_clusters=_n_clusters_fit,
+            vcov_mode=_wave_d_vcov_mode,
+            survey_df=(resolved_survey_fit.df_survey if resolved_survey_fit is not None else None),
+            has_survey=resolved_survey_fit is not None,
+        )
+        # Results metadata: the df the reported t/p/CI actually used - None
+        # under normal theory ("normal") and under the all-NaN sentinel.
+        _inference_df_used: Optional[float] = (
+            float(df_for_inference)
+            if df_for_inference is not None and df_for_inference > 0
+            else None
+        )
 
         # Step 16b: branch on event_study mode for result extraction.
         att_dynamic_df: Optional[pd.DataFrame] = None
@@ -3628,10 +3733,10 @@ class SpilloverDiD(BaseEstimator):
             r_squared=None,
             inference_method="analytical",
             n_bootstrap=None,
-            n_clusters=(
-                int(len(np.unique(cluster_ids_fit))) if cluster_ids_fit is not None else None
-            ),
+            n_clusters=_n_clusters_fit,
             vcov_type=self.vcov_type,
+            df_convention=self.df_convention,
+            inference_df=_inference_df_used,
             # Wave E.1: when survey.psu wins the warn-and-use-PSU override
             # (`_resolve_effective_cluster`), the EFFECTIVE clustering label
             # is `survey_design.psu`, not `self.cluster`. Report that so

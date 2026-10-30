@@ -1,0 +1,7 @@
+### Breaking Changes
+
+- `SpilloverDiD` gains the three-value `df_convention` knob with the 4.0 default `"cluster"` ([M-154], item 7c of the 4.0 cut): p-values and confidence intervals on its clustered lanes - the unit auto-cluster and an explicit `cluster=` - now use the Stata/fixest `t(G - 1)` reference like every other auto-clustered default, with `G` the effective cluster count reported as `n_clusters`. Point estimates, standard errors and t-statistics never move. `df_convention="residual"` restores the 3.x residual-df inference bit-for-bit; `"normal"` is deliberate z. `"cluster"` falls back to the residual df on `cluster=False` and on every `vcov_type="conley"` fit, an explicit product-kernel `cluster=` included (`"normal"` still selects z there); a `survey_design` df keeps precedence under every value; a saturated stage-2 sample stays all-NaN under every value. `SpilloverDiDResults` reports `df_convention` and `inference_df` (also in `to_dict()`).
+
+### Internal
+
+- Ledger: M-154 -> `done`, pinned by `tests/test_v4_spillover_df_convention.py`; the df ladder is the pure helper `spillover._resolve_inference_df` (survey df -> saturation -> `utils.resolve_tail_df`). The variance-conventions matrix gains the `spillover_cluster_unit` / `spillover_cluster_unit_default_df` rows; the REGISTRY `df_convention` knob roster, `docs/methodology/variance-conventions.md`, the migration guide, `llms-full.txt` and `docs/api/spillover.rst` describe the knob; tutorial 23 re-validated (it prints no p-values or CIs).

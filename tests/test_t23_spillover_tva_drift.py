@@ -796,3 +796,29 @@ def test_spillover_conley_fit_warning_policy_post_filter_clean(panel):
             _silence_spillover_matmul_warnings()  # mirror notebook §6 filter
             est.fit(panel, outcome="y", unit="unit", time="time", treatment="D")
         _assert_post_filter_warning_surface_is_clean(w)
+
+
+# ----------------------------------------------------------------------------
+# 7c ([M-154]): the df_convention knob on the tutorial's fits
+# ----------------------------------------------------------------------------
+
+
+def test_default_inference_is_t_g_minus_1(spillover_fit, panel):
+    """The default (CR1 at unit) lane runs t(G-1) since 4.0: G = 200 units."""
+    from scipy import stats
+
+    G = panel["unit"].nunique()
+    assert spillover_fit.df_convention == "cluster"
+    assert spillover_fit.inference_df == G - 1 == spillover_fit.n_clusters - 1 == 199
+    np.testing.assert_allclose(
+        spillover_fit.p_value,
+        2 * stats.t.sf(abs(spillover_fit.t_stat), G - 1),
+        rtol=1e-12,
+    )
+
+
+def test_hc1_and_conley_lanes_keep_residual_df(spillover_hc1_fit, spillover_conley_lag0_fit, panel):
+    """cluster=False and every Conley fit are knob-inert: residual df n - k (k = 2)."""
+    n_obs = len(panel)
+    assert spillover_hc1_fit.inference_df == n_obs - 2
+    assert spillover_conley_lag0_fit.inference_df == n_obs - 2

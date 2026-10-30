@@ -143,7 +143,7 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # to_dataframe level twin (M-150, 4.0-cut framing) = 132; + the LWDiD
 # results-contract rows (M-151/M-152 alias deprecations, M-153 to_dataframe
 # reshape; 4.0-cut PR 1) = 135; + the 7b cluster-policy pair (M-154 SpilloverDiD
-# df_convention, planned for 7c; M-155 the shared cluster contract) = 137.
+# df_convention, shipped 7c; M-155 the shared cluster contract) = 137.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.

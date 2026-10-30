@@ -896,5 +896,5 @@ def test_ledger_rows_are_done_and_point_here():
         assert row["test_ref"] == THIS_TEST_REF, rid
     assert rows["M-080"]["old"] == "diff_diff:SpilloverDiD[cluster]"
     assert rows["M-155"]["old"] == "diff_diff.utils:validate_cluster"
-    assert rows["M-154"]["status"] == "planned"  # 7c: the SpilloverDiD df_convention knob
+    assert rows["M-154"]["status"] == "done"  # 7c shipped the SpilloverDiD df_convention knob
     assert rows["M-154"]["old"] == "diff_diff:SpilloverDiD[df_convention]"

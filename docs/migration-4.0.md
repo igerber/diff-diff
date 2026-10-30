@@ -307,6 +307,8 @@ Two changes alter results without changing any call:
   leads); `LPDiD` was already there. Clustered analytical p-values and confidence intervals
   now use the Stata/fixest `t(G − 1)` reference instead of the fitted residual df
   `t(n − K)`; point estimates, standard errors and t-statistics never move.
+  (`SpilloverDiD` gained the knob at 4.0 with the same `"cluster"` default, [M-154] - no
+  flip, a new surface; see the bullet below.)
 
   ```python
   TwoWayFixedEffects().fit(df, outcome="y", treatment="d", post="post", unit="unit")
@@ -381,9 +383,14 @@ Two changes alter results without changing any call:
   auto-cluster is never injected as a PSU, so the former `"unit"` label described ids
   the regression never received); summaries render ", G=..." and `SunAbraham` summaries
   gain a "Std. errors:" line on analytical non-survey fits.
-- **`SpilloverDiD` p-values and CIs on the new default lane stay on the residual df** in
-  this release step; the next PR adds its `df_convention` knob with the 4.0 `"cluster"`
-  default ([M-154]), which moves them to t(G-1) like every other auto-clustered default.
+- **`SpilloverDiD` p-values and CIs on its clustered lanes move to t(G − 1)** ([M-154]):
+  `SpilloverDiD` gained the three-value `df_convention` knob with the 4.0 `"cluster"`
+  default, so the unit auto-cluster and an explicit `cluster=` now use the same reference
+  distribution as every other auto-clustered default. `SpilloverDiD(df_convention="residual")`
+  restores the 3.x residual-df inference bit-for-bit; `"cluster"` falls back to the residual df
+  on `cluster=False` and Conley fits (`"normal"` still selects z there); the survey design df
+  keeps precedence under every value. Results
+  report `df_convention` and `inference_df`.
 
 ## Removed functions and aliases
 
@@ -401,8 +408,8 @@ Bacon roster re-homing, and the family-wide `anticipation` validation below. The
 the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings,
 [M-147] is an additive policy, and [M-153] is a results-frame reshape. These have no
 removal/deprecation fields and appear here only. [M-155] (the shared `cluster`
-argument contract, see "Inference defaults that move numbers") is the same kind of
-behavior tightening.
+argument contract) and [M-154] (the `SpilloverDiD` `df_convention` knob), both in
+"Inference defaults that move numbers", are the same kind of behavior tightening.
 
 - `WooldridgeDiD(unsupported_period_action="error")` ([M-147]) refuses periods lacking
   comparison support before removing them. The default `"drop"` preserves filtering and
@@ -602,7 +609,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
 | M-007 | obligation-warning-retirements | `diff_diff.estimators` | — | The MultiPeriodDiD `e=-1` transition FutureWarning is no longer emitted (the class is gone; the event-study mode defaults to the last pre-period silently); drop any warning filter that suppressed it. |
-| M-080 | policy-auto-cluster | `diff_diff:SpilloverDiD[cluster]` | — | `SpilloverDiD` now clusters at `unit` when `cluster=` is omitted (TWFE's carve-outs mirrored: explicit `cluster=` wins, dropped on the Conley path, never injected as a survey PSU; its p-values/CIs keep the residual df until [M-154]); pass `cluster=False` for the 3.x observation-level HC standard errors (`None`/omission means auto-cluster, not off). Every other panel estimator already clustered at unit or is unit-level by construction, so its numbers do not move. `cluster=False` is also newly accepted on `TwoWayFixedEffects`/`SunAbraham`/`WooldridgeDiD`/`LPDiD` (plain HC sandwich - new behaviour; residual-df t), as a no-op on the by-construction estimators, on `ImputationDiD`/`TwoStageDiD` and on the 2x2 `DifferenceInDifferences` / 2x2x2 `TripleDifference` surfaces; `StackedDiD` still rejects it. Rejected with `inference="wild_bootstrap"` (DiD/TWFE), `WooldridgeDiD(n_bootstrap > 0)` and `vcov_type="hc2_bm"` on `SunAbraham`/`WooldridgeDiD`. `cluster` accepts `str | None | False` only ([M-155]). |
+| M-080 | policy-auto-cluster | `diff_diff:SpilloverDiD[cluster]` | — | `SpilloverDiD` now clusters at `unit` when `cluster=` is omitted (TWFE's carve-outs mirrored: explicit `cluster=` wins, dropped on the Conley path, never injected as a survey PSU; its p-values/CIs use t(G − 1) since [M-154], item 7c); pass `cluster=False` for the 3.x observation-level HC standard errors (`None`/omission means auto-cluster, not off). Every other panel estimator already clustered at unit or is unit-level by construction, so its numbers do not move. `cluster=False` is also newly accepted on `TwoWayFixedEffects`/`SunAbraham`/`WooldridgeDiD`/`LPDiD` (plain HC sandwich - new behaviour; residual-df t), as a no-op on the by-construction estimators, on `ImputationDiD`/`TwoStageDiD` and on the 2x2 `DifferenceInDifferences` / 2x2x2 `TripleDifference` surfaces; `StackedDiD` still rejects it. Rejected with `inference="wild_bootstrap"` (DiD/TWFE), `WooldridgeDiD(n_bootstrap > 0)` and `vcov_type="hc2_bm"` on `SunAbraham`/`WooldridgeDiD`. `cluster` accepts `str | None | False` only ([M-155]). |
 | M-032 | renames-cohort | `diff_diff:WooldridgeDiD.fit[cohort]` | `diff_diff:WooldridgeDiD.fit[first_treat]` | Rename the keyword: `cohort=` becomes `first_treat=`. |
 | M-035 | renames-col-suffix | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome_col]` | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome]` | Rename the keyword: `outcome_col=` becomes `outcome=`. |
 | M-036 | renames-col-suffix | `diff_diff:HeterogeneousAdoptionDiD.fit[dose_col]` | `diff_diff:HeterogeneousAdoptionDiD.fit[dose]` | Rename the keyword: `dose_col=` becomes `dose=`. |
