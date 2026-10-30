@@ -2679,7 +2679,7 @@ class TestCallawaySantAnnaBootstrap:
         assert np.linalg.eigvalsh(vcov).min() > 0
         off_diagonal = vcov[~np.eye(len(index), dtype=bool)]
         assert np.abs(off_diagonal).max() > 0.1 * ses.min() ** 2
-        reference = [e for e, d in effects.items() if d.get("n_groups", 1) == 0]
+        reference = [e for e, d in effects.items() if d.get("is_reference")]
         assert bool(reference) == (base_period == "universal")
         assert not set(reference) & set(index)
 
@@ -4100,7 +4100,8 @@ class TestCallawaySantAnnaTStatNaN:
         assert np.isnan(ref["conf_int"][0]) and np.isnan(
             ref["conf_int"][1]
         ), f"Reference period CI should be (NaN, NaN), got {ref['conf_int']}"
-        assert ref["n_groups"] == 0, f"Reference period n_groups should be 0, got {ref['n_groups']}"
+        assert ref.get("is_reference") is True, "Reference period row must carry is_reference"
+        assert "n_groups" not in ref, "Reference period row carries no count (M-093)"
 
     def test_event_study_varying_excludes_reference_period(self):
         """Test that varying base period does NOT artificially add e=-1 with effect=0."""
@@ -4121,10 +4122,10 @@ class TestCallawaySantAnnaTStatNaN:
         # Varying mode: no single reference period, e=-1 computed normally or excluded
         # The key is we don't artificially add a 0-effect entry
         if -1 in es:
-            # If it exists, it should be an actual computed effect, not 0.0 with n_groups=0
+            # If it exists, it should be an actual computed effect, not a marked reference
             assert (
-                es[-1]["n_groups"] > 0
-            ), "Varying mode should not artificially add e=-1 with n_groups=0"
+                not es[-1].get("is_reference") and es[-1]["n_groups"] > 0
+            ), "Varying mode should not artificially add e=-1 as a reference row"
 
     def test_event_study_universal_with_anticipation(self):
         """Test reference period with anticipation > 0."""

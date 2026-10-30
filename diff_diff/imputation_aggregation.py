@@ -1044,14 +1044,16 @@ class _ImputationAggregationMixin:
 
         event_study_effects: Dict[int, Dict[str, Any]] = {}
 
-        # Add reference period marker
+        # Add the reference period row: the normalization anchor, marked
+        # EXPLICITLY (4.0, ledger row M-093 item 8a) - no count key; the 3.x
+        # ``n_obs == 0`` sentinel is retired.
         event_study_effects[ref_period] = {
             "effect": 0.0,
             "se": 0.0,
             "t_stat": np.nan,
             "p_value": np.nan,
             "conf_int": (0.0, 0.0),
-            "n_obs": 0,
+            "is_reference": True,
         }
 
         # Pre-period coefficients via BJS Test 1 lead regression
@@ -1749,7 +1751,9 @@ class _ImputationAggregationMixin:
         _sorted_rel_times = sorted(
             e
             for e in _es_effects.keys()
-            if np.isfinite(_es_effects[e]["effect"]) and _es_effects[e].get("n_obs", 1) > 0
+            if np.isfinite(_es_effects[e]["effect"])
+            and not _es_effects[e].get("is_reference", False)
+            and _es_effects[e].get("n_obs", 1) > 0
         )
         _sorted_groups = sorted(
             g for g in _grp_effects.keys() if np.isfinite(_grp_effects[g]["effect"])

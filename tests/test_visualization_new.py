@@ -882,7 +882,7 @@ class TestPlotEventStudyZeroSE:
                 "t_stat": nan,
                 "p_value": nan,
                 "conf_int": ref_conf_int,
-                "n_obs": 0,
+                "is_reference": True,
             },
             0: {
                 "effect": 1.5,

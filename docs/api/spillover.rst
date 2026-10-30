@@ -200,8 +200,10 @@ and planned follow-up enhancements:
   DataFrame plus MultiIndex ``spillover_effects``. The
   ``event_study_effects: Dict[int, Dict]`` alias mirrors
   ``TwoStageDiD``'s schema for ``plot_event_study`` consumption (the
-  plotter prefers the new ``reference_period`` attribute over the
-  legacy ``n_obs==0`` heuristic). ``DiagnosticReport`` routing for
+  plotter reads the ``reference_period`` attribute, else the row's
+  ``is_reference`` key; since 4.0 the reference row carries
+  ``is_reference: True`` and no ``n_obs``, and the event-study frames a
+  boolean ``is_reference`` column with NaN ``n_obs`` there - [M-093]). ``DiagnosticReport`` routing for
   ``SpilloverDiDResults`` is wired: parallel-trends (event-study on
   the direct-effect dynamics), design-effect, and heterogeneity apply;
   Goodman-Bacon is excluded (spillover identifies off far-away

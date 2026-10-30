@@ -308,7 +308,7 @@ class TestImputationDiD:
         )
 
         for h, eff in es_dict(results).items():
-            if eff["n_obs"] > 0:
+            if eff.get("n_obs", 0) > 0:
                 assert abs(h) <= 3
 
     def test_summary(self):
@@ -723,7 +723,7 @@ class TestImputationVariance:
         )
 
         for h, eff in es_dict(results).items():
-            if eff["n_obs"] > 0 and np.isfinite(eff["se"]):
+            if eff.get("n_obs", 0) > 0 and np.isfinite(eff["se"]):
                 assert eff["se"] > 0
 
     def test_aux_partition_cohort_horizon(self):
@@ -964,7 +964,7 @@ class TestImputationBootstrap:
         relayed = es_dict(results)
         assert set(relayed) == set(results.event_study_effects)
         for h, eff in results.event_study_effects.items():
-            if eff["n_obs"] == 0:
+            if eff.get("is_reference"):
                 continue  # reference row: the container reports NaN inference
             assert relayed[h]["effect"] == eff["effect"]
             assert relayed[h]["se"] == eff["se"]
@@ -1019,7 +1019,7 @@ class TestImputationBootstrap:
         # The unrestricted relay still works and its SEs are the bootstrap SEs.
         relayed = es_dict(results)
         for h, eff in relayed.items():
-            if eff["n_obs"] > 0 and np.isfinite(eff["effect"]):
+            if eff.get("n_obs", 0) > 0 and np.isfinite(eff["effect"]):
                 if h in results.bootstrap_results.event_study_ses:
                     assert np.isfinite(results.bootstrap_results.event_study_ses[h])
                     assert eff["se"] == results.bootstrap_results.event_study_ses[h]
@@ -1567,7 +1567,7 @@ class TestImputationEdgeCases:
 
         # Check that NaN horizons have all-NaN inference
         for h, eff in effects.items():
-            if eff["n_obs"] > 0 and np.isnan(eff["effect"]):
+            if eff.get("n_obs", 0) > 0 and np.isnan(eff["effect"]):
                 assert np.isnan(eff["se"])
                 assert np.isnan(eff["t_stat"])
                 assert np.isnan(eff["p_value"])
@@ -1713,7 +1713,7 @@ class TestImputationEdgeCases:
         # Reference should be at -2 (= -1 - anticipation)
         es = results.aggregate("event_study")
         assert es.event_time[es.is_reference].tolist() == [-2]
-        assert es_dict(results)[-2]["n_obs"] == 0  # legacy zero-count marker
+        assert es_dict(results)[-2].get("is_reference") is True  # explicit marker (M-093)
 
         # Test that plot_event_study auto-detects it on the container
         pytest.importorskip("matplotlib")

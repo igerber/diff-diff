@@ -902,14 +902,16 @@ class StackedDiD(BaseEstimator):
         es_vcov: Optional[np.ndarray] = None
         es_vcov_index: Optional[List[int]] = None
         es_df_used: Dict[int, float] = {}
-        # Reference period (e = -1 - anticipation)
+        # Reference period (e = -1 - anticipation): the normalization anchor,
+        # marked EXPLICITLY (4.0, ledger row M-093 item 8a) - no count key;
+        # the 3.x ``n_obs == 0`` sentinel is retired.
         event_study_effects[ref_period] = {
             "effect": 0.0,
             "se": 0.0,
             "t_stat": np.nan,
             "p_value": np.nan,
             "conf_int": (np.nan, np.nan),
-            "n_obs": 0,
+            "is_reference": True,
         }
         for h in event_times:
             idx = interaction_indices[h]

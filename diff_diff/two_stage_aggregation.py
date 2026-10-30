@@ -475,7 +475,7 @@ class _TwoStageAggregationMixin:
                             "t_stat": np.nan,
                             "p_value": np.nan,
                             "conf_int": (0.0, 0.0),
-                            "n_obs": 0,
+                            "is_reference": True,
                         }
                     },
                     None,
@@ -541,7 +541,7 @@ class _TwoStageAggregationMixin:
                     "t_stat": np.nan,
                     "p_value": np.nan,
                     "conf_int": (0.0, 0.0),
-                    "n_obs": 0,
+                    "is_reference": True,
                 }
             }
             ref_only.update(prop5_effects)
@@ -608,7 +608,7 @@ class _TwoStageAggregationMixin:
             "t_stat": np.nan,
             "p_value": np.nan,
             "conf_int": (0.0, 0.0),
-            "n_obs": 0,
+            "is_reference": True,
         }
 
         for h in est_horizons:

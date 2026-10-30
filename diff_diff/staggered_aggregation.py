@@ -1000,6 +1000,10 @@ class CallawaySantAnnaAggregationMixin:
         agg_effects_list = []
         agg_ses_list = []
         agg_n_groups = []
+        # Reference-only horizons (universal base): marked EXPLICITLY on the
+        # row dict (``is_reference``, no ``n_groups`` key) since 4.0 (ledger
+        # row M-093 item 8a) - the ``n_groups == 0`` sentinel is retired.
+        agg_is_reference: List[bool] = []
         agg_effective_dfs = []  # Per-horizon effective df (replicate designs)
         agg_periods = []  # Relative times that yielded an estimable aggregate row
         _psi_vectors = []  # Per-event-time combined IF vectors for VCV
@@ -1031,7 +1035,10 @@ class CallawaySantAnnaAggregationMixin:
             if reference_cells and all(gt in reference_cells for gt in gt_pairs):
                 agg_effects_list.append(0.0)
                 agg_ses_list.append(np.nan)
+                # Positional bookkeeping only (agg_n_groups is indexed beside
+                # agg_periods); the row dict omits the count on reference rows.
                 agg_n_groups.append(0)
+                agg_is_reference.append(True)
                 agg_effective_dfs.append(None)
                 agg_periods.append(e)
                 # No influence-function column for a reference-only horizon (it
@@ -1073,6 +1080,7 @@ class CallawaySantAnnaAggregationMixin:
             # NaN cells and zero references don't inflate n_groups — matches the
             # all-NaN early-return which already reports 0.
             agg_n_groups.append(sum(1 for gt in gt_pairs if gt not in reference_cells))
+            agg_is_reference.append(False)
             agg_effective_dfs.append(eff_df)
             agg_periods.append(e)
             _psi_vectors.append(psi_e)
@@ -1121,14 +1129,19 @@ class CallawaySantAnnaAggregationMixin:
 
         event_study_effects: Dict[Any, Dict[str, Any]] = {}
         for idx, e in enumerate(agg_periods):
-            event_study_effects[e] = {
+            row: Dict[str, Any] = {
                 "effect": agg_effects_list[idx],
                 "se": agg_ses_list[idx],
                 "t_stat": float(t_stats[idx]),
                 "p_value": float(p_values[idx]),
                 "conf_int": (float(ci_lowers[idx]), float(ci_uppers[idx])),
-                "n_groups": agg_n_groups[idx],
             }
+            if agg_is_reference[idx]:
+                # The normalization anchor: explicit marker, no count key.
+                row["is_reference"] = True
+            else:
+                row["n_groups"] = agg_n_groups[idx]
+            event_study_effects[e] = row
 
         # (Universal-mode zero reference rows are now materialized per cohort at
         # their positional base event time e = base - g during the aggregation

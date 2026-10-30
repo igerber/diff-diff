@@ -11,13 +11,14 @@ Three helpers keep dict-iteration tests short and let the few tests whose
 SUBJECT is the native (legacy-pickle) route build a faithful stand-in:
 
 ``es_dict(results, balance_e=None)``
-    ``aggregate("event_study")`` as the legacy ``event_study_effects`` mapping
+    ``aggregate("event_study")`` as the native ``event_study_effects`` mapping
     ``{event_time: {"effect", "se", "t_stat", "p_value", "conf_int", <count>}}``.
     The count key follows the container's ``n_kind`` (``"groups"`` -> ``n_groups``,
-    ``"obs"`` -> ``n_obs``, ...); a NaN count becomes 0 (the legacy zero-count
-    reference sentinel); when the container has NO ``n_kind`` (ContinuousDiD) no
-    count key is emitted - ``_from_relative_dict`` rejects a zero-count row with a
-    finite nonzero effect. ``cband_conf_int`` is added where the band is finite.
+    ``"obs"`` -> ``n_obs``, ...) on estimated rows; a reference row carries
+    ``"is_reference": True`` and NO count key (the 4.0 marking, ledger row M-093 -
+    the zero-count sentinel is retired); a NaN count on a non-reference row emits
+    no count key; when the container has NO ``n_kind`` (ContinuousDiD) no count key
+    is emitted at all. ``cband_conf_int`` is added where the band is finite.
 ``group_dict(results)``
     ``aggregate("group")`` as the legacy ``group_effects`` mapping (label keys;
     ``df_used`` from the ``df`` column).
@@ -92,9 +93,12 @@ def es_dict_from_container(es: Any) -> Dict[Any, Dict[str, Any]]:
             "p_value": float(es.p_value[i]),
             "conf_int": (float(es.conf_int_lower[i]), float(es.conf_int_upper[i])),
         }
-        if key is not None:
+        if bool(es.is_reference[i]):
+            row["is_reference"] = True
+        elif key is not None:
             n = float(es.n[i])
-            row[key] = 0 if math.isnan(n) else (int(n) if float(n).is_integer() else n)
+            if not math.isnan(n):
+                row[key] = int(n) if float(n).is_integer() else n
         if es.cband_lower is not None and es.cband_upper is not None:
             lo, hi = float(es.cband_lower[i]), float(es.cband_upper[i])
             if math.isfinite(lo) and math.isfinite(hi):

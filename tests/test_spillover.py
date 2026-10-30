@@ -3318,6 +3318,7 @@ class TestSpilloverDiDEventStudyAPI:
             "ci_low",
             "ci_high",
             "n_obs",
+            "is_reference",
         }
 
     def test_event_study_emits_multiindex_spillover_effects(self):
@@ -3334,7 +3335,12 @@ class TestSpilloverDiDEventStudyAPI:
         assert all(isinstance(k, int) for k in res.event_study_effects.keys())
         # Each entry has the TwoStageDiD schema.
         for k, entry in res.event_study_effects.items():
-            assert set(entry.keys()) == {"effect", "se", "n_obs", "t_stat", "p_value", "conf_int"}
+            # Estimated rows carry n_obs; the reference row carries the
+            # explicit is_reference key and no count (4.0, M-093).
+            count_or_marker = {"is_reference"} if k == res.reference_period else {"n_obs"}
+            assert set(entry.keys()) == {"effect", "se", "t_stat", "p_value", "conf_int"} | (
+                count_or_marker
+            )
             assert isinstance(entry["conf_int"], tuple)
             assert len(entry["conf_int"]) == 2
 
@@ -3345,7 +3351,7 @@ class TestSpilloverDiDEventStudyAPI:
         ref = res.event_study_effects[res.reference_period]
         assert ref["effect"] == 0.0
         assert ref["se"] == 0.0
-        assert ref["n_obs"] == 0
+        assert ref["is_reference"] is True and "n_obs" not in ref  # 4.0 marking (M-093)
         assert ref["conf_int"] == (0.0, 0.0)
         assert np.isnan(ref["t_stat"])
         assert np.isnan(ref["p_value"])
@@ -3391,7 +3397,7 @@ class TestSpilloverDiDEventStudyReferencePeriod:
         ref_row = res.att_dynamic.loc[-1]
         assert ref_row["coef"] == 0.0
         assert ref_row["se"] == 0.0
-        assert ref_row["n_obs"] == 0
+        assert bool(ref_row["is_reference"]) and np.isnan(ref_row["n_obs"])  # M-093
 
 
 class TestSpilloverDiDEventStudyReduceToAggregate:
@@ -3832,8 +3838,9 @@ class TestSpilloverDiDEventStudySingularity:
         res = _fit_event_study(df, horizon_max=2)
         if "[50, 200]" in res.spillover_effects.index.get_level_values("ring"):
             outer = res.spillover_effects.xs("[50, 200]", level="ring")
-            # All n_obs = 0 (no units in the outer ring in this DGP).
-            assert all(outer["n_obs"] == 0)
+            # All n_obs = 0 (no units in the outer ring in this DGP); the
+            # reference row is excluded (its n_obs is NaN by construction).
+            assert all(outer.loc[~outer["is_reference"], "n_obs"] == 0)
 
 
 class TestSpilloverDiDEventStudyConleyIntegration:
@@ -4015,6 +4022,9 @@ class TestSpilloverDiDEventStudyFiniteMaskPath:
             res = est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
         # event_study_effects dict mirrors att_dynamic, must be consistent.
         for k in res.att_dynamic.index:
+            if bool(res.att_dynamic.loc[k, "is_reference"]):
+                assert "n_obs" not in res.event_study_effects[int(k)]
+                continue
             es_n = res.event_study_effects[int(k)]["n_obs"]
             dyn_n = res.att_dynamic.loc[k, "n_obs"]
             assert es_n == dyn_n, (
@@ -4111,7 +4121,7 @@ class TestSpilloverDiDEventStudyReferencePeriodSpilloverRows:
             row = res.spillover_effects.loc[(ring_label, ref)]
             assert row["coef"] == 0.0
             assert row["se"] == 0.0
-            assert row["n_obs"] == 0
+            assert bool(row["is_reference"]) and np.isnan(row["n_obs"])  # M-093
             assert row["ci_low"] == 0.0
             assert row["ci_high"] == 0.0
             assert np.isnan(row["t_stat"])
@@ -8656,7 +8666,11 @@ class TestSpilloverDiDWaveE3SubpopulationFullDesignEventStudy:
         # Exact n_obs values captured from the Wave E.3 implementation
         # post codex-R8 count_mask fix (excluding PSU 3 = first_treat=3
         # removes treated-cohort rows at each event-time horizon).
-        _EXPECTED_EVENT_STUDY_N_OBS = {-2: 22, -1: 0, 0: 26, 1: 26, 2: 56}
+        _EXPECTED_EVENT_STUDY_N_OBS = {-2: 22, 0: 26, 1: 26, 2: 56}
+        # The reference row (k=-1) carries the is_reference marker and no
+        # count since 4.0 (M-093).
+        assert res_subpop.event_study_effects[-1]["is_reference"] is True
+        assert "n_obs" not in res_subpop.event_study_effects[-1]
         for k, expected_n in _EXPECTED_EVENT_STUDY_N_OBS.items():
             actual_n = res_subpop.event_study_effects[k]["n_obs"]
             assert actual_n == expected_n, (
@@ -8666,9 +8680,9 @@ class TestSpilloverDiDWaveE3SubpopulationFullDesignEventStudy:
             )
         # att_dynamic n_obs matches event_study_effects n_obs (same source)
         assert res_subpop.att_dynamic is not None
-        expected_n_list = [22, 0, 26, 26, 56]
+        expected_n_list = [22.0, np.nan, 26.0, 26.0, 56.0]  # NaN at the reference row
         actual_n_list = res_subpop.att_dynamic["n_obs"].tolist()
-        assert actual_n_list == expected_n_list, (
+        assert np.allclose(actual_n_list, expected_n_list, equal_nan=True), (
             f"Wave E.3: att_dynamic.n_obs={actual_n_list}, " f"expected {expected_n_list}"
         )
         # spillover_effects per-(ring, k) n_obs reflects count_mask too.
@@ -8676,8 +8690,8 @@ class TestSpilloverDiDWaveE3SubpopulationFullDesignEventStudy:
         assert res_subpop.spillover_effects is not None
         # Sum across ring-k cells (positive horizons only, ref_period excluded).
         spill_n_obs = res_subpop.spillover_effects["n_obs"].tolist()
-        _EXPECTED_SPILLOVER_N_OBS = [0, 0, 42, 42, 102]
-        assert spill_n_obs == _EXPECTED_SPILLOVER_N_OBS, (
+        _EXPECTED_SPILLOVER_N_OBS = [0.0, np.nan, 42.0, 42.0, 102.0]  # NaN at the reference row
+        assert np.allclose(spill_n_obs, _EXPECTED_SPILLOVER_N_OBS, equal_nan=True), (
             f"Wave E.3: spillover_effects n_obs={spill_n_obs}, "
             f"expected {_EXPECTED_SPILLOVER_N_OBS}"
         )

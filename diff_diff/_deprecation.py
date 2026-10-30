@@ -42,8 +42,9 @@ pre-existing M-001..M-003 ``DeprecationWarning`` sites were removed at the
 4.0 cut).
 """
 
+import math
 import warnings
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 __all__: "list[str]" = []
 
@@ -221,4 +222,57 @@ def migrate_renamed_state_keys(
         if old in out:
             value = out.pop(old)
             out.setdefault(new, value)
+    return out
+
+
+def migrate_event_study_reference_sentinel(
+    effects: Optional[Mapping[Any, Any]],
+) -> Optional[Dict[Any, Any]]:
+    """Rewrite 3.x zero-count reference rows of a pickled event-study dict.
+
+    Through 3.x the native ``event_study_effects`` dicts marked their
+    normalization (reference) row with a zero-count SENTINEL (``n_groups == 0``
+    on CallawaySantAnna, ``n_obs == 0`` on StackedDiD / ImputationDiD /
+    TwoStageDiD / SpilloverDiD). Since 4.0 (ledger row M-093, item 8a of the
+    cut) the reference row carries an explicit ``"is_reference": True`` key and
+    NO count key, and every remaining zero count is a genuine count. This
+    helper is the ONLY place the retired sentinel is still recognized: the
+    containers' ``__setstate__`` run it so 3.x pickles load in the 4.0 shape
+    (the ``migrate_renamed_state_keys`` precedent).
+
+    Returns a NEW dict (the input is never mutated); ``None`` passes through.
+    A row is rewritten only when it is a mapping WITHOUT an ``is_reference``
+    key whose count key (``n_groups`` or ``n_obs``) equals 0 and whose effect
+    (``effect``, else ``att``) is finite and exactly ``0.0`` - the
+    normalization anchor's signature. A NaN-effect zero-count row is a
+    genuinely non-estimable horizon (TwoStageDiD all-filtered horizons,
+    SpilloverDiD rectangular cells) and is copied verbatim.
+    """
+    if effects is None:
+        return None
+    out: Dict[Any, Any] = {}
+    for key, row in effects.items():
+        if not isinstance(row, Mapping) or "is_reference" in row:
+            out[key] = row
+            continue
+        count_key = "n_groups" if "n_groups" in row else ("n_obs" if "n_obs" in row else None)
+        if count_key is None:
+            out[key] = row
+            continue
+        try:
+            is_zero_count = float(row[count_key]) == 0.0
+        except (TypeError, ValueError):
+            is_zero_count = False
+        effect = row.get("effect", row.get("att"))
+        try:
+            effect_f = float(effect)
+        except (TypeError, ValueError):
+            effect_f = float("nan")
+        if is_zero_count and math.isfinite(effect_f) and effect_f == 0.0:
+            new_row = dict(row)
+            new_row.pop(count_key)
+            new_row["is_reference"] = True
+            out[key] = new_row
+        else:
+            out[key] = row
     return out

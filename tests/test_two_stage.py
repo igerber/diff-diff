@@ -1057,7 +1057,10 @@ class TestTwoStageDiDEdgeCases:
         # Event study should contain only the reference period
         assert len(es.event_time) == 1
         assert bool(es.is_reference[0])
-        assert es_dict_from_container(es)[int(es.event_time[0])]["n_obs"] == 0
+        # Reference-only surface: the keyed row records no count (n_kind None).
+        assert es.n_kind is None
+        row = es_dict_from_container(es)[int(es.event_time[0])]
+        assert row["is_reference"] is True and "n_obs" not in row
 
     def test_proposition_5_nan_for_long_run_horizons(self):
         """Prop 5 horizons have n_obs > 0 but NaN inference (unidentified)."""
@@ -2264,10 +2267,11 @@ def _assert_full_bootstrap_nan(r):
         assert all(np.isnan(v) for v in b.event_study_ses.values())
     if b.group_ses:
         assert all(np.isnan(v) for v in b.group_ses.values())
-    # Per-horizon event-study inference fields (skip reference-period markers,
-    # which carry n_obs == 0 and are not real effects).
+    # Per-horizon event-study inference fields (skip the reference row - the
+    # explicit is_reference marker, not a real effect - and genuine
+    # zero-observation horizons).
     for eff in (r.event_study_effects or {}).values():
-        if eff.get("n_obs", 1) == 0:
+        if eff.get("is_reference") or eff.get("n_obs", 1) == 0:
             continue
         assert np.isnan(eff["se"])
         assert np.isnan(eff["t_stat"])

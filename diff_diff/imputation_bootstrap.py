@@ -164,8 +164,10 @@ class ImputationDiDBootstrapMixin:
             ref_period = -1 - self.anticipation
 
             for h in event_study_effects:
+                if event_study_effects[h].get("is_reference", False):
+                    continue  # the normalization anchor carries no draws
                 if event_study_effects[h].get("n_obs", 0) == 0:
-                    continue
+                    continue  # genuine zero-observation horizon
                 if h == ref_period:
                     continue
                 if not np.isfinite(event_study_effects[h].get("effect", np.nan)):

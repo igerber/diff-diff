@@ -2006,6 +2006,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                     for h in event_study_effects:
                         if (
                             h in bootstrap_results.event_study_ses
+                            and not event_study_effects[h].get("is_reference", False)
                             and event_study_effects[h].get("n_obs", 1) > 0
                         ):
                             event_study_effects[h]["se"] = bootstrap_results.event_study_ses[h]

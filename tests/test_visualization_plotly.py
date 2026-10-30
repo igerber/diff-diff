@@ -539,7 +539,7 @@ class TestPlotEventStudyZeroSEPlotly:
 
         res = _Fake()
         res.event_study_effects = {
-            -1: {"effect": 0.0, "se": 0.0, "conf_int": (0.0, 0.0), "n_obs": 0},
+            -1: {"effect": 0.0, "se": 0.0, "conf_int": (0.0, 0.0), "is_reference": True},
             0: {"effect": 1.5, "se": 0.0, "conf_int": (nan, nan), "n_obs": 8},
             1: {"effect": 1.0, "se": 0.5, "conf_int": (0.02, 1.98), "n_obs": 8},
         }

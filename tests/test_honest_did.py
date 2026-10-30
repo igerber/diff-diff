@@ -713,10 +713,10 @@ class TestEdgeCases:
 
         # ``_estimate_max_pre_violation`` reads the CS raw ``event_study_effects``
         # dict (the 3.x fit-time shape, now the legacy-pickle route): feed it a
-        # stand-in carrying the container's surface. Its reference row is the
-        # zero-count sentinel the method excludes.
+        # stand-in carrying the container's surface. Its reference row carries
+        # the is_reference key the method excludes (4.0, M-093).
         results = legacy_standin(fit)
-        assert results.event_study_effects[-1]["n_groups"] == 0
+        assert results.event_study_effects[-1].get("is_reference") is True
 
         # If there are real pre-periods, max_violation should be > 0
         # (based on actual pre-period effects, not the reference period's effect=0)

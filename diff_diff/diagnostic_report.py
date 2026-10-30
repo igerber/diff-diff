@@ -3363,9 +3363,10 @@ class DiagnosticReport:
             return self._scalars_from_mapping(ge)
         # 2. event_study_effects: dict keyed by relative time -> dict with
         # 'effect'. Filter to **post-treatment** horizons (rel_time >= 0),
-        # exclude reference markers (``n_groups == 0`` on CS/SA;
-        # ``n_obs == 0`` on Stacked/TwoStage/Imputation/EfficientDiD), and
-        # exclude entries with non-finite effect.
+        # exclude the reference row (``is_reference`` - the explicit marker
+        # since 4.0, row M-093) and genuine zero-count horizons (a
+        # non-estimable horizon, e.g. TwoStageDiD all-filtered), and exclude
+        # entries with non-finite effect.
         es = getattr(r, "event_study_effects", None)
         if es is not None:
             # Anticipation-aware post-treatment cutoff: include horizons
@@ -3390,7 +3391,11 @@ class DiagnosticReport:
                 if rel < post_cutoff:
                     continue
                 if isinstance(entry, dict):
-                    if entry.get("n_groups") == 0 or entry.get("n_obs") == 0:
+                    if (
+                        entry.get("is_reference")
+                        or entry.get("n_groups") == 0
+                        or entry.get("n_obs") == 0
+                    ):
                         continue
                 eff = _extract_scalar_effect(entry)
                 if eff is None or not np.isfinite(eff):
@@ -4087,13 +4092,14 @@ def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
 
     Rows are SKIPPED when ``is_reference`` is set OR the row's count is
     exactly zero (reference rows carry NaN ``n``, so the conditions are
-    disjoint). The zero-count skip mirrors the raw route's
-    ``n_groups == 0`` / ``n_obs == 0`` exclusion in
-    ``_collect_pre_period_coefs`` — the container deliberately preserves
-    NaN-effect zero-count horizons as NON-reference rows
-    (``results_base._from_relative_dict``), and without this skip such a
-    row would inflate ``n_dropped_undefined`` and flip a valid joint-Wald
-    PT to "inconclusive". NaN se/p on surviving rows pass through so the
+    disjoint). The zero-count skip mirrors the raw route's genuine
+    zero-count exclusion in ``_collect_pre_period_coefs`` — a zero count is
+    a NON-ESTIMABLE horizon (TwoStageDiD all-filtered, SpilloverDiD
+    rectangular cells), never a reference marker since 4.0 (row M-093), and
+    the container preserves such NaN-effect rows as NON-reference rows
+    (``results_base._from_relative_dict``); without this skip such a row
+    would inflate ``n_dropped_undefined`` and flip a valid joint-Wald PT to
+    "inconclusive". NaN se/p on surviving rows pass through so the
     undefined-inference guards behave identically to the raw route.
 
     Keys go through ``_event_time_key``: integer-valued horizons become
@@ -4154,11 +4160,13 @@ def _collect_pre_period_coefs(
 
     Filtering rules (critical for methodology-safe PT tests):
 
-    * Entries marked as reference markers (``n_groups == 0`` on CS / SA or
-      ``n_obs == 0`` on Stacked / TwoStage / Imputation event-study shape)
-      are excluded. These are synthetic ``effect=0, se=NaN`` rows injected
-      for universal-base normalization and are NOT counted in
-      ``n_dropped_undefined`` — they never represented a real pre-period.
+    * The reference row (``is_reference`` - the explicit normalization-row
+      marker every materializing producer writes since 4.0, row M-093; the
+      zero-count sentinel is retired) is excluded, and so is a genuine
+      zero-count horizon (``n_groups == 0`` / ``n_obs == 0``: a
+      non-estimable horizon with no contributing observations). Neither is
+      counted in ``n_dropped_undefined`` — neither represented a real,
+      estimated pre-period.
     * Entries whose ``effect`` or ``se`` is non-finite (NaN / inf) or whose
       ``se <= 0`` are excluded as undefined inference (``safe_inference``
       contract, ``utils.py:175``). These ARE real pre-periods whose
@@ -4226,10 +4234,11 @@ def _collect_pre_period_coefs(
                 continue
             if not isinstance(entry, dict):
                 continue
-            # Drop universal-base reference markers. These are synthetic,
-            # not a real pre-period, so they do not count toward
+            # Drop the reference row (``is_reference``) and genuine
+            # zero-count (non-estimable) horizons. Neither is a real,
+            # estimated pre-period, so neither counts toward
             # ``n_dropped_undefined``.
-            if entry.get("n_groups") == 0 or entry.get("n_obs") == 0:
+            if entry.get("is_reference") or entry.get("n_groups") == 0 or entry.get("n_obs") == 0:
                 continue
             # Wooldridge stores ``att`` rather than ``effect`` in its
             # event-study payloads; accept either (round-16 CI review).

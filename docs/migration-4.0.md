@@ -219,6 +219,21 @@ for heterogeneity. StackedDiD and SunAbraham always populate the raw
 surface (nothing to derive), and ChaisemartinDHaultfoeuille's pre-period
 checks read `placebo_event_study` directly.
 
+**Reference rows ([M-093], item 8a).** Since 4.0 every native event-study dict
+that MATERIALIZES a normalization row (StackedDiD, ImputationDiD, TwoStageDiD,
+SpilloverDiD, the CallawaySantAnna/DMLDiD universal-base carrier) marks it with
+`"is_reference": True` and carries no observation/group count there (3.x:
+`n_obs == 0` / `n_groups == 0`); SpilloverDiD's event-study
+`att_dynamic`/`spillover_effects` frames gain a boolean `is_reference` column
+(`n_obs` NaN on those rows); the native `to_dataframe(level="event_study")`
+frames of StackedDiD / bootstrapped ImputationDiD / TwoStageDiD show
+`n_obs = NaN` on the reference row (the column is float) until the 4.0 schema
+rewire replaces them. SunAbraham omits its reference row (`reference_period`)
+and EfficientDiD's PT-Post anchor is an estimated cell named by
+`reference_period` - both unchanged. Code that located the reference by a zero
+count should read the key, or the container's `is_reference` column. 3.x
+pickles are migrated on load.
+
 ```{warning}
 **Bootstrapped fits: every adopter has a post-fit route - two mechanisms.**
 On `CallawaySantAnna`, `DMLDiD` (which inherits the CS replay channel), and `EfficientDiD`, the post-fit recompute levels REPLAY the
@@ -656,4 +671,4 @@ does not mean no action is required, so read the `Fix` cell.
 | M-046 | renames-robust-drop | `diff_diff:TripleDifference[robust]` | — | Drop it. `TripleDifference` accepts only `vcov_type="hc1"`, so `robust=` never changed its inference - do NOT write `vcov_type="classical"`, which raises. |
 | M-047 | renames-robust-drop | `diff_diff:HeterogeneousAdoptionDiD[robust]` | — | HAD's legacy default is non-robust: `robust=True` becomes `vcov_type="hc1"`; drop `robust=False`. |
 | M-115 | renames-robust-drop | `diff_diff:LinearRegression[robust]` | — | Drop `robust=True` (already the `hc1` default); `robust=False` becomes `vcov_type="classical"`. |
-| M-093 | results-contract | `diff_diff:CallawaySantAnnaResults.event_study_effects` | `diff_diff:EventStudyResults` | The sentinel is retired - read the unified `EventStudyResults` surface instead of the raw field. |
+| M-093 | results-contract | `diff_diff:CallawaySantAnnaResults.event_study_effects` | `diff_diff:EventStudyResults` | The zero-count sentinel is retired (8a): read `is_reference` on the row, or the unified `EventStudyResults` surface; the per-class `to_dataframe(level='event_study')` schema lands in 8b. |

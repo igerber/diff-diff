@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import migrate_event_study_reference_sentinel
 from diff_diff.results_base import (
     _SUMMARY_ALPHA_MESSAGE,
     BaseResults,
@@ -397,9 +398,11 @@ class SpilloverDiDResults(DiDResults):
         Total effect on the treated, ``tau_total`` (inherited from DiDResults).
     spillover_effects : pd.DataFrame, optional
         Per-ring spillover-on-control estimates. Columns: ``["coef", "se",
-        "t_stat", "p_value", "ci_low", "ci_high"]``. Index: ring label
-        like ``"[0, 50)"``; for event-study output the index is a
-        ``MultiIndex`` over ``(ring_label, event_time)``.
+        "t_stat", "p_value", "ci_low", "ci_high"]`` plus, in event-study
+        output, ``"n_obs"`` and the boolean ``"is_reference"`` (True on the
+        per-ring reference-period rows, whose ``n_obs`` is NaN; 4.0, ledger
+        row M-093). Index: ring label like ``"[0, 50)"``; for event-study
+        output the index is a ``MultiIndex`` over ``(ring_label, event_time)``.
     ring_breakpoints : list of float
         Sorted distance breakpoints used to construct the rings.
     d_bar : float
@@ -450,8 +453,10 @@ class SpilloverDiDResults(DiDResults):
     # Wave C event-study fields (None when event_study=False):
     att_dynamic: Optional[pd.DataFrame] = field(default=None)
     # Per-event-time direct effects DataFrame indexed by integer k.
-    # Columns: ["coef", "se", "t_stat", "p_value", "ci_low", "ci_high", "n_obs"].
-    # Includes the reference period row with coef=0.0, se=0.0, n_obs=0.
+    # Columns: ["coef", "se", "t_stat", "p_value", "ci_low", "ci_high", "n_obs",
+    # "is_reference"]. Includes the reference period row with coef=0.0,
+    # se=0.0, is_reference=True and n_obs=NaN (4.0, row M-093 item 8a: the
+    # 3.x n_obs=0 sentinel is retired; a zero n_obs is a genuine empty cell).
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     # TwoStageDiD-compatible alias for ``att_dynamic`` consumable by
     # ``plot_event_study`` (wired in Wave C via the ``reference_period``
@@ -461,9 +466,10 @@ class SpilloverDiDResults(DiDResults):
     # applicable checks {parallel_trends (event-study on these direct-effect
     # dynamics), design_effect, heterogeneity}; bacon is excluded (spillover
     # identifies off far-away units, not TWFE 2x2 comparisons).
-    # Schema mirrors ``two_stage.py:1355-1389``:
+    # Schema mirrors TwoStageDiD's ``_stage2_event_study``:
     #   {k: {"effect", "se", "n_obs", "t_stat", "p_value", "conf_int": (low, high)}}
-    # Reference row uses ``conf_int = (0.0, 0.0)`` (TwoStageDiD parity).
+    # Reference row uses ``conf_int = (0.0, 0.0)`` (TwoStageDiD parity) and
+    # carries ``"is_reference": True`` with no ``n_obs`` key (M-093, 8a).
     horizon_max: Optional[int] = field(default=None)
     reference_period: Optional[int] = field(default=None)
     # Wave E.1 survey-design fields (None when survey_design=None on fit).
@@ -475,6 +481,41 @@ class SpilloverDiDResults(DiDResults):
     survey_metadata: Optional[Any] = field(default=None)
     n_psu: Optional[int] = field(default=None)
     n_strata: Optional[int] = field(default=None)
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate 3.x pickles to the 4.0 reference-row marking (row M-093).
+
+        Through 3.x the event-study reference row was marked by the
+        ``n_obs == 0`` sentinel in ``event_study_effects`` and in the
+        ``att_dynamic`` / ``spillover_effects`` frames. Since 4.0 the dict row
+        carries ``is_reference: True`` (no count key) and the event-study
+        frames carry a boolean ``is_reference`` column with NaN ``n_obs`` on
+        the reference rows. Aggregate-mode fits (``reference_period`` None)
+        have no reference row and pass through untouched; a fresh 4.0 pickle
+        round-trips as a no-op.
+        """
+        state = dict(state)
+        if "event_study_effects" in state:
+            state["event_study_effects"] = migrate_event_study_reference_sentinel(
+                state["event_study_effects"]
+            )
+        ref = state.get("reference_period")
+        if ref is not None:
+            for name in ("att_dynamic", "spillover_effects"):
+                frame = state.get(name)
+                if not isinstance(frame, pd.DataFrame) or "is_reference" in frame.columns:
+                    continue
+                frame = frame.copy()
+                if isinstance(frame.index, pd.MultiIndex):
+                    is_ref = frame.index.get_level_values("k") == ref
+                else:
+                    is_ref = frame.index == ref
+                frame["is_reference"] = np.asarray(is_ref, dtype=bool)
+                if "n_obs" in frame.columns and bool(np.any(is_ref)):
+                    frame["n_obs"] = frame["n_obs"].astype(float)
+                    frame.loc[is_ref, "n_obs"] = np.nan
+                state[name] = frame
+        self.__dict__.update(state)
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """Extended summary with ATT row, per-event-time direct block, and

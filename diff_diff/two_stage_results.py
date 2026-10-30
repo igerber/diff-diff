@@ -15,6 +15,7 @@ import pandas as pd
 from diff_diff._deprecation import (
     LEGACY_OVERALL_QUINTET,
     deprecated_field_property,
+    migrate_event_study_reference_sentinel,
     migrate_renamed_state_keys,
 )
 from diff_diff.aggregation import (
@@ -143,7 +144,9 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         Confidence interval for overall ATT.
     event_study_effects : dict, optional
         Dictionary mapping relative time h to effect dict with keys:
-        'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_obs'.
+        'effect', 'se', 't_stat', 'p_value', 'conf_int' and, on estimated
+        rows, 'n_obs'; the reference row carries ``'is_reference': True``
+        and no count (4.0, ledger row M-093).
     group_effects : dict, optional
         Dictionary mapping cohort g to effect dict.
     groups : list
@@ -253,7 +256,15 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         under their canonical names and ``overall_*`` never reappear in
         ``__dict__``.
         """
-        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
+        state = migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET)
+        if "event_study_effects" in state:
+            # 3.x surfaces marked the reference row with the n_obs == 0
+            # sentinel (retired at 4.0, row M-093).
+            state = dict(state)
+            state["event_study_effects"] = migrate_event_study_reference_sentinel(
+                state["event_study_effects"]
+            )
+        self.__dict__.update(state)
 
     # --- Post-fit aggregation (M-022/M-119) ------------------------------
 
@@ -700,8 +711,8 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
 
             for h in sorted(self.event_study_effects.keys()):
                 eff = self.event_study_effects[h]
-                if eff.get("n_obs", 1) == 0:
-                    # Reference period marker
+                if eff.get("is_reference", False):
+                    # Reference period row (explicit marker since 4.0, M-093)
                     lines.append(
                         f"[ref: {h}]" f"{'0.0000':>17} {'---':>12} {'---':>10} {'---':>10} {'':>6}"
                     )

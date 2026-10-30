@@ -125,7 +125,7 @@ class TestImputationPretrends:
         for h, eff in es_dict(results).items():
             if h == ref_period:
                 continue
-            if eff["n_obs"] == 0:
+            if eff.get("n_obs", 0) == 0:
                 continue
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"
             assert eff["se"] > 0, f"h={h}: SE not positive"
@@ -146,7 +146,7 @@ class TestImputationPretrends:
         assert -1 in effects
         ref = effects[-1]
         assert ref["effect"] == 0.0
-        assert ref["n_obs"] == 0
+        assert ref.get("is_reference") is True and "n_obs" not in ref
 
     def test_backward_compatibility(self):
         """pretrends=False (default) gives identical results."""
@@ -234,7 +234,7 @@ class TestImputationPretrends:
         assert -2 in effects
         ref = effects[-2]
         assert ref["effect"] == 0.0
-        assert ref["n_obs"] == 0
+        assert ref.get("is_reference") is True and "n_obs" not in ref
 
     def test_get_params_includes_pretrends(self):
         """get_params includes pretrends parameter."""
@@ -334,7 +334,7 @@ class TestTwoStagePretrends:
         for h, eff in es_dict(results).items():
             if h == ref_period:
                 continue
-            if eff["n_obs"] == 0:
+            if eff.get("n_obs", 0) == 0:
                 continue
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"
             assert eff["se"] > 0, f"h={h}: SE not positive"
@@ -409,7 +409,7 @@ class TestTwoStagePretrends:
         assert -2 in effects
         ref = effects[-2]
         assert ref["effect"] == 0.0
-        assert ref["n_obs"] == 0
+        assert ref.get("is_reference") is True and "n_obs" not in ref
 
 
 # =============================================================================
@@ -509,7 +509,7 @@ class TestPretrends_Regressions:
         )
 
         for h, eff in es_dict(results).items():
-            if eff["n_obs"] == 0:
+            if eff.get("n_obs", 0) == 0:
                 continue
             assert np.isfinite(eff["se"]), f"h={h}: SE not finite"
 
@@ -568,7 +568,7 @@ class TestPretrends_Regressions:
         # touch them): the analytical recompute vs the relayed fit-time surface.
         es_no_boot, es_boot = es_dict(results_no_boot), es_dict(results_boot)
         for h in es_no_boot:
-            if h >= 0 or es_no_boot[h]["n_obs"] == 0:
+            if h >= 0 or es_no_boot[h].get("n_obs", 0) == 0:
                 continue
             eff_nb = es_no_boot[h]
             eff_b = es_boot[h]
@@ -630,7 +630,7 @@ class TestPretrends_Regressions:
         es_perm = es_dict(results_perm)
         es_gap = es_dict(results_gap)
         for h in es_default:
-            if es_default[h]["n_obs"] == 0:
+            if es_default[h].get("n_obs", 0) == 0:
                 continue
             eff_d = es_default[h]
             eff_p = es_perm[h]
@@ -688,7 +688,7 @@ class TestPretrends_Regressions:
 
         es_default, es_perm = es_dict(results_default), es_dict(results_perm)
         for h in es_default:
-            if es_default[h]["n_obs"] == 0:
+            if es_default[h].get("n_obs", 0) == 0:
                 continue
             eff_d = es_default[h]
             eff_p = es_perm[h]

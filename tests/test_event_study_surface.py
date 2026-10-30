@@ -558,9 +558,10 @@ def _expected_reference_labels(label, native):
       -1-anticipation; dCDH at 0).
     - LPDiD's horizon==-1 base row.
     - Wooldridge / HAD omit no baseline (no reference).
-    - The remaining relative-dict producers mark EVERY zero-count sentinel
-      row (CallawaySantAnna universal base on a gapped grid can materialize
-      several); CS varying and EfficientDiD estimate e=-1, so none.
+    - The remaining relative-dict producers mark EVERY row carrying the
+      explicit ``is_reference`` key (CallawaySantAnna universal base on a
+      gapped grid can materialize several; 4.0, row M-093 - the zero-count
+      sentinel is retired); CS varying and EfficientDiD estimate e=-1, so none.
     """
     if label == "SpilloverDiD" or label in NATIVE_SURFACE_PRODUCERS:
         return [] if native.reference_period is None else [native.reference_period]
@@ -572,14 +573,9 @@ def _expected_reference_labels(label, native):
         return [-1] if (native.event_study["horizon"] == -1).any() else []
     if label in ("WooldridgeDiD", "HeterogeneousAdoptionDiD"):
         return []
-    # Count-sentinel producers: a zero-count row is the reference only when its
-    # effect is finite (0.0); a NaN-effect zero-count row is non-estimable.
-    return sorted(
-        e
-        for e, row in native.event_study_effects.items()
-        if (row.get("n_groups", 1) == 0 or row.get("n_obs", 1) == 0)
-        and np.isfinite(row.get("att", row.get("effect", np.nan)))
-    )
+    # Keyed producers: the explicit ``is_reference`` row(s); a NaN-effect
+    # zero-count row is a genuine non-estimable horizon, never a reference.
+    return sorted(e for e, row in native.event_study_effects.items() if row.get("is_reference"))
 
 
 def test_all_producers_built(surfaces):
@@ -615,7 +611,7 @@ def test_reference_row_values_normalized(label, surfaces):
 
 @pytest.mark.parametrize("label", ALL_PRODUCERS)
 def test_no_sentinel_in_schema(label, surfaces):
-    # The retiring sentinels (n_groups==0 / n_obs==0) must not surface as a
+    # The retired sentinels (n_groups==0 / n_obs==0) must not surface as a
     # zero count on the marked reference row: it is NaN there.
     _, surface = surfaces[label]
     ref = surface.is_reference
@@ -754,13 +750,17 @@ def test_spillover_oversized_horizon_single_reference():
         )
     surface = build_event_study_surface(sp)
     df = surface.to_dataframe()
-    # Native has >=2 zero-count rows; exactly one is the reference.
+    # Native: the reference row is keyed (no count); the rectangular
+    # non-estimable horizons carry a GENUINE n_obs == 0 (>= 1 of them).
     zero_native = [k for k, r in sp.event_study_effects.items() if r.get("n_obs") == 0]
-    assert len(zero_native) >= 2
+    keyed_native = [k for k, r in sp.event_study_effects.items() if r.get("is_reference")]
+    assert len(zero_native) >= 1
+    assert keyed_native == [sp.reference_period]
+    assert "n_obs" not in sp.event_study_effects[sp.reference_period]
     marked = df[df["is_reference"]]["event_time"].tolist()
     assert marked == [sp.reference_period]
     # A non-reference zero-count horizon keeps its NaN att and n=0.
-    other_zero = next(k for k in zero_native if k != sp.reference_period)
+    other_zero = zero_native[0]
     row = df[df["event_time"] == other_zero].iloc[0]
     assert not bool(row["is_reference"])
     assert np.isnan(row["att"])
@@ -881,7 +881,8 @@ def test_cs_universal_gapped_multiple_references():
                 first_treat="first_treat",
             )
         )
-    native_refs = sorted(e for e, r in cs.event_study_effects.items() if r.get("n_groups") == 0)
+    native_refs = sorted(e for e, r in cs.event_study_effects.items() if r.get("is_reference"))
+    assert all("n_groups" not in cs.event_study_effects[e] for e in native_refs)
     assert len(native_refs) >= 2  # the case only matters when >1
     surface = build_event_study_surface(cs)
     marked = sorted(surface.event_time[surface.is_reference].tolist())
@@ -918,36 +919,53 @@ def test_absent_surface_distinguished_from_empty():
         build_event_study_surface(_NotRequested())
 
 
-def test_zero_count_finite_nonzero_effect_raises():
-    # A zero-count row with a finite NONZERO effect is malformed (a reference
-    # must be exactly 0) - fail loudly rather than silently rewrite to 0.
+def test_keyed_reference_finite_nonzero_effect_raises():
+    # An ``is_reference`` row with a finite NONZERO effect is malformed (a
+    # reference must be exactly 0) - fail loudly rather than let the
+    # container's __post_init__ silently rewrite it to 0 (row M-093, 8a).
     class _Malformed:
         alpha = 0.05
         event_study_effects = {
             0: {"effect": 1.0, "se": 0.1, "n_obs": 40},
-            1: {"effect": 3.3, "se": np.nan, "n_obs": 0},  # nonzero + zero count
+            1: {"effect": 3.3, "se": np.nan, "is_reference": True},  # nonzero + marked
         }
 
     with pytest.raises(ValueError, match="finite nonzero effect"):
         build_event_study_surface(_Malformed())
 
 
+def test_zero_count_is_a_genuine_count_not_a_reference():
+    # The 3.x zero-count SENTINEL is retired (row M-093, 8a): a row with
+    # ``n_obs == 0`` / ``n_groups == 0``, effect 0.0 and NO ``is_reference``
+    # key is an ordinary zero-count row - the builder marks nothing.
+    class _Unkeyed:
+        alpha = 0.05
+        event_study_effects = {
+            -1: {"effect": 0.0, "se": np.nan, "n_groups": 0},
+            0: {"effect": 1.0, "se": 0.1, "n_groups": 40},
+        }
+
+    surface = build_event_study_surface(_Unkeyed())
+    assert not surface.is_reference.any()
+    assert surface.n[0] == 0.0 and surface.n_kind == "groups"
+
+
 def test_zero_count_nan_horizon_is_not_a_reference():
     # TwoStageDiD emits effect=NaN, n_obs=0 for an estimated horizon whose
     # observations are all filtered (two_stage_aggregation.py::_stage2_event_study) - distinct from
-    # its effect=0.0, n_obs=0 reference. The count-sentinel adapter path must
-    # mark ONLY the finite-effect (0.0) row as reference and preserve the
-    # NaN-effect horizon as a non-reference NaN row (never normalize it to 0).
+    # its keyed reference row. The adapter must mark ONLY the ``is_reference``
+    # row and preserve the NaN-effect zero-count horizon as a non-reference
+    # NaN row (never normalize it to 0).
     class _FakeTwoStage:
         alpha = 0.05
         event_study_effects = {
-            -1: {  # the reference: effect 0.0, n_obs 0
+            -1: {  # the reference: effect 0.0, keyed, no count
                 "effect": 0.0,
                 "se": 0.0,
                 "t_stat": np.nan,
                 "p_value": np.nan,
                 "conf_int": (0.0, 0.0),
-                "n_obs": 0,
+                "is_reference": True,
             },
             0: {  # an identified horizon
                 "effect": 1.5,

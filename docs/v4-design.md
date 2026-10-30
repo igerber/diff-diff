@@ -1239,7 +1239,12 @@ tests-first PR that flips no rows).
    `tests/test_v4_cluster_policy.py`, notebook 23 re-executed; 7c SHIPPED
    2026-10-29: [M-154] SpilloverDiD df_convention, pinned by
    `tests/test_v4_spillover_df_convention.py`; item 7 complete.)
-8. [M-093] sentinel retirement + event-study schema enforcement.
+8. [M-093] sentinel retirement + event-study schema enforcement. (8a SHIPPED
+   2026-10-30: the sentinel retirement - every materialized reference row carries
+   `is_reference: True` and no count key, the builder and the consumers' raw-dict
+   routes read the key, 3.x pickles migrate on load; pinned by
+   `tests/test_v4_sentinel_retirement.py`. 8b = the
+   `to_dataframe(level="event_study")` schema enforcement + the row flip.)
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,

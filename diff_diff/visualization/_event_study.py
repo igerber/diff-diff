@@ -972,19 +972,17 @@ def _extract_plot_data(
         if reference_period is None:
             reference_inferred = True  # We're about to infer it
             # Prefer an explicit `reference_period` attribute on the result
-            # (Wave C ``SpilloverDiDResults`` sets this directly). The
-            # legacy `n_obs == 0` heuristic was ambiguous for rectangular
-            # outputs like SpilloverDiD's `event_study_effects`, which
-            # legitimately emits multiple empty non-reference horizons.
+            # (Wave C ``SpilloverDiDResults`` sets this directly), else the
+            # row marked ``is_reference`` (the explicit normalization-row
+            # marker every materializing producer writes since 4.0, ledger
+            # row M-093 item 8a - the zero-count sentinel is retired, so a
+            # zero count is a genuine empty horizon and never a marker).
             explicit_ref = getattr(results, "reference_period", None)
             if explicit_ref is not None:
                 reference_period = int(explicit_ref)
             else:
-                # Detect reference period from n_groups=0 marker (normalization
-                # constraint). This handles anticipation > 0 where reference
-                # is at e = -1 - anticipation.
                 for period, effect_data in results.event_study_effects.items():
-                    if effect_data.get("n_groups", 1) == 0 or effect_data.get("n_obs", 1) == 0:
+                    if effect_data.get("is_reference", False):
                         reference_period = period
                         break
                 # Fallback to -1 if no marker found (backward compatibility).
@@ -1224,13 +1222,15 @@ def plot_honest_event_study(
             reference_period = getattr(original_results, "reference_period", None)
         if reference_period is None:
             # HonestDiD's own reference signature (honest_did.py): a
-            # normalization-constraint row, NOT any row whose inference
-            # happens to be undefined. No signature match (e.g. a
-            # marker-less varying-base surface) means no inferred
+            # normalization-constraint row - the producer's explicit
+            # ``is_reference`` key (4.0, row M-093; the zero-count sentinel
+            # is retired) with effect exactly 0.0 and NaN SE - NOT any row
+            # whose inference happens to be undefined. No signature match
+            # (e.g. a marker-less varying-base surface) means no inferred
             # reference - deliberately no -1 fallback here.
             for t, data in original_results.event_study_effects.items():
                 if (
-                    data.get("n_groups", data.get("n_obs", 1)) == 0
+                    data.get("is_reference", False)
                     and data["effect"] == 0.0
                     and not np.isfinite(data["se"])
                 ):
@@ -1238,15 +1238,15 @@ def plot_honest_event_study(
                     break
         # Verified anchor: the resolved reference (attribute, signature
         # match, or caller label) counts only if its row carries the
-        # producers' constraint signature - zero group/obs count, effect
+        # producers' constraint signature - the ``is_reference`` key, effect
         # exactly 0.0, and no defined SE (NaN for CS, 0.0 for the
         # Imputation/TwoStage/Stacked-style markers). An estimated row
-        # (positive count) is never an anchor, even at effect 0, se 0.
+        # (no key) is never an anchor, even at effect 0, se 0.
         _anchor_period = None
         _ref_data = original_results.event_study_effects.get(reference_period)
         if (
             _ref_data is not None
-            and _ref_data.get("n_groups", _ref_data.get("n_obs", 1)) == 0
+            and _ref_data.get("is_reference", False)
             and _ref_data["effect"] == 0.0
             and not (np.isfinite(_ref_data["se"]) and float(_ref_data["se"]) > 0)
         ):

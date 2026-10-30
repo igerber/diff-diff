@@ -776,7 +776,7 @@ class TestCBWSDIDCovariateBalance:
         fitted = {
             h: res.event_study_effects[h]["effect"]
             for h in res.event_study_effects
-            if res.event_study_effects[h]["n_obs"] > 0
+            if res.event_study_effects[h].get("n_obs", 0) > 0
         }
         closed = _closed_form_cbwsdid(df, res.groups, _CB_KP, _CB_KPOST)
         assert set(fitted) == {h for h in closed}
@@ -931,7 +931,7 @@ class TestCBWSDIDEffectiveMass:
         fitted = {
             h: res.event_study_effects[h]["effect"]
             for h in res.event_study_effects
-            if res.event_study_effects[h]["n_obs"] > 0
+            if res.event_study_effects[h].get("n_obs", 0) > 0
         }
         # control counts genuinely vary across cohorts (else the test is vacuous)
         ncs = {a: d["n_control"] for a, d in res.balance_diagnostics.items()}
