@@ -14,6 +14,7 @@ import pandas as pd
 from diff_diff._deprecation import (
     LEGACY_OVERALL_QUINTET,
     deprecated_field_property,
+    migrate_event_study_reference_sentinel,
     migrate_renamed_state_keys,
 )
 from diff_diff.aggregation import (
@@ -340,7 +341,15 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         under their canonical names and ``overall_*`` never reappear in
         ``__dict__``.
         """
-        self.__dict__.update(migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET))
+        state = migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET)
+        if "event_study_effects" in state:
+            # 3.x fit-time surfaces marked the universal-base reference rows
+            # with the n_groups == 0 sentinel (retired at 4.0, row M-093).
+            state = dict(state)
+            state["event_study_effects"] = migrate_event_study_reference_sentinel(
+                state["event_study_effects"]
+            )
+        self.__dict__.update(state)
 
     def __repr__(self) -> str:
         """Concise string representation."""

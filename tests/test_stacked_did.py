@@ -98,7 +98,7 @@ class TestStackedDiDBasic:
         # Reference period effect should be zero
         ref = results.event_study_effects[-1]
         assert ref["effect"] == 0.0
-        assert ref["n_obs"] == 0
+        assert ref["is_reference"] is True and "n_obs" not in ref  # 4.0 marking (M-093)
 
         # Post-treatment periods should have effects
         for h in range(0, 3):
@@ -571,7 +571,8 @@ class TestEdgeCases:
         # Reference period is -2 (not -1)
         assert -2 in results.event_study_effects
         assert results.event_study_effects[-2]["effect"] == 0.0
-        assert results.event_study_effects[-2]["n_obs"] == 0  # sentinel
+        assert results.event_study_effects[-2]["is_reference"] is True  # explicit marker (M-093)
+        assert "n_obs" not in results.event_study_effects[-2]
 
         # -1 is NOT the reference; it should have a non-zero estimated effect
         assert -1 in results.event_study_effects
@@ -1860,7 +1861,7 @@ class TestStackedDiDCovariateBalance:
         cb = _cb_fit(df, balance="entropy", covariates=["x"])
         plain = _cb_fit(df, balance="none")
         for h in plain.event_study_effects:
-            if plain.event_study_effects[h]["n_obs"] > 0:
+            if plain.event_study_effects[h].get("n_obs", 0) > 0:
                 assert (
                     abs(
                         cb.event_study_effects[h]["effect"] - plain.event_study_effects[h]["effect"]

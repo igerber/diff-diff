@@ -1699,7 +1699,7 @@ class TestStackedContainerAdmission:
             and np.isnan(v["conf_int"][0])
             and np.isnan(v["conf_int"][1])
             for h, v in eff.items()
-            if v["n_obs"] > 0
+            if v.get("n_obs", 0) > 0
         )
         surf = res.aggregate("event_study")
         with pytest.warns(UserWarning, match="withheld/undefined"):
@@ -2209,7 +2209,7 @@ class TestHonestRawRouteZeroSE:
         nan = float("nan")
         original = SimpleNamespace(
             event_study_effects={
-                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                -1: {"effect": 0.0, "se": nan, "is_reference": True},
                 0: {"effect": 1.0, "se": 0.5, "n_groups": 3},
                 1: {"effect": 1.2, "se": 0.0, "n_groups": 3},
             }
@@ -2256,7 +2256,7 @@ class TestHonestRawRouteZeroSE:
         nan = float("nan")
         original = SimpleNamespace(
             event_study_effects={
-                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                -1: {"effect": 0.0, "se": nan, "is_reference": True},
                 0: {"effect": 1.0, "se": 0.0, "n_groups": 3},
                 1: {"effect": 1.2, "se": nan, "n_groups": 3},
             }
@@ -2275,7 +2275,7 @@ class TestHonestRawRouteZeroSE:
         nan = float("nan")
         original = SimpleNamespace(
             event_study_effects={
-                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                -1: {"effect": 0.0, "se": nan, "is_reference": True},
                 0: {"effect": 1.0, "se": 0.0, "n_groups": 3},
                 1: {"effect": 1.2, "se": nan, "n_groups": 3},
             }
@@ -2348,7 +2348,7 @@ class TestHonestRawRouteZeroSE:
         nan = float("nan")
         original = SimpleNamespace(
             event_study_effects={
-                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                -1: {"effect": 0.0, "se": nan, "is_reference": True},
                 0: {"effect": 1.0, "se": 0.5, "n_groups": 3},
             }
         )

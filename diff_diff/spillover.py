@@ -849,7 +849,8 @@ def _extract_event_study_results(
     Builds three output surfaces from a single stage-2 fit:
 
     - ``att_dynamic`` : per-event-time direct-effect DataFrame indexed by ``k``.
-      Includes the reference period row with ``coef=0.0, se=0.0, n_obs=0``.
+      Includes the reference period row (``coef=0.0, se=0.0``, marked by the
+      boolean ``is_reference`` column with ``n_obs=NaN``; 4.0, row M-093).
       Rectangular emission across the full direct-effect event-time grid.
     - ``spillover_effects`` : MultiIndex ``(ring_label, event_time)`` DataFrame
       with the same columns. Rectangular over the full spillover grid.
@@ -891,6 +892,10 @@ def _extract_event_study_results(
     direct_rows: List[Dict[str, Any]] = []
     for k in all_direct_ks:
         if k == ref_period:
+            # Reference row: the normalization anchor, marked EXPLICITLY
+            # (4.0, ledger row M-093 item 8a); ``n_obs`` is NaN there - the
+            # 3.x ``n_obs == 0`` sentinel is retired, so a zero ``n_obs``
+            # is always a genuine empty cell.
             direct_rows.append(
                 {
                     "k": k,
@@ -900,12 +905,13 @@ def _extract_event_study_results(
                     "p_value": float("nan"),
                     "ci_low": 0.0,
                     "ci_high": 0.0,
-                    "n_obs": 0,
+                    "n_obs": float("nan"),
+                    "is_reference": True,
                 }
             )
         elif ("direct", None, k) in per_coef:
             r = per_coef[("direct", None, k)]
-            direct_rows.append({"k": k, **r})
+            direct_rows.append({"k": k, **r, "is_reference": False})
         else:
             direct_rows.append(
                 {
@@ -917,6 +923,7 @@ def _extract_event_study_results(
                     "ci_low": float("nan"),
                     "ci_high": float("nan"),
                     "n_obs": 0,
+                    "is_reference": False,
                 }
             )
     att_dynamic_df = pd.DataFrame(direct_rows).set_index("k").sort_index() if direct_rows else None
@@ -927,8 +934,8 @@ def _extract_event_study_results(
     # period row per ring. The pre-filter in _build_event_study_design drops
     # `ref_period` from the fitted column set, but the rectangular schema
     # for spillover must still emit (ring, ref_period) with `coef=0.0,
-    # se=0.0, n_obs=0` for symmetry with the direct-effect series (which
-    # emits its reference row at k=ref_period). Without this, consumers
+    # se=0.0, is_reference=True, n_obs=NaN` for symmetry with the
+    # direct-effect series (which emits its reference row at k=ref_period). Without this, consumers
     # iterating `[-H, ..., +H]` would hit a missing (ring, ref_period)
     # slice — the registry promises rectangular emission over the full
     # event-time grid.
@@ -937,7 +944,8 @@ def _extract_event_study_results(
     for ring_lab in ring_labels:
         for k in all_spillover_ks:
             if k == ref_period:
-                # Reference-period spillover row: 0-anchored (mirrors direct).
+                # Reference-period spillover row: 0-anchored (mirrors direct);
+                # marked by ``is_reference`` with NaN ``n_obs`` (M-093, 8a).
                 spillover_rows.append(
                     {
                         "ring": ring_lab,
@@ -948,14 +956,15 @@ def _extract_event_study_results(
                         "p_value": float("nan"),
                         "ci_low": 0.0,
                         "ci_high": 0.0,
-                        "n_obs": 0,
+                        "n_obs": float("nan"),
+                        "is_reference": True,
                     }
                 )
                 continue
             key = ("spillover", ring_lab, k)
             if key in per_coef:
                 r = per_coef[key]
-                spillover_rows.append({"ring": ring_lab, "k": k, **r})
+                spillover_rows.append({"ring": ring_lab, "k": k, **r, "is_reference": False})
             else:
                 spillover_rows.append(
                     {
@@ -968,6 +977,7 @@ def _extract_event_study_results(
                         "ci_low": float("nan"),
                         "ci_high": float("nan"),
                         "n_obs": 0,
+                        "is_reference": False,
                     }
                 )
     spillover_df = (
@@ -980,13 +990,14 @@ def _extract_event_study_results(
     event_study_effects: Dict[int, Dict[str, Any]] = {}
     for k in all_direct_ks:
         if k == ref_period:
+            # Reference row: ``is_reference`` marks it, no count key (M-093, 8a).
             event_study_effects[k] = {
                 "effect": 0.0,
                 "se": 0.0,
-                "n_obs": 0,
                 "t_stat": float("nan"),
                 "p_value": float("nan"),
                 "conf_int": (0.0, 0.0),
+                "is_reference": True,
             }
         elif ("direct", None, k) in per_coef:
             r = per_coef[("direct", None, k)]

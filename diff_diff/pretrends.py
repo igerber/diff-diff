@@ -1188,8 +1188,8 @@ class PreTrendsPower(BaseEstimator):
                 # ``anticipation=k``, true pre-periods are ``t < -k``;
                 # ``t ∈ [-k, -1]`` is the anticipation window and must
                 # not be used for pre-trends power. Filter out
-                # normalization constraints (n_groups=0) and non-finite
-                # SEs as well.
+                # normalization constraints (the ``is_reference`` row; 4.0,
+                # row M-093) and non-finite SEs as well.
                 _ant = getattr(results, "anticipation", 0) or 0
                 try:
                     _ant = int(_ant)
@@ -1204,7 +1204,7 @@ class PreTrendsPower(BaseEstimator):
                     t: data
                     for t, data in results.event_study_effects.items()
                     if t < _pre_cutoff
-                    and data.get("n_groups", 1) > 0
+                    and not data.get("is_reference", False)
                     and np.isfinite(data.get("se", np.nan))
                     and float(data.get("se", 0.0)) > 0
                 }
@@ -1283,7 +1283,7 @@ class PreTrendsPower(BaseEstimator):
                     t: data
                     for t, data in results.event_study_effects.items()
                     if t < _pre_cutoff
-                    and data.get("n_groups", 1) > 0
+                    and not data.get("is_reference", False)
                     and np.isfinite(data.get("se", np.nan))
                     and float(data.get("se", 0.0)) > 0
                 }

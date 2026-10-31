@@ -1150,8 +1150,9 @@ class TestNarrowedApplicabilityAndPlaceboSchema:
         assert sensitivity["status"] == "not_applicable"
 
     def test_n_obs_zero_reference_marker_filtered(self):
-        """Stacked / TwoStage / Imputation reference markers use n_obs=0
-        (not n_groups=0). ``_collect_pre_period_coefs`` must filter both."""
+        """A GENUINE zero-count row (n_obs=0; the 3.x reference sentinel shape,
+        still a non-estimable horizon today) is excluded by
+        ``_collect_pre_period_coefs`` and never counted as undefined."""
         import numpy as np
 
         from diff_diff.diagnostic_report import _collect_pre_period_coefs
@@ -1166,13 +1167,14 @@ class TestNarrowedApplicabilityAndPlaceboSchema:
                 "effect": 0.0,
                 "se": np.nan,
                 "p_value": np.nan,
-                "n_obs": 0,  # synthetic reference marker
+                "n_obs": 0,  # a GENUINE zero-count (non-estimable) row, not a marker
             },
             0: {"effect": 1.5, "se": 0.2, "p_value": 0.0001, "n_obs": 50},
         }
-        coefs, _ = _collect_pre_period_coefs(obj)
+        coefs, n_dropped = _collect_pre_period_coefs(obj)
         keys = [k for (k, _, _, _) in coefs]
         assert -1 not in keys, "n_obs==0 row must be filtered out"
+        assert n_dropped == 0, "a zero-count horizon is not an undefined pre-period"
         assert -2 in keys
 
 
@@ -1182,7 +1184,7 @@ class TestReferenceMarkerAndNaNFiltering:
 
     Universal-base CS / SA / ImputationDiD / Stacked event-study output
     injects a synthetic reference-period row (``effect=0``, ``se=NaN``,
-    ``p_value=NaN``, ``n_groups=0``). Treating that row as valid
+    ``p_value=NaN``, ``is_reference``). Treating that row as valid
     pre-period evidence would inflate the Bonferroni denominator and
     collapse all-NaN fallbacks to a false-clean verdict.
     """
@@ -1204,7 +1206,7 @@ class TestReferenceMarkerAndNaNFiltering:
         obj.n_treated = 40
         obj.n_control = 160
         obj.survey_metadata = None
-        # Two real pre-period rows + one universal-base reference marker (n_groups=0).
+        # Two real pre-period rows + one universal-base reference row (is_reference).
         obj.event_study_effects = {
             -3: {"effect": 0.1, "se": 0.3, "p_value": 0.74, "n_groups": 5},
             -2: {"effect": -0.2, "se": 0.3, "p_value": 0.51, "n_groups": 5},
@@ -1213,7 +1215,7 @@ class TestReferenceMarkerAndNaNFiltering:
                 "se": np.nan,
                 "p_value": np.nan,
                 "conf_int": (np.nan, np.nan),
-                "n_groups": 0,
+                "is_reference": True,
             },
             0: {"effect": 1.5, "se": 0.2, "p_value": 0.0001, "n_groups": 5},
         }
@@ -1230,7 +1232,7 @@ class TestReferenceMarkerAndNaNFiltering:
         coefs, _ = _collect_pre_period_coefs(obj)
         keys = [k for (k, _, _, _) in coefs]
         assert -1 not in keys, (
-            "Universal-base reference marker (n_groups=0) must not appear "
+            "Universal-base reference row (is_reference) must not appear "
             "as a valid pre-period coefficient"
         )
         assert -3 in keys and -2 in keys
@@ -1262,7 +1264,7 @@ class TestReferenceMarkerAndNaNFiltering:
                 "effect": 0.0,
                 "se": np.nan,
                 "p_value": np.nan,
-                "n_groups": 0,
+                "is_reference": True,
             },
             0: {"effect": 1.5, "se": 0.2, "p_value": 0.0001, "n_groups": 5},
         }
@@ -2519,11 +2521,11 @@ class TestHeterogeneityPostTreatmentOnly:
             pass
 
         stub = CallawaySantAnnaResults()
-        # Event study: pre horizons (rel<0), reference marker (n_groups=0),
+        # Event study: pre horizons (rel<0), the reference row (is_reference),
         # non-finite row, and two valid post rows.
         stub.event_study_effects = {
             -2: {"effect": -3.0, "se": 0.2, "n_groups": 15},
-            -1: {"effect": 0.0, "se": float("nan"), "n_groups": 0},  # reference marker
+            -1: {"effect": 0.0, "se": float("nan"), "is_reference": True},  # reference row
             0: {"effect": 1.0, "se": 0.2, "n_groups": 15},
             1: {"effect": 2.0, "se": 0.2, "n_groups": 12},
             2: {"effect": float("nan"), "se": 0.2, "n_groups": 5},  # non-finite
@@ -3124,7 +3126,7 @@ class TestStackedTwoStageJointWaldUpgrade:
                     "t_stat": np.nan,
                     "p_value": np.nan,
                     "conf_int": (np.nan, np.nan),
-                    "n_obs": 0,
+                    "is_reference": True,
                 },
                 0: {
                     "effect": 0.9,
@@ -3266,7 +3268,7 @@ class TestStackedTwoStageJointWaldUpgrade:
                     "t_stat": np.nan,
                     "p_value": np.nan,
                     "conf_int": (np.nan, np.nan),
-                    "n_obs": 0,
+                    "is_reference": True,
                 },
                 0: {
                     "effect": 0.9,

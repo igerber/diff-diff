@@ -510,8 +510,8 @@ class EventStudyResults(BaseResults):
 
         # Multiple reference rows are legal: CallawaySantAnna with
         # base_period="universal" on a gapped period grid materializes each
-        # cohort's positional base as its own reference-only horizon (all
-        # n_groups==0), so a valid surface can carry several. `is_reference`
+        # cohort's positional base as its own reference-only horizon (each
+        # marked ``is_reference``), so a valid surface can carry several. `is_reference`
         # is the general marker; `reference_period` is a convenience scalar
         # DERIVED from it - authoritative only when there is exactly one
         # reference, None otherwise - so a caller-supplied value can never
@@ -1081,26 +1081,30 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     (``att`` inner key normalized here), and TripleDifference's staggered
     design (through the carrier its ``aggregate('event_study')`` builds).
 
-    Reference resolution is PRODUCER-AWARE, because a zero count is not a
-    universal reference marker:
+    Reference resolution reads EXPLICIT markers only (4.0, ledger row M-093
+    item 8a) - a count is never interpreted as a marker:
 
-    1. If the producer names a ``reference_period`` that is PRESENT in the
-       effects dict (SpilloverDiD materializes a zero row), that row is THE
-       reference. Other zero-count rows - SpilloverDiD emits genuinely
-       non-estimable rectangular horizons with ``n_obs == 0`` and NaN
-       inference - are preserved as NON-reference NaN rows.
-    2. If the producer names a ``reference_period`` that is ABSENT (an
-       OMITTED baseline, e.g. SunAbraham's ``e = -1 - anticipation``), the
-       anchor row is synthesized ONLY when the estimator reports it was
-       genuinely observed (``reference_observed``) - never invented on a
-       gapped grid where that period was never in the data.
-    3. Otherwise the in-band zero-count sentinel marks the reference: a
-       zero-count row is a reference iff its effect is exactly 0 (the
-       normalization anchor). A NaN-effect zero-count row is a genuinely
-       non-estimable horizon (TwoStageDiD emits effect=NaN, n_obs=0 for a
-       horizon whose observations are all filtered) - preserved, never
-       normalized. CallawaySantAnna universal base can mark several such
-       rows; ContinuousDiD / Wooldridge carry no count key and yield none.
+    1. A row carrying ``"is_reference": True`` is a reference row. This is
+       how every producer that materializes its normalization row marks it
+       (StackedDiD, ImputationDiD, TwoStageDiD, SpilloverDiD, the
+       CallawaySantAnna / DMLDiD universal-base carrier - which can mark
+       several rows on a gapped grid). Such rows carry no count key.
+    2. If the producer names a ``reference_period`` that is PRESENT in the
+       effects dict (SpilloverDiD; EfficientDiD's PT-Post anchor, an
+       ESTIMATED cell), that row is marked too. If it is ABSENT (an OMITTED
+       baseline, e.g. SunAbraham's ``e = -1 - anticipation``), the anchor row
+       is synthesized ONLY when the estimator reports it was genuinely
+       observed (``reference_observed``) - never invented on a gapped grid
+       where that period was never in the data.
+
+    A zero count is a GENUINE count: TwoStageDiD's all-filtered horizons and
+    SpilloverDiD's rectangular cells carry ``n_obs == 0`` with NaN inference
+    and stay NON-reference NaN rows. The 3.x zero-count reference sentinel is
+    rewritten to the explicit key at pickle load
+    (``_deprecation.migrate_event_study_reference_sentinel``) and is never
+    interpreted here. A marked row whose effect is finite and nonzero is
+    malformed and raises (``__post_init__`` would otherwise silently rewrite
+    it to 0).
     """
     effects = getattr(results, "event_study_effects", None)
     if effects is None:
@@ -1138,7 +1142,7 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     ci_lo = np.empty(n_rows)
     ci_hi = np.empty(n_rows)
     n = np.full(n_rows, np.nan)
-    zero_count = np.zeros(n_rows, dtype=bool)
+    keyed_ref = np.zeros(n_rows, dtype=bool)
     cband_pairs: Dict[int, Tuple[float, float]] = {}
 
     n_kind: Optional[str] = None
@@ -1156,11 +1160,10 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
         if "n_groups" in row:
             n_kind = "groups"
             n[i] = float(row["n_groups"])
-            zero_count[i] = row["n_groups"] == 0
         elif "n_obs" in row:
             n_kind = "obs"
             n[i] = float(row["n_obs"])
-            zero_count[i] = row["n_obs"] == 0
+        keyed_ref[i] = bool(row.get("is_reference", False))
 
         cband = row.get("cband_conf_int")
         if cband is not None:
@@ -1170,29 +1173,28 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     ref_present = explicit_ref is not None and (
         synthesized_ref is not None or explicit_ref in set(event_time.tolist())
     )
+    # Explicit ``is_reference`` keys (every materialized reference row since
+    # 4.0) UNIONED with the named reference: materialized (SpilloverDiD,
+    # EfficientDiD PT-Post anchor) or synthesized (SunAbraham observed). A
+    # named reference that is absent and NOT synthesized (SunAbraham on a
+    # gapped grid where the anchor was never observed) marks nothing. Counts
+    # are never consulted: a zero count is a genuine count.
+    is_ref = keyed_ref.copy()
     if ref_present:
-        # Named reference that is materialized (Spillover) or synthesized
-        # (SunAbraham observed): mark exactly that row.
-        is_ref = event_time == explicit_ref
-    elif explicit_ref is not None:
-        # Named reference that is absent and NOT synthesized (SunAbraham on a
-        # gapped grid where the anchor was never observed): no reference row.
-        is_ref = np.zeros(n_rows, dtype=bool)
-    else:
-        # In-band zero-count sentinel. A zero-count row is the REFERENCE only
-        # when its effect is exactly 0 (the normalization anchor). A NaN-effect
-        # zero-count row is a genuinely non-estimable horizon - preserved. A
-        # zero-count row with a finite NONZERO effect is malformed - fail
-        # loudly rather than silently rewrite it.
-        finite = np.isfinite(att)
-        bad = zero_count & finite & (att != 0.0)
-        if bad.any():
-            raise ValueError(
-                f"{type(results).__name__} event-study surface has a zero-count "
-                f"row with a finite nonzero effect at {event_time[bad].tolist()}; "
-                "a reference/normalization row must have effect 0.0."
-            )
-        is_ref = zero_count & finite
+        is_ref |= event_time == explicit_ref
+    # A KEYED row with a finite NONZERO effect is malformed - fail loudly
+    # rather than let __post_init__ silently rewrite it to 0. The NAMED
+    # reference is exempt: EfficientDiD's PT-Post anchor is an estimated
+    # bucket that can pool a nonzero fractional pre-period estimate with the
+    # mechanical zero (REGISTRY fractional-period Note), and the container
+    # normalizes it by design.
+    bad = keyed_ref & np.isfinite(att) & (att != 0.0)
+    if bad.any():
+        raise ValueError(
+            f"{type(results).__name__} event-study surface has an is_reference "
+            f"row with a finite nonzero effect at {event_time[bad].tolist()}; "
+            "a reference/normalization row must have effect 0.0."
+        )
 
     cband_lo, cband_hi = _materialize_cband(cband_pairs, n_rows)
 

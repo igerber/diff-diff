@@ -561,8 +561,10 @@ class TwoStageDiDBootstrapMixin:
                 event_study_cis = {}
                 event_study_p_values = {}
                 for h in original_event_study:
+                    if original_event_study[h].get("is_reference", False):
+                        continue  # the normalization anchor carries no draws
                     if original_event_study[h].get("n_obs", 0) == 0:
-                        continue
+                        continue  # genuine zero-observation horizon
                     if np.isnan(original_event_study[h]["effect"]):
                         continue  # Skip Prop 5 and other NaN-effect horizons
                     if h not in horizon_to_col:

@@ -955,7 +955,7 @@ def _extract_container_params(
             stacklevel=4,
         )
 
-    # Row filter: is_reference supersedes the fit-time n_groups==0 sniff;
+    # Row filter: is_reference (the same marker the fit-time dict carries since 4.0);
     # non-finite-SE rows (genuinely non-estimable horizons) drop exactly as
     # the fit-time branch drops them. se == 0 rows drop too: safe_inference
     # treats a zero SE as undefined inference (NaN t/p/CI), and admitting
@@ -1003,7 +1003,7 @@ def _extract_container_params(
     ref_rows = surface.event_time[surface.is_reference].tolist()
     if len(ref_rows) > 1:
         # No route recommendation here: the native-results path picks the
-        # first n_groups==0 marker and then fails its own consecutive-grid
+        # first is_reference marker and then fails its own consecutive-grid
         # validation on the same gapped layout, so pointing users there
         # would be a dead end.
         raise ValueError(
@@ -1256,27 +1256,28 @@ def _extract_event_study_params(
                 )
 
             # Extract event study effects by relative time
-            # Filter out normalization constraints (n_groups=0), non-finite
+            # Filter out normalization constraints (the ``is_reference`` row;
+            # 4.0, row M-093 - the n_groups==0 sentinel is retired), non-finite
             # SEs, and zero SEs (safe_inference treats se <= 0 as undefined
             # inference - admitting such a row would launder NaN source
             # inference into finite sensitivity bounds; mirrors pretrends).
             event_effects = {
                 t: data
                 for t, data in results.event_study_effects.items()
-                if data.get("n_groups", 1) > 0
+                if not data.get("is_reference", False)
                 and np.isfinite(data.get("se", np.nan))
                 and float(data.get("se", 0.0)) > 0
             }
             rel_times = sorted(event_effects.keys())
 
             # Infer the omitted reference period from the normalization
-            # marker injected by _aggregate_event_study for universal base.
-            # The reference has the exact signature: effect=0.0, se=NaN, n_groups=0.
-            # Other empty bins may also have n_groups=0 but with NaN effect.
+            # marker _aggregate_event_study writes for the universal base:
+            # the ``is_reference`` row with effect=0.0 and se=NaN. Empty bins
+            # with NaN effect carry no marker and are never a reference.
             ref_period = None
             for t, data in results.event_study_effects.items():
                 if (
-                    data.get("n_groups", 1) == 0
+                    data.get("is_reference", False)
                     and data.get("effect", None) == 0.0
                     and not np.isfinite(data.get("se", 0.0))
                 ):
@@ -3363,7 +3364,8 @@ class HonestDiD(BaseEstimator):
                     pre_effects = [
                         abs(results.event_study_effects[t]["effect"])
                         for t in results.event_study_effects
-                        if t in pre_set and results.event_study_effects[t].get("n_groups", 1) > 0
+                        if t in pre_set
+                        and not results.event_study_effects[t].get("is_reference", False)
                     ]
                     if pre_effects:
                         return max(pre_effects)

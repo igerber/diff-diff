@@ -132,18 +132,14 @@ def _ref_labels(r: Any) -> Optional[list]:
     the container under test (a surface that wrongly marks an estimated horizon
     as reference must fail, not skip). Where the post-fit route is closed on
     the capture tree (bootstrapped Imputation/TwoStage/ContinuousDiD) the
-    legacy zero-count sentinel rows (``n_obs``/``n_groups`` == 0) are the
+    ``is_reference``-keyed rows (the 4.0 marking, row M-093) are the
     reference set; a surface with neither yields ``None`` (no membership pin).
     """
     try:
         es = _quiet(r.aggregate, "event_study")
     except NotImplementedError:
         legacy = r.event_study_effects or {}
-        refs = [
-            _key(k)
-            for k, v in legacy.items()
-            if ("n_obs" in v or "n_groups" in v) and float(v.get("n_obs", v.get("n_groups"))) == 0.0
-        ]
+        refs = [k_ for k_, v in ((_key(k), v) for k, v in legacy.items()) if v.get("is_reference")]
         return sorted(refs, key=float)
     labels = list(es.event_time)
     flags = np.asarray(es.is_reference, dtype=bool)

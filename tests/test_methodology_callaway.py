@@ -271,7 +271,8 @@ class TestBasePeriodSelection:
         ref = es[-1]
         assert ref["effect"] == 0.0, "Reference period effect should be 0"
         assert np.isnan(ref["se"]), "Reference period SE should be NaN"
-        assert ref["n_groups"] == 0, "Reference period n_groups should be 0"
+        assert ref.get("is_reference") is True, "Reference period row must carry is_reference"
+        assert "n_groups" not in ref, "Reference period row carries no count (M-093)"
 
 
 class TestDoublyRobustEstimator:
