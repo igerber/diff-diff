@@ -828,6 +828,17 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
             - "event_study": Event study effects by relative time
             - "group": Group (cohort) effects
 
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Analytical fits recompute the surface from the retained kit
+            (a replicate-weight survey fit with ``pretrends=True`` raises
+            ``NotImplementedError``, as ``aggregate('event_study')`` does);
+            bootstrapped fits relay the fit-time percentile surface.
+
         Returns
         -------
         pd.DataFrame
@@ -837,29 +848,7 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
             return self.treatment_effects.copy()
 
         elif level == "event_study":
-            if self.event_study_effects is None:
-                raise ValueError(
-                    "Event study effects not stored on this fit. Use "
-                    "results.aggregate('event_study') - analytical fits "
-                    "recompute from the retained kit; bootstrapped fits relay "
-                    "the surface computed at fit. A result unpickled from a "
-                    "pre-3.9 release carries no kit and must be re-fit."
-                )
-            rows = []
-            for h, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": h,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
+            return self.aggregate("event_study").to_dataframe()
 
         elif level == "group":
             if self.group_effects is None:

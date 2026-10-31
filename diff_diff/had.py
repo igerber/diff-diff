@@ -1009,30 +1009,28 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
             "event_study_df": self.event_study_df,
         }
 
-    def to_dataframe(self) -> pd.DataFrame:
-        """Return a tidy per-horizon DataFrame.
+    def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
+        """Return the unified per-horizon event-study table.
 
-        Columns: ``event_time, att, se, t_stat, p_value, conf_int_low,
-        conf_int_high, n_obs``. One row per event-time horizon. When a
-        simultaneous band was computed (``cband=True`` with a
-        weighted/survey OR clustered fit), also includes ``cband_low`` and
-        ``cband_high`` columns.
+        Parameters
+        ----------
+        level : {"event_study"}, default "event_study"
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat,
+            p_value, conf_int_lower, conf_int_upper, cband_lower, cband_upper,
+            n, df, is_reference, estimand``), identical across estimators
+            (4.0, ledger row M-093). One row per estimated horizon (no
+            reference row - the ``F-1`` anchor is identically zero and the
+            WAS is not identified there); ``n`` counts units
+            (``n_kind="units"``); ``estimand`` carries ``target_parameter``
+            (``"WAS"`` / ``"WAS_d_lower"``) because the ``att`` column is NOT
+            an ATT; the ``cband_*`` columns are NaN when no simultaneous band
+            was computed.
         """
-        data: Dict[str, Any] = {
-            "event_time": self.event_times,
-            "att": self.att,
-            "se": self.se,
-            "t_stat": self.t_stat,
-            "p_value": self.p_value,
-            "conf_int_low": self.conf_int_low,
-            "conf_int_high": self.conf_int_high,
-            "n_obs": self.n_obs_per_horizon,
-        }
-        if self.cband_low is not None:
-            data["cband_low"] = self.cband_low
-        if self.cband_high is not None:
-            data["cband_high"] = self.cband_high
-        return pd.DataFrame(data)
+        if level != "event_study":
+            raise ValueError(f"Unknown level: {level!r}. Use 'event_study'.")
+        return self.aggregate("event_study").to_dataframe()
 
     # ------------------------------------------------------------------
     # Post-fit aggregation (rows M-027/M-122): PURE VIEW, no kit.

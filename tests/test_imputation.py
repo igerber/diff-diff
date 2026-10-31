@@ -397,8 +397,12 @@ class TestImputationDiD:
         with pytest.raises(ValueError, match="Unknown level"):
             results.to_dataframe("invalid")
 
-        with pytest.raises(ValueError, match="Event study effects not stored on this fit"):
-            results.to_dataframe("event_study")
+        # 4.0 (M-093 8b): the analytical fit recomputes the event study from
+        # the retained kit instead of raising.
+        pd.testing.assert_frame_equal(
+            results.to_dataframe("event_study"),
+            results.aggregate("event_study").to_dataframe(),
+        )
 
     def test_get_params(self):
         """Test get_params returns all constructor parameters."""

@@ -542,9 +542,16 @@ class TestReadSurfaces:
             assert cols_expected in cross_fit.to_dataframe().columns
         with pytest.raises(ValueError, match="fit the staggered design"):
             cross_fit.to_dataframe("group_time")
-        for level in ("event_study", "group"):
-            with pytest.raises(ValueError, match="not stored on 4.0 fits"):
-                stag_fit.to_dataframe(level)
+        # 4.0 (M-093 8b): level="event_study" relays the aggregate() container;
+        # level="group" still raises; the 2x2x2 design has no event study.
+        pd.testing.assert_frame_equal(
+            stag_fit.to_dataframe("event_study"),
+            stag_fit.aggregate("event_study").to_dataframe(),
+        )
+        with pytest.raises(ValueError, match="not stored on 4.0 fits"):
+            stag_fit.to_dataframe("group")
+        with pytest.raises(ValueError, match="2x2x2 TripleDifference design"):
+            cross_fit.to_dataframe("event_study")
         with pytest.raises(ValueError, match="Unknown level"):
             stag_fit.to_dataframe("bogus")
 

@@ -2248,11 +2248,13 @@ class TestMultiHorizonToDataframe:
             L_max=3,
         )
         df = r.to_dataframe("event_study")
-        assert "horizon" in df.columns
-        assert "effect" in df.columns
-        # Should have: placebos + ref + positive horizons
-        assert (df["horizon"] == 0).any()  # reference period
-        assert (df["horizon"] > 0).any()  # positive horizons
+        # 4.0 (M-093 8b): the unified EVENT_STUDY_SCHEMA frame on the paper's
+        # l1_first_switch convention, bit-equal to the aggregate() container's.
+        assert "event_time" in df.columns
+        assert "att" in df.columns
+        assert df.loc[df["is_reference"], "event_time"].tolist() == [0]  # reference
+        assert (df["event_time"] > 0).any()  # positive horizons
+        pd.testing.assert_frame_equal(df, r.aggregate("event_study").to_dataframe())
 
     def test_normalized_level(self, data):
         est = ChaisemartinDHaultfoeuille(placebo=False, twfe_diagnostic=False)
@@ -5121,7 +5123,7 @@ class TestByPathBootstrap:
         # Negative-horizon rows must also show NaN in the inference
         # columns.
         df_es = res.to_dataframe(level="event_study")
-        negative_rows = df_es[df_es["horizon"] < 0]
+        negative_rows = df_es[df_es["event_time"] < 0]
         if len(negative_rows) > 0:
             for col in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
                 assert negative_rows[col].isna().all(), (

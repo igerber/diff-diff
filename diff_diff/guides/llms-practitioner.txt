@@ -520,7 +520,7 @@ SA computes event-study and cohort effects automatically during `fit()`:
 ```python
 sa = SunAbraham()
 results = sa.fit(data, ...)
-# Event-study effects (dynamic):
+# Event-study effects (dynamic; the unified EVENT_STUDY_SCHEMA frame, 4.0):
 es_df = results.to_dataframe(level='event_study')
 # Cohort-specific effects:
 cohort_df = results.to_dataframe(level='cohort')

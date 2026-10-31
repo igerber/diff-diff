@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from diff_diff.results_base import BaseResults, _coverage_pct
+from diff_diff.results_base import BaseResults, _coverage_pct, build_event_study_surface
 
 
 @dataclass
@@ -140,12 +140,29 @@ class LPDiDResults(BaseResults):
     # serialization
     # ------------------------------------------------------------------
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
+        """Tabular view.
+
+        Parameters
+        ----------
+        level : {"event_study", "pooled"}, default "event_study"
+            ``level="event_study"`` returns the unified event-study table -
+            ``build_event_study_surface(self).to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            The native per-horizon frame (``horizon, coefficient, ..., n_obs,
+            n_clusters``) stays available as the ``event_study`` attribute; a
+            fit that computed no event study (``only_pooled=True``) raises, and
+            so does a zero-row stored frame. ``"pooled"`` returns a copy of the
+            native pooled frame.
+        """
         # "event_study" is the canonical level spelling library-wide (the
         # 3.x "event" spelling was retired at 4.0 and now raises below).
         if level == "event_study":
             if self.event_study is None:
                 raise ValueError("event_study dataframe was not computed")
-            return self.event_study.copy()
+            return build_event_study_surface(self).to_dataframe()
         if level == "pooled":
             if self.pooled is None:
                 raise ValueError("pooled dataframe was not computed")
