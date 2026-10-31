@@ -16,6 +16,7 @@ from diff_diff.results_base import (
     BaseResults,
     _coverage_pct,
     _require_fit_alpha,
+    build_event_study_surface,
 )
 
 
@@ -516,6 +517,30 @@ class SpilloverDiDResults(DiDResults):
                     frame.loc[is_ref, "n_obs"] = np.nan
                 state[name] = frame
         self.__dict__.update(state)
+
+    def to_dataframe(self, level: str = "simple") -> pd.DataFrame:
+        """Tabular view.
+
+        Parameters
+        ----------
+        level : {"simple", "event_study"}, default "simple"
+            ``"simple"``: the one-row headline frame (the inherited
+            :meth:`DiDResults.to_dataframe`). ``"event_study"`` returns the
+            unified event-study table - ``build_event_study_surface(self)
+            .to_dataframe()`` over the per-event-time DIRECT effects
+            (``att_dynamic``) - with the pinned ``EVENT_STUDY_SCHEMA`` columns
+            (``event_time, att, se, t_stat, p_value, conf_int_lower,
+            conf_int_upper, cband_lower, cband_upper, n, df, is_reference,
+            estimand``), identical across estimators (4.0, ledger row M-093).
+            An aggregate-mode fit (``event_study=False``) carries no
+            event-study surface and raises ``ValueError``; the per-ring
+            spillover dynamics stay on ``spillover_effects``.
+        """
+        if level == "simple":
+            return super().to_dataframe()
+        if level == "event_study":
+            return build_event_study_surface(self).to_dataframe()
+        raise ValueError(f"Unknown level: {level!r}. Use 'simple' or 'event_study'.")
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """Extended summary with ATT row, per-event-time direct block, and

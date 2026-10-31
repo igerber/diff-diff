@@ -965,6 +965,16 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         ----------
         level : str, default="group_time"
             Level of aggregation: "group_time", "event_study", or "group".
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Analytical fits recompute the surface from the retained
+            aggregation kit; bootstrapped fits REPLAY the fit-time multiplier
+            bootstrap on every call (no memoization). ``"group"`` raises on
+            4.0 fits with a pointer to ``aggregate('group')``.
 
         Returns
         -------
@@ -993,29 +1003,7 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             return pd.DataFrame(rows)
 
         elif level == "event_study":
-            if self.event_study_effects is None:
-                raise ValueError(
-                    "Event study effects are not stored on 4.0 fits; use "
-                    "results.aggregate('event_study').to_dataframe() "
-                    "(no refit required)."
-                )
-            rows = []
-            for rel_t, data in sorted(self.event_study_effects.items()):
-                cband_ci = data.get("cband_conf_int", (np.nan, np.nan))
-                rows.append(
-                    {
-                        "relative_period": rel_t,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "cband_lower": cband_ci[0],
-                        "cband_upper": cband_ci[1],
-                    }
-                )
-            return pd.DataFrame(rows)
+            return self.aggregate("event_study").to_dataframe()
 
         elif level == "group":
             if self.group_effects is None:

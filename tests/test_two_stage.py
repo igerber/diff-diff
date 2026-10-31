@@ -241,9 +241,8 @@ class TestTwoStageDiDBasic:
             first_treat="first_treat",
         )
 
-        with pytest.raises(ValueError, match=r"aggregate\('event_study'\)"):
-            results.to_dataframe("event_study")
-        df = results.aggregate("event_study").to_dataframe()
+        df = results.to_dataframe("event_study")
+        pd.testing.assert_frame_equal(df, results.aggregate("event_study").to_dataframe())
         assert isinstance(df, pd.DataFrame)
         assert "event_time" in df.columns
         assert "att" in df.columns
@@ -295,15 +294,22 @@ class TestTwoStageDiDBasic:
             results.to_dataframe("invalid")
 
     def test_to_dataframe_no_event_study(self):
-        """to_dataframe raises on an analytic fit (no fit-time event-study
-        surface) and steers to the post-fit aggregate() route."""
+        """The default level is event_study: an analytic fit recomputes it
+        from the retained kit (M-093 8b); a kit-less legacy pickle raises."""
+        import copy
+
         data = generate_test_data()
         results = TwoStageDiD().fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        with pytest.raises(ValueError, match="not stored on this fit"):
-            results.to_dataframe("event_study")
+        pd.testing.assert_frame_equal(
+            results.to_dataframe(), results.aggregate("event_study").to_dataframe()
+        )
+        legacy = copy.copy(results)
+        object.__setattr__(legacy, "_aggregation_kit", None)
+        with pytest.raises(ValueError, match="carries no aggregation kit"):
+            legacy.to_dataframe("event_study")
 
     def test_repr(self):
         """Test __repr__ contains expected elements."""

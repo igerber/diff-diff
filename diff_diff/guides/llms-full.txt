@@ -335,7 +335,7 @@ for h in sorted(results.event_study_effects):
     e = results.event_study_effects[h]
     print(f"  DID_{h} = {e['effect']:.3f} (SE={e['se']:.3f})")
 print(f"Cost-benefit delta: {results.cost_benefit_delta['delta']:.3f}")
-df = results.to_dataframe("event_study")  # includes placebos as negative horizons
+df = results.to_dataframe("event_study")  # unified EVENT_STUDY_SCHEMA: placebos at negative event_time, reference marked is_reference at 0
 ```
 
 **Standalone TWFE diagnostic** (without fitting the full estimator):
@@ -1794,7 +1794,7 @@ Returned by `CallawaySantAnna.fit()`.
 | `event_study_effects` | `dict[int, dict] | None` | Legacy field - `None` on EVERY fit since 4.0 (fit() computes no event-study surface); use `aggregate("event_study")` |
 | `group_effects` | `dict | None` | Legacy field - `None` on EVERY fit since 4.0; use `aggregate("group")` |
 
-**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="group_time")` (the event-study / group tables come from `aggregate(...).to_dataframe()`; `level="event_study"|"group"` raises on 4.0 fits)
+**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="group_time")` (`level="event_study"` returns `aggregate('event_study').to_dataframe()` - the unified `EVENT_STUDY_SCHEMA` frame, 4.0 M-093; `level="group"` raises on 4.0 fits)
 
 `aggregate("simple"|"event_study"|"group"|"total")` re-aggregates POST-FIT
 with no
@@ -1839,7 +1839,7 @@ Returned by `SunAbraham.fit()`.
 | `n_clusters` | `int | None` | Effective count of those clusters (4.0, appended field); None when `cluster_name` is None |
 | `event_study_df` | `dict[int, float] | None` | Per-event-time df provenance (G-1 on plain clustered analytic fits under the 4.0 default; the finite residual df under `df_convention="residual"`; None under bootstrap) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")`
+**Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")` (the event-study level is the unified `EVENT_STUDY_SCHEMA` frame with the omitted reference period as a synthesized `is_reference` row - 4.0 M-093)
 
 ### SyntheticDiDResults
 
@@ -1938,7 +1938,7 @@ staggered design's event-study / cohort surfaces are post-fit (`aggregate()`).
 | `bootstrap_results` | `CSBootstrapResults \| None` | Staggered multiplier-bootstrap payload |
 | `epv_diagnostics` | `dict \| None` | Keyed by subgroup (2x2x2) or `(g, t)` cell (staggered) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level=None)` (`'overall'` one-row scalars, both designs; `'group_time'` cells, staggered), `epv_summary()`, `aggregate(type, weights=None, *, balance_e=None)` - `'simple'` relays the stored headline in both designs (one-row `AggregationResult`; `weights='event_time'` gives the paper's Eq. 4.14 overall, the unweighted mean of post-treatment ES(e), accepting `balance_e=`); `'event_study'` (`EventStudyResults`, `balance_e=`) and `'group'` (`AggregationResult`) are recomputed from the retained kit in the staggered design - bootstrapped fits REPLAY the fit-time multiplier bootstrap - and raise in the 2x2x2 design. No `'total'`. The 3.x `StaggeredTripleDiffResults`, its `overall_*` fields and the fit-time `aggregate=` / `balance_e=` keywords were removed at 4.0 (rows M-014 / M-140 / M-141).
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level=None)` (`'overall'` one-row scalars, both designs; `'group_time'` cells, staggered; `'event_study'` the unified `EVENT_STUDY_SCHEMA` frame via `aggregate('event_study')`, staggered only - 4.0 M-093), `epv_summary()`, `aggregate(type, weights=None, *, balance_e=None)` - `'simple'` relays the stored headline in both designs (one-row `AggregationResult`; `weights='event_time'` gives the paper's Eq. 4.14 overall, the unweighted mean of post-treatment ES(e), accepting `balance_e=`); `'event_study'` (`EventStudyResults`, `balance_e=`) and `'group'` (`AggregationResult`) are recomputed from the retained kit in the staggered design - bootstrapped fits REPLAY the fit-time multiplier bootstrap - and raise in the 2x2x2 design. No `'total'`. The 3.x `StaggeredTripleDiffResults`, its `overall_*` fields and the fit-time `aggregate=` / `balance_e=` keywords were removed at 4.0 (rows M-014 / M-140 / M-141).
 
 ### BaconDecompositionResults
 
@@ -2009,6 +2009,8 @@ Individual 2x2 DiD comparison (used in BaconDecompositionResults).
 | `time_window` | `tuple[float, float]` | (start, end) time window |
 
 ### Common Results Pattern for Staggered Estimators
+
+**`to_dataframe(level="event_study")` (4.0, ledger row M-093):** every results class that carries an event-study surface returns the unified `EVENT_STUDY_SCHEMA` frame (`event_time, att, se, t_stat, p_value, conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df, is_reference, estimand`) - identical to `results.aggregate('event_study').to_dataframe()` (CallawaySantAnna/DMLDiD, EfficientDiD, ImputationDiD, TwoStageDiD, StackedDiD, ContinuousDiD, TripleDifference staggered, ChaisemartinDHaultfoeuille, HAD event-study, DurationDiD, LWDiD) or to `build_event_study_surface(results).to_dataframe()` (SunAbraham, LPDiD, WooldridgeDiD, SpilloverDiD). Analytical fits recompute from the retained kit (bootstrapped CallawaySantAnna/EfficientDiD/TripleDifference fits REPLAY the fit-time bootstrap on every call); the 3.x bespoke frames (`relative_period`, `effect`/`att_glob`, `conf_int_lo/hi`, `n_obs`, dCDH's `horizon`/`estimand 'ref'`) and the "not stored on 4.0 fits" raises are gone. Two producers append fit-configuration columns AFTER the schema: WooldridgeDiD (`cohort_trends`, `aggregation_weights`; its frame requires a prior `aggregate('event_study', weights=)` and raises otherwise) and LWDiD (`rolling`, `estimation_method`, `vcov_type`). `SpilloverDiDResults.to_dataframe(level='simple'|'event_study')` and `DurationDiDResults.to_dataframe(level='event_study')` are new levels; `level='group'` on CallawaySantAnna/EfficientDiD/TripleDifference still raises with the post-fit pointer.
 
 ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDResults share a similar structure:
 
@@ -2149,7 +2151,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event
 | `cband_n_bootstrap` | `int | None` | Bootstrap iterations used for the band |
 | `event_study_df` | `float | None` | Scalar survey df governing every horizon's t-inference (the unit-level design's `df_survey`); `None` on non-survey fits. Threaded into the unified container's per-row `df` column via `_from_had` |
 
-**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `aggregate(type, ...)` (M-027 pure view: `'event_study'` only - the unified `EventStudyResults` container via the `_from_had` passthrough, cband fields included; no kit; `'simple'` needs a two-period fit - no overall WAS is stored here)
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="event_study")` (the unified `EVENT_STUDY_SCHEMA` frame via `aggregate('event_study')`; `estimand` carries the WAS label - 4.0 M-093), `aggregate(type, ...)` (M-027 pure view: `'event_study'` only - the unified `EventStudyResults` container via the `_from_had` passthrough, cband fields included; no kit; `'simple'` needs a two-period fit - no overall WAS is stored here)
 
 ### ChangesInChangesResults
 

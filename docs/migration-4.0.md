@@ -38,7 +38,7 @@ updated, CI fails.
 | renames-level | Aggregation-level params and their accepted values unify on `level=`/`"event_study"` | 5 | §3 |
 | renames-post | The post-dummy `time=` becomes `post=` | 3 | §3 |
 | renames-robust-drop | `robust=` is dropped in favour of `vcov_type=` - read §3, the translation is per-estimator | 4 | §3 |
-| results-contract | A legacy sentinel field is retired in favour of the unified event-study surface | 1 | §5 |
+| results-contract | The zero-count reference sentinel is retired and every results class's `to_dataframe(level="event_study")` emits the unified `EVENT_STUDY_SCHEMA` ([M-093]) | 1 | §5 |
 
 ## The three merges
 
@@ -225,14 +225,44 @@ SpilloverDiD, the CallawaySantAnna/DMLDiD universal-base carrier) marks it with
 `"is_reference": True` and carries no observation/group count there (3.x:
 `n_obs == 0` / `n_groups == 0`); SpilloverDiD's event-study
 `att_dynamic`/`spillover_effects` frames gain a boolean `is_reference` column
-(`n_obs` NaN on those rows); the native `to_dataframe(level="event_study")`
-frames of StackedDiD / bootstrapped ImputationDiD / TwoStageDiD show
-`n_obs = NaN` on the reference row (the column is float) until the 4.0 schema
-rewire replaces them. SunAbraham omits its reference row (`reference_period`)
+(`n_obs` NaN on those rows); every `to_dataframe(level="event_study")` frame
+is the unified schema (next paragraph), where the reference row is the
+`is_reference` row. SunAbraham omits its reference row (`reference_period`)
 and EfficientDiD's PT-Post anchor is an estimated cell named by
 `reference_period` - both unchanged. Code that located the reference by a zero
 count should read the key, or the container's `is_reference` column. 3.x
 pickles are migrated on load.
+
+**Event-study frames ([M-093], item 8b).** Since 4.0 every results class's
+`to_dataframe(level="event_study")` emits the unified `EVENT_STUDY_SCHEMA`
+(`event_time, att, se, t_stat, p_value, conf_int_lower, conf_int_upper,
+cband_lower, cband_upper, n, df, is_reference, estimand`) - the same frame
+`results.aggregate("event_study").to_dataframe()` returns (CallawaySantAnna/
+DMLDiD, EfficientDiD, ImputationDiD, TwoStageDiD, StackedDiD, ContinuousDiD,
+TripleDifference staggered, ChaisemartinDHaultfoeuille, HAD event-study,
+DurationDiD, LWDiD) or the builder frame (SunAbraham, LPDiD, WooldridgeDiD,
+SpilloverDiD). What left the 3.x frames: `relative_period` is `event_time`;
+`effect` / `att_glob` / LPDiD's `coefficient` are `att`; `conf_int_lo`/`hi`,
+`conf_low`/`high` and HAD's `conf_int_low`/`high` are
+`conf_int_lower`/`conf_int_upper`; `n_obs` is `n` (NaN on the reference row,
+never a zero count); dCDH's `horizon` is `event_time` on the paper's
+`l1_first_switch` convention, its per-horizon `estimand` labels
+(`DID^pl_l` / `ref` / `DID_l`) are gone (`estimand` is `"att"`) and its
+reference row is marked `is_reference`, not `n_obs 0`. WooldridgeDiD appends
+`cohort_trends` and `aggregation_weights` after the schema and RAISES before
+`aggregate("event_study", weights=)` (3.x returned an empty frame); LWDiD
+appends its three configuration columns ([M-153]). CallawaySantAnna,
+EfficientDiD, TripleDifference and analytical ImputationDiD / TwoStageDiD /
+ContinuousDiD no longer raise "not stored on 4.0 fits" - the level recomputes
+from the retained kit (bootstrapped CallawaySantAnna / EfficientDiD /
+TripleDifference fits replay the fit-time bootstrap on every call, so cache
+the frame); a kit-less pre-3.9 pickle, or a bootstrapped pickle predating the
+replay state, that still carries a stored dict now raises where it returned a
+frame (read `event_study_effects` directly). `level="group"` on those three
+classes still raises with the post-fit pointer. `SpilloverDiDResults` gains
+`to_dataframe(level="simple" | "event_study")` (aggregate-mode fits raise),
+HAD event-study results gain `level="event_study"` and `DurationDiDResults`
+gains `"event_study"`.
 
 ```{warning}
 **Bootstrapped fits: every adopter has a post-fit route - two mechanisms.**
@@ -671,4 +701,4 @@ does not mean no action is required, so read the `Fix` cell.
 | M-046 | renames-robust-drop | `diff_diff:TripleDifference[robust]` | — | Drop it. `TripleDifference` accepts only `vcov_type="hc1"`, so `robust=` never changed its inference - do NOT write `vcov_type="classical"`, which raises. |
 | M-047 | renames-robust-drop | `diff_diff:HeterogeneousAdoptionDiD[robust]` | — | HAD's legacy default is non-robust: `robust=True` becomes `vcov_type="hc1"`; drop `robust=False`. |
 | M-115 | renames-robust-drop | `diff_diff:LinearRegression[robust]` | — | Drop `robust=True` (already the `hc1` default); `robust=False` becomes `vcov_type="classical"`. |
-| M-093 | results-contract | `diff_diff:CallawaySantAnnaResults.event_study_effects` | `diff_diff:EventStudyResults` | The zero-count sentinel is retired (8a): read `is_reference` on the row, or the unified `EventStudyResults` surface; the per-class `to_dataframe(level='event_study')` schema lands in 8b. |
+| M-093 | results-contract | `diff_diff:CallawaySantAnnaResults.event_study_effects` | `diff_diff:EventStudyResults` | Read `event_time`/`att`/`conf_int_lower`/`conf_int_upper`/`n`/`is_reference` from `to_dataframe(level='event_study')` - every class emits `EVENT_STUDY_SCHEMA` (WooldridgeDiD/LWDiD append their config columns after it); locate the reference row via `is_reference`, never a zero count; call `aggregate('event_study')` before WooldridgeDiD's frame. |

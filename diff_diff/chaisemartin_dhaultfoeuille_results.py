@@ -1693,9 +1693,19 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             - ``"per_period"``: one row per time period with
               ``did_plus_t``, ``did_minus_t``, switching cell counts, and
               the A11-zeroed flags.
-            - ``"event_study"``: one row per horizon (positive and
-              negative/placebo), including a reference period at
-              horizon 0. Available when ``L_max >= 1``.
+            - ``"event_study"``: the unified event-study table -
+              ``self.aggregate("event_study").to_dataframe()`` - with the
+              pinned ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se,
+              t_stat, p_value, conf_int_lower, conf_int_upper, cband_lower,
+              cband_upper, n, df, is_reference, estimand``), identical across
+              estimators (4.0, ledger row M-093). One row per horizon on the
+              paper's ``l1_first_switch`` convention: placebos at negative
+              ``event_time``, the reference marked ``is_reference`` at 0,
+              ``DID_l`` at ``l >= 1``. The per-horizon estimand labels
+              (``DID^pl_l`` / ``ref`` / ``DID_l``) are not carried - the
+              ``estimand`` column is the ATT contract's ``"att"``;
+              ``summary()`` keeps the paper's labels. Available when
+              ``L_max >= 1``.
             - ``"normalized"``: one row per horizon for the normalized
               effects ``DID^n_l``. Available when ``L_max >= 1``.
             - ``"twfe_weights"``: per-(group, time) TWFE decomposition
@@ -1847,64 +1857,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             return pd.DataFrame(rows)
 
         elif level == "event_study":
-            rows = []
-            # Placebo horizons (negative keys)
-            if self.placebo_event_study:
-                for h in sorted(self.placebo_event_study.keys()):
-                    entry = self.placebo_event_study[h]
-                    cband = entry.get("cband_conf_int", (np.nan, np.nan))
-                    rows.append(
-                        {
-                            "horizon": h,
-                            "estimand": f"DID^pl_{abs(h)}",
-                            "effect": entry["effect"],
-                            "se": entry["se"],
-                            "t_stat": entry["t_stat"],
-                            "p_value": entry["p_value"],
-                            "conf_int_lower": entry["conf_int"][0],
-                            "conf_int_upper": entry["conf_int"][1],
-                            "n_obs": entry["n_obs"],
-                            "cband_lower": cband[0] if cband else np.nan,
-                            "cband_upper": cband[1] if cband else np.nan,
-                        }
-                    )
-            # Reference period (horizon 0)
-            rows.append(
-                {
-                    "horizon": 0,
-                    "estimand": "ref",
-                    "effect": 0.0,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int_lower": np.nan,
-                    "conf_int_upper": np.nan,
-                    "n_obs": 0,
-                    "cband_lower": np.nan,
-                    "cband_upper": np.nan,
-                }
-            )
-            # Positive horizons
-            if self.event_study_effects:
-                for h in sorted(self.event_study_effects.keys()):
-                    entry = self.event_study_effects[h]
-                    cband = entry.get("cband_conf_int", (np.nan, np.nan))
-                    rows.append(
-                        {
-                            "horizon": h,
-                            "estimand": self._horizon_label(h),
-                            "effect": entry["effect"],
-                            "se": entry["se"],
-                            "t_stat": entry["t_stat"],
-                            "p_value": entry["p_value"],
-                            "conf_int_lower": entry["conf_int"][0],
-                            "conf_int_upper": entry["conf_int"][1],
-                            "n_obs": entry["n_obs"],
-                            "cband_lower": cband[0] if cband else np.nan,
-                            "cband_upper": cband[1] if cband else np.nan,
-                        }
-                    )
-            return pd.DataFrame(rows)
+            return self.aggregate("event_study").to_dataframe()
 
         elif level == "normalized":
             if not self.normalized_effects:

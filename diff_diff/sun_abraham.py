@@ -39,7 +39,12 @@ if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, _coverage_pct, _require_fit_alpha
+from diff_diff.results_base import (
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 from diff_diff.utils import (
     ClusterArg,
     absorbed_fe_cr1_k_increment,
@@ -450,6 +455,15 @@ class SunAbrahamResults(BaseResults):
         ----------
         level : str, default="event_study"
             Level of aggregation: "event_study" or "cohort".
+            ``level="event_study"`` returns the unified event-study table -
+            ``build_event_study_surface(self).to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            The omitted reference period (``reference_period``) appears as a
+            synthesized ``is_reference`` row; ``n`` is the number of
+            contributing cohorts per event time.
 
         Returns
         -------
@@ -457,20 +471,7 @@ class SunAbrahamResults(BaseResults):
             Results as DataFrame.
         """
         if level == "event_study":
-            rows = []
-            for rel_t, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": rel_t,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                    }
-                )
-            return pd.DataFrame(rows)
+            return build_event_study_surface(self).to_dataframe()
 
         elif level == "cohort":
             if self.cohort_effects is None:

@@ -113,11 +113,12 @@ LEVELS = {
     StackedDiDResults: ("event_study", "group"),
     EfficientDiDResults: ("group_time", "event_study", "group"),
     WooldridgeDiDResults: ("simple", "group", "calendar", "event_study", "gt"),
-    ChaisemartinDHaultfoeuilleResults: ("overall",),
+    ChaisemartinDHaultfoeuilleResults: ("overall", "event_study"),
     ContinuousDiDResults: ("dose_response", "group_time", "event_study"),
 }
 # Classes whose fits may legitimately refuse a level because the surface
-# was not stored on a 4.0 fit (the documented ValueError).
+# was not stored on a 4.0 fit (the documented ValueError) - since M-093 8b
+# only the "group" level does so (event_study relays aggregate()).
 NOT_STORED_RE = re.compile(
     r"not stored|aggregate\(|not available|not supported|no .* surface|None", re.I
 )
