@@ -34,7 +34,6 @@
       ~LWDiDResults.cband_crit_value
       ~LWDiDResults.cband_method
       ~LWDiDResults.cband_n_bootstrap
-      ~LWDiDResults.ci
       ~LWDiDResults.cluster_name
       ~LWDiDResults.cohort_effects
       ~LWDiDResults.cohort_time_effects
@@ -53,7 +52,6 @@
       ~LWDiDResults.params
       ~LWDiDResults.pscore_trim
       ~LWDiDResults.psm_config
-      ~LWDiDResults.pvalue
       ~LWDiDResults.ri_pvalue
       ~LWDiDResults.seed
       ~LWDiDResults.vcov

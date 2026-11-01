@@ -278,11 +278,10 @@ def test_result_accepts_provenance_attribute(fitted_cs):
     fitted_cs._balance_adjustment = sentinel
     assert fitted_cs._balance_adjustment is sentinel
     del fitted_cs._balance_adjustment
-    # ...while the legacy ``overall_*`` names are read-only FutureWarning
-    # properties since the 4.0 storage flip (the canonical ``att`` is the
-    # stored field; full coverage lives in tests/test_result_aliases.py).
-    with pytest.raises(AttributeError):
-        fitted_cs.overall_att = 0.0
+    # ...while the legacy ``overall_*`` names are gone since the 4.0 storage
+    # flip (the canonical ``att`` is the stored field; the shims were retired
+    # at 4.0 by item 9b; full coverage lives in tests/test_result_aliases.py).
+    assert not hasattr(fitted_cs, "overall_att")
 
 
 # ---------------------------------------------------------------------------

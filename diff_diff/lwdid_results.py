@@ -9,7 +9,6 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results_base import (
     _SUMMARY_ALPHA_MESSAGE,
@@ -230,13 +229,6 @@ class LWDiDResults(BaseResults, AggregationMixin):
     # ------------------------------------------------------------------ #
     # Properties                                                          #
     # ------------------------------------------------------------------ #
-    # Deprecated 3.10-born aliases for the canonical quintet names (ledger rows
-    # M-151 / M-152): FutureWarning from 4.0, removed at 5.0. Plain class
-    # attributes (no annotation) so they stay descriptors, never dataclass
-    # fields - the ``shimmed`` field-row shape tests/test_v4_matrix.py asserts.
-    pvalue = deprecated_field_property("LWDiDResults", "pvalue", "p_value", removed_in="5.0")
-    ci = deprecated_field_property("LWDiDResults", "ci", "conf_int", removed_in="5.0")
-
     @property
     def is_staggered(self) -> bool:
         """Whether this result comes from a staggered adoption design."""

@@ -24,6 +24,6 @@
   keeps due enforcement unchanged. The id snapshot and `ROW_COUNT_FLOOR` now include
   `M-148`/`M-149` (shipped by #838 without extending them) and `M-150` (132 rows).
   `M-091`'s roster records the four later-born `Diagnostic` containers; `M-050`'s
-  `code_refs` record that `diff_diff/_deprecation.py` survives 4.0 as 5.0-window
+  `code_refs` record that `diff_diff/_deprecation.py` survives 4.0 as pickle-migration
   infrastructure; `M-045`/`M-115` name the legacy-CR1 remap branches their removal
   deletes. A `maint/3.13` branch is cut at `v3.13.0` for 3.13.x patches.

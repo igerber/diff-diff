@@ -10,13 +10,11 @@
 - **`RDDensityTestResult.to_dict()`**: JSON-serializable scalars with native casts (NaN
   inference passes through), the `*_conventional` block `None` unless `report_all=True`, and
   the bandwidth-selection table nested under `bandwidths` only when it was estimated.
-- `diff_diff._deprecation.deprecated_field_property` takes `removed_in=` so the warning and the
-  generated docstring name the row's actual removal release.
 
 ### Deprecated
 - **`LWDiDResults.pvalue` and `LWDiDResults.ci`** (ledger rows `M-151`, `M-152`): the
-  3.10-born alias properties for `p_value` / `conf_int` now emit a `FutureWarning` and are
-  removed in 5.0. Read `.p_value` / `.conf_int`.
+  3.10-born alias properties for `p_value` / `conf_int` were first shimmed with a `FutureWarning`
+  and then removed outright at 4.0 (item 9b of the cut). Read `.p_value` / `.conf_int`.
 
 ### Breaking Changes
 - **`LWDiDResults.to_dataframe()` is reshaped onto the shared results schema** (ledger row

@@ -634,9 +634,10 @@ class TestRunPlaceboTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            time="period",
             unit="unit",
             test_type="permutation",
+            post_periods=[2, 3],
             n_permutations=50,
             seed=42,
         )
@@ -649,9 +650,10 @@ class TestRunPlaceboTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            time="period",
             unit="unit",
             test_type="leave_one_out",
+            post_periods=[2, 3],
         )
 
         assert results.test_type == "leave_one_out"
@@ -701,13 +703,16 @@ class TestRunAllPlaceboTests:
             seed=42,
         )
 
-        # Should have fake timing tests for periods 1 and 2
-        assert "fake_timing_1" in results
-        assert "fake_timing_2" in results
-
-        # Should have permutation and LOO tests
-        assert "permutation" in results
-        assert "leave_one_out" in results
+        # Fake timing tests for periods 1 and 2, plus permutation and LOO -
+        # every one a real result on a six-period calendar column (through
+        # 3.x the two dummy-consuming tests came back as error dicts here).
+        assert set(results) == {"fake_timing_1", "fake_timing_2", "permutation", "leave_one_out"}
+        for key, value in results.items():
+            assert isinstance(value, PlaceboTestResults), (key, value)
+        assert results["permutation"].test_type == "permutation"
+        assert results["leave_one_out"].test_type == "leave_one_out"
+        assert np.isfinite(results["permutation"].p_value)
+        assert np.isfinite(results["leave_one_out"].placebo_effect)
 
     def test_returns_dict_structure(self, simple_panel_data):
         """Should return properly structured dict."""
@@ -724,10 +729,241 @@ class TestRunAllPlaceboTests:
         )
 
         assert isinstance(results, dict)
-
-        # Check that each result is either PlaceboTestResults or error dict
+        assert set(results) == {"fake_timing_1", "permutation", "leave_one_out"}
         for key, value in results.items():
-            assert isinstance(value, (PlaceboTestResults, dict))
+            assert isinstance(value, PlaceboTestResults), (key, value)
+
+
+# =============================================================================
+# Wrapper calendar contract (ledger rows M-156 / M-157, 4.0 item 9b)
+# =============================================================================
+
+
+class TestPlaceboWrapperCalendarContract:
+    """``time`` is the calendar column; the post dummy is derived from ``post_periods``."""
+
+    @pytest.mark.parametrize(
+        "test_type", ["fake_timing", "fake_group", "permutation", "leave_one_out"]
+    )
+    @pytest.mark.parametrize("post_periods", [None, []])
+    def test_run_placebo_test_requires_post_periods(
+        self, simple_panel_data, test_type, post_periods
+    ):
+        with pytest.raises(ValueError, match="post_periods is required"):
+            run_placebo_test(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                unit="unit",
+                test_type=test_type,
+                fake_treatment_period=1,
+                fake_treatment_group=[15, 16],
+                post_periods=post_periods,
+                n_permutations=10,
+                seed=0,
+            )
+
+    @pytest.mark.parametrize("post_periods", [None, []])
+    def test_run_all_requires_post_periods_and_raises_not_error_dict(
+        self, simple_panel_data, post_periods
+    ):
+        # post_periods is a required positional on run_all_placebo_tests, so
+        # omitting it is Python's own TypeError; None / [] reach the helper and
+        # raise BEFORE the try blocks (never recorded as an error dict).
+        with pytest.raises(ValueError, match="post_periods is required"):
+            run_all_placebo_tests(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                unit="unit",
+                pre_periods=[0, 1],
+                post_periods=post_periods,
+                n_permutations=10,
+                seed=0,
+            )
+
+    def test_misspelled_time_column_raises_value_error(self, simple_panel_data):
+        with pytest.raises(ValueError, match="time column 'perido' not found"):
+            run_all_placebo_tests(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="perido",
+                unit="unit",
+                pre_periods=[0, 1],
+                post_periods=[2, 3],
+            )
+
+    def test_post_periods_absent_from_time_column_raises(self, simple_panel_data):
+        with pytest.raises(ValueError, match=r"post_periods values \[7\] do not occur"):
+            run_placebo_test(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                unit="unit",
+                test_type="permutation",
+                post_periods=[3, 7],
+                n_permutations=10,
+                seed=0,
+            )
+
+    def test_nan_in_time_column_raises(self, simple_panel_data):
+        data = simple_panel_data.copy()
+        data.loc[data.index[:3], "period"] = np.nan
+        with pytest.raises(ValueError, match="has missing values"):
+            run_all_placebo_tests(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                unit="unit",
+                pre_periods=[0, 1],
+                post_periods=[2, 3],
+            )
+
+    def test_preexisting_placebo_post_column_raises(self, simple_panel_data):
+        data = simple_panel_data.copy()
+        data["_placebo_post"] = 0
+        with pytest.raises(ValueError, match="already has a '_placebo_post' column"):
+            run_placebo_test(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                unit="unit",
+                test_type="leave_one_out",
+                post_periods=[2, 3],
+            )
+
+    def test_wrapper_does_not_mutate_input(self, simple_panel_data):
+        before = simple_panel_data.copy()
+        run_placebo_test(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            unit="unit",
+            test_type="permutation",
+            post_periods=[2, 3],
+            n_permutations=10,
+            seed=0,
+        )
+        pd.testing.assert_frame_equal(simple_panel_data, before)
+        assert "_placebo_post" not in simple_panel_data.columns
+
+    def test_permutation_parity_with_direct_callee(self, simple_panel_data):
+        """The derived dummy reproduces ``post`` exactly, so the wrapper equals the callee bitwise."""
+        assert (
+            simple_panel_data["post"] == simple_panel_data["period"].isin([2, 3]).astype(int)
+        ).all()
+        via_wrapper = run_placebo_test(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            unit="unit",
+            test_type="permutation",
+            post_periods=[2, 3],
+            n_permutations=40,
+            seed=7,
+        )
+        direct = permutation_test(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            post="post",
+            unit="unit",
+            n_permutations=40,
+            seed=7,
+        )
+        assert via_wrapper.placebo_effect == direct.placebo_effect
+        assert via_wrapper.p_value == direct.p_value
+        np.testing.assert_array_equal(
+            via_wrapper.permutation_distribution, direct.permutation_distribution
+        )
+
+    @pytest.mark.parametrize("label_kind", ["pandas_timestamp", "numpy_datetime64"])
+    def test_datetime_calendar_column_with_either_scalar_kind(self, simple_panel_data, label_kind):
+        """Datetime periods: ``post_periods`` may be pandas Timestamps or NumPy datetime64
+        scalars (``data[time].values[...]``) - membership is dtype-aware, never a Python-set
+        hash comparison, so both spellings validate and reproduce the direct callees."""
+        data = simple_panel_data.copy()
+        data["date"] = pd.Timestamp("2020-01-01") + pd.to_timedelta(data["period"] * 30, unit="D")
+        dates = np.sort(data["date"].unique().to_numpy(dtype="datetime64[ns]"))
+        if label_kind == "numpy_datetime64":
+            post_dates = list(dates[2:])
+            assert all(isinstance(d, np.datetime64) for d in post_dates)
+        else:
+            post_dates = [pd.Timestamp(d) for d in dates[2:]]
+            assert all(isinstance(d, pd.Timestamp) for d in post_dates)
+        assert (data["post"] == data["date"].isin(post_dates).astype(int)).all()
+        for test_type in ("permutation", "leave_one_out"):
+            via_wrapper = run_placebo_test(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="date",
+                unit="unit",
+                test_type=test_type,
+                post_periods=post_dates,
+                n_permutations=20,
+                seed=3,
+            )
+            if test_type == "permutation":
+                direct = permutation_test(
+                    data,
+                    outcome="outcome",
+                    treatment="treated",
+                    post="post",
+                    unit="unit",
+                    n_permutations=20,
+                    seed=3,
+                )
+            else:
+                direct = leave_one_out_test(
+                    data, outcome="outcome", treatment="treated", post="post", unit="unit"
+                )
+            assert via_wrapper.placebo_effect == direct.placebo_effect
+            assert via_wrapper.p_value == direct.p_value
+        suite = run_all_placebo_tests(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="date",
+            unit="unit",
+            pre_periods=list(dates[:2]),
+            post_periods=post_dates,
+            n_permutations=20,
+            seed=3,
+        )
+        for key, value in suite.items():
+            assert isinstance(value, PlaceboTestResults), (key, value)
+
+    def test_leave_one_out_parity_with_direct_callee(self, simple_panel_data):
+        via_wrapper = run_placebo_test(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            unit="unit",
+            test_type="leave_one_out",
+            post_periods=[2, 3],
+        )
+        direct = leave_one_out_test(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            post="post",
+            unit="unit",
+        )
+        assert via_wrapper.placebo_effect == direct.placebo_effect
+        assert via_wrapper.p_value == direct.p_value
+        np.testing.assert_array_equal(
+            via_wrapper.leave_one_out_effects, direct.leave_one_out_effects
+        )
 
 
 class TestDiagnosticsTStatNaN:

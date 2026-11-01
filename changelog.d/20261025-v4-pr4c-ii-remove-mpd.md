@@ -20,8 +20,9 @@
   (`M-083`). Through 3.x `time=` was the deprecated alias for the 0/1 post indicator and
   emitted a `FutureWarning` (`M-082`); since 4.0 `time` means the event-study calendar column
   only. Supplying both `post=` and `time=` keeps raising the "pass only post=" error.
-- **`EventStudyResults.period_effects` is a `FutureWarning` compatibility view** (`M-016`;
-  removed in 5.0): on a calendar surface it returns the former calendar-keyed dict of
+- **`EventStudyResults.period_effects` is removed** (`M-016`; the compatibility view
+  this item first shipped was retired at 4.0 by item 9b - no release carried it). Through
+  the pre-release window, on a calendar surface it returned the former calendar-keyed dict of
   per-period records (`period, effect, se, t_stat, p_value, conf_int, is_significant,
   significance_stars`, reference period omitted; `is_significant` is evaluated at the fit's
   `alpha`, where the removed record hard-coded 0.05; duplicate labels raise). Relative-time

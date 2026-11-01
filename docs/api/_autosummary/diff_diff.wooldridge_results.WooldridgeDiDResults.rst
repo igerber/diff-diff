@@ -40,11 +40,6 @@
       ~WooldridgeDiDResults.n_control_units
       ~WooldridgeDiDResults.n_obs
       ~WooldridgeDiDResults.n_treated_units
-      ~WooldridgeDiDResults.overall_att
-      ~WooldridgeDiDResults.overall_conf_int
-      ~WooldridgeDiDResults.overall_p_value
-      ~WooldridgeDiDResults.overall_se
-      ~WooldridgeDiDResults.overall_t_stat
       ~WooldridgeDiDResults.survey_metadata
       ~WooldridgeDiDResults.unsupported_period_action
       ~WooldridgeDiDResults.vcov_type

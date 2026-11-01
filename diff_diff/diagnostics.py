@@ -191,6 +191,49 @@ class PlaceboTestResults(Diagnostic):
         return pd.DataFrame([self.to_dict()])
 
 
+_PLACEBO_POST_COL = "_placebo_post"
+
+
+def _resolve_placebo_post(
+    data: pd.DataFrame, time: str, post_periods: Optional[List[Any]]
+) -> pd.Series:
+    """Derive the 0/1 post-period dummy of the placebo wrappers from the calendar column.
+
+    ``time`` is always the calendar period column (never a 0/1 indicator - spec
+    section 8 rule 1); ``post_periods`` lists its post-treatment values. The
+    dummy is ``data[time].isin(post_periods)``, the same rule
+    :func:`placebo_timing_test` and :func:`placebo_group_test` apply internally.
+    Every malformed input raises ``ValueError`` (never a silent all-zero dummy):
+    a missing ``time`` column, a missing/empty ``post_periods``, missing values
+    in ``time`` (``isin`` would classify them as pre-treatment), ``post_periods``
+    values absent from the column, or a pre-existing ``_placebo_post`` column.
+    """
+    if time not in data.columns:
+        raise ValueError(f"time column '{time}' not found in data")
+    if post_periods is None or len(post_periods) == 0:
+        raise ValueError(
+            "post_periods is required: the list of post-treatment values of the " f"'{time}' column"
+        )
+    if data[time].isna().any():
+        raise ValueError(
+            f"time column '{time}' has missing values; drop or fill them before "
+            "running placebo tests"
+        )
+    # dtype-aware membership (the same machinery as the ``isin`` below): a Python
+    # set would hash a NumPy datetime64 scalar and the equivalent pandas
+    # Timestamp differently on some NumPy/pandas versions and reject valid dates.
+    present = pd.Index(list(post_periods)).isin(pd.Index(data[time].unique()))
+    missing = [p for p, ok in zip(post_periods, present) if not ok]
+    if missing:
+        raise ValueError(f"post_periods values {missing} do not occur in the '{time}' column")
+    if _PLACEBO_POST_COL in data.columns:
+        raise ValueError(
+            f"data already has a '{_PLACEBO_POST_COL}' column; rename it before "
+            "running placebo tests"
+        )
+    return data[time].isin(post_periods).astype(int)
+
+
 def run_placebo_test(
     data: pd.DataFrame,
     outcome: str,
@@ -223,7 +266,9 @@ def run_placebo_test(
     treatment : str
         Name of treatment indicator column (0/1).
     time : str
-        Name of time period column.
+        Name of the calendar period column (never a 0/1 indicator; in a
+        two-period design pass the period column and
+        ``post_periods=[<the post period>]``).
     unit : str, optional
         Name of unit identifier column. Required for some test types.
     test_type : str, default="fake_timing"
@@ -237,8 +282,11 @@ def run_placebo_test(
         Should be a pre-treatment period.
     fake_treatment_group : list, optional
         For "fake_group": List of control unit IDs to designate as fake treated.
-    post_periods : list, optional
-        List of post-treatment periods. Required for fake_timing test.
+    post_periods : list
+        Required. The values of ``time`` that are post-treatment. The
+        permutation and leave-one-out tests derive their 0/1 post dummy as
+        ``data[time].isin(post_periods)`` (the same rule the fake-timing and
+        fake-group tests apply).
     n_permutations : int, default=1000
         For "permutation": Number of random treatment assignments.
     alpha : float, default=0.05
@@ -272,6 +320,7 @@ def run_placebo_test(
     ...     data, outcome='sales', treatment='treated', time='period',
     ...     unit='unit_id',
     ...     test_type='permutation',
+    ...     post_periods=[2, 3, 4],
     ...     n_permutations=1000,
     ...     seed=42
     ... )
@@ -290,6 +339,7 @@ def run_placebo_test(
         raise ValueError(f"test_type must be one of {valid_types}, got '{test_type}'")
 
     if test_type == "fake_timing":
+        _resolve_placebo_post(data, time, post_periods)  # validation only
         return placebo_timing_test(
             data=data,
             outcome=outcome,
@@ -306,6 +356,7 @@ def run_placebo_test(
             raise ValueError("unit is required for fake_group test")
         if fake_treatment_group is None or len(fake_treatment_group) == 0:
             raise ValueError("fake_treatment_group is required for fake_group test")
+        _resolve_placebo_post(data, time, post_periods)  # validation only
         return placebo_group_test(
             data=data,
             outcome=outcome,
@@ -321,11 +372,14 @@ def run_placebo_test(
     elif test_type == "permutation":
         if unit is None:
             raise ValueError("unit is required for permutation test")
+        post_dummy = _resolve_placebo_post(data, time, post_periods)
+        data = data.copy()
+        data[_PLACEBO_POST_COL] = post_dummy
         return permutation_test(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            post=time,
+            post=_PLACEBO_POST_COL,
             unit=unit,
             n_permutations=n_permutations,
             alpha=alpha,
@@ -336,11 +390,14 @@ def run_placebo_test(
     elif test_type == "leave_one_out":
         if unit is None:
             raise ValueError("unit is required for leave_one_out test")
+        post_dummy = _resolve_placebo_post(data, time, post_periods)
+        data = data.copy()
+        data[_PLACEBO_POST_COL] = post_dummy
         return leave_one_out_test(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            post=time,
+            post=_PLACEBO_POST_COL,
             unit=unit,
             alpha=alpha,
             **estimator_kwargs,
@@ -866,13 +923,18 @@ def run_all_placebo_tests(
     treatment : str
         Treatment indicator column.
     time : str
-        Time period column.
+        Calendar period column (never a 0/1 indicator).
     unit : str
         Unit identifier column.
     pre_periods : list
-        List of pre-treatment periods.
+        List of pre-treatment periods (a fake-timing test runs for each one
+        after the first).
     post_periods : list
-        List of post-treatment periods.
+        Required. The values of ``time`` that are post-treatment; the
+        permutation and leave-one-out tests derive their 0/1 post dummy as
+        ``data[time].isin(post_periods)``. A malformed ``post_periods`` (or
+        ``time`` column) raises ``ValueError`` before any test runs - it is
+        never recorded as an error dict.
     n_permutations : int, default=500
         Permutations for permutation test.
     alpha : float, default=0.05
@@ -888,6 +950,10 @@ def run_all_placebo_tests(
         Dictionary mapping test names to PlaceboTestResults.
         Keys: "fake_timing_{period}", "permutation", "leave_one_out"
     """
+    post_dummy = _resolve_placebo_post(data, time, post_periods)
+    dummy_data = data.copy()
+    dummy_data[_PLACEBO_POST_COL] = post_dummy
+
     results = {}
 
     # Fake timing tests for each pre-period (except first)
@@ -916,10 +982,10 @@ def run_all_placebo_tests(
     # Permutation test
     try:
         perm_result = permutation_test(
-            data=data,
+            data=dummy_data,
             outcome=outcome,
             treatment=treatment,
-            post=time,
+            post=_PLACEBO_POST_COL,
             unit=unit,
             n_permutations=n_permutations,
             alpha=alpha,
@@ -937,10 +1003,10 @@ def run_all_placebo_tests(
     # Leave-one-out test
     try:
         loo_result = leave_one_out_test(
-            data=data,
+            data=dummy_data,
             outcome=outcome,
             treatment=treatment,
-            post=time,
+            post=_PLACEBO_POST_COL,
             unit=unit,
             alpha=alpha,
             **estimator_kwargs,

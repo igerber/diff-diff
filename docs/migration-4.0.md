@@ -21,14 +21,14 @@ updated, CI fails.
 | constructor-hygiene | `covariates=` moves from the constructor to `fit()` | 1 | §7b |
 | df-convention-flip | The `df_convention` default flips to `"cluster"` on seven estimators - numbers move | 7 | §6 |
 | diagnostic-family | Bacon is re-homed out of the estimator roster into the diagnostics family | 1 | §7b |
-| field-flip | Nine results containers rename `overall_att` to the canonical `att` | 9 | §5 |
+| field-flip | Nine results containers rename `overall_att` to the canonical `att`; the old names are removed at 4.0, not shimmed | 9 | §5 |
 | function-wrappers | Eight module-level wrapper functions are removed; call the classes | 8 | §7 |
-| lwdid-results-contract | `LWDiDResults` joins the uniform results contract: the `pvalue`/`ci` alias properties warn in favour of `p_value`/`conf_int` (two rows); `to_dataframe()` is reshaped ([M-153], prose) | 2 | §7b |
+| lwdid-results-contract | `LWDiDResults` joins the uniform results contract: the `pvalue`/`ci` alias properties are removed in favour of `p_value`/`conf_int` (two rows); `to_dataframe()` is reshaped ([M-153], prose) | 2 | §7b |
 | merge-ddd | `StaggeredTripleDifference` is absorbed by `TripleDifference` | 5 | §2 |
 | merge-mpd | `MultiPeriodDiD` is absorbed by `TwoWayFixedEffects(event_study=True)` | 5 | §2 |
 | merge-qdid | `QDiD` is absorbed by `ChangesInChanges(method="qdid")` | 2 | §2 |
 | obligation-sdid-params | Two SyntheticDiD constructor params (inert since 3.0.0) are removed | 3 | §7b |
-| obligation-sc-inner-budget | Two SyntheticControl constructor params (inert since the exact NNLS inner solve) warn at 4.0 and are removed at 5.0 | 2 | §7b |
+| obligation-sc-inner-budget | Two SyntheticControl constructor params (inert since the exact NNLS inner solve; `DeprecationWarning` in 3.13.0) are removed at 4.0 | 2 | §7b |
 | obligation-warning-retirements | A transition `FutureWarning` stops being emitted | 1 | §7b |
 | policy-auto-cluster | SpilloverDiD auto-clusters on `unit` unless you pass `cluster=`; `cluster=False` becomes the uniform explicit off-switch | 1 | §6 |
 | renames-cohort | `cohort=` becomes `first_treat=` | 1 | §3 |
@@ -36,7 +36,7 @@ updated, CI fails.
 | renames-control-group | `clean_control=` becomes `control_group=` | 2 | §3 |
 | renames-dcdh | dCDH's `group=`/`controls=` become `unit=`/`covariates=` | 4 | §3 |
 | renames-level | Aggregation-level params and their accepted values unify on `level=`/`"event_study"` | 5 | §3 |
-| renames-post | The post-dummy `time=` becomes `post=` | 3 | §3 |
+| renames-post | The post-dummy `time=` becomes `post=`; the placebo wrappers take `time` as the calendar column and derive the dummy from `post_periods` | 5 | §3 |
 | renames-robust-drop | `robust=` is dropped in favour of `vcov_type=` - read §3, the translation is per-estimator | 4 | §3 |
 | results-contract | The zero-count reference sentinel is retired and every results class's `to_dataframe(level="event_study")` emits the unified `EVENT_STUDY_SCHEMA` ([M-093]) | 1 | §5 |
 
@@ -87,13 +87,12 @@ results = TwoWayFixedEffects().fit(
 )
 ```
 
-- **`results.period_effects` still works, with a `FutureWarning`** ([M-016]; removed in 5.0).
-  On a `TwoWayFixedEffects` event-study surface it returns the same calendar-keyed dict of
-  per-period records (`period, effect, se, t_stat, p_value, conf_int, is_significant,
-  significance_stars`; the reference period omitted; `is_significant` at the fit's `alpha`).
-  The successor is the surface itself: `results.to_dataframe()` has one row per `event_time`
-  (reference row included) and the columnar `att`/`se`/`p_value`/`conf_int_lower`/
-  `conf_int_upper` arrays.
+- **`results.period_effects` is removed** ([M-016]; the `MultiPeriodDiDResults` dict of
+  per-period records has no 4.0 equivalent - the compatibility view once planned for a 4.0 ->
+  5.0 window was retired at 4.0, item 9b, before any release carried it, so reading it is an
+  `AttributeError`). The successor is the surface itself: `results.to_dataframe()` has one row
+  per `event_time` (reference row included) and the columnar `att`/`se`/`p_value`/
+  `conf_int_lower`/`conf_int_upper` arrays.
 
 ```python
 # 4.0 - the per-period surface replaces the period_effects dict
@@ -179,11 +178,16 @@ release:
 4.0, passing `time=` in static mode (`TwoWayFixedEffects`) or 2x2x2 mode (`TripleDifference`)
 **raises `ValueError`** rather than being silently reinterpreted. If you pass a post dummy, rename
 it to `post=`; if you pass a calendar column to an event-study or staggered fit, leave it alone.
+The placebo wrappers `run_placebo_test` / `run_all_placebo_tests` follow the same rule from 4.0
+([M-156], [M-157]): `time=` is the calendar column, `post_periods=` (now required for every
+`test_type`) lists its post-treatment values, and the 0/1 dummy the permutation and
+leave-one-out tests need is derived as `data[time].isin(post_periods)`. Through 3.x the wrappers
+forwarded `time` itself as that dummy, which only worked on a two-period 0/1 column.
 
 **Dropped parameters are not always deletions.** A parameter with no successor in the appendix
 may still need a replacement call — see its `Fix` cell.
 
-**Dropped `fit()` parameters shift the positional slots after them.** Removing the fit-time
+**Dropped parameters shift the positional slots after them.** Removing the fit-time
 `aggregate=`/`balance_e=` keywords moves every later positional parameter left: on
 `CallawaySantAnna`, `ImputationDiD` and `TwoStageDiD` `survey_design` moves from slot 9 to 7;
 on `EfficientDiD` `survey_design` 9 -> 7 and `store_eif` 10 -> 8; on `StackedDiD` (`aggregate`
@@ -192,7 +196,9 @@ sat before them) `population`/`survey_design`/`covariates` move 7/8/9 -> 6/7/8; 
 `L_max`, `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`,
 `design2` and `survey_design` each move one slot left (7..14 -> 6..13). `HeterogeneousAdoptionDiD`
 and `did_had_pretest_workflow` shift nothing (everything after the removed slot is keyword-only;
-a seventh positional on `fit()` now raises). Pass these by keyword.
+a seventh positional on `fit()` now raises). On the `SyntheticControl` constructor, removing
+`inner_max_iter`/`inner_min_decrease` (slots 5-6) moves `standardize`, `alpha`, `seed` and
+`v_cv_t0` two slots left ([M-148], [M-149]). Pass these by keyword.
 
 ## Post-fit aggregation
 
@@ -291,13 +297,15 @@ replicate-weight `ImputationDiD`/`TwoStageDiD` designs: the plain fit's replicat
 ## Results fields
 
 Nine containers rename `overall_att` to the canonical `att`. Since 4.0 the canonical name
-is the stored dataclass field and the old name is a read-only warning-emitting property
-(removed at 5.0); the new accessor already worked under 3.x, so a codebase that migrated
+is the stored dataclass field and the old name is **gone**: reading it raises `AttributeError`.
+This is an unwarned break of a released 3.x name - the `FutureWarning` property once planned
+for a 4.0 -> 5.0 window was retired at 4.0 (item 9b) before any release carried it, so this
+guide is the notice. The new accessor already worked under 3.x, so a codebase that migrated
 early sees no change.
 
 ```python
 att = results.att          # canonical: the stored field
-att = results.overall_att  # FutureWarning since 4.0, removed at 5.0
+att = results.overall_att  # AttributeError at 4.0
 ```
 
 **The whole inference quintet moves, not just the point estimate.** Wherever a container
@@ -317,7 +325,7 @@ names in the same step:
 `overall_att_se`, `overall_att_t_stat`, `overall_att_p_value` and
 `overall_att_conf_int` — with the `att` infix — and they flipped to the same canonical
 names. If you grep for `overall_se` you will miss them. Since 4.0 all nine of its legacy
-spellings warn: the five former fields AND the four former silent `overall_se` /
+spellings are gone: the five former fields AND the four former silent `overall_se` /
 `overall_t_stat` / `overall_p_value` / `overall_conf_int` aliases.
 ```
 
@@ -331,10 +339,11 @@ the legacy `overall_*` keys to the canonical names on load (an existing canonica
 so the loaded object stores the quintet natively and `overall_*` never reappear in its
 `__dict__` or in a re-pickle.
 
-**The legacy names are read-only.** Assigning `results.overall_se = x` raises
-`AttributeError`; assign the canonical field (`results.se = x`) instead. The bootstrap draw
-containers (`results.bootstrap_results.overall_att_se` and friends) are NOT part of this
-flip: they hold no point estimate, keep their payload names, and emit no warning.
+**Assign the canonical field** (`results.se = x`). The legacy names are no longer
+descriptors, so `results.overall_se = x` silently creates an unrelated instance attribute that
+nothing reads - grep your fixtures for `overall_` writes. The bootstrap draw containers
+(`results.bootstrap_results.overall_att_se` and friends) are NOT part of this flip: they hold
+no point estimate and keep their payload names.
 
 **Report schemas.** `DiagnosticReport.to_dict()` reports `headline_metric.name` and
 `target_parameter.headline_attribute` as `"att"` for the nine containers (`"overall_att"`
@@ -448,7 +457,7 @@ each one with its target.
 Smaller items that do not fit the families above — two inert `SyntheticDiD` constructor
 parameters, two `SyntheticControl` inner-solve parameters that became inert when the donor
 weights moved to an exact non-negative least squares ([M-148], [M-149]: `DeprecationWarning`
-at 4.0, removed at 5.0), the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
+in 3.13.0, removed at 4.0), the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
 the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings,
 [M-147] is an additive policy, and [M-153] is a results-frame reshape. These have no
@@ -527,8 +536,9 @@ they expose no such knob. `DMLDiDResults` inherits `CallawaySantAnnaResults` sto
 `overall_att` family rides [M-050] with the parent. `LWDiDResults` joined the uniform
 results contract in the cut's conformance PR: `summary(alpha=None)` / `print_summary(alpha=None)`
 under the [M-146] guard, the reshaped `to_dataframe(level=...)` / `to_csv(level=...)` described
-under "Remaining 4.0 changes" ([M-153]), and FutureWarnings on its `pvalue`/`ci` alias
-properties ([M-151], [M-152]: read `.p_value` / `.conf_int`; removed at 5.0). `DurationDiDResults`
+under "Remaining 4.0 changes" ([M-153]), and the removal of its `pvalue`/`ci` alias
+properties ([M-151], [M-152]: read `.p_value` / `.conf_int`; the FutureWarning window once planned
+for them was retired at 4.0, item 9b). `DurationDiDResults`
 gains `aggregate("simple")` (a verbatim relay of the stored bootstrap inference, `df` NaN) and
 `RDDensityTestResult` gains `to_dict()`.
 
@@ -589,7 +599,7 @@ but now emit a `FutureWarning`, and they no longer appear in `dir()`/`vars()`.
 
 ## Appendix: every 4.0 change
 
-One row per ledger row that requires action at 4.0 — 113 in total. `Old` and `New` are the
+One row per ledger row that requires action at 4.0 — 115 in total. `Old` and `New` are the
 ledger's own locators. An em dash in `New` means the ledger names no successor **locator**; it
 does not mean no action is required, so read the `Fix` cell.
 
@@ -623,15 +633,15 @@ does not mean no action is required, so read the `Fix` cell.
 | M-130 | df-convention-flip | `diff_diff:StackedDiD[df_convention]` | — | The `df_convention` default flips to `"cluster"`; pass `df_convention="residual"` to keep 3.x numbers. |
 | M-131 | df-convention-flip | `diff_diff:ImputationDiD[df_convention]` | — | The `df_convention` default flips to `"cluster"`; pass `df_convention="residual"` to keep 3.x numbers. |
 | M-090 | diagnostic-family | `diff_diff:BaconDecomposition` | — | Bacon moves out of the estimator roster into the diagnostics family - update docs references and imports of the roster, not call sites. |
-| M-050 | field-flip | `diff_diff:CallawaySantAnnaResults.overall_att` | `diff_diff:CallawaySantAnnaResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-051 | field-flip | `diff_diff:SunAbrahamResults.overall_att` | `diff_diff:SunAbrahamResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-052 | field-flip | `diff_diff:ImputationDiDResults.overall_att` | `diff_diff:ImputationDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-053 | field-flip | `diff_diff:TwoStageDiDResults.overall_att` | `diff_diff:TwoStageDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-054 | field-flip | `diff_diff:StackedDiDResults.overall_att` | `diff_diff:StackedDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-055 | field-flip | `diff_diff:EfficientDiDResults.overall_att` | `diff_diff:EfficientDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-056 | field-flip | `diff_diff:WooldridgeDiDResults.overall_att` | `diff_diff:WooldridgeDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-057 | field-flip | `diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att` | `diff_diff:ChaisemartinDHaultfoeuilleResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
-| M-058 | field-flip | `diff_diff:ContinuousDiDResults.overall_att` | `diff_diff:ContinuousDiDResults.att` | Read and construct with `att`; `overall_att` is a read-only FutureWarning property since 4.0; 3.x pickles load unchanged. |
+| M-050 | field-flip | `diff_diff:CallawaySantAnnaResults.overall_att` | `diff_diff:CallawaySantAnnaResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-051 | field-flip | `diff_diff:SunAbrahamResults.overall_att` | `diff_diff:SunAbrahamResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-052 | field-flip | `diff_diff:ImputationDiDResults.overall_att` | `diff_diff:ImputationDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-053 | field-flip | `diff_diff:TwoStageDiDResults.overall_att` | `diff_diff:TwoStageDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-054 | field-flip | `diff_diff:StackedDiDResults.overall_att` | `diff_diff:StackedDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-055 | field-flip | `diff_diff:EfficientDiDResults.overall_att` | `diff_diff:EfficientDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-056 | field-flip | `diff_diff:WooldridgeDiDResults.overall_att` | `diff_diff:WooldridgeDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-057 | field-flip | `diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att` | `diff_diff:ChaisemartinDHaultfoeuilleResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
+| M-058 | field-flip | `diff_diff:ContinuousDiDResults.overall_att` | `diff_diff:ContinuousDiDResults.att` | Read and construct with `att`; `overall_att` (and the sibling `overall_*` names) are removed at 4.0 - `AttributeError`, no warned release preceded it; 3.x pickles load unchanged. |
 | M-070 | function-wrappers | `diff_diff:imputation_did` | — | Call the estimator class directly instead of `imputation_did`. |
 | M-071 | function-wrappers | `diff_diff:two_stage_did` | — | Call the estimator class directly instead of `two_stage_did`. |
 | M-072 | function-wrappers | `diff_diff:stacked_did` | — | Call the estimator class directly instead of `stacked_did`. |
@@ -640,8 +650,8 @@ does not mean no action is required, so read the `Fix` cell.
 | M-075 | function-wrappers | `diff_diff:triple_difference` | — | Call the estimator class directly instead of `triple_difference`. |
 | M-076 | function-wrappers | `diff_diff:bacon_decompose` | — | Call the estimator class directly instead of `bacon_decompose`. |
 | M-077 | function-wrappers | `diff_diff:chaisemartin_dhaultfoeuille` | — | Call the estimator class directly instead of `chaisemartin_dhaultfoeuille`. |
-| M-151 | lwdid-results-contract | `diff_diff:LWDiDResults.pvalue` | `diff_diff:LWDiDResults.p_value` | Read `.p_value`; the alias warns from 4.0 and is removed at 5.0. |
-| M-152 | lwdid-results-contract | `diff_diff:LWDiDResults.ci` | `diff_diff:LWDiDResults.conf_int` | Read `.conf_int`; the alias warns from 4.0 and is removed at 5.0. |
+| M-151 | lwdid-results-contract | `diff_diff:LWDiDResults.pvalue` | `diff_diff:LWDiDResults.p_value` | Read `.p_value`; the alias is removed at 4.0 (`AttributeError`). |
+| M-152 | lwdid-results-contract | `diff_diff:LWDiDResults.ci` | `diff_diff:LWDiDResults.conf_int` | Read `.conf_int`; the alias is removed at 4.0 (`AttributeError`). |
 | M-013 | merge-ddd | `diff_diff:StaggeredTripleDifference` | `diff_diff:TripleDifference.fit[first_treat]` | See the merges section for the worked before/after. |
 | M-014 | merge-ddd | `diff_diff:StaggeredTripleDiffResults` | — | Both designs return `TripleDifferenceResults` (`results.design` says which); read `att` / `se` / ... where you read `overall_*`; event-study and cohort surfaces are `results.aggregate(...)`. 3.x staggered pickles cannot load. |
 | M-085 | merge-ddd | `diff_diff:TripleDifference.fit[time]` | — | In 2x2x2 mode, `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the staggered calendar column only. |
@@ -650,12 +660,12 @@ does not mean no action is required, so read the `Fix` cell.
 | M-010 | merge-mpd | `diff_diff:MultiPeriodDiD` | `diff_diff:TwoWayFixedEffects.fit[event_study]` | See the merges section for the worked before/after. |
 | M-011 | merge-mpd | `diff_diff:MultiPeriodDiDResults` | — | Read the unified event-study surface on the merged `TwoWayFixedEffects` results instead of this container. |
 | M-012 | merge-mpd | `diff_diff:PeriodEffect` | — | Superseded by the unified event-study representation - read the event-study surface rather than per-period `PeriodEffect` objects. |
-| M-016 | merge-mpd | `diff_diff:EventStudyResults.period_effects` | — | Not removed at 4.0: `period_effects` is a `FutureWarning` property view over the unified event-study surface (calendar surfaces only; keyed by calendar period, reference omitted), removed at 5.0. Read `to_dataframe()` or the columnar arrays instead. |
+| M-016 | merge-mpd | `diff_diff:EventStudyResults.period_effects` | — | Removed at 4.0 (`AttributeError`; the compatibility view once planned for a 5.0 window was retired before any release carried it). Read `to_dataframe()` - one row per `event_time`, reference row included - or the columnar arrays instead. |
 | M-083 | merge-mpd | `diff_diff:TwoWayFixedEffects.fit[time]` | — | In static mode (`event_study=False`), `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the calendar column only. |
 | M-015 | merge-qdid | `diff_diff:QDiD` | `diff_diff:ChangesInChanges[method]` | See the merges section for the worked before/after. |
 | M-143 | merge-qdid | `diff_diff:ChangesInChangesResults.estimator` | `diff_diff:ChangesInChangesResults.method` | See the merges section for the worked before/after. |
-| M-148 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_max_iter]` | — | Drop it. The donor weights are solved exactly (one non-negative least squares) since #842, so there is no inner iteration budget; passing it warns `DeprecationWarning` at 4.0 and is a `TypeError` at 5.0. The former Frank-Wolfe budget is NOT a knob to carry over to `optimizer_options=` (that is the outer `V` search). |
-| M-149 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_min_decrease]` | — | Drop it. An exact inner solve has no stopping tolerance; passing it warns `DeprecationWarning` at 4.0 and is a `TypeError` at 5.0. Do NOT translate it into `optimizer_options={"xatol": ...}` - that tolerance governs the outer `V` search, a different quantity. |
+| M-148 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_max_iter]` | — | Drop it. The donor weights are solved exactly (one non-negative least squares) since #842, so there is no inner iteration budget; passing it warned `DeprecationWarning` in 3.13.0 and is a `TypeError` at 4.0. Positional callers: `standardize`/`alpha`/`seed`/`v_cv_t0` moved up two slots - pass them by keyword. The former Frank-Wolfe budget is NOT a knob to carry over to `optimizer_options=` (that is the outer `V` search). |
+| M-149 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_min_decrease]` | — | Drop it. An exact inner solve has no stopping tolerance; passing it warned `DeprecationWarning` in 3.13.0 and is a `TypeError` at 4.0 (positional slots after it shift up two - pass later params by keyword). Do NOT translate it into `optimizer_options={"xatol": ...}` - that tolerance governs the outer `V` search, a different quantity. |
 | M-001 | obligation-sdid-params | `diff_diff:SyntheticDiD[lambda_reg]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_omega=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_omega=` only as a deliberate new choice. |
 | M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
@@ -703,6 +713,8 @@ does not mean no action is required, so read the `Fix` cell.
 | M-030 | renames-post | `diff_diff:DifferenceInDifferences.fit[time]` | `diff_diff:DifferenceInDifferences.fit[post]` | Rename the keyword: `time=` becomes `post=`. |
 | M-137 | renames-post | `diff_diff:permutation_test[time]` | `diff_diff:permutation_test[post]` | Rename the keyword: `time=` becomes `post=`. |
 | M-138 | renames-post | `diff_diff:leave_one_out_test[time]` | `diff_diff:leave_one_out_test[post]` | Rename the keyword: `time=` becomes `post=`. |
+| M-156 | renames-post | `diff_diff:run_placebo_test[time]` | — | Pass the calendar column as `time=` and list its post-treatment values in `post_periods=` (now required for every `test_type`); the 0/1 dummy for the permutation / leave-one-out tests is derived as `data[time].isin(post_periods)`. Code that passed the 0/1 indicator as `time=` with `post_periods=[1]` returns identical numbers; code that passed it without `post_periods` must add `post_periods=[1]`; code that passed a multi-period calendar column now gets real permutation / leave-one-out results instead of error dicts. |
+| M-157 | renames-post | `diff_diff:run_all_placebo_tests[time]` | — | Same contract on the suite wrapper: pass the calendar column as `time=` and list its post-treatment values in `post_periods=` (now required for every `test_type`); the 0/1 dummy for the permutation / leave-one-out tests is derived as `data[time].isin(post_periods)`. Code that passed the 0/1 indicator as `time=` with `post_periods=[1]` returns identical numbers; code that passed it without `post_periods` must add `post_periods=[1]`; code that passed a multi-period calendar column now gets real permutation / leave-one-out results instead of error dicts. A malformed `post_periods` / `time` column now raises before any test runs rather than being swallowed into error dicts. |
 | M-045 | renames-robust-drop | `diff_diff:DifferenceInDifferences[robust]` | — | Drop `robust=True` (already the `hc1` default); `robust=False` becomes `vcov_type="classical"`. |
 | M-046 | renames-robust-drop | `diff_diff:TripleDifference[robust]` | — | Drop it. `TripleDifference` accepts only `vcov_type="hc1"`, so `robust=` never changed its inference - do NOT write `vcov_type="classical"`, which raises. |
 | M-047 | renames-robust-drop | `diff_diff:HeterogeneousAdoptionDiD[robust]` | — | HAD's legacy default is non-robust: `robust=True` becomes `vcov_type="hc1"`; drop `robust=False`. |

@@ -39,11 +39,6 @@
       ~ChaisemartinDHaultfoeuilleResults.is_significant
       ~ChaisemartinDHaultfoeuilleResults.linear_trends_effects
       ~ChaisemartinDHaultfoeuilleResults.normalized_effects
-      ~ChaisemartinDHaultfoeuilleResults.overall_att
-      ~ChaisemartinDHaultfoeuilleResults.overall_conf_int
-      ~ChaisemartinDHaultfoeuilleResults.overall_p_value
-      ~ChaisemartinDHaultfoeuilleResults.overall_se
-      ~ChaisemartinDHaultfoeuilleResults.overall_t_stat
       ~ChaisemartinDHaultfoeuilleResults.path_cumulated_event_study
       ~ChaisemartinDHaultfoeuilleResults.path_effects
       ~ChaisemartinDHaultfoeuilleResults.path_heterogeneity_effects

@@ -60,9 +60,13 @@ sketched in section 9 but not specified here.
 
 **Ladder:** 3.9 ships the new surface additively plus FutureWarnings on old
 surface (sklearn playbook) -> 4.0 removes deprecated surface, flips results
-storage (section 5) and the two default policies -> 4.1 adds the front door ->
-5.0 removes the 4.0-era compatibility properties. Last fully-old-API release:
-3.8.0 (tag `v3.8.0`).
+storage (section 5) and the two default policies -> 4.1 adds the front door.
+(Amended 2026-11-01, item 9b, user decision: the 4.0-era compatibility
+properties scheduled for a 5.0 removal were retired AT 4.0 - no release ever
+carried them - so the released 3.x names `overall_*`, `period_effects` and
+LWDiD's `pvalue`/`ci` break at 4.0 WITHOUT a warned release; the migration
+guide is the only notice, and 5.0 has no scheduled removals.) Last
+fully-old-API release: 3.8.0 (tag `v3.8.0`).
 
 **maint/3.8 branch rule:** 3.8.x patches are cut from main until the first
 Phase 2 PR merges; after that, main carries minor-worthy content, so further
@@ -378,7 +382,8 @@ settings and unconditionally in the no-unit repeated-cross-sections form.
 **Results.** 3.9's `TWFE(event_study=True)` returns the unified event-study
 surface (section 5) from day one - no intermediate container churn.
 `period_effects` becomes a FutureWarning property view over that surface at
-4.0, removed 5.0 [M-016] (the view's values are a private frozen record
+4.0, removed 5.0 [M-016] (Amended 2026-11-01, item 9b: the view was retired AT
+4.0 before any release carried it - `period_effects` is simply gone; the view's values were a private frozen record
 mirroring the former `PeriodEffect` fields - `period, effect, se, t_stat,
 p_value, conf_int, is_significant, significance_stars` - keyed by calendar
 period with the reference omitted; user decision 2026-10-24; shipped PR 4c-ii
@@ -508,7 +513,13 @@ minors.) At 4.0 the STORAGE flips [M-050]..[M-058]: the canonical names
 become the native dataclass fields; `overall_att` (and sibling `overall_*`
 inference fields, plus ContinuousDiD's deviant `overall_att_*` family
 [M-058]) become FutureWarning properties, removed 5.0. MultiPeriodDiD's
-`avg_*` family dies with its class [M-011] instead of flipping.
+`avg_*` family dies with its class [M-011] instead of flipping. (Amended
+2026-11-01, item 9b, user decision: the 4.0 -> 5.0 windows of [M-016],
+[M-050]..[M-058], [M-151], [M-152] were retired AT 4.0 - the shims had landed
+on main after the v3.13.0 tag and no release carried them, so the courtesy
+window protected nobody yet; the released 3.x names therefore break at 4.0
+without a warned release, stated plainly in `docs/migration-4.0.md`. The
+pickle migration of section 5 stays.)
 
 **Serialization policy.** `to_dict()` / `to_dataframe()` emit canonical names
 only from 4.0 (deprecated names never leak into serialized output; the
@@ -990,11 +1001,14 @@ missed.**
    guard (`tests/test_naming_guard.py`) and removal PRs consult the family's
    `code_refs` UNION, and the pre-terminal repo-wide grep above remains the
    per-row safety net (decided 2026-08-01 over per-row duplication).
-   Corollary (2026-10-18): the shim helper module `diff_diff/_deprecation.py`
-   SURVIVES 4.0 - the 4.0->5.0 FutureWarning property shims of [M-016] and
-   [M-050]..[M-058] are its consumers through the 5.0 window - so the 4.0
-   removal PRs delete the shims that use it, never the module (recorded in
-   [M-050]'s `code_refs`).
+   Corollary (2026-10-18; amended 2026-11-01, item 9b): the helper module
+   `diff_diff/_deprecation.py` SURVIVES 4.0 as the pickle-migration
+   (`LEGACY_OVERALL_QUINTET`, `migrate_renamed_state_keys`,
+   `migrate_event_study_reference_sentinel`) and required-arg (`NOT_SUPPLIED`,
+   `require_arg`) helper module (recorded in [M-050]'s `code_refs`); the
+   kwarg-rename and property-shim helpers were deleted at item 9b together
+   with their last consumers (the [M-016] / [M-050]..[M-058] / [M-151] /
+   [M-152] shims, retired AT 4.0).
 
 **Missed-rename amendments (2026-08-02, the 2(c)-ii PR-B sweep):** [M-136]
 (LPDiD `to_dataframe(level="event")` - the drifted value spelling every
@@ -1006,7 +1020,11 @@ phase-1 estimator-roster inventory missed). The `run_placebo_test` /
 `run_all_placebo_tests` WRAPPERS keep their single overloaded `time`
 (calendar for the timing/group tests, post dummy for the two renamed
 callees): a rename cannot express dual semantics - the signature redesign is
-tracked in TODO.md and the guard carries honest allowlist reasons.
+tracked in TODO.md and the guard carries honest allowlist reasons. (RESOLVED
+2026-11-01, item 9b: `time` is the calendar column on both wrappers,
+`post_periods` is required, and the post dummy is derived as
+`data[time].isin(post_periods)` [M-156] [M-157]; the wrappers joined the
+guard's rule-1 calendar inventory.)
 
 **Domain vocabulary that is NOT a violation** (recorded so the sweep is not
 re-litigated): the staggered family's `group`/`groups` on results containers
@@ -1026,7 +1044,9 @@ candidates:**
 altered-meaning trap - and over a convenience subclass); underscored
 control_group values (over R-compact spellings, over accept-both);
 unified event-study representation with `period_effects` as a 4.0->5.0
-property (over keeping the dict canonical, over hard removal); n_bootstrap
+property (over keeping the dict canonical, over hard removal; superseded
+2026-11-01, item 9b: hard removal at 4.0 once it was clear no release would
+carry the property); n_bootstrap
 semantic-only unification (over uniform 999, over uniform 200); panel
 auto-cluster-at-unit (over never-auto-cluster, over status quo).
 2026-07-31 addendum (consolidation scope): staggered-family mega-merge
@@ -1052,7 +1072,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] + its results-field mirror [M-143] (shipped: tests/test_v4_merge_cic.py; method= is keyword-only and lowercase-only, the QDiD CLASS is deprecated while the METHOD is not, and ChangesInChangesResults.estimator -> .method carries a dual-key to_dict() window through 3.9) |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (warn-and-discard shims at 4.0 once the donor weights moved to an exact NNLS, removal at 5.0); the LWDiD result-alias pair [M-151] [M-152] (FutureWarning shims at 4.0, removal at 5.0); docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] removed at 4.0 (item 9b; the planned 5.0 window was retired); storage flips [M-050..M-058] (their 4.0 -> 5.0 shims retired at 4.0, item 9b); default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; placebo-wrapper calendar contract [M-156] [M-157] (item 9b); warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (DeprecationWarning in 3.13.0, removed at 4.0 - item 9b); the LWDiD result-alias pair [M-151] [M-152] (removed at 4.0, item 9b); docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -1220,7 +1240,8 @@ tests-first PR that flips no rows).
    the canonical quintet ahead of the flip; 5b, 2026-10-26, flipped the
    storage: the quintet are the native fields, renamed in slot, with the
    `overall_*` names as read-only `deprecated_field_property` FutureWarning
-   shims (removed 5.0), `DMLDiDResults` re-declaring the five shims so the
+   shims (removed 5.0; AMENDED 2026-11-01, item 9b: the shims were retired AT
+   4.0 before any release carried them), `DMLDiDResults` re-declaring the five shims so the
    warning names the subclass, `__setstate__` migration through the new
    `_deprecation.migrate_renamed_state_keys` / `LEGACY_OVERALL_QUINTET`,
    ContinuousDiD's nine spellings shimmed, the report surface reading the
@@ -1266,6 +1287,22 @@ tests-first PR that flips no rows).
    `/docs-check` classification; pinned by
    `tests/test_v4_diagnostic_family_docs.py`, which runs in the docs-tests
    workflow; row flipped to `done`.)
+9b. Shim retirement + placebo redesign (SHIPPED 2026-11-01, user decision: no
+    4.x debt): the 14 rows scheduled for a 5.0 removal - [M-016] [M-050..M-058]
+    [M-148] [M-149] [M-151] [M-152] - flipped to `removed` at 4.0 (none of
+    the FutureWarning shims had reached a release; M-148/M-149's
+    DeprecationWarning shipped in 3.13.0), so the released 3.x names
+    `overall_*` / `overall_att_*`, `period_effects` and LWDiD's `pvalue`/`ci`
+    break at 4.0 without a warned release (stated plainly in the migration
+    guide); `_deprecation.py` reduced to the pickle-migration and
+    required-arg helpers; `run_placebo_test` / `run_all_placebo_tests` take
+    `time=` as the calendar column only, require `post_periods`, and derive
+    the post dummy as `data[time].isin(post_periods)` [M-156] [M-157]
+    (TODO.md's 2(c)-ii redesign row closed - the 3.x wrappers returned error
+    dicts on any multi-period calendar column). Pinned by
+    `tests/test_v4_storage_flip.py`, `tests/test_v4_merge_mpd.py`,
+    `tests/test_methodology_synthetic_control.py`, `tests/test_lwdid.py` and
+    `tests/test_diagnostics.py`.
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
     migration-guide retitle, due gate green; re-execute (Rust backend) the
     tutorials whose clustered-default outputs moved at item 7a and were
@@ -1281,7 +1318,7 @@ tests-first PR that flips no rows).
 
 Ordering constraints: 4a before 4b before 4c-i before 4c-ii; 4 before 5 and 6; 5 before 6
 (the unified DDD container is born canonical); 7a before 7b before 7c; 7 and 8
-independent; 9 after 4/6; 10 last.
+independent; 9 after 4/6; 9b after 5 and 4c-ii; 10 last.
 Waves 2 and 3 are independent of each other and of 4.
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`
@@ -1440,6 +1477,13 @@ or `evaluate` -> `done`. Terminal rows (`removed`/`done`) keep asserting
 forever - a removed symbol resurrecting is a test failure.
 
 **Assertion semantics (enforced by `tests/test_v4_matrix.py`).**
+- Item 9b (2026-11-01): a row may move from `shimmed` to `removed` inside the
+  cut window with `deprecated_in: null` and no `warning` when no RELEASE
+  carried its shim (the shim landed on main after `cut_base`); the guard's
+  cut-window exemption is what permits the early terminal flip, and the
+  migration guide carries the unwarned-break notice. `deprecated_in` is
+  corrected to the release that actually warned when one did (M-148/M-149:
+  3.13.0).
 - Cut-PR-2 probe clarifications (2026-10-18): at `removed`, a `function`
   row whose top-level `diff_diff:Name` resolves to a MODULE object counts as
   absent (four 3.9 wrappers - `trop`, `synthetic_control`, `stacked_did`,

@@ -20,7 +20,6 @@ TwoWayFixedEffects event-study mode returns the container natively.
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -67,8 +66,8 @@ class BaseResults:
     - **Canonical quintet.** ``att``, ``se``, ``t_stat``, ``p_value``,
       ``conf_int`` bound to ONE coherent inference row. Native fields on
       every estimator container since the 4.0 storage flip (ledger rows
-      M-050..M-058; the legacy ``overall_*`` names live on as read-only
-      FutureWarning properties until 5.0); the last ``overall_*`` container,
+      M-050..M-058; the legacy ``overall_*`` names are gone - item 9b retired
+      their compatibility properties at 4.0); the last ``overall_*`` container,
       ``StaggeredTripleDiffResults``, was retired by the item-6 DDD
       container unification (row M-014) in favour of the canonical
       :class:`~diff_diff.TripleDifferenceResults`.
@@ -213,59 +212,6 @@ N_KIND_VOCABULARY: Tuple[str, ...] = (
     "obs",
     "clusters",
 )
-
-
-def _significance_stars(p_value: float) -> str:
-    """Leaf-local twin of ``results._get_significance_stars`` (NaN -> "").
-
-    ``results_base`` imports no other ``diff_diff`` module, so the M-016 view
-    carries its own copy of the convention.
-    """
-    if np.isnan(p_value):
-        return ""
-    if p_value < 0.001:
-        return "***"
-    if p_value < 0.01:
-        return "**"
-    if p_value < 0.05:
-        return "*"
-    if p_value < 0.1:
-        return "."
-    return ""
-
-
-_PERIOD_EFFECTS_REMOVED_MSG = (
-    "EventStudyResults.period_effects is deprecated and will be removed in "
-    "5.0; use to_dataframe() (one row per event_time, reference row included) "
-    "or the columnar att/se/t_stat/p_value/conf_int_lower/conf_int_upper "
-    "arrays instead."
-)
-
-_PERIOD_EFFECTS_SCALE_MSG = (
-    "period_effects is a compatibility view of the former calendar-keyed "
-    "per-period dict (row M-016) and exists only on time_scale='calendar' "
-    "surfaces; relative-time surfaces never had it - use to_dataframe()."
-)
-
-
-@dataclass(frozen=True)
-class _PeriodEffectView:
-    """One row of the deprecated ``EventStudyResults.period_effects`` view (row M-016).
-
-    Private, read-only snapshot of a non-reference row of a calendar surface;
-    mirrors the per-period record the 4.0 cut removed (row M-012).
-    ``is_significant`` is evaluated at the surface's ``alpha`` (NaN p-value ->
-    False); ``significance_stars`` follows the package convention.
-    """
-
-    period: Any
-    effect: float
-    se: float
-    t_stat: float
-    p_value: float
-    conf_int: Tuple[float, float]
-    is_significant: bool
-    significance_stars: str
 
 
 @dataclass
@@ -667,52 +613,6 @@ class EventStudyResults(BaseResults):
         base on a gapped grid, empty when the estimator omits no baseline.
         """
         return [_json_safe_label(v) for v in self.event_time[self.is_reference].tolist()]
-
-    @property
-    def period_effects(self) -> Dict[Any, _PeriodEffectView]:
-        """Deprecated calendar-keyed per-period dict (row M-016; removed in 5.0).
-
-        Compatibility view of the former ``period_effects`` dict: one
-        :class:`_PeriodEffectView` per NON-reference row, keyed by the row's
-        calendar label (the reference row is omitted, as the old dict did).
-        Only ``time_scale="calendar"`` surfaces carry it; reading it on a
-        relative-time surface raises ``AttributeError`` (so ``hasattr`` is
-        False there and nothing warns). Reading it emits ``FutureWarning``.
-        Use :meth:`to_dataframe` (one row per ``event_time``, reference row
-        included) or the columnar arrays instead.
-        """
-        if self.time_scale != "calendar":
-            raise AttributeError(_PERIOD_EFFECTS_SCALE_MSG)
-        # Iterate the array itself (not .tolist(), which turns datetime64[ns]
-        # labels into integer nanoseconds); the elements hash/compare like the
-        # calendar labels the old dict was keyed by.
-        # Uniqueness is checked over EVERY row (reference included): a label
-        # shared by a reference row and an estimated row would otherwise
-        # surface the estimate under the reference's key.
-        labels = list(self.event_time)
-        if len(set(labels)) != len(labels):
-            raise ValueError(
-                "The event-study surface carries duplicate event_time labels "
-                f"({self.event_time.tolist()}); each label must appear exactly once "
-                "for a label-keyed period_effects view."
-            )
-        warnings.warn(_PERIOD_EFFECTS_REMOVED_MSG, FutureWarning, stacklevel=2)
-        out: Dict[Any, _PeriodEffectView] = {}
-        for i, label in enumerate(self.event_time):
-            if self.is_reference[i]:
-                continue
-            p = float(self.p_value[i])
-            out[label] = _PeriodEffectView(
-                period=label,
-                effect=float(self.att[i]),
-                se=float(self.se[i]),
-                t_stat=float(self.t_stat[i]),
-                p_value=p,
-                conf_int=(float(self.conf_int_lower[i]), float(self.conf_int_upper[i])),
-                is_significant=bool(p < self.alpha),
-                significance_stars=_significance_stars(p),
-            )
-        return out
 
     # ------------------------------------------------------------------
     # Serialization contract
@@ -1636,8 +1536,7 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
     it (never a silent empty container).
     """
     if isinstance(results, EventStudyResults):
-        # A surface is already the surface: never duck-sniff it (the M-016
-        # period_effects view is a warning property - hasattr would fire it).
+        # A surface is already the surface: pass it through untouched.
         return results
     # Order matters: dCDH carries both event_study_effects and the split
     # placebo dict; HAD's columnar container has unique attributes; LPDiD's

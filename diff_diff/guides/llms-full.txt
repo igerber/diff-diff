@@ -151,32 +151,24 @@ print(es.summary())
 
 **Note:** TWFE can be biased with staggered treatment timing and heterogeneous effects. Consider CallawaySantAnna, SunAbraham, or ImputationDiD for staggered designs.
 
-### EventStudyResults.period_effects (compatibility view)
+### Per-period effects on the TWFE event-study surface
 
 The `MultiPeriodDiD` class, `MultiPeriodDiDResults`, `PeriodEffect` and the
 `EventStudy` alias were removed at the 4.0 cut (ledger rows M-010/M-011/M-012/
-M-060); `TwoWayFixedEffects(...).fit(..., event_study=True)` is the estimator.
-For code that still reads the old per-period dict, the `EventStudyResults`
-returned by the TWFE event-study mode exposes `period_effects` as a deprecated
-compatibility VIEW (ledger row M-016, removed in 5.0):
-
-- Reading it emits a `FutureWarning`; `to_dataframe()` (one row per
-  `event_time`, reference row included) is the successor.
-- Calendar-time surfaces only (`time_scale="calendar"`, i.e. the TWFE
-  event-study mode); on a relative-time surface the attribute raises
-  `AttributeError`, so `hasattr(es, "period_effects")` is False there.
-- A dict keyed by calendar period with the reference period OMITTED (as the
-  old dict was). Each value is a read-only record with `period`, `effect`,
-  `se`, `t_stat`, `p_value`, `conf_int`, `is_significant` and
-  `significance_stars`; `is_significant` is evaluated at the fit's `alpha`
-  (NaN p-value -> False), not the removed record's fixed 0.05.
+M-060); `TwoWayFixedEffects(...).fit(..., event_study=True)` is the estimator
+and the `EventStudyResults` it returns is the only per-period surface. The old
+calendar-keyed per-period dict has NO successor attribute (the planned 4.0 -> 5.0
+compatibility view, ledger row M-016, was retired at 4.0 - item 9b): read
+`to_dataframe()` (one row per `event_time`, reference row included, columns
+`att` / `se` / `t_stat` / `p_value` / `conf_int_lower` / `conf_int_upper` /
+`is_reference`) or the columnar arrays of the same names.
 
 ```python
 es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
               event_study=True, time='period', post_periods=[4, 5, 6, 7])
-table = es.to_dataframe()          # successor: columnar per-event-time table
-pe = es.period_effects             # FutureWarning; {period: record}, reference omitted
-pe[5].effect, pe[5].conf_int
+table = es.to_dataframe()          # columnar per-event-time table
+row5 = table.loc[table["event_time"] == 5].iloc[0]
+row5["att"], (row5["conf_int_lower"], row5["conf_int_upper"])
 ```
 
 ### CallawaySantAnna
@@ -624,8 +616,6 @@ SyntheticControl(
     custom_v=None,                          # diagonal V (len = #predictors); required iff v_method="custom"; forbidden otherwise
     optimizer_options: dict | None = None,  # merged into scipy.optimize.minimize (outer V search; nested/cv)
     n_starts: int = 4,                      # multistart count for the outer V search (nested/cv)
-    inner_max_iter: int | None = None,      # DEPRECATED no-op (warns; removed in 5.0): the inner solve is exact (NNLS)
-    inner_min_decrease: float | None = None,  # DEPRECATED no-op (warns; removed in 5.0): the inner solve is exact (NNLS)
     standardize: str = "std",               # "std" (per-row SD, ddof=1) or "none" (deviation from R)
     alpha: float = 0.05,
     seed: int | None = None,                # seeds the multistart Dirichlet draws
@@ -1500,12 +1490,12 @@ results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_tre
 section stores the headline inference under the canonical names
 `att` / `se` / `t_stat` / `p_value` / `conf_int` (4.0 design spec section
 5; the storage flipped at the 4.0 cut, ledger rows M-050..M-058) - read
-and construct with those. The 3.x `overall_att` / `overall_se` /
-`overall_t_stat` / `overall_p_value` / `overall_conf_int` spellings (and
-ContinuousDiD's `overall_att_se`-style spellings) are read-only
-`FutureWarning` properties that relay the same values and are removed at
-5.0; they are not constructor keywords and never appear in `to_dict()`.
-3.x pickles load (the legacy keys are rewritten on load). The bootstrap
+and construct with those. The 3.x `overall_*` spellings (and
+ContinuousDiD's `overall_att_*`-style spellings) are GONE at 4.0 - the
+planned FutureWarning window was retired at item 9b before any release
+carried it, so reading one raises `AttributeError`; they are not constructor
+keywords and never appear in `to_dict()`. 3.x pickles still load (the legacy
+keys are rewritten on load). The bootstrap
 draw containers (`bootstrap_results.overall_att_se` etc.) keep their
 payload names. External adapters that `getattr(res, "se", None)`-style
 query the inference surface (e.g.
@@ -1941,7 +1931,7 @@ Results container for `ChangesInChanges` under both methods (the `method` field 
 
 ### LWDiDResults
 
-Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int` (when inference is unavailable - e.g. psm, degenerate designs - `se`/`t_stat`/`p_value` and both CI bounds are jointly NaN while `att` is RETAINED: the fail-closed contract), plus `n_obs`, `n_treated`, `n_control`, `df_inference`, `cluster_name`/`n_clusters`, and fit provenance (`rolling`, `estimation_method`, `vcov_type`, `alpha`, `control_group`, `n_bootstrap`, `seed`, `pscore_trim`, `psm_config`, `inference_basis`). Staggered fits also carry `cohort_effects` and `cohort_time_effects` dicts. Methods: `summary(alpha=None)` / `print_summary(alpha=None)` (alpha must equal the fit-time alpha - the family-wide guard), `to_dict()`, `to_dataframe(level='simple')` / `to_csv(path, level='simple')` (4.0: aggregate-backed - `aggregate(level).to_dataframe()` plus the `rolling`/`estimation_method`/`vcov_type` columns; `level` in `'simple'` (one headline row, default), `'group'` (per-cohort rows, staggered only), `'event_study'`; columns `conf_int_lower`/`conf_int_upper`, `n` = treated units - `n_obs`/`n_control` live in `to_dict()`), `aggregate(level)` with levels `'simple'` (view-relay of the fitted headline -> AggregationResult), `'event_study'` (per-event-time effects -> EventStudyResults), and `'group'` (per-cohort effects -> AggregationResult; staggered fits only - common-timing fits raise), and - common-timing `estimation_method='reg'` fits ONLY - `randomization_test()` and `wild_cluster_bootstrap()` (the latter ADDITIONALLY requires a `cluster=` fit - unclustered fits raise; both REPLAY the fitted collapsed design; no data arguments accepted; other fits reject informatively). NOTE: there is NO `overall_att` or `period_effects` attribute, not even as a deprecated alias - those surfaces were retired pre-release (the staggered containers above carry `overall_att` only as a 5.0-removed FutureWarning property); use `.att` for the overall effect and `aggregate('event_study')` for per-period effects.
+Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int` (when inference is unavailable - e.g. psm, degenerate designs - `se`/`t_stat`/`p_value` and both CI bounds are jointly NaN while `att` is RETAINED: the fail-closed contract), plus `n_obs`, `n_treated`, `n_control`, `df_inference`, `cluster_name`/`n_clusters`, and fit provenance (`rolling`, `estimation_method`, `vcov_type`, `alpha`, `control_group`, `n_bootstrap`, `seed`, `pscore_trim`, `psm_config`, `inference_basis`). Staggered fits also carry `cohort_effects` and `cohort_time_effects` dicts. Methods: `summary(alpha=None)` / `print_summary(alpha=None)` (alpha must equal the fit-time alpha - the family-wide guard), `to_dict()`, `to_dataframe(level='simple')` / `to_csv(path, level='simple')` (4.0: aggregate-backed - `aggregate(level).to_dataframe()` plus the `rolling`/`estimation_method`/`vcov_type` columns; `level` in `'simple'` (one headline row, default), `'group'` (per-cohort rows, staggered only), `'event_study'`; columns `conf_int_lower`/`conf_int_upper`, `n` = treated units - `n_obs`/`n_control` live in `to_dict()`), `aggregate(level)` with levels `'simple'` (view-relay of the fitted headline -> AggregationResult), `'event_study'` (per-event-time effects -> EventStudyResults), and `'group'` (per-cohort effects -> AggregationResult; staggered fits only - common-timing fits raise), and - common-timing `estimation_method='reg'` fits ONLY - `randomization_test()` and `wild_cluster_bootstrap()` (the latter ADDITIONALLY requires a `cluster=` fit - unclustered fits raise; both REPLAY the fitted collapsed design; no data arguments accepted; other fits reject informatively). NOTE: LWDiDResults never had the 3.x `overall_*` headline spelling or a per-period dict (and since 4.0 no container does - item 9b removed them library-wide); use `.att` for the overall effect and `aggregate('event_study')` for per-period effects.
 
 ### TROPResults
 
@@ -2230,7 +2220,7 @@ permutation_test(data, outcome, treatment, post, unit,
 leave_one_out_test(data, outcome, treatment, post, unit, alpha=0.05)
 ```
 
-`permutation_test` / `leave_one_out_test` take `post=` (the pre-4.0 `time=` alias was removed in 4.0). The `run_placebo_test` / `run_all_placebo_tests` wrappers keep their `time` parameter.
+`permutation_test` / `leave_one_out_test` take `post=` (the pre-4.0 `time=` alias was removed in 4.0). The `run_placebo_test` / `run_all_placebo_tests` wrappers take `time=` as the calendar period column only and derive the 0/1 post dummy for those two tests as `data[time].isin(post_periods)`; `post_periods` is required on both wrappers (4.0, ledger rows M-156 / M-157).
 
 All return `PlaceboTestResults` with attributes: `test_type`, `placebo_effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_obs`, `is_significant`.
 

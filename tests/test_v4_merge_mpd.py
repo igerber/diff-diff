@@ -6,8 +6,8 @@ MultiPeriodDiD), M-082 (static ``fit(time=)`` -> ``post=``) and M-083 (static
 v4-design section 4.1 gate triple, the mode/rename validation surfaces, the
 day-one auto-cluster carve-outs (user decision 2026-08-07), the 4.0 removal
 pins (M-010/M-011/M-012/M-060: the names are gone; M-007: the legacy
-reference-period warning is retired; M-016: ``period_effects`` is a
-FutureWarning view on the surface), the unified surface contract, warning
+reference-period warning is retired; M-016: ``period_effects`` is gone -
+its 4.0 -> 5.0 view was retired at 4.0 by item 9b), the unified surface contract, warning
 attribution, and the consumer ports. Through 3.x the MultiPeriodDiD class was
 the live twin of every lane here; those parity pins moved to the committed
 pre-refactor oracle in ``tests/test_twfe_event_study_decoupling.py``.
@@ -42,21 +42,14 @@ from diff_diff import (
 from diff_diff.pretrends import compute_pretrends_power
 from diff_diff.results_base import (
     EventStudyResults,
-    _PeriodEffectView,
     build_event_study_surface,
 )
-from diff_diff.visualization import plot_event_study, plot_honest_event_study
+from diff_diff.visualization import plot_event_study
 
 # ---------------------------------------------------------------------------
 # Pinned messages (the deprecation/validation contract)
 # ---------------------------------------------------------------------------
 
-PERIOD_EFFECTS_MSG = (
-    "EventStudyResults.period_effects is deprecated and will be removed in "
-    "5.0; use to_dataframe() (one row per event_time, reference row included) "
-    "or the columnar att/se/t_stat/p_value/conf_int_lower/conf_int_upper "
-    "arrays instead."
-)
 REMOVED_NAMES = ("MultiPeriodDiD", "MultiPeriodDiDResults", "PeriodEffect", "EventStudy")
 STATIC_TIME_MSG = (
     "TwoWayFixedEffects.fit: in static mode (event_study=False) time= is "
@@ -646,8 +639,8 @@ class TestGateERemoval:
         assert np.allclose(anchor[np.nonzero(anchor)], 1.0 / n_post)
 
 
-class TestPeriodEffectsView:
-    """M-016: ``period_effects`` is a FutureWarning view on calendar surfaces."""
+class TestPeriodEffectsRemoved:
+    """M-016: ``period_effects`` is gone (the 4.0 -> 5.0 view was retired at 4.0, item 9b)."""
 
     def _fit(self, panel, alpha=0.05):
         return TwoWayFixedEffects(alpha=alpha).fit(
@@ -660,187 +653,36 @@ class TestPeriodEffectsView:
             post_periods=_post(),
         )
 
-    def test_is_a_property_not_a_field(self):
+    def test_period_effects_is_gone_on_calendar_surfaces(self, panel):
         import dataclasses
         import inspect
 
         assert "period_effects" not in {f.name for f in dataclasses.fields(EventStudyResults)}
-        assert isinstance(inspect.getattr_static(EventStudyResults, "period_effects"), property)
-
-    def test_warns_once_and_matches_the_surface_rowwise(self, panel):
+        assert inspect.getattr_static(EventStudyResults, "period_effects", None) is None
         s = self._fit(panel)
+        assert s.time_scale == "calendar"
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            pe = s.period_effects
-        fw = [w for w in rec if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1 and str(fw[0].message) == PERIOD_EFFECTS_MSG
-        labels = [lab for lab, ref in zip(s.event_time.tolist(), s.is_reference) if not ref]
-        assert list(pe) == labels
-        for i, lab in enumerate(s.event_time.tolist()):
-            if s.is_reference[i]:
-                assert lab not in pe
-                continue
-            rec_ = pe[lab]
-            assert isinstance(rec_, _PeriodEffectView)
-            assert rec_.period == lab
-            assert rec_.effect == float(s.att[i]) and rec_.se == float(s.se[i])
-            assert rec_.t_stat == float(s.t_stat[i]) and rec_.p_value == float(s.p_value[i])
-            assert rec_.conf_int == (float(s.conf_int_lower[i]), float(s.conf_int_upper[i]))
-            assert rec_.is_significant == bool(s.p_value[i] < s.alpha)
-        # the reference row is omitted, as the pre-4.0 dict did
-        assert len(pe) == int((~s.is_reference).sum())
+            assert not hasattr(s, "period_effects")
+            with pytest.raises(AttributeError):
+                s.period_effects
+        assert not [w for w in rec if issubclass(w.category, FutureWarning)]
+        # the successor is the surface itself
+        frame = s.to_dataframe()
+        assert len(frame) == len(s.event_time)
 
-    def test_is_significant_uses_the_surface_alpha(self, panel):
-        s10 = self._fit(panel, alpha=0.10)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            pe = s10.period_effects
-        ps = {lab: r.p_value for lab, r in pe.items()}
-        for lab, r in pe.items():
-            assert r.is_significant == (ps[lab] < 0.10)
-        # a row between 0.05 and 0.10 is significant at the surface's alpha
-        # but would not have been at the removed record's hard-coded 0.05 -
-        # the pin is on the rule, so just assert the rule held for every row
-        assert all(r.is_significant == (r.p_value < 0.10) for r in pe.values())
-
-    def test_significance_stars_thresholds(self):
-        rows = {1: (1.0, 0.1), 2: (1.0, 0.2), 4: (1.0, 0.5), 5: (0.001, 1.0), 6: (0.05, 1.0)}
-        s = calendar_surface(rows, reference=3, post_periods=[4, 5, 6])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            pe = s.period_effects
-        from diff_diff.results_base import _significance_stars
-
-        for lab, r in pe.items():
-            assert r.significance_stars == _significance_stars(r.p_value)
-        assert _significance_stars(np.nan) == ""
-        assert _significance_stars(0.0005) == "***"
-        assert _significance_stars(0.005) == "**"
-        assert _significance_stars(0.03) == "*"
-        assert _significance_stars(0.07) == "."
-        assert _significance_stars(0.5) == ""
-
-    def test_nan_rows_stay_nan_records(self):
-        rows = {1: (0.1, 0.2), 2: (np.nan, np.nan), 4: (0.5, 0.1)}
-        s = calendar_surface(rows, reference=3, post_periods=[4])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            r = s.period_effects[2]
-        assert np.isnan(r.effect) and np.isnan(r.p_value)
-        assert r.is_significant is False and r.significance_stars == ""
-
-    def test_datetime_labels_survive_as_keys(self):
-        import dataclasses
-
-        rows = {1: (0.1, 0.2), 2: (0.2, 0.2), 4: (0.5, 0.1)}
-        base = calendar_surface(rows, reference=3, post_periods=[4])
-        # object-dtype Timestamps are what a datetime time column produces
-        # (the surface keeps the native dtype; a datetime64[ns] array would
-        # be flattened to integer nanoseconds by .tolist(), which the view
-        # avoids by iterating the array itself)
-        stamps = np.array([pd.Timestamp(f"2020-0{m}-01") for m in (1, 2, 3, 4)], dtype=object)
-        s = dataclasses.replace(
-            base,
-            event_time=stamps,
-            vcov=None,
-            vcov_index=None,
-            reference_period=stamps[2],
-            post_periods=(stamps[3],),
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            pe = s.period_effects
-        assert set(pe) == {stamps[0], stamps[1], stamps[3]}
-        assert all(isinstance(k, pd.Timestamp) for k in pe)
-        assert pe[pd.Timestamp("2020-04-01")].effect == 0.5
-
-    def test_duplicate_labels_fail_closed(self):
-        import dataclasses
-
-        rows = {1: (0.1, 0.2), 2: (0.2, 0.2), 4: (0.5, 0.1)}
-        base = calendar_surface(rows, reference=3, post_periods=[4])
-        dup = dataclasses.replace(
-            base, event_time=np.array([1, 1, 3, 4]), vcov=None, vcov_index=None
-        )
-        with pytest.raises(ValueError, match="duplicate event_time labels"):
-            dup.period_effects
-        # a label shared by the reference row and an estimated row is rejected
-        # too (it would surface the estimate under the reference's key)
-        ref_dup = dataclasses.replace(
-            base, event_time=np.array([1, 3, 3, 4]), vcov=None, vcov_index=None
-        )
-        with pytest.raises(ValueError, match="duplicate event_time labels"):
-            ref_dup.period_effects
-
-    def test_relative_surfaces_do_not_carry_the_view(self):
-        """Gated to calendar surfaces: a relative-time aggregate('event_study')
-        container never had period_effects, so hasattr is False and nothing
-        warns there."""
+    def test_period_effects_is_gone_on_relative_surfaces(self):
         data = generate_staggered_data(n_units=40, n_periods=6, seed=3)
         cs = CallawaySantAnna().fit(
             data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         es = cs.aggregate("event_study")
         assert isinstance(es, EventStudyResults) and es.time_scale == "relative"
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            assert not hasattr(es, "period_effects")
-            with pytest.raises(AttributeError, match="time_scale='calendar'"):
-                es.period_effects
-        assert not [w for w in rec if issubclass(w.category, FutureWarning)]
+        assert not hasattr(es, "period_effects")
 
-    def test_hasattr_fires_the_view_on_calendar_surfaces(self, panel):
-        """Documents the hazard: any new duck sniff must guard with isinstance
-        first, because hasattr runs the getter (and warns)."""
+    def test_builder_passthrough(self, panel):
         s = self._fit(panel)
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            assert hasattr(s, "period_effects")
-        assert [w for w in rec if "period_effects" in str(w.message)]
-
-    def test_builder_passthrough_never_fires_the_view(self, panel):
-        s = self._fit(panel)
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            assert build_event_study_surface(s) is s
-        assert not [w for w in rec if "period_effects" in str(w.message)]
-
-    def test_no_consumer_path_fires_the_view(self, panel):
-        """The view-never-fires sweep: every surface-consuming path stays
-        duck-sniff free (scoped to the view's own FutureWarning, so legitimate
-        UserWarnings or matplotlib/scipy warnings do not fail it)."""
-        # matplotlib is an optional dependency (absent on the CI test legs):
-        # the plotting half of the sweep runs only when it is importable;
-        # the rest of the sweep always runs.
-        try:
-            import matplotlib
-
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-        except ImportError:  # pragma: no cover - depends on the environment
-            plt = None
-
-        s = self._fit(panel)
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            s.to_dataframe()
-            s.to_dict()
-            s.summary()
-            build_event_study_surface(s)
-            h = compute_honest_did(s, M=1.0)
-            compute_pretrends_power(s, M=0.3, pretest_form="wald")
-            if plt is not None:
-                ax = plot_event_study(s)
-                plt.close("all")
-                plot_honest_event_study(h)  # original_results rides on h
-                plt.close("all")
-                assert ax is not None
-        offenders = [
-            w
-            for w in rec
-            if issubclass(w.category, FutureWarning) and "period_effects" in str(w.message)
-        ]
-        assert offenders == []
+        assert build_event_study_surface(s) is s
 
 
 # ---------------------------------------------------------------------------
@@ -1501,7 +1343,6 @@ class TestConsumers:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        from diff_diff.visualization import plot_event_study
         from diff_diff.visualization._event_study import _pre_shading_runs
 
         assert _pre_shading_runs([0, 1, 3]) == [(0, 1), (3, 3)]

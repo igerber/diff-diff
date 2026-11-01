@@ -48,11 +48,6 @@
       ~StackedDiDResults.n_stacked_obs
       ~StackedDiDResults.n_sub_experiments
       ~StackedDiDResults.n_treated_units
-      ~StackedDiDResults.overall_att
-      ~StackedDiDResults.overall_conf_int
-      ~StackedDiDResults.overall_p_value
-      ~StackedDiDResults.overall_se
-      ~StackedDiDResults.overall_t_stat
       ~StackedDiDResults.reference_event_times
       ~StackedDiDResults.significance_stars
       ~StackedDiDResults.survey_metadata

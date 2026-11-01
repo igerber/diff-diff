@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import deprecated_field_property, migrate_renamed_state_keys
+from diff_diff._deprecation import migrate_renamed_state_keys
 from diff_diff.aggregation import (
     AggregationMixin,
     AggregationResult,
@@ -220,42 +220,6 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     # no level takes balance_e (the estimator has no balance_e machinery).
     _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study", "dose")
     _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
-
-    # --- Deprecated 3.x storage names (ledger row M-058) ---
-    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
-    # annotation) so they stay descriptors, never dataclass fields - the
-    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
-    # (the LWDiDResults 3.10-alias precedent).
-    # Nine spellings onto the five canonical fields: the five former
-    # ``overall_att_*`` fields AND the four former silent ``overall_*``
-    # aliases (the M-058 family); ``overall_acrt*`` is a separate estimand.
-    overall_att = deprecated_field_property(
-        "ContinuousDiDResults", "overall_att", "att", removed_in="5.0"
-    )
-    overall_att_se = deprecated_field_property(
-        "ContinuousDiDResults", "overall_att_se", "se", removed_in="5.0"
-    )
-    overall_att_t_stat = deprecated_field_property(
-        "ContinuousDiDResults", "overall_att_t_stat", "t_stat", removed_in="5.0"
-    )
-    overall_att_p_value = deprecated_field_property(
-        "ContinuousDiDResults", "overall_att_p_value", "p_value", removed_in="5.0"
-    )
-    overall_att_conf_int = deprecated_field_property(
-        "ContinuousDiDResults", "overall_att_conf_int", "conf_int", removed_in="5.0"
-    )
-    overall_se = deprecated_field_property(
-        "ContinuousDiDResults", "overall_se", "se", removed_in="5.0"
-    )
-    overall_t_stat = deprecated_field_property(
-        "ContinuousDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
-    )
-    overall_p_value = deprecated_field_property(
-        "ContinuousDiDResults", "overall_p_value", "p_value", removed_in="5.0"
-    )
-    overall_conf_int = deprecated_field_property(
-        "ContinuousDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
-    )
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Migrate 3.x pickles written under the ``overall_*`` storage names.

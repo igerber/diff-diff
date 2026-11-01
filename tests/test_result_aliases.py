@@ -3,9 +3,10 @@
 Since the 4.0 storage flip (ledger rows M-050..M-058, PR 5b) the canonical
 quintet ``att`` / ``se`` / ``t_stat`` / ``p_value`` / ``conf_int`` IS the
 native storage on every estimator container in this file, and the 3.x
-``overall_*`` / ``overall_att_*`` names are read-only ``FutureWarning``
-properties (removed at 5.0). This file pins that direction: canonical names
-are constructor keywords and dataclass fields, legacy names warn and relay.
+``overall_*`` / ``overall_att_*`` names are GONE (their 4.0 -> 5.0
+FutureWarning shims were retired at 4.0 by item 9b of the cut). This file
+pins that direction: canonical names are constructor keywords and dataclass
+fields, legacy names are absent (``hasattr`` False).
 The last ``overall_*`` container, ``StaggeredTripleDiffResults``, was retired by
 the item-6 DDD container unification (row M-014): ``TripleDifferenceResults``
 now serves both DDD designs with native canonical storage.
@@ -19,6 +20,7 @@ shipped with ``se=NaN`` / ``conf_int=NaN`` in the methods-appendix table.
 
 from __future__ import annotations
 
+import inspect
 import math
 from dataclasses import asdict, fields
 
@@ -144,22 +146,6 @@ def test_required_init_kwargs_handles_default_factory_and_tuple_dispatch():
     assert inst.x == 1.5
 
 
-def _assert_legacy_aliases_relay(res, *, att, se, t_stat, p_value, conf_int):
-    """Pattern B post-flip: the five legacy ``overall_*`` properties warn and relay
-    the canonical fields."""
-    cls = type(res).__name__
-    for old, expected in (
-        ("overall_att", att),
-        ("overall_se", se),
-        ("overall_t_stat", t_stat),
-        ("overall_p_value", p_value),
-        ("overall_conf_int", conf_int),
-    ):
-        with pytest.warns(FutureWarning, match=rf"{cls}\.{old} is deprecated"):
-            got = getattr(res, old)
-        assert _alias_equal(got, expected), f"{cls}.{old} relays {got!r}, expected {expected!r}"
-
-
 # Sentinel inference values exercised across direct-construction tests.
 _ATT = 1.5
 _SE = 0.3
@@ -198,34 +184,23 @@ FLIPPED_PATTERN_B = [
 
 
 @pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
-def test_pattern_b_legacy_aliases_relay_canonical(cls):
+def test_pattern_b_canonical_keywords_and_no_legacy_names(cls):
     """Each flipped class constructs with canonical keywords; the legacy
-    ``overall_*`` properties warn (FutureWarning) and relay the stored value."""
+    ``overall_*`` names are gone (removed at 4.0, item 9b)."""
     res = cls(**_required_init_kwargs(cls, dict(_CANONICAL)))
     assert res.att == _ATT
     assert res.se == _SE
     assert res.t_stat == _T
     assert res.p_value == _P
     assert res.conf_int == _CI
-    _assert_legacy_aliases_relay(res, att=_ATT, se=_SE, t_stat=_T, p_value=_P, conf_int=_CI)
-
-
-@pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
-def test_pattern_b_legacy_aliases_propagate_nan(cls):
-    """When the canonical fields are NaN (degenerate fit), the legacy aliases are NaN.
-
-    Pins the safe_inference() joint-NaN contract (per CLAUDE.md: ALL inference
-    fields are computed together and stay NaN-consistent). Aliases are pure
-    read-throughs, so the contract holds without re-computation.
-    """
-    res = cls(**_required_init_kwargs(cls, dict(_CANONICAL_NAN)))
-    with pytest.warns(FutureWarning):
-        assert math.isnan(res.overall_att)
-        assert math.isnan(res.overall_se)
-        assert math.isnan(res.overall_t_stat)
-        assert math.isnan(res.overall_p_value)
-        assert math.isnan(res.overall_conf_int[0])
-        assert math.isnan(res.overall_conf_int[1])
+    for old in (
+        "overall_att",
+        "overall_se",
+        "overall_t_stat",
+        "overall_p_value",
+        "overall_conf_int",
+    ):
+        assert not hasattr(res, old), f"{cls.__name__}.{old} resurrected"
 
 
 @pytest.mark.parametrize("cls", FLIPPED_PATTERN_B, ids=lambda c: c.__name__)
@@ -270,31 +245,6 @@ def test_continuous_did_canonical_fields_native():
     assert res.overall_acrt == 0.0  # the separate ACRT estimand is untouched
 
 
-@pytest.mark.parametrize(
-    ("old", "expected"),
-    [
-        ("overall_att", _ATT),
-        ("overall_att_se", _SE),
-        ("overall_att_t_stat", _T),
-        ("overall_att_p_value", _P),
-        ("overall_att_conf_int", _CI),
-        ("overall_se", _SE),
-        ("overall_t_stat", _T),
-        ("overall_p_value", _P),
-        ("overall_conf_int", _CI),
-    ],
-)
-def test_continuous_did_legacy_spellings_warn_and_relay(old, expected):
-    """All nine 3.x spellings - the five former ``overall_att_*`` fields and the
-    four former silent ``overall_*`` aliases - warn and relay the canonical
-    field (the M-058 family)."""
-    res = ContinuousDiDResults(
-        **_required_init_kwargs(ContinuousDiDResults, _continuous_did_overrides())
-    )
-    with pytest.warns(FutureWarning, match=rf"ContinuousDiDResults\.{old} is deprecated"):
-        assert getattr(res, old) == expected
-
-
 # ============================================================================
 # Read-only semantics
 # ============================================================================
@@ -326,21 +276,21 @@ def test_continuous_did_legacy_spellings_warn_and_relay(old, expected):
     ],
     ids=["CallawaySantAnnaResults", "ContinuousDiDResults"],
 )
-def test_legacy_aliases_are_read_only_canonical_fields_writable(cls, ovr, legacy_names):
-    """Post-flip read-only semantics are INVERTED from 3.x: assigning to a legacy
-    ``overall_*`` property raises AttributeError (no setter installed), while the
-    canonical quintet are plain dataclass fields and accept assignment (the
+def test_legacy_names_absent_canonical_fields_writable(cls, ovr, legacy_names):
+    """The legacy ``overall_*`` / ``overall_att_*`` names are absent (neither
+    field nor descriptor; ``hasattr`` False), while the canonical quintet are
+    plain dataclass fields and accept assignment (the
     ``WooldridgeDiDResults.aggregate("simple")`` write path relies on this).
 
-    Regression lineage: a downstream test in tests/test_practitioner.py once
-    used `r.overall_se = X` on a `ContinuousDiDResults.__new__()` mock. Locking
-    the direction here means fixtures that assign the wrong name fail loudly
-    via this test rather than deep in another suite.
+    Note: with the descriptors gone, assigning a legacy name creates a shadow
+    instance attribute on these non-slotted dataclasses instead of raising -
+    the former "wrong name fails loudly" guard was retired with the shims at
+    item 9b; the naming guard's consumer sweep is the in-repo defense.
     """
     res = cls(**_required_init_kwargs(cls, ovr))
     for name in legacy_names:
-        with pytest.raises(AttributeError):
-            setattr(res, name, object())
+        assert inspect.getattr_static(cls, name, None) is None, f"{cls.__name__}.{name}"
+        assert not hasattr(res, name), f"{cls.__name__}.{name}"
     for name in ("att", "se", "conf_int", "p_value", "t_stat"):
         setattr(res, name, 7.0)
         assert getattr(res, name) == 7.0
@@ -430,8 +380,7 @@ def test_balance_adapter_pattern_returns_populated_se():
         conf_int is not None and len(conf_int) == 2 and all(np.isfinite(x) for x in conf_int)
     ), f"balance adapter would see conf_int={conf_int!r}; pre-alias bug returned None"
     assert p_value is not None and np.isfinite(p_value)
-    # The legacy overall_* properties relay the same stored values (and warn).
-    with pytest.warns(FutureWarning):
-        assert se == res.overall_se
-        assert conf_int == res.overall_conf_int
-        assert p_value == res.overall_p_value
+    # The legacy overall_* names are gone (removed at 4.0, item 9b).
+    assert not hasattr(res, "overall_se")
+    assert not hasattr(res, "overall_conf_int")
+    assert not hasattr(res, "overall_p_value")

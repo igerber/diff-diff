@@ -39,11 +39,6 @@
       ~SunAbrahamResults.inference_df
       ~SunAbrahamResults.is_significant
       ~SunAbrahamResults.n_clusters
-      ~SunAbrahamResults.overall_att
-      ~SunAbrahamResults.overall_conf_int
-      ~SunAbrahamResults.overall_p_value
-      ~SunAbrahamResults.overall_se
-      ~SunAbrahamResults.overall_t_stat
       ~SunAbrahamResults.reference_observed
       ~SunAbrahamResults.reference_period
       ~SunAbrahamResults.significance_stars

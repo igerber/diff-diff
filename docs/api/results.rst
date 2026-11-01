@@ -63,11 +63,11 @@ Shared bases introduced by the 4.0 API-unification program.
 ``BaseResults`` is the estimator-results base;
 ``Diagnostic`` marks diagnostic result containers (which carry no
 inference row); ``EventStudyResults`` is the unified per-event-time
-representation. On calendar-time surfaces (``TwoWayFixedEffects`` event-study
-mode) ``EventStudyResults.period_effects`` is a deprecated compatibility view
-of the removed ``MultiPeriodDiDResults.period_effects`` (FutureWarning, ledger
-M-016, removed in 5.0): a dict keyed by calendar period with the reference
-period omitted; ``to_dataframe()`` is the successor.
+representation. The removed ``MultiPeriodDiDResults.period_effects`` dict has
+no successor attribute (its planned compatibility view, ledger M-016, was
+retired at 4.0): ``EventStudyResults.to_dataframe()`` - one row per
+``event_time``, reference row included - and the columnar arrays are the
+per-period route.
 
 .. autoclass:: diff_diff.BaseResults
    :no-index:

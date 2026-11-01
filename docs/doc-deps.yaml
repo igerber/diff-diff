@@ -1603,10 +1603,10 @@ sources:
         note: "BaseResults / Diagnostic marker / EventStudyResults contract (4.0 program Phase 2; ledger rows M-091/M-092/M-093)"
       - path: docs/migration-4.0.md
         type: user_guide
-        note: "EventStudyResults.period_effects compatibility view (ledger row M-016) - worked example in the MultiPeriodDiD merge section"
+        note: "M-016 period_effects removed at 4.0 (item 9b) - the to_dataframe() route in the MultiPeriodDiD merge section"
       - path: diff_diff/guides/llms-full.txt
         type: user_guide
-        note: "EventStudyResults.period_effects compatibility view block (M-016 reader)"
+        note: "per-period effects block: to_dataframe() route (M-016 view removed at 4.0, item 9b)"
 
   diff_diff/bootstrap_utils.py:
     drift_risk: medium

@@ -40,15 +40,6 @@
       ~ContinuousDiDResults.is_significant
       ~ContinuousDiDResults.n_bootstrap
       ~ContinuousDiDResults.num_knots
-      ~ContinuousDiDResults.overall_att
-      ~ContinuousDiDResults.overall_att_conf_int
-      ~ContinuousDiDResults.overall_att_p_value
-      ~ContinuousDiDResults.overall_att_se
-      ~ContinuousDiDResults.overall_att_t_stat
-      ~ContinuousDiDResults.overall_conf_int
-      ~ContinuousDiDResults.overall_p_value
-      ~ContinuousDiDResults.overall_se
-      ~ContinuousDiDResults.overall_t_stat
       ~ContinuousDiDResults.pscore_fallback
       ~ContinuousDiDResults.pscore_trim
       ~ContinuousDiDResults.rank_deficient_action
