@@ -8,6 +8,7 @@ Eq. 4.14 surfaces are post-fit ``results.aggregate(...)`` calls, not fit-time fi
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from diff_diff import (
@@ -452,9 +453,8 @@ class TestStaggeredTripleDiffEventStudy:
             assert col in df.columns
         assert len(df) == len(es.event_time)
         np.testing.assert_allclose(df["att"].to_numpy(), es.att, rtol=0, atol=0)
-        # The fit-time event-study table is gone from the results container.
-        with pytest.raises(ValueError, match="not stored on 4.0 fits"):
-            res.to_dataframe("event_study")
+        # 4.0 (M-093 8b): the results-level frame relays the container.
+        pd.testing.assert_frame_equal(res.to_dataframe("event_study"), df)
 
     def test_event_study_and_group_both_available(self, simple_data):
         # The former aggregate='all' fit: both surfaces come from the same result.

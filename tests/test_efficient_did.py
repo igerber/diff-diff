@@ -346,10 +346,13 @@ class TestOutputFormats:
     def test_to_dataframe_raises_without_aggregation(self):
         df = _make_simple_panel()
         result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
-        # 4.0: the legacy fit-time field is never populated; the error
-        # steers to the post-fit container route.
-        with pytest.raises(ValueError, match=r"not stored on 4.0 fits.*aggregate\('event_study'\)"):
-            result.to_dataframe("event_study")
+        # 4.0: the legacy fit-time field is never populated; since M-093 8b
+        # level="event_study" relays the post-fit container, level="group"
+        # still steers there with an error.
+        pd.testing.assert_frame_equal(
+            result.to_dataframe("event_study"),
+            result.aggregate("event_study").to_dataframe(),
+        )
         with pytest.raises(ValueError, match=r"not stored on 4.0 fits.*aggregate\('group'\)"):
             result.to_dataframe("group")
 

@@ -901,6 +901,9 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
         "4.0 stores no surface - re-fit with diff-diff >= 4.0, which computes "
         "it at fit)"
     ),
+    # SunAbraham always computes its event-study surface at fit (no
+    # aggregate() step exists); absence means a hand-built or corrupted object.
+    "SunAbrahamResults": "re-fit; SunAbraham always computes the event-study surface",
     "WooldridgeDiDResults": "call results.aggregate('event_study') first",
     "SpilloverDiDResults": "refit with event_study=True",
     "ChaisemartinDHaultfoeuilleResults": "refit with L_max >= 1",
@@ -1623,7 +1626,10 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
     """Build the unified event-study surface from a fitted results object.
 
     Package-internal (spec section 5 / row M-092): public exposure rides
-    ``results.aggregate(type="event_study")`` (Phase 2 PR (b)); the Phase 3
+    ``results.aggregate(type="event_study")`` (Phase 2 PR (b)) and, since the
+    4.0 cut (row M-093, item 8b), every results class's
+    ``to_dataframe(level="event_study")``, which returns this container's
+    ``to_dataframe()`` (the ``EVENT_STUDY_SCHEMA`` columns); the Phase 3
     merged TwoWayFixedEffects event-study mode returns the container
     natively. Values are copied bit-exactly from the native surface;
     an absent surface raises ``ValueError`` naming the call that produces

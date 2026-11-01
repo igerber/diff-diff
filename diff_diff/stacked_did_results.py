@@ -554,35 +554,22 @@ class StackedDiDResults(BaseResults, AggregationMixin):
             - "event_study": Event study effects by relative time
             - "group": Group (cohort) effects
 
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+
         Returns
         -------
         pd.DataFrame
             Results as DataFrame.
         """
         if level == "event_study":
-            if self.event_study_effects is None:
-                # Only reachable on pre-3.9 pickles: 3.9+ fits always
-                # materialize the surface (row M-024).
-                raise ValueError(
-                    "Event study effects not present on this results object. "
-                    "Re-fit with diff-diff >= 3.9, which always computes the "
-                    "event-study surface."
-                )
-            rows = []
-            for h, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": h,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
+            # A pre-3.9 pickle (no stored surface) raises the builder's
+            # "re-fit with diff-diff >= 3.9" hint; 3.9+ fits always carry it.
+            return self.aggregate("event_study").to_dataframe()
 
         elif level == "group":
             raise ValueError(

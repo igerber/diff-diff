@@ -10,6 +10,7 @@ import pytest
 
 from diff_diff import StackedDiD, StackedDiDResults
 from diff_diff.prep_dgp import generate_staggered_data
+from diff_diff.results_base import EVENT_STUDY_SCHEMA
 
 # =============================================================================
 # Test Data Fixtures
@@ -764,8 +765,10 @@ class TestResultsMethods:
         )
         df = results.to_dataframe(level="event_study")
         assert isinstance(df, pd.DataFrame)
-        assert "relative_period" in df.columns
-        assert "effect" in df.columns
+        # 4.0 (M-093 8b): the unified EVENT_STUDY_SCHEMA frame, bit-equal to
+        # the aggregate() container's.
+        assert list(df.columns) == list(EVENT_STUDY_SCHEMA)
+        pd.testing.assert_frame_equal(df, results.aggregate("event_study").to_dataframe())
 
     def test_to_dataframe_group_raises(self, staggered_data):
         """to_dataframe(level='group') raises ValueError."""
@@ -791,7 +794,8 @@ class TestResultsMethods:
             first_treat="first_treat",
         )
         df = results.to_dataframe(level="event_study")
-        assert sorted(df["relative_period"].tolist()) == [-2, -1, 0, 1, 2]
+        assert sorted(df["event_time"].tolist()) == [-2, -1, 0, 1, 2]
+        assert df.loc[df["is_reference"], "event_time"].tolist() == [-1]
 
     def test_to_dataframe_legacy_pickle_none_branch(self, staggered_data):
         """The effects-None branch survives for pre-3.9 pickles only."""

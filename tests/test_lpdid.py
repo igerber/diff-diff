@@ -23,6 +23,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff.results_base import EVENT_STUDY_SCHEMA
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _dgp_utils import make_lpdid_panel  # noqa: E402
 from legacy_surface import es_dict  # noqa: E402
@@ -278,7 +280,20 @@ class TestLPDiDAPI:
             )
 
     def test_results_to_dataframe_and_repr(self):
-        df = pd.DataFrame({"horizon": [0], "coefficient": [1.0], "se": [0.1]})
+        # 4.0 (M-093 8b): level="event_study" is the unified EVENT_STUDY_SCHEMA
+        # frame built from the native per-horizon frame (horizon -1 = reference).
+        df = pd.DataFrame(
+            {
+                "horizon": [-1, 0],
+                "coefficient": [0.0, 1.0],
+                "se": [np.nan, 0.1],
+                "t_stat": [np.nan, 10.0],
+                "p_value": [np.nan, 0.0],
+                "conf_low": [np.nan, 0.8],
+                "conf_high": [np.nan, 1.2],
+                "n_obs": [np.nan, 10],
+            }
+        )
         results = LPDiDResults(
             event_study=df,
             pooled=None,
@@ -292,12 +307,31 @@ class TestLPDiDAPI:
             no_composition=False,
             pmd=None,
         )
-        assert results.to_dataframe(level="event_study").equals(df)
+        out = results.to_dataframe(level="event_study")
+        assert list(out.columns) == list(EVENT_STUDY_SCHEMA)
+        assert out["event_time"].tolist() == [-1, 0]
+        assert out["is_reference"].tolist() == [True, False]
+        assert out["att"].tolist()[1] == 1.0
         with pytest.raises(ValueError, match="not computed"):
             results.to_dataframe(level="pooled")
         with pytest.raises(ValueError, match="level must be"):
             results.to_dataframe(level="bad")
         assert "LPDiDResults" in repr(results)
+        absent = LPDiDResults(
+            event_study=None,
+            pooled=None,
+            n_obs=10,
+            n_treated_units=4,
+            n_control_units=6,
+            pre_window=2,
+            post_window=0,
+            control_group="clean",
+            reweight=False,
+            no_composition=False,
+            pmd=None,
+        )
+        with pytest.raises(ValueError, match="event_study dataframe was not computed"):
+            absent.to_dataframe(level="event_study")
 
     def test_results_summary_and_to_dict_run(self):
         df = make_lpdid_panel(cohorts=(4,), n_per_cohort=15, n_never=15, n_periods=8, seed=11)

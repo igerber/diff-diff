@@ -613,7 +613,7 @@ def _handle_sa(results: Any):
                 "these are computed automatically during fit()."
             ),
             code=(
-                "# SA event-study effects:\n"
+                "# SA event-study effects (the unified EVENT_STUDY_SCHEMA frame):\n"
                 "sa_es_df = results.to_dataframe(level='event_study')\n"
                 "# SA cohort effects:\n"
                 "sa_cohort_df = results.to_dataframe(level='cohort')"

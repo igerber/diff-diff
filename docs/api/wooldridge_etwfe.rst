@@ -142,6 +142,12 @@ Basic OLS (follows Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
     print(r.to_dataframe(level='group'))
     print(r.summary())
 
+Since 4.0 ``to_dataframe(level='event_study')`` is the library-wide unified
+event-study table (``event_time, att, se, t_stat, p_value, conf_int_lower,
+conf_int_upper, cband_lower, cband_upper, n, df, is_reference, estimand``)
+followed by the ``cohort_trends`` and ``aggregation_weights`` configuration
+columns; it requires a prior ``aggregate('event_study')`` and raises otherwise.
+
 .. note::
 
    When ``method="ols"`` is applied to a binary (``{0, 1}``) or non-negative
@@ -190,7 +196,9 @@ Aggregation Methods
 
 Call ``.aggregate(type, weights=...)``, then export with
 ``.to_dataframe(level=...)`` (``summary()`` prints the headline simple
-aggregation):
+aggregation; the ``event_study`` level is the library-wide
+``EVENT_STUDY_SCHEMA`` plus ``cohort_trends`` / ``aggregation_weights``, and
+raises if ``aggregate('event_study')`` has not been called):
 
 .. list-table::
    :header-rows: 1

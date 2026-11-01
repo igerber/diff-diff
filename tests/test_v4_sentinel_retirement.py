@@ -11,8 +11,9 @@ raw-dict routes read the key, and 3.x pickles are migrated on load by
 ``_deprecation.migrate_event_study_reference_sentinel``.
 
 The second half of M-093 (every results class's ``to_dataframe(level=
-"event_study")`` emitting the unified schema) is item 8b; the row flips to
-``done`` there.
+"event_study")`` emitting the unified schema) shipped as item 8b and is pinned
+by ``tests/test_v4_event_study_schema.py``, the row's ``test_ref``; the row is
+``done``. ``THIS_TEST_REF`` below names this file for the 8a pins only.
 """
 
 import copy
@@ -34,7 +35,7 @@ from diff_diff import (
 )
 from diff_diff._deprecation import migrate_event_study_reference_sentinel
 from diff_diff.prep_dgp import generate_staggered_data
-from diff_diff.results_base import build_event_study_surface
+from diff_diff.results_base import EVENT_STUDY_SCHEMA, build_event_study_surface
 from diff_diff.spillover import SpilloverDiD
 from tests._dgp_utils import generate_butts_staggered_dgp
 
@@ -200,15 +201,16 @@ def test_spillover_frames_carry_is_reference_with_nan_n_obs(spillover_fit):
 @pytest.mark.parametrize(
     "fixture_name", ["stacked_fit", "imputation_boot_fit", "twostage_boot_fit"]
 )
-def test_native_to_dataframe_event_study_reference_n_obs_is_nan(request, fixture_name):
-    # The 8a visible change on the native level frames (8b replaces them with
-    # the unified schema): the reference row's n_obs renders NaN, not 0.
+def test_native_to_dataframe_event_study_reference_n_is_nan(request, fixture_name):
+    # Since 8b the level frame IS the unified schema: the reference row is the
+    # is_reference row (n NaN by contract), never a zero count.
     res = request.getfixturevalue(fixture_name)
     df = res.to_dataframe(level="event_study")
-    ref_mask = df["relative_period"] == -1
-    assert ref_mask.sum() == 1
-    assert np.isnan(float(df.loc[ref_mask, "n_obs"].iloc[0]))
-    assert np.all(np.isfinite(df.loc[~ref_mask, "n_obs"].to_numpy(dtype=float)))
+    assert list(df.columns) == list(EVENT_STUDY_SCHEMA)
+    ref_mask = df["is_reference"].to_numpy(dtype=bool)
+    assert df.loc[ref_mask, "event_time"].tolist() == [-1]
+    assert np.isnan(float(df.loc[ref_mask, "n"].iloc[0]))
+    assert np.all(np.isfinite(df.loc[~ref_mask, "n"].to_numpy(dtype=float)))
 
 
 # --------------------------------------------------------------------------- #
@@ -570,11 +572,11 @@ def test_bootstrap_override_skips_reference_row(request, fixture_name):
 # --------------------------------------------------------------------------- #
 
 
-def test_ledger_row_points_here_and_stays_planned_until_8b():
+def test_ledger_row_done_and_points_at_the_8b_schema_file():
     from tests.test_v4_matrix import ROWS as LEDGER_ROWS
 
     row = {r["id"]: r for r in LEDGER_ROWS}["M-093"]
     assert row["kind"] == "behavior"
-    assert row["status"] == "planned"  # flips to done in 8b (the schema rewire)
-    assert row["test_ref"] == THIS_TEST_REF
+    assert row["status"] == "done"
+    assert row["test_ref"] == "tests/test_v4_event_study_schema.py"
     assert row["old"] == "diff_diff:CallawaySantAnnaResults.event_study_effects"

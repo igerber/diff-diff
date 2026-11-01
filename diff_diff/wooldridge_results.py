@@ -19,6 +19,7 @@ from diff_diff.results_base import (
     BaseResults,
     _coverage_pct,
     _require_fit_alpha,
+    build_event_study_surface,
 )
 from diff_diff.utils import safe_inference
 
@@ -824,6 +825,19 @@ class WooldridgeDiDResults(BaseResults):
         level : "simple" | "group" | "calendar" | "event_study" | "gt"
             Use "gt" to export raw group-time effects. Any other value
             raises ``ValueError``.
+            ``level="event_study"`` returns the unified event-study table -
+            ``build_event_study_surface(self).to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Two fit-configuration columns follow the schema: ``cohort_trends``
+            and ``aggregation_weights`` (the weighting scheme of the stored
+            event-study aggregation). The event-study aggregation is computed
+            post-fit, so ``to_dataframe(level="event_study")`` before
+            ``aggregate("event_study", weights=...)`` raises ``ValueError``
+            (through 3.x it returned an empty frame) - the weighting scheme
+            changes the numbers and is never chosen silently.
         """
         valid_levels = ("simple", "group", "calendar", "event_study", "gt")
         if level not in valid_levels:
@@ -837,6 +851,14 @@ class WooldridgeDiDResults(BaseResults):
                 row.update(eff)
                 rows.append(row)
             return pd.DataFrame(rows)
+        if aggregation == "event_study":
+            # Unified EVENT_STUDY_SCHEMA prefix (4.0, M-093 item 8b); a fit
+            # whose event-study aggregation was never requested raises the
+            # builder's "call results.aggregate('event_study') first" hint.
+            frame = build_event_study_surface(self).to_dataframe()
+            frame["cohort_trends"] = self.cohort_trends
+            frame["aggregation_weights"] = self.aggregation_weights.get("event_study", "cell")
+            return frame
 
         # Active weighting scheme for the requested aggregation surface
         # (default "cell"; flips to "cohort_share" after an opt-in
@@ -880,17 +902,6 @@ class WooldridgeDiDResults(BaseResults):
                     "aggregation_weights": active_weights,
                 }
                 for t, eff in sorted((self.calendar_effects or {}).items())
-            ],
-            "event_study": [
-                {
-                    "relative_period": k,
-                    **{kk: vv for kk, vv in eff.items() if kk != "conf_int"},
-                    "conf_int_lo": eff["conf_int"][0],
-                    "conf_int_hi": eff["conf_int"][1],
-                    "cohort_trends": self.cohort_trends,
-                    "aggregation_weights": active_weights,
-                }
-                for k, eff in sorted((self.event_study_effects or {}).items())
             ],
         }
         rows = mapping.get(aggregation, [])

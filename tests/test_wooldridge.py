@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff.results_base import EVENT_STUDY_SCHEMA
 from diff_diff.wooldridge import (
     WooldridgeDiD,
     _build_interaction_matrix,
@@ -84,6 +85,19 @@ class TestWooldridgeDiDResults:
         df = r.to_dataframe("event_study")
         assert isinstance(df, pd.DataFrame)
         assert "att" in df.columns
+        # 4.0 (M-093 8b): the unified EVENT_STUDY_SCHEMA prefix plus the two
+        # Wooldridge fit-configuration columns.
+        assert list(df.columns) == list(EVENT_STUDY_SCHEMA) + [
+            "cohort_trends",
+            "aggregation_weights",
+        ]
+
+    def test_to_dataframe_event_before_aggregate_raises(self):
+        # Through 3.x this returned an EMPTY frame (a silent failure); the
+        # weighting scheme changes the numbers, so 4.0 raises instead.
+        r = _make_minimal_results()
+        with pytest.raises(ValueError, match=r"aggregate\('event_study'\) first"):
+            r.to_dataframe("event_study")
 
     def test_aggregate_simple_returns_self(self):
         r = _make_minimal_results()
@@ -389,7 +403,7 @@ class TestAggregations:
     def test_to_dataframe_event(self, fitted):
         fitted.aggregate("event_study")
         df = fitted.to_dataframe("event_study")
-        assert "relative_period" in df.columns
+        assert "event_time" in df.columns
         assert "att" in df.columns
 
     def test_to_dataframe_gt(self, fitted):

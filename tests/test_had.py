@@ -50,6 +50,7 @@ from diff_diff.had import (
     _validate_had_panel_event_study,
 )
 from diff_diff.local_linear import bias_corrected_local_linear
+from diff_diff.results_base import EVENT_STUDY_SCHEMA
 from tests.conftest import assert_nan_inference
 
 # =============================================================================
@@ -2589,16 +2590,13 @@ class TestEventStudyResultMethods:
         result = self._fit()
         df = result.to_dataframe()
         assert len(df) == len(result.event_times)
-        assert set(df.columns) == {
-            "event_time",
-            "att",
-            "se",
-            "t_stat",
-            "p_value",
-            "conf_int_low",
-            "conf_int_high",
-            "n_obs",
-        }
+        # 4.0 (M-093 8b): the unified EVENT_STUDY_SCHEMA frame; the estimand
+        # column carries the WAS label, and no reference row is synthesized.
+        assert list(df.columns) == list(EVENT_STUDY_SCHEMA)
+        assert set(df["estimand"]) == {result.target_parameter}
+        assert not df["is_reference"].any()
+        with pytest.raises(ValueError, match="Use 'event_study'"):
+            result.to_dataframe(level="periods")
 
     def test_to_dict_shape(self):
         result = self._fit()

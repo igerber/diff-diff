@@ -10,6 +10,7 @@ import pytest
 from legacy_surface import es_dict
 from scipy import stats
 
+from diff_diff.results_base import EVENT_STUDY_SCHEMA
 from diff_diff.sun_abraham import SunAbraham, SunAbrahamResults
 
 
@@ -244,9 +245,10 @@ class TestSunAbraham:
 
         # Event study DataFrame
         df_es = results.to_dataframe(level="event_study")
-        assert "relative_period" in df_es.columns
-        assert "effect" in df_es.columns
-        assert "se" in df_es.columns
+        # 4.0 (M-093 8b): the unified EVENT_STUDY_SCHEMA frame; the omitted
+        # reference period appears as the single is_reference row.
+        assert list(df_es.columns) == list(EVENT_STUDY_SCHEMA)
+        assert int(df_es["is_reference"].sum()) == 1
 
     def test_get_set_params(self):
         """Test sklearn-compatible parameter access."""

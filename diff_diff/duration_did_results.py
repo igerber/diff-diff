@@ -445,11 +445,21 @@ class DurationDiDResults(BaseResults, AggregationMixin):
 
         Parameters
         ----------
-        level : {"periods", "att"}
+        level : {"periods", "att", "event_study"}
             ``"periods"``: one row per post-treatment date with the effect,
             pointwise inference, simultaneous band and validity status.
             ``"att"``: the single headline row.
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Relative event time (``-1`` is the reference row, ``0..`` the
+            post-treatment dates in order).
         """
+        if level == "event_study":
+            return self.aggregate("event_study").to_dataframe()
         if level == "att":
             return pd.DataFrame(
                 [
@@ -482,7 +492,7 @@ class DurationDiDResults(BaseResults, AggregationMixin):
                     "status": list(self.period_status),
                 }
             )
-        raise ValueError(f"level must be 'periods' or 'att', got {level!r}")
+        raise ValueError(f"level must be 'periods', 'att' or 'event_study', got {level!r}")
 
     # ------------------------------------------------------------------ #
     # Summary                                                              #

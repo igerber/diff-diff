@@ -500,17 +500,12 @@ class TestContinuousDiDResults:
 
     def test_to_dataframe_event_study_bootstrapped_populated(self, results):
         """A bootstrapped fit materializes the event-study surface at fit
-        time (4.0: always, no fit-time kwarg), so the legacy frame is
-        available and agrees row-for-row with the relayed container; the
-        analytic-fit error is pinned in test_event_study_to_dataframe."""
+        time (4.0: always, no fit-time kwarg); since 8b (M-093) the level
+        frame IS the relayed container's unified frame, bit-equal."""
         assert results.event_study_effects is not None
         df = results.to_dataframe(level="event_study")
-        assert "relative_period" in df.columns
-        assert "att_glob" in df.columns
         es = results.aggregate("event_study")
-        assert len(df) == len(es.event_time)
-        np.testing.assert_array_equal(df["relative_period"].to_numpy(), es.event_time)
-        np.testing.assert_allclose(df["att_glob"].to_numpy(), es.att, rtol=1e-14, atol=0)
+        pd.testing.assert_frame_equal(df, es.to_dataframe())
 
     def test_to_dataframe_invalid_level(self, results):
         with pytest.raises(ValueError, match="Unknown level"):
@@ -606,13 +601,13 @@ class TestEventStudyAggregation:
         est = ContinuousDiD()
         results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         # analytic fits leave the legacy fit-time field None; the surface is
-        # the post-fit container
+        # the post-fit container, which to_dataframe(level="event_study")
+        # now relays (M-093 8b) instead of raising.
         assert results.event_study_effects is None
-        with pytest.raises(ValueError, match=r"aggregate\('event_study'\)"):
-            results.to_dataframe(level="event_study")
         df = results.aggregate("event_study").to_dataframe()
         assert "event_time" in df.columns
         assert "att" in df.columns
+        pd.testing.assert_frame_equal(results.to_dataframe(level="event_study"), df)
 
     def test_event_study_not_yet_treated(self):
         """Event study with control_group='not_yet_treated' and analytic SE."""

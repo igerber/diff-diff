@@ -329,16 +329,21 @@ class TestCallawaySantAnnaResults:
         with pytest.raises(ValueError, match="Unknown level"):
             results.to_dataframe(level="invalid")
 
-    def test_event_study_not_computed_error(self):
-        """Test error when event study not computed."""
+    def test_event_study_level_routes_to_aggregate(self):
+        """4.0 (M-093 8b): level="event_study" relays the aggregate() container
+        (kit recompute) instead of raising; level="group" still raises."""
         data = generate_staggered_data()
         cs = CallawaySantAnna()
         results = cs.fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
+        pd.testing.assert_frame_equal(
+            results.to_dataframe(level="event_study"),
+            results.aggregate("event_study").to_dataframe(),
+        )
         with pytest.raises(ValueError, match="not stored on 4.0 fits"):
-            results.to_dataframe(level="event_study")
+            results.to_dataframe(level="group")
 
 
 def generate_staggered_data_with_covariates(

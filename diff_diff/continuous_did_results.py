@@ -494,6 +494,15 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         ----------
         level : str, default="dose_response"
             ``"dose_response"``, ``"group_time"``, or ``"event_study"``.
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Analytical fits recompute the binarized event study from the
+            retained kit; bootstrapped fits relay the fit-time percentile
+            surface.
         """
         if level == "dose_response":
             att_df = self.dose_response_att.to_dataframe()
@@ -526,29 +535,7 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
                 )
             return pd.DataFrame(rows)
         elif level == "event_study":
-            if self.event_study_effects is None:
-                raise ValueError(
-                    "Event study effects not stored (only bootstrapped fits "
-                    "materialize the surface at fit). Call "
-                    "results.aggregate('event_study') for the unified "
-                    "post-fit container - analytic fits recompute it from "
-                    "the retained kit; a result unpickled from an older "
-                    "release must be re-fit with diff-diff >= 3.9."
-                )
-            rows = []
-            for rel_t, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": rel_t,
-                        "att_glob": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                    }
-                )
-            return pd.DataFrame(rows)
+            return self.aggregate("event_study").to_dataframe()
         else:
             raise ValueError(
                 f"Unknown level: {level}. Use 'dose_response', 'group_time', or 'event_study'."

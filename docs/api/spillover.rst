@@ -203,7 +203,11 @@ and planned follow-up enhancements:
   plotter reads the ``reference_period`` attribute, else the row's
   ``is_reference`` key; since 4.0 the reference row carries
   ``is_reference: True`` and no ``n_obs``, and the event-study frames a
-  boolean ``is_reference`` column with NaN ``n_obs`` there - [M-093]). ``DiagnosticReport`` routing for
+  boolean ``is_reference`` column with NaN ``n_obs`` there - [M-093]).
+  ``to_dataframe(level='event_study')`` returns the unified
+  ``EVENT_STUDY_SCHEMA`` table of the direct effects (``level='simple'``,
+  the default, is the one-row headline frame; an aggregate-mode fit
+  raises). ``DiagnosticReport`` routing for
   ``SpilloverDiDResults`` is wired: parallel-trends (event-study on
   the direct-effect dynamics), design-effect, and heterogeneity apply;
   Goodman-Bacon is excluded (spillover identifies off far-away

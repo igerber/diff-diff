@@ -533,7 +533,12 @@ distinct per-cohort positional-base event times whose multi-entry case
 fails the HonestDiD/PreTrendsPower common-reference guard on gapped
 universal grids; amended into [M-092] pre-cut with the
 2(b) consumer delivery), and `to_dataframe(level="event_study")`
-emitting identical column schemas from every estimator. The container
+emitting the `EVENT_STUDY_SCHEMA` columns as an identical PREFIX from every
+estimator (amended at the 4.0 cut, item 8b [M-093]: a producer may append
+documented fit-configuration columns AFTER the schema - LWDiD's
+`rolling`/`estimation_method`/`vcov_type` [M-153] and WooldridgeDiD's
+`cohort_trends`/`aggregation_weights`; no producer renames, reorders or omits
+a schema column). The container
 OWNS its arrays: `__post_init__` copies every array field including the
 `vcov`/`vcov_index` pair (amended with [M-024] - `np.asarray` aliased the
 producer's stored matrix on the post-fit view route, so mutating a
@@ -1243,8 +1248,12 @@ tests-first PR that flips no rows).
    2026-10-30: the sentinel retirement - every materialized reference row carries
    `is_reference: True` and no count key, the builder and the consumers' raw-dict
    routes read the key, 3.x pickles migrate on load; pinned by
-   `tests/test_v4_sentinel_retirement.py`. 8b = the
-   `to_dataframe(level="event_study")` schema enforcement + the row flip.)
+   `tests/test_v4_sentinel_retirement.py`. 8b SHIPPED 2026-10-31: the
+   `to_dataframe(level="event_study")` schema rewire on every results class -
+   the `EVENT_STUDY_SCHEMA` prefix rule above, routed through
+   `aggregate('event_study')` / `build_event_study_surface` - pinned by
+   `tests/test_v4_event_study_schema.py`; row flipped to `done`; item 8
+   complete.)
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,

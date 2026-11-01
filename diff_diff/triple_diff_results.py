@@ -682,10 +682,16 @@ class TripleDifferenceResults(BaseResults, AggregationMixin):
             ``"overall"`` - one row of the scalar ``to_dict()`` entries (both
             designs); ``"group_time"`` - the ``ATT(g, t)`` cells (staggered
             design only). ``None`` selects ``"overall"`` in the 2x2x2 design
-            and ``"group_time"`` in the staggered design. ``"event_study"`` and
-            ``"group"`` are not stored on 4.0 fits - use
-            ``results.aggregate('event_study').to_dataframe()`` /
-            ``results.aggregate('group').to_dataframe()``.
+            and ``"group_time"`` in the staggered design.
+            ``level="event_study"`` returns the unified event-study table -
+            ``self.aggregate("event_study").to_dataframe()`` - with the pinned
+            ``EVENT_STUDY_SCHEMA`` columns (``event_time, att, se, t_stat, p_value,
+            conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df,
+            is_reference, estimand``), identical across estimators (4.0, ledger
+            row M-093).
+            Staggered design only - the 2x2x2 design raises the single-ATT
+            error from ``aggregate``. ``"group"`` is not stored on 4.0 fits -
+            use ``results.aggregate('group').to_dataframe()``.
 
         Returns
         -------
@@ -719,10 +725,12 @@ class TripleDifferenceResults(BaseResults, AggregationMixin):
                     row["epv"] = self.epv_diagnostics[(g, t)].get("epv")
                 rows.append(row)
             return pd.DataFrame(rows)
-        if level in ("event_study", "group"):
+        if level == "event_study":
+            return self.aggregate("event_study").to_dataframe()
+        if level == "group":
             raise ValueError(
-                f"{'Event study' if level == 'event_study' else 'Group'} effects are not "
-                f"stored on 4.0 fits; use results.aggregate({level!r}).to_dataframe() "
+                "Group effects are not stored on 4.0 fits; use "
+                "results.aggregate('group').to_dataframe() "
                 "(no refit required; staggered design only)."
             )
         raise ValueError(
