@@ -10,7 +10,7 @@ This document provides the academic foundations and key implementation requireme
 
 1. [Core DiD Estimators](#core-did-estimators)
    - [DifferenceInDifferences](#differenceindifferences)
-   - [MultiPeriodDiD](#multiperioddid)
+   - [MultiPeriodDiD](#multiperioddid) *(archived - class removed at 4.0)*
    - [TwoWayFixedEffects](#twowayfixedeffects)
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
    - [CallawaySantAnna](#callawaysantanna)
@@ -28,10 +28,10 @@ This document provides the academic foundations and key implementation requireme
    - [SyntheticDiD](#syntheticdid)
    - [SyntheticControl](#syntheticcontrol)
    - [TripleDifference](#tripledifference)
-   - [StaggeredTripleDifference](#staggeredtripledifference)
+   - [StaggeredTripleDifference](#staggeredtripledifference) *(archived - class removed at 4.0)*
    - [TROP](#trop)
    - [HeterogeneousAdoptionDiD](#heterogeneousadoptiondid)
-   - [ChangesInChanges (CiC) + QDiD](#changesinchanges-cic)
+   - [ChangesInChanges (CiC) + QDiD](#changesinchanges-cic) *(QDiD class spelling archived - removed at 4.0)*
    - [DurationDiD](#durationdid)
    - [SpilloverDiD](#spilloverdid)
 4. [Regression Discontinuity](#regression-discontinuity)
@@ -45,6 +45,8 @@ This document provides the academic foundations and key implementation requireme
    - [HonestDiD](#honestdid)
    - [PreTrendsPower](#pretrendspower)
    - [PowerAnalysis](#poweranalysis)
+
+**Archived sections.** Sections marked *archived* are the methodology record of classes removed at the 4.0 cut (ledger rows M-010, M-013, M-015 - [M-090], cut item 9): each opens with an archive Note naming the surviving surface that runs the same estimation core, and the body is kept verbatim in the removed class's vocabulary. They are not live entry points.
 
 ---
 
@@ -199,7 +201,7 @@ independent full-refit enumeration in `tests/test_wild_bootstrap.py::test_wcr_ma
 
 ## MultiPeriodDiD
 
-- **Note:** REMOVED at the 4.0 cut (PR 4c-ii, ledger row M-010; deprecated in 3.9).
+- **Note (archived section - class removed at 4.0):** REMOVED at the 4.0 cut (PR 4c-ii, ledger row M-010; deprecated in 3.9).
   This section is retained as the methodology record of the pooled
   event-study design, which `TwoWayFixedEffects().fit(..., event_study=True,
   spec="pooled", post_periods=, reference_period=)` runs unchanged - the
@@ -215,8 +217,8 @@ independent full-refit enumeration in `tests/test_wild_bootstrap.py::test_wcr_ma
   `tests/helpers/event_study_average.py` arithmetic), `period_effects`
   survives as a FutureWarning view on `EventStudyResults` (row M-016,
   removed 5.0), and `unit=` auto-clusters the pooled spec at unit. The
-  methodology below is stated in the removed class's vocabulary; archive
-  framing lands with [M-090].
+  methodology below is stated in the removed class's vocabulary and is kept
+  verbatim as the archive record ([M-090], 4.0 cut item 9).
 
 **Primary source:** Event study methodology
 - Freyaldenhoven, S., Hansen, C., Pérez, J.P., & Shapiro, J.M. (2021). Visualization,
@@ -4406,7 +4408,7 @@ shared verbatim.
 
 ## StaggeredTripleDifference
 
-- **Note:** REMOVED at the 4.0 cut (PR 4a, ledger row M-013; deprecated in 3.9).
+- **Note (archived section - class removed at 4.0):** REMOVED at the 4.0 cut (PR 4a, ledger row M-013; deprecated in 3.9).
   This section is retained as the methodology record of the staggered DDD engine,
   which `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)` runs
   unchanged - the estimation core moved verbatim to
@@ -4415,8 +4417,8 @@ shared verbatim.
   surface: `eligibility=` is `partition=`, `control_group` takes `"not_yet_treated"`
   / `"never_treated"` (R's compact spellings died with the class), and `cluster=`
   raises in staggered mode (see the TripleDifference section). The methodology
-  below is stated in the engine's own vocabulary; archive framing lands with
-  [M-090].
+  below is stated in the engine's own vocabulary and is kept verbatim as the
+  archive record ([M-090], 4.0 cut item 9).
 
 **Primary source:** [Ortiz-Villavicencio, M., & Sant'Anna, P.H.C. (2025). Better Understanding Triple Differences Estimators. arXiv:2505.09942v3.](https://arxiv.org/abs/2505.09942v3). Paper review on file: `docs/methodology/papers/ortiz-villavicencio-santanna-2025-review.md`.
 
@@ -6048,7 +6050,7 @@ where `Q1` is the R type-1 quantile - the paper's eq. (35)/(A.1) inf-based ceili
 
 ### QDiD (quantile DiD comparison estimator)
 
-- **Note:** As of 3.9 this estimator is selected with `ChangesInChanges(method="qdid")`; the standalone `QDiD` class spelling (and the `QDiDResults` alias) was removed at the 4.0 cut (PR 4a, ledger row M-015). Only the class spelling went - the estimator is fully supported and selecting it emits no advisory warning. The existing footnote-21 non-monotonicity `UserWarning` and `practitioner.py`'s "Prefer ChangesInChanges over QDiD" step already carry Athey-Imbens' p. 447 recommendation at the moments a user can act on it; a third warning on every `method="qdid"` fit would blur which of the class/method is dying. Both engines and every number are unchanged by the merge.
+- **Note (archived class spelling - removed at 4.0):** As of 3.9 this estimator is selected with `ChangesInChanges(method="qdid")`; the standalone `QDiD` class spelling (and the `QDiDResults` alias) was removed at the 4.0 cut (PR 4a, ledger row M-015). Only the class spelling went - the estimator is fully supported and selecting it emits no advisory warning. The existing footnote-21 non-monotonicity `UserWarning` and `practitioner.py`'s "Prefer ChangesInChanges over QDiD" step already carry Athey-Imbens' p. 447 recommendation at the moments a user can act on it; a third warning on every `method="qdid"` fit would blur which of the class/method is dying. Both engines and every number are unchanged by the merge.
 
 **Primary source:** Athey & Imbens (2006), Section 3.3 (pp. 446-447) - the paper formalizes QDiD as the natural comparison estimator and recommends CiC over it: QDiD's justifying model (eq. 22) is not invariant to monotone rescaling of the outcome, forces `U ⊥ (G, T)` (identical unobservable distributions in all four cells), and places testable restrictions on the data (footnote 21 - the implementation warns when the implied counterfactual quantile function is non-monotone on the requested grid; unconditional fits only, see the covariates block above).
 
@@ -7031,7 +7033,7 @@ should be a deliberate user choice.
 | StackedDiD | Cluster-robust (unit) | Cluster at unit × sub-experiment |
 | TROP | Block bootstrap | — |
 | ChangesInChanges | Bootstrap (replicate-SD SEs, normal-approx CIs) | Sup-t uniform bands (fixed 95%, qte parity) |
-| QDiD | Bootstrap (replicate-SD SEs, normal-approx CIs) | Sup-t uniform bands (fixed 95%, qte parity) |
+| ChangesInChanges(method="qdid") | Bootstrap (replicate-SD SEs, normal-approx CIs) | Sup-t uniform bands (fixed 95%, qte parity) |
 | BaconDecomposition | N/A (exact decomposition) | Individual 2×2 SEs |
 | RDDensityTest | Jackknife (leave-one-out, window-restricted; rddensity default) | Plug-in asymptotic (`vcov_type="plugin"`) |
 | HonestDiD | Inherited from event study | FLCI, C-LF |
@@ -7057,7 +7059,7 @@ should be a deliberate user choice.
 | StackedDiD | stacked-did-weights | `create_sub_exp()` + `compute_weights()` |
 | TROP | - | (forthcoming) |
 | ChangesInChanges | qte | `CiC()` |
-| QDiD | qte | `QDiD()` |
+| ChangesInChanges(method="qdid") | qte | `QDiD()` |
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |
 | RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp + fuzzy + covariate-adjusted, nn path; `takeup` = R's `fuzzy=`, `covariates` = R's `covs=`) |
@@ -8011,8 +8013,8 @@ variance from the distribution of replicate estimates.
     HeterogeneousAdoptionDiD (TSL-only survey paths; replicate designs
     rejected at `fit()`), SyntheticControl (rejects `survey_design`
     entirely)
-  - **BaconDecomposition** is diagnostic-only — outside the 20-estimator
-    count — and likewise rejects replicate designs
+  - **BaconDecomposition** is diagnostic-only — outside the estimator
+    roster — and likewise rejects replicate designs
   - Estimators with replicate support reject replicate + bootstrap
     (replicate weights provide analytical variance)
 - **Note:** When invalid replicates are dropped in `compute_replicate_vcov`

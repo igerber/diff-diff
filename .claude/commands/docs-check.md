@@ -52,7 +52,7 @@ The following estimators/features MUST have documentation:
 | WooldridgeDiD | "WooldridgeDiD" | "WooldridgeDiD" | wooldridge_etwfe.rst | "Multi-Period and Staggered" |
 | TROP | "TROP" | "TROP" | trop.rst | "Triply Robust Panel" |
 | HonestDiD | n/a (in `## Diagnostics`) | n/a (in `## Diagnostics`) | honest_did.rst | "Honest DiD" |
-| BaconDecomposition | "BaconDecomposition" | "BaconDecomposition" | bacon.rst | "Multi-Period and Staggered" |
+| BaconDecomposition | n/a (in `## Diagnostics and Sensitivity Analysis`) | n/a (in `## Diagnostics & Sensitivity`) | bacon.rst | "Multi-Period and Staggered" |
 
 ### Supporting Features (require llms.txt mention + API docs; README mention only if landing-page-relevant)
 
@@ -117,11 +117,11 @@ Determine which checks to run based on `$ARGUMENTS`.
 For each estimator/diagnostic in the table above:
 
 1. Read `diff_diff/guides/llms.txt` and verify the name appears under the right section:
-   - **Estimators** (e.g. CallawaySantAnna, SunAbraham, TROP, BaconDecomposition): under `## Estimators`
-   - **Diagnostics-class** (HonestDiD, and any future diagnostic-only entries): under `## Diagnostics and Sensitivity Analysis`
+   - **Estimators** (e.g. CallawaySantAnna, SunAbraham, TROP): under `## Estimators`
+   - **Diagnostics-class** (HonestDiD, BaconDecomposition, RDPlot, RDDensityTest, and any future diagnostic-only entries): under `## Diagnostics and Sensitivity Analysis`
 2. Read `README.md` and verify the name appears in the matching flat catalog:
    - **Estimators**: in the `## Estimators` section
-   - **Diagnostics-class** (HonestDiD): in the `## Diagnostics & Sensitivity` section
+   - **Diagnostics-class** (HonestDiD, BaconDecomposition, RDPlot, RDDensityTest): in the `## Diagnostics & Sensitivity` section
 3. Report missing entries
 
 ```bash

@@ -577,6 +577,12 @@ sources:
         type: user_guide
       - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
         type: tutorial
+      - path: docs/api/index.rst
+        type: api_reference
+        note: "Diagnostics autosummary entry (moved from Visualization)"
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
   diff_diff/rddensity.py:
     drift_risk: medium
     docs:
@@ -602,6 +608,9 @@ sources:
       - path: diff_diff/guides/llms-autonomous.txt
         section: "RD in-scope routing paragraph"
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
   diff_diff/_rdrobust_port.py:
     drift_risk: high
     docs:
@@ -666,6 +675,9 @@ sources:
         note: "Survey-aware pretest workflow walkthrough (overall + event-study under SurveyDesign(strata=...)); drift-locks `_QUG_DEFERRED_SUFFIX`, the event-study summary QUG-skip note, and joint pretrends/homogeneity horizon labels under stratified-clustered Stute bootstrap (PR #432). Drift-locked at tests/test_t22_had_survey_design_drift.py"
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   diff_diff/local_linear.py:
     drift_risk: low
@@ -1228,6 +1240,9 @@ sources:
         type: user_guide
       - path: docs/r_comparison.rst
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   # ── TWFE Weight Diagnostics ───���─────────────────────────────────────────
 
@@ -1250,6 +1265,9 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "TWFE Weight Diagnostics"
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
   diff_diff/twfe_weights_results.py:
     drift_risk: low
     docs:
@@ -1276,7 +1294,7 @@ sources:
         type: tutorial
         note: "TWFE failure-mode demonstration"
       - path: README.md
-        section: "Estimators (one-line catalog entry)"
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
         type: user_guide
       - path: docs/references.rst
         type: user_guide
@@ -1284,10 +1302,16 @@ sources:
         section: "BaconDecomposition"
         type: user_guide
       - path: diff_diff/guides/llms.txt
-        section: "Estimators"
+        section: "Diagnostics and Sensitivity Analysis"
         type: user_guide
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/api/index.rst
+        type: api_reference
+        note: "Diagnostics autosummary entry"
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   # ── Diagnostics & analysis ───────���─────────────────────────────────
 
@@ -1306,6 +1330,9 @@ sources:
         type: tutorial
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   diff_diff/pretrends.py:
     drift_risk: low
@@ -1321,6 +1348,9 @@ sources:
         type: tutorial
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   diff_diff/business_report.py:
     drift_risk: medium
@@ -1359,6 +1389,9 @@ sources:
         type: user_guide
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   diff_diff/mmm.py:
     drift_risk: medium
@@ -1404,6 +1437,9 @@ sources:
         type: tutorial
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   # ── Survey support ─────────────────────────────────────────────────
 
@@ -1509,6 +1545,9 @@ sources:
         type: internal
       - path: docs/api/utils.rst
         type: api_reference
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
 
   diff_diff/results.py:
     drift_risk: medium

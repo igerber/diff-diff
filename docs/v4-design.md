@@ -273,7 +273,12 @@ documented under Diagnostics & Sensitivity - is consolidated under the
 unified family grouping; README catalog, llms.txt, API reference and
 alias-table groupings, and estimator-count claims on JOSS-adjacent
 surfaces all split accordingly. Tracked as a behavior row so the cut
-sweep cannot miss it.
+sweep cannot miss it. SHIPPED 2026-11-01 (cut item 9; pinned by
+`tests/test_v4_diagnostic_family_docs.py`; homepage counts kept at "20+" by
+user decision; `paper.md` untouched - it already states 23 estimators with
+Bacon outside the count; REGISTRY archive framing is in-place - archive Notes,
+TOC markers and an archived-sections convention paragraph - so anchors and
+doc-deps section names survive).
 
 **RDPlot contract compliance [M-088] [M-089].** `RDPlot.fit()` shipped
 with `outcome_col` / `running_col` after the ledger froze - the section 8
@@ -1256,6 +1261,11 @@ tests-first PR that flips no rows).
    complete.)
 9. [M-090] docs reorganization: Bacon to the diagnostics family, catalogue
    counts, JOSS prose, REGISTRY archive framing for the removed classes.
+   (SHIPPED 2026-11-01: Bacon and RDPlot re-homed on every catalogue surface,
+   homepage Diagnostics & Sensitivity table, in-place REGISTRY archive framing,
+   `/docs-check` classification; pinned by
+   `tests/test_v4_diagnostic_family_docs.py`, which runs in the docs-tests
+   workflow; row flipped to `done`.)
 10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
     migration-guide retitle, due gate green; re-execute (Rust backend) the
     tutorials whose clustered-default outputs moved at item 7a and were

@@ -121,7 +121,6 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [LWDiD](https://diff-diff.readthedocs.io/en/stable/api/lwdid.html) - Lee & Wooldridge (2025, 2026) rolling-transformation DiD: unit-specific demean/detrend converts panel to cross-section, staggered adoption, `estimation_method` in `reg`/`ipw`/`dr`/`psm` (the papers' RA/IPW/IPWRA plus propensity-score matching), exact small-N inference on the classical collapsed regression
 - [DMLDiD](https://diff-diff.readthedocs.io/en/stable/api/dml_did.html) - Chang (2020) double/debiased machine learning DiD: staggered ATT(g,t) with cross-fitted ML nuisance learners (DML2) and Neyman-orthogonal scores, for flexible/high-dimensional covariate adjustment under conditional parallel trends; panel or declared repeated cross sections (`panel=False`); survey/cluster support on both lanes (bad-control lane: panel only, `cluster=` only); Caetano, Callaway, Payne & Sant'Anna (2026) bad-control score via `fit(bad_control=, bad_control_covariates=)`
 - [DurationDiD](https://diff-diff.readthedocs.io/en/stable/api/duration_did.html) - Deaner & Ku (2026) causal duration DiD for a binary absorbing outcome (spell ended) in a two-group common-timing design: restricts the groups' untreated hazards (`method="cd"` additive gap or `method="ph"` ratio) instead of outcome levels, imputes the treated counterfactual survival, reports the per-date absorption ATT with whole-individual bootstrap pointwise and simultaneous bands plus a fixed-anchor pre-treatment specification test
-- [BaconDecomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html) - Goodman-Bacon (2021) decomposition for diagnosing TWFE bias in staggered settings
 
 ## Diagnostics & Sensitivity
 
@@ -131,6 +130,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
 - [Placebo Tests](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - placebo timing, group, permutation, leave-one-out
 - [TWFE Weight Diagnostics](https://diff-diff.readthedocs.io/en/stable/api/twfe_weights.html) - Baker et al. (2025) implicit weights a TWFE regression places on each ATT(g,t), against the ATT^O / ATT^simple targets, with the pre-period contribution. Ports Callaway's `twfeweights` (MIT)
+- [Bacon Decomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html) - Goodman-Bacon (2021) decomposition of the TWFE estimate into its 2x2 comparisons and weights, for diagnosing TWFE bias in staggered settings (`BaconDecomposition`, alias `Bacon`)
 - [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html) - Rambachan & Roth (2023) sensitivity analysis: robust CI under PT violations, breakdown values
 - [Pre-Trends Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/pretrends.html) - Roth (2022) minimum detectable violation and power curves
 - [Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/power.html) - analytical and simulation-based MDE, sample size, power curves for study design

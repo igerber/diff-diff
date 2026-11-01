@@ -17,7 +17,9 @@ for backward compatibility, so you can import any of them using:
 
     from diff_diff import DifferenceInDifferences, TwoWayFixedEffects, SyntheticDiD
 
-Most estimators have short aliases (``TROP`` already uses its short canonical name):
+Most estimators have short aliases (``TROP`` already uses its short canonical name;
+``Bacon`` is the alias of the :class:`~diff_diff.BaconDecomposition` diagnostic, see
+:doc:`bacon`):
 
 .. code-block:: python
 
