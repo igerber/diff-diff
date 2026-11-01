@@ -1,5 +1,7 @@
 # v4.0 deprecation ledger - the single source of truth for every API-lifecycle
-# fact in the 4.0 program (3.9 shims -> 4.0 removals -> 5.0 alias retirement).
+# fact in the 4.0 program (3.9 shims -> 4.0 removals; the
+# 5.0 alias-retirement window was retired at item 9b, 2026-11-01 - every shim
+# scheduled for it was removed AT 4.0).
 #
 # NORMATIVE SCHEMA: docs/v4-design.md section 11 (field meanings, kind and
 # status vocabularies, locator grammar, lifecycle rules). Enforced by
@@ -226,14 +228,13 @@ rows:
     group: merge-mpd
     old: "diff_diff:EventStudyResults.period_effects"
     new: null
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_merge_mpd.py
     code_refs: [diff_diff/results_base.py, diff_diff/guides/llms-full.txt]
-    notes: "SHIMMED at the 4.0 cut (PR 4c-ii, 2026-10-25): locator migrated from MultiPeriodDiDResults.period_effects with [M-011]'s flip (cross-row rule, spec section 11). @property on EventStudyResults (results_base.py; a plain descriptor, never a dataclass field) emitting FutureWarning(stacklevel=2) naming 5.0 and to_dataframe(); returns {calendar label: results_base._PeriodEffectView} over the non-reference rows (reference omitted like the old dict; duplicate labels raise); is_significant = p_value < alpha (NaN -> False; the removed record hard-coded 0.05 - user decision 2026-10-25); stars via a leaf-local helper (results_base imports no diff_diff module, so the view is a leaf-local computed property, not a deprecated_field_property rename-forwarder). GATED to time_scale='calendar' surfaces: on a relative-time surface the property raises AttributeError before warning, so hasattr is False and nothing warns. build_event_study_surface opens with an isinstance(EventStudyResults) passthrough so no duck sniff reaches the property. Reader inventory after the deletions: results_base.py (the view) and guides/llms-full.txt (its documentation). Original: Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11). Reader inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the EventStudyResults.period_effects view, _PeriodEffectView and the leaf-local stars helper are gone from results_base.py; to_dataframe() (one row per event_time, reference row included) and the columnar arrays are the successor. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 4c-ii, 2026-10-25): locator migrated from MultiPeriodDiDResults.period_effects with [M-011]'s flip (cross-row rule, spec section 11). @property on EventStudyResults (results_base.py; a plain descriptor, never a dataclass field) emitting FutureWarning(stacklevel=2) naming 5.0 and to_dataframe(); returns {calendar label: results_base._PeriodEffectView} over the non-reference rows (reference omitted like the old dict; duplicate labels raise); is_significant = p_value < alpha (NaN -> False; the removed record hard-coded 0.05 - user decision 2026-10-25); stars via a leaf-local helper (results_base imports no diff_diff module, so the view is a leaf-local computed property, not a deprecated_field_property rename-forwarder). GATED to time_scale='calendar' surfaces: on a relative-time surface the property raises AttributeError before warning, so hasattr is False and nothing warns. build_event_study_surface opens with an isinstance(EventStudyResults) passthrough so no duck sniff reaches the property. Reader inventory after the deletions: results_base.py (the view) and guides/llms-full.txt (its documentation). Original: Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11). Reader inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
 
   # ---- fit(aggregate=) -> results.aggregate(type=) -------------------------
   - id: M-020
@@ -640,126 +641,117 @@ rows:
     old: "diff_diff:CallawaySantAnnaResults.overall_att"
     new: "diff_diff:CallawaySantAnnaResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/staggered_results.py, diff_diff/staggered.py, diff_diff/staggered_aggregation.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py, diff_diff/diagnostic_report.py, diff_diff/prep_dgp.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/triple_diff_results.py, diff_diff/dml_did.py, diff_diff/dml_did_results.py, diff_diff/_deprecation.py, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, docs/methodology/REPORTING.md]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): the canonical quintet att/se/t_stat/p_value/conf_int are the native dataclass fields, renamed IN SLOT (the generated __init__ positional layout is public API and unchanged; constructors take canonical keywords and overall_att= raises TypeError). The five overall_* names are read-only deprecated_field_property shims (FutureWarning, stacklevel 2, 'Will be removed in 5.0'; plain class attributes, never dataclass fields, absent from fields()/asdict()/to_dict()). DMLDiDResults inherits the storage and RE-DECLARES the five shims so the warning names the subclass (tests/test_naming_guard.py SURFACE_ALLOWLIST['DMLDiDResults.overall_att'] records it - no independent row). Pickle migration: __setstate__ on every flipped container rewrites the legacy keys through _deprecation.migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET) (an existing canonical key wins; the legacy key never lingers in __dict__; spec section 5). Report surface: _reporting_helpers headline_attribute is 'att' for the nine containers and diagnostic_report._extract_scalar_headline's legacy overall_*/overall_att_* alias row was deleted (DR schema 2.0 -> 3.0, BR 3.0 -> 4.0; REPORTING.md Note). StaggeredTripleDiffResults is UNFLIPPED (storage, to_dict keys and headline_attribute stay overall_*; it dies with the item-6 container unification, whose successor is born canonical). The bootstrap draw containers (CSBootstrapResults.overall_att_se etc., DCDHBootstrapResults.overall_se etc.) keep their payload names (user decision 2026-10-26; REGISTRY.md Result-class field naming Note). Reader inventory after PR 5a/5a-ii/5b: no in-repo reader of the overall_* names remains on the nine containers (source, tests, docs, notebooks, guides, benchmarks all read the canonical quintet); the only quoted literals are the shim declarations, the LEGACY_OVERALL_QUINTET state map and the staggered-DDD branch of _reporting_helpers. diff_diff/_deprecation.py is 5.0-WINDOW INFRASTRUCTURE (added 2026-10-18): these rows' FutureWarning properties ride its deprecated_field_property helper and their __setstate__ bodies ride migrate_renamed_state_keys through the 4.0 -> 5.0 window ([M-016]'s view is a leaf-local computed property in results_base.py instead), so the 5.0 removal PR deletes these shims and the LEGACY_OVERALL_QUINTET state map but never the module - and must add CONSUMER_ALLOWLIST[('overall_att', 'diff_diff/_deprecation.py')] if it keeps the migration literal for still-older pickles. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. DMLDiDResults' re-declared shims gone with the parent's (the SURFACE_ALLOWLIST entry was deleted). deprecated_field_property itself was deleted from _deprecation.py (no consumer left); the module survives for the pickle migration. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): the canonical quintet att/se/t_stat/p_value/conf_int are the native dataclass fields, renamed IN SLOT (the generated __init__ positional layout is public API and unchanged; constructors take canonical keywords and overall_att= raises TypeError). The five overall_* names are read-only deprecated_field_property shims (FutureWarning, stacklevel 2, 'Will be removed in 5.0'; plain class attributes, never dataclass fields, absent from fields()/asdict()/to_dict()). DMLDiDResults inherits the storage and RE-DECLARES the five shims so the warning names the subclass (tests/test_naming_guard.py SURFACE_ALLOWLIST['DMLDiDResults.overall_att'] records it - no independent row). Pickle migration: __setstate__ on every flipped container rewrites the legacy keys through _deprecation.migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET) (an existing canonical key wins; the legacy key never lingers in __dict__; spec section 5). Report surface: _reporting_helpers headline_attribute is 'att' for the nine containers and diagnostic_report._extract_scalar_headline's legacy overall_*/overall_att_* alias row was deleted (DR schema 2.0 -> 3.0, BR 3.0 -> 4.0; REPORTING.md Note). StaggeredTripleDiffResults is UNFLIPPED (storage, to_dict keys and headline_attribute stay overall_*; it dies with the item-6 container unification, whose successor is born canonical). The bootstrap draw containers (CSBootstrapResults.overall_att_se etc., DCDHBootstrapResults.overall_se etc.) keep their payload names (user decision 2026-10-26; REGISTRY.md Result-class field naming Note). Reader inventory after PR 5a/5a-ii/5b: no in-repo reader of the overall_* names remains on the nine containers (source, tests, docs, notebooks, guides, benchmarks all read the canonical quintet); the only quoted literals are the shim declarations, the LEGACY_OVERALL_QUINTET state map and the staggered-DDD branch of _reporting_helpers. diff_diff/_deprecation.py is 5.0-WINDOW INFRASTRUCTURE (added 2026-10-18): these rows' FutureWarning properties ride its deprecated_field_property helper and their __setstate__ bodies ride migrate_renamed_state_keys through the 4.0 -> 5.0 window ([M-016]'s view is a leaf-local computed property in results_base.py instead), so the 5.0 removal PR deletes these shims and the LEGACY_OVERALL_QUINTET state map but never the module - and must add CONSUMER_ALLOWLIST[('overall_att', 'diff_diff/_deprecation.py')] if it keeps the migration literal for still-older pickles. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
   - id: M-051
     kind: field
     group: field-flip
     old: "diff_diff:SunAbrahamResults.overall_att"
     new: "diff_diff:SunAbrahamResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/sun_abraham.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): SunAbrahamResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): SunAbrahamResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-052
     kind: field
     group: field-flip
     old: "diff_diff:ImputationDiDResults.overall_att"
     new: "diff_diff:ImputationDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/imputation_results.py, diff_diff/imputation.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ImputationDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ImputationDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-053
     kind: field
     group: field-flip
     old: "diff_diff:TwoStageDiDResults.overall_att"
     new: "diff_diff:TwoStageDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/two_stage_results.py, diff_diff/two_stage.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): TwoStageDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): TwoStageDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-054
     kind: field
     group: field-flip
     old: "diff_diff:StackedDiDResults.overall_att"
     new: "diff_diff:StackedDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/stacked_did_results.py, diff_diff/stacked_did.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): StackedDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (extends the existing clean_control -> control_group migration). Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): StackedDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (extends the existing clean_control -> control_group migration). Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-055
     kind: field
     group: field-flip
     old: "diff_diff:EfficientDiDResults.overall_att"
     new: "diff_diff:EfficientDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/efficient_did_results.py, diff_diff/efficient_did_aggregation.py, diff_diff/efficient_did.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): EfficientDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): EfficientDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys. Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-056
     kind: field
     group: field-flip
     old: "diff_diff:WooldridgeDiDResults.overall_att"
     new: "diff_diff:WooldridgeDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/wooldridge_results.py, diff_diff/wooldridge.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): WooldridgeDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (key renames run BEFORE the existing default backfills); the two self-WRITE sites - aggregate('simple') in wooldridge_results.py and the bootstrap override in wooldridge.py - assign the canonical fields. Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): WooldridgeDiDResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (key renames run BEFORE the existing default backfills); the two self-WRITE sites - aggregate('simple') in wooldridge_results.py and the bootstrap override in wooldridge.py - assign the canonical fields. Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-057
     kind: field
     group: field-flip
     old: "diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att"
     new: "diff_diff:ChaisemartinDHaultfoeuilleResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ChaisemartinDHaultfoeuilleResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (extends the existing groups -> units migration). Mechanics and the cross-cutting inventory on [M-050]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; the five overall_* FutureWarning properties are gone (AttributeError); the canonical quintet att/se/t_stat/p_value/conf_int is the only vocabulary; __setstate__ legacy-key migration via _deprecation.migrate_renamed_state_keys(LEGACY_OVERALL_QUINTET) kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ChaisemartinDHaultfoeuilleResults stores the canonical quintet natively (fields renamed in slot); overall_att/overall_se/overall_t_stat/overall_p_value/overall_conf_int are read-only FutureWarning deprecated_field_property shims (removed 5.0); __setstate__ migrates 3.x pickles via _deprecation.migrate_renamed_state_keys (extends the existing groups -> units migration). Mechanics and the cross-cutting inventory on [M-050]."
   - id: M-058
     kind: field
     group: field-flip
     old: "diff_diff:ContinuousDiDResults.overall_att"
     new: "diff_diff:ContinuousDiDResults.att"
     introduced_in: "4.0"
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_v4_storage_flip.py
     code_refs: [diff_diff/continuous_did_results.py, diff_diff/continuous_did.py, docs/methodology/continuous-did.md]
-    notes: "SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ContinuousDiDResults stores the ATT-side headline under the canonical quintet (fields renamed in slot; overall_acrt* untouched - a separate estimand). NINE read-only FutureWarning deprecated_field_property shims onto the five canonical fields: the five former fields overall_att/overall_att_se/overall_att_t_stat/overall_att_p_value/overall_att_conf_int AND the four former silent aliases overall_se/overall_t_stat/overall_p_value/overall_conf_int (removed 5.0). __setstate__ migrates 3.x pickles via a module-local overall_att_* -> canonical map (the silent aliases were never stored). Mechanics on [M-050]. Original: Also flips the deviant overall_att_se/overall_att_p_value/overall_att_conf_int/overall_att_t_stat sibling fields (the trap-catalog outlier)."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; all NINE overall_att_* / overall_* FutureWarning properties are gone (AttributeError); the canonical quintet is the only vocabulary (overall_acrt* untouched - a separate estimand); __setstate__ migration via the module-local _LEGACY_OVERALL_ATT_QUINTET kept so 3.x pickles still load. Pre-release main (2026-10-25/26): SHIMMED at the 4.0 cut (PR 5b, 2026-10-26): ContinuousDiDResults stores the ATT-side headline under the canonical quintet (fields renamed in slot; overall_acrt* untouched - a separate estimand). NINE read-only FutureWarning deprecated_field_property shims onto the five canonical fields: the five former fields overall_att/overall_att_se/overall_att_t_stat/overall_att_p_value/overall_att_conf_int AND the four former silent aliases overall_se/overall_t_stat/overall_p_value/overall_conf_int (removed 5.0). __setstate__ migrates 3.x pickles via a module-local overall_att_* -> canonical map (the silent aliases were never stored). Mechanics on [M-050]. Original: Also flips the deviant overall_att_se/overall_att_p_value/overall_att_conf_int/overall_att_t_stat sibling fields (the trap-catalog outlier)."
 
   # ---- Alias table ---------------------------------------------------------
   - id: M-060
@@ -1835,27 +1827,27 @@ rows:
     group: obligation-sc-inner-budget
     old: "diff_diff:SyntheticControl[inner_max_iter]"
     new: null
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: "3.13.0"
+    removed_in: "4.0"
+    status: removed
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_synthetic_control.py
     code_refs: [diff_diff/synthetic_control.py, docs/methodology/REGISTRY.md]
-    notes: "Inert since the exact NNLS inner solve (#838 / #842): the donor-weight problem is solved by Lawson-Hanson's active set, which has no iteration budget. Warn-and-discard shim (stored as None, the [M-001] shape); deprecated_in 4.0 because 4.0 is the locked ladder's next release (tests/test_naming_guard.py _NEXT_RELEASE), so the shim ships there and the removal lands at 5.0."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): the parameter is gone from SyntheticControl.__init__ (positional slots after it - standardize, alpha, seed, v_cv_t0 - shift up by two); passing it is a TypeError. The DeprecationWarning shipped in the released 3.13.0 (deprecated_in corrected from the ladder's 4.0 to 3.13.0). Through 3.13: Inert since the exact NNLS inner solve (#838 / #842): the donor-weight problem is solved by Lawson-Hanson's active set, which has no iteration budget. Warn-and-discard shim (stored as None, the [M-001] shape); deprecated_in 4.0 because 4.0 is the locked ladder's next release (tests/test_naming_guard.py _NEXT_RELEASE), so the shim ships there and the removal lands at 5.0."
   - id: M-149
     kind: param
     group: obligation-sc-inner-budget
     old: "diff_diff:SyntheticControl[inner_min_decrease]"
     new: null
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: "3.13.0"
+    removed_in: "4.0"
+    status: removed
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_synthetic_control.py
     code_refs: [diff_diff/synthetic_control.py, docs/methodology/REGISTRY.md]
-    notes: "Inert since the exact NNLS inner solve (#838 / #842): an exact solve has no stopping tolerance. Same warn-and-discard shim and ladder reasoning as [M-148]."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): the parameter is gone from SyntheticControl.__init__ (positional slots after it - standardize, alpha, seed, v_cv_t0 - shift up by two); passing it is a TypeError. The DeprecationWarning shipped in the released 3.13.0 (deprecated_in corrected from the ladder's 4.0 to 3.13.0). Through 3.13: Inert since the exact NNLS inner solve (#838 / #842): an exact solve has no stopping tolerance. Same warn-and-discard shim and ladder reasoning as [M-148]."
   # ---- 4.0-cut framing amendment (2026-10-18) ------------------------------
   - id: M-150
     kind: param-value
@@ -1878,28 +1870,26 @@ rows:
     old: "diff_diff:LWDiDResults.pvalue"
     new: "diff_diff:LWDiDResults.p_value"
     introduced_in: null
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_lwdid.py
     code_refs: [diff_diff/lwdid_results.py, diff_diff/_deprecation.py, docs/methodology/REGISTRY.md]
-    notes: "Born 3.10 as an undocumented duplicate of the canonical quintet name p_value (the alias-diet class, spec section 3.2: one name per concept) - no reader anywhere in the repo (every .pvalue hit is RandomizationResult / SpecificationResult / the lwdid-py package, independent surfaces). Deprecated AT 4.0 rather than removed, because the name shipped in released minors 3.10-3.13; removed 5.0. Shim = deprecated_field_property(..., removed_in='5.0') so the warning and the generated docstring name 5.0 (the helper gained the removed_in keyword in this PR). Row added in the same PR as the shim (the [M-148]/[M-149] precedent). ENFORCEMENT NOTE: 'pvalue' joins test_naming_guard's _PATTERN_TOKENS and _AMBIGUOUS_TOKENS (the two kwarg-lane hits are the independent same-named fields on RandomizationResult / SpecificationResult, allowlisted)."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; LWDiDResults.pvalue is gone; read .p_value. Pre-release main (2026-10-25/26): Born 3.10 as an undocumented duplicate of the canonical quintet name p_value (the alias-diet class, spec section 3.2: one name per concept) - no reader anywhere in the repo (every .pvalue hit is RandomizationResult / SpecificationResult / the lwdid-py package, independent surfaces). Deprecated AT 4.0 rather than removed, because the name shipped in released minors 3.10-3.13; removed 5.0. Shim = deprecated_field_property(..., removed_in='5.0') so the warning and the generated docstring name 5.0 (the helper gained the removed_in keyword in this PR). Row added in the same PR as the shim (the [M-148]/[M-149] precedent). ENFORCEMENT NOTE: 'pvalue' joins test_naming_guard's _PATTERN_TOKENS and _AMBIGUOUS_TOKENS (the two kwarg-lane hits are the independent same-named fields on RandomizationResult / SpecificationResult, allowlisted)."
   - id: M-152
     kind: field
     group: lwdid-results-contract
     old: "diff_diff:LWDiDResults.ci"
     new: "diff_diff:LWDiDResults.conf_int"
     introduced_in: null
-    deprecated_in: "4.0"
-    removed_in: "5.0"
-    status: shimmed
+    deprecated_in: null
+    removed_in: "4.0"
+    status: removed
     phase: 5
-    warning: FutureWarning
     test_ref: tests/test_lwdid.py
     code_refs: [diff_diff/lwdid_results.py, diff_diff/_deprecation.py, docs/methodology/REGISTRY.md]
-    notes: "Twin of [M-151] for the conf_int alias; same window, same shim. ENFORCEMENT NOTE: 'ci' is library-wide local vocabulary (`ci = ...` assignments in ~21 source modules) and RDPlot's own confidence-level parameter, so it joins _AMBIGUOUS_TOKENS (precise lanes only) with a SURFACE_ALLOWLIST entry for RDPlot.__init__[ci] and CONSUMER_ALLOWLIST entries for rdplot.py and the CCFT-2017 paper review; REGISTRY.md's rdplot `ci` backtick is covered by this row's code_refs."
+    notes: "REMOVED at the 4.0 cut (item 9b, 2026-11-01): UNWARNED BREAK of a released 3.x name (user decision 2026-11-01 - no 4.x debt): the name was native/documented through v3.13.0 and no release carried the FutureWarning shim (it landed on main after the v3.13.0 tag), so the 4.0->5.0 window was retired and the property deleted outright; LWDiDResults.ci is gone; read .conf_int. Pre-release main (2026-10-25/26): Twin of [M-151] for the conf_int alias; same window, same shim. ENFORCEMENT NOTE: 'ci' is library-wide local vocabulary (`ci = ...` assignments in ~21 source modules) and RDPlot's own confidence-level parameter, so it joins _AMBIGUOUS_TOKENS (precise lanes only) with a SURFACE_ALLOWLIST entry for RDPlot.__init__[ci] and CONSUMER_ALLOWLIST entries for rdplot.py and the CCFT-2017 paper review; REGISTRY.md's rdplot `ci` backtick is covered by this row's code_refs."
   - id: M-153
     kind: behavior
     group: lwdid-results-contract
@@ -1939,3 +1929,27 @@ rows:
     test_ref: tests/test_v4_cluster_policy.py
     code_refs: [diff_diff/utils.py]
     notes: "Shared cluster-argument contract (item 7b, 2026-10-29; the [M-144]/[M-145] validation-tightening precedent): cluster is str | None | False on every estimator exposing it (StackedDiD keeps its 'unit'/'unit_subexp' vocabulary); non-str column labels, True and other types raise the shared ValueError at __init__, through set_params and again at fit (direct-mutation defense). Previously 13 classes accepted any hashable label and only DMLDiD type-checked. Also covers EfficientDiD.hausman_pretest and the LWDiD sensitivity helpers' own cluster arguments."
+  - id: M-156
+    kind: behavior
+    group: renames-post
+    old: "diff_diff:run_placebo_test[time]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: done
+    phase: 5
+    test_ref: tests/test_diagnostics.py
+    code_refs: [diff_diff/diagnostics.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/api/diagnostics.rst, docs/methodology/REGISTRY.md, docs/tutorials/04_parallel_trends.ipynb, docs/tutorials/17_brand_awareness_survey.ipynb]
+    notes: "DONE at the 4.0 cut (item 9b, 2026-11-01): time= is the calendar period column ONLY (spec section 8 rule 1); post_periods is required for every test_type and the 0/1 post dummy handed to permutation_test/leave_one_out_test [M-137]/[M-138] is derived as data[time].isin(post_periods) (the placebo_timing_test/placebo_group_test idiom) via diagnostics._resolve_placebo_post; a missing time column, missing/empty post_periods, NaN in the time column, post_periods values absent from data[time], or a pre-existing _placebo_post column raise ValueError. Through 3.x: the wrapper forwarded time= as the dummy, which raised (validate_binary) on any multi-period calendar column - the TODO.md 2(c)-ii redesign row is closed."
+  - id: M-157
+    kind: behavior
+    group: renames-post
+    old: "diff_diff:run_all_placebo_tests[time]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: done
+    phase: 5
+    test_ref: tests/test_diagnostics.py
+    code_refs: [diff_diff/diagnostics.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/api/diagnostics.rst, docs/methodology/REGISTRY.md, docs/tutorials/04_parallel_trends.ipynb, docs/tutorials/17_brand_awareness_survey.ipynb]
+    notes: "DONE at the 4.0 cut (item 9b, 2026-11-01): twin of [M-156] for the suite wrapper - time= is the calendar column only, post_periods (already required) feeds the derived dummy, and the validation runs BEFORE the three try/except blocks so a malformed post_periods / time column raises instead of being swallowed into error dicts. Through 3.x: with a multi-period calendar column the permutation and leave-one-out entries were ALWAYS error dicts (validate_binary rejected the forwarded calendar column) and nothing warned."

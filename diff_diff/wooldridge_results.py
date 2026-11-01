@@ -11,7 +11,6 @@ import pandas as pd
 
 from diff_diff._deprecation import (
     LEGACY_OVERALL_QUINTET,
-    deprecated_field_property,
     migrate_renamed_state_keys,
 )
 from diff_diff.results_base import (
@@ -249,9 +248,9 @@ class WooldridgeDiDResults(BaseResults):
         - the convention every pre-3.9 fit ran under (NOT the 4.0 default).
         Missing ``unsupported_period_action`` defaults to ``"drop"``.
         Pickles written before the 4.0 storage flip (``docs/v4-design.md``
-        section 5) carry the simple aggregate under ``overall_att`` /
-        ``overall_se`` / ...; the keys are rewritten to the canonical quintet
-        BEFORE the update (key renames first, default backfills after).
+        section 5) carry the simple aggregate under the legacy 3.x storage
+        keys; the keys are rewritten to the canonical quintet BEFORE the
+        update (key renames first, default backfills after).
         """
         state = migrate_renamed_state_keys(state, LEGACY_OVERALL_QUINTET)
         self.__dict__.update(state)
@@ -957,27 +956,6 @@ class WooldridgeDiDResults(BaseResults):
         else:
             se = {k: v["se"] for k, v in (self.event_study_effects or {}).items()}
         plot_event_study(effects=effects, se=se, alpha=self.alpha, **kwargs)
-
-    # --- Deprecated 3.x storage names (ledger row M-056) ---
-    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
-    # annotation) so they stay descriptors, never dataclass fields - the
-    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
-    # (the LWDiDResults 3.10-alias precedent).
-    overall_att = deprecated_field_property(
-        "WooldridgeDiDResults", "overall_att", "att", removed_in="5.0"
-    )
-    overall_se = deprecated_field_property(
-        "WooldridgeDiDResults", "overall_se", "se", removed_in="5.0"
-    )
-    overall_t_stat = deprecated_field_property(
-        "WooldridgeDiDResults", "overall_t_stat", "t_stat", removed_in="5.0"
-    )
-    overall_p_value = deprecated_field_property(
-        "WooldridgeDiDResults", "overall_p_value", "p_value", removed_in="5.0"
-    )
-    overall_conf_int = deprecated_field_property(
-        "WooldridgeDiDResults", "overall_conf_int", "conf_int", removed_in="5.0"
-    )
 
     def __repr__(self) -> str:
         n_gt = len(self.group_time_effects)

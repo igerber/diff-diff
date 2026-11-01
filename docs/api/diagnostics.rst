@@ -8,7 +8,10 @@ Placebo tests and diagnostic tools for validating DiD assumptions.
 run_placebo_test
 ----------------
 
-Main dispatcher for running different types of placebo tests.
+Main dispatcher for running different types of placebo tests. Since 4.0 ``time`` is
+the calendar period column only and ``post_periods`` is required for every
+``test_type``: the 0/1 post dummy the permutation and leave-one-out tests need is
+derived as ``data[time].isin(post_periods)`` (ledger row M-156).
 
 .. autofunction:: diff_diff.run_placebo_test
 
@@ -120,7 +123,10 @@ Example
 run_all_placebo_tests
 ---------------------
 
-Run comprehensive suite of diagnostic tests.
+Run comprehensive suite of diagnostic tests. ``time`` is the calendar column and the
+post dummy is derived from ``post_periods`` (ledger row M-157); a malformed
+``post_periods`` or ``time`` column raises ``ValueError`` before any test runs instead of
+being recorded as an error dict.
 
 .. autofunction:: diff_diff.run_all_placebo_tests
 

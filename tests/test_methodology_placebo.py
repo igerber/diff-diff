@@ -391,6 +391,7 @@ class TestPlaceboFakeGroup:
             unit="unit",
             test_type="fake_group",
             fake_treatment_group=[3, 4],
+            post_periods=[1],
         )
         # dispatcher passes treatment -> ever-treated dropped -> 5 controls x 2 = 10 rows
         assert res.n_obs == 10

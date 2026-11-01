@@ -15,28 +15,21 @@ file now pins:
   and pickles from the old field name still migrate via ``__setstate__``
   (spec section 5: 3.x pickles load under 4.0).
 
-``diff_diff._deprecation`` itself survives (it still serves M-031/M-082 and
-the PR-3 rows), so ``TestDeprecationHelpers`` stays.
+``diff_diff._deprecation`` itself survives as the pickle-migration and
+required-arg helper module (the kwarg-rename and field-property helpers were
+deleted at item 9b with their last consumers), so ``TestDeprecationHelpers``
+covers the sentinel and ``require_arg`` only.
 """
 
 import copy
 import pickle
 import warnings
-from dataclasses import dataclass, fields
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    _NotSupplied,
-    deprecated_field_property,
-    deprecated_kwarg_message,
-    require_arg,
-    resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
-)
+from diff_diff._deprecation import NOT_SUPPLIED, _NotSupplied, require_arg
 
 
 def _assert_no_future_warning(record):
@@ -71,89 +64,10 @@ class TestDeprecationHelpers:
         cloned["nested"][1].append("changed")
         assert params["nested"][1] == []
 
-    def test_message_template(self):
-        msg = deprecated_kwarg_message("Cls.fit", "old", "use new= instead")
-        assert msg == (
-            "Cls.fit(old=) is deprecated and will be removed in 4.0; " "use new= instead."
-        )
-
-    def test_warn_deprecated_kwarg_emits_future_warning(self):
-        # Retained 5.0-window helper (spec section 8 rule 11): its last library
-        # caller (dCDH fit(aggregate=), M-026) was removed at 4.0, so this pin
-        # keeps the helper itself under test.
-        with pytest.warns(FutureWarning, match=r"Cls\.fit\(old=\) is deprecated") as rec:
-            warn_deprecated_kwarg("Cls.fit", "old", "use new= instead", stacklevel=2)
-        assert str(rec[0].message) == deprecated_kwarg_message("Cls.fit", "old", "use new= instead")
-
-    def test_resolve_neither_returns_default(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            out = resolve_renamed_kwarg(
-                "Cls.fit", "old", NOT_SUPPLIED, "new", NOT_SUPPLIED, default="d"
-            )
-        assert out == "d"
-
-    def test_resolve_new_silent(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            out = resolve_renamed_kwarg("Cls.fit", "old", NOT_SUPPLIED, "new", "value")
-        assert out == "value"
-
-    def test_resolve_old_warns_and_maps(self):
-        with pytest.warns(FutureWarning, match=r"Cls\.fit\(old=\) is deprecated"):
-            out = resolve_renamed_kwarg("Cls.fit", "old", "value", "new", NOT_SUPPLIED)
-        assert out == "value"
-
-    def test_resolve_old_extra_appended(self):
-        with pytest.warns(FutureWarning, match="calendar column"):
-            resolve_renamed_kwarg(
-                "Cls.fit",
-                "old",
-                "value",
-                "new",
-                NOT_SUPPLIED,
-                extra="From 4.0, old= means the calendar column only.",
-            )
-
-    def test_resolve_both_raises(self):
-        with pytest.raises(ValueError, match=r"pass only new="):
-            resolve_renamed_kwarg("Cls.fit", "old", "a", "new", "b")
-
     def test_require_arg(self):
         require_arg("Cls.fit", "new", "value")  # no raise
         with pytest.raises(TypeError, match=r"missing required argument: 'new'"):
             require_arg("Cls.fit", "new", NOT_SUPPLIED)
-
-    def test_deprecated_field_property_shape(self):
-        @dataclass
-        class Toy:
-            new_name: int = 3
-            old_name = deprecated_field_property("Toy", "old_name", "new_name")
-
-        toy = Toy()
-        assert "new_name" in {f.name for f in fields(toy)}
-        assert "old_name" not in {f.name for f in fields(toy)}
-        with pytest.warns(FutureWarning, match=r"Toy\.old_name is deprecated"):
-            assert toy.old_name == 3
-        with pytest.raises(AttributeError):
-            toy.old_name = 5
-        # default removal version is the 3.9 sweep's 4.0, in both the warning and the docstring
-        with pytest.warns(FutureWarning, match=r"Will be removed in 4\.0\."):
-            toy.old_name
-        assert "(removed in 4.0)" in Toy.old_name.__doc__
-
-    def test_deprecated_field_property_removed_in_override(self):
-        """Aliases deprecated AT 4.0 (M-151/M-152) name their 5.0 removal in both surfaces."""
-
-        @dataclass
-        class Toy:
-            conf_int: int = 7
-            ci = deprecated_field_property("Toy", "ci", "conf_int", removed_in="5.0")
-
-        toy = Toy()
-        with pytest.warns(FutureWarning, match=r"Toy\.ci is deprecated.*Will be removed in 5\.0\."):
-            assert toy.ci == 7
-        assert Toy.ci.__doc__ == "Deprecated alias for :attr:`conf_int` (removed in 5.0)."
 
 
 # ---------------------------------------------------------------------------

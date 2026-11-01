@@ -69,7 +69,7 @@ def main():
         r = results["dcdh"]
         results["placebo_summary"] = {
             "placebo_effect": getattr(r, "placebo_effect", None),
-            "overall_att": getattr(r, "overall_att", None),
+            "att": getattr(r, "att", None),
             "joiners_att": getattr(r, "joiners_att", None),
             "leavers_att": getattr(r, "leavers_att", None),
         }

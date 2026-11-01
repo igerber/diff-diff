@@ -545,6 +545,10 @@ _RULE1_TIME_SURFACES = (
     "placebo_timing_test[time]",
     "plot_staircase[time]",
     "profile_panel[time]",
+    # The two placebo wrappers joined the calendar-only contract at 4.0 (rows
+    # M-156 / M-157, item 9b): the post dummy is derived from post_periods.
+    "run_all_placebo_tests[time]",
+    "run_placebo_test[time]",
     "summarize_did_data[time]",
     "twowayfeweights[time]",
     "validate_did_data[time]",
@@ -583,12 +587,6 @@ SURFACE_ALLOWLIST = {
         "overall/event_study modes survive - only the routing param died"
     ),
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
-    "DMLDiDResults.overall_att": (
-        "re-declared deprecated_field_property shim so the FutureWarning "
-        "names the subclass; the storage is INHERITED from "
-        "CallawaySantAnnaResults and rides M-050 (dml_did_results.py / "
-        "dml_did.py are in its code_refs) - no independent row"
-    ),
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
     ),
@@ -607,16 +605,6 @@ SURFACE_ALLOWLIST = {
         )
         for fn in ("attgt_weights", "decompose_twfe_weights")
     },
-    "run_placebo_test[time]": (
-        "OVERLOADED pass-through, redesign pending (TODO.md): forwarded as "
-        "the calendar column to placebo_timing_test/placebo_group_test AND "
-        "as the 0/1 post dummy to permutation_test/leave_one_out_test "
-        "(M-137/M-138) - workable only because a two-period 0/1 calendar "
-        "column is both; a rename cannot fix the dual semantics"
-    ),
-    "run_all_placebo_tests[time]": (
-        "OVERLOADED pass-through, redesign pending (TODO.md) - see " "run_placebo_test[time]"
-    ),
     **{key: _RULE1_TIME for key in _RULE1_TIME_SURFACES},
     "rank_control_units[lambda_reg]": (
         "prep helper's own independent regularization param (prep.py) - a "
@@ -1027,6 +1015,69 @@ CONSUMER_ALLOWLIST = {
     ("clean_control", "diff_diff/stacked_did_results.py"): (
         "__setstate__ legacy-key migration (M-095), kept"
     ),
+    # (a-ii) item 9b (2026-11-01): the M-016 / M-050..M-058 / M-148 / M-149 /
+    # M-151 / M-152 shims were removed AT 4.0, so their token families have no
+    # live row left and every remaining lane hit must be accounted for here.
+    ("overall_att", "diff_diff/_deprecation.py"): (
+        "LEGACY_OVERALL_QUINTET __setstate__ key map (M-050..M-058), kept so 3.x pickles load"
+    ),
+    ("overall_att", "diff_diff/continuous_did_results.py"): (
+        "_LEGACY_OVERALL_ATT_QUINTET __setstate__ key map (M-058), kept so 3.x pickles load"
+    ),
+    ("overall_att", "diff_diff/chaisemartin_dhaultfoeuille.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/continuous_did.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/efficient_did_aggregation.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/imputation.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/imputation_results.py"): (
+        "bootstrap-kit replay keyword (`overall_att=bk[...]`) of the bootstrap draw containers, which keep their payload names (REGISTRY field-naming Note); not a results-property reader"
+    ),
+    ("overall_att", "diff_diff/stacked_did.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/staggered_aggregation.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/sun_abraham.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/two_stage.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "diff_diff/two_stage_results.py"): (
+        "bootstrap-kit replay keyword (`overall_att=bk[...]`) of the bootstrap draw containers, which keep their payload names; not a results-property reader"
+    ),
+    ("overall_att", "diff_diff/wooldridge.py"): (
+        "body-local `overall_att` name for the overall aggregate (the estimator's own arithmetic), not a reader of the removed M-050..M-058 property"
+    ),
+    ("overall_att", "docs/methodology/REGISTRY.md"): (
+        "methodology prose: 3.x storage history of the M-050..M-058 flip and the retired LWDiD pre-release surface; not a reader"
+    ),
+    ("overall_att", "docs/methodology/REPORTING.md"): (
+        "schema-version history (DR 3.0 / BR 4.0 renamed the headline attribute string from overall_att to att); not a reader"
+    ),
+    ("inner_max_iter", "docs/methodology/REGISTRY.md"): (
+        "SyntheticControl inner-solve prose: the removed param's history (M-148; the pre-#838 Frank-Wolfe budget); not a reader"
+    ),
+    ("inner_min_decrease", "docs/methodology/REGISTRY.md"): (
+        "SyntheticControl inner-solve prose: the removed param's history (M-149); not a reader"
+    ),
+    ("pvalue", "diff_diff/lwdid_results.py"): (
+        "`self._ri_result.pvalue` relays RandomizationResult.pvalue (an independent field) through the ri_pvalue property; not the removed M-151 alias"
+    ),
+    ("pvalue", "docs/methodology/REGISTRY.md"): (
+        "LWDiD results-contract prose naming the removed M-151 alias as history; not a reader"
+    ),
+    ("ci", "docs/methodology/REGISTRY.md"): (
+        "LWDiD results-contract prose naming the removed M-152 alias as history, plus RDPlot's own `ci` confidence-level parameter; not a reader"
+    ),
     ("groups", "diff_diff/chaisemartin_dhaultfoeuille_results.py"): (
         "__setstate__ legacy-key migration (M-114), kept"
     ),
@@ -1173,9 +1224,6 @@ CONSUMER_ALLOWLIST = {
         "fallback label string literal for a non-str control_group value, not a reader"
     ),
     ("clean_control", "diff_diff/power.py"): "historical comment on the 3.x default, not a reader",
-    ("placebo_effects", "diff_diff/_deprecation.py"): (
-        "docstring names the M-003 precedent the helper's wording follows; not a reader"
-    ),
     ("trop", "diff_diff/trop.py"): (
         "docstring example variable `trop = TROP()` (kwarg-lane noise), not the removed wrapper"
     ),

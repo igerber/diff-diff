@@ -211,9 +211,10 @@ class TestDiagnosticsTimeToPost:
                 placebo_panel,
                 "y",
                 "d",
-                "p",
+                "p",  # the two-period calendar column (M-156: never a dummy)
                 unit="u",
                 test_type="permutation",
+                post_periods=[1],
                 n_permutations=30,
                 seed=2,
             )

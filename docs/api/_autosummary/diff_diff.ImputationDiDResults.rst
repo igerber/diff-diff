@@ -36,11 +36,6 @@
       ~ImputationDiDResults.is_significant
       ~ImputationDiDResults.leave_one_out
       ~ImputationDiDResults.n_clusters
-      ~ImputationDiDResults.overall_att
-      ~ImputationDiDResults.overall_conf_int
-      ~ImputationDiDResults.overall_p_value
-      ~ImputationDiDResults.overall_se
-      ~ImputationDiDResults.overall_t_stat
       ~ImputationDiDResults.pretrend_results
       ~ImputationDiDResults.significance_stars
       ~ImputationDiDResults.survey_metadata

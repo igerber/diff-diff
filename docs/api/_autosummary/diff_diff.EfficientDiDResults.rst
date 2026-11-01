@@ -44,11 +44,6 @@
       ~EfficientDiDResults.n_clusters
       ~EfficientDiDResults.omega_condition_numbers
       ~EfficientDiDResults.omega_ridge
-      ~EfficientDiDResults.overall_att
-      ~EfficientDiDResults.overall_conf_int
-      ~EfficientDiDResults.overall_p_value
-      ~EfficientDiDResults.overall_se
-      ~EfficientDiDResults.overall_t_stat
       ~EfficientDiDResults.pt_assumption
       ~EfficientDiDResults.ratio_clip
       ~EfficientDiDResults.reference_period

@@ -111,14 +111,6 @@ class SyntheticControl(BaseEstimator):
         outer V search (e.g. ``maxiter``, ``xatol``, ``fatol``).
     n_starts : int, default 4
         Number of starting points for the multistart outer V search.
-    inner_max_iter : int, optional
-        **Deprecated, no effect** (``DeprecationWarning`` when passed; removed in
-        v5.0). The inner simplex solves (the donor weights at every V, and the
-        conformal proxy) are exact: one non-negative least squares each, with no
-        iteration budget to set.
-    inner_min_decrease : float, optional
-        **Deprecated, no effect** (``DeprecationWarning`` when passed; removed in
-        v5.0), for the same reason: an exact solve has no stopping tolerance.
     standardize : {"std", "none"}, default "std"
         Predictor standardization. ``"std"`` divides each predictor row by its
         standard deviation across donors+treated (ddof=1), matching R ``Synth``.
@@ -144,8 +136,6 @@ class SyntheticControl(BaseEstimator):
         custom_v: Optional[Any] = None,
         optimizer_options: Optional[Dict[str, Any]] = None,
         n_starts: int = 4,
-        inner_max_iter: Optional[int] = None,
-        inner_min_decrease: Optional[float] = None,
         standardize: str = "std",
         alpha: float = 0.05,
         seed: Optional[int] = None,
@@ -155,25 +145,6 @@ class SyntheticControl(BaseEstimator):
         self.custom_v = custom_v
         self.optimizer_options = optimizer_options
         self.n_starts = n_starts
-        # Deprecated warn-and-discard (ledger M-148 / M-149): the inner weight solve is
-        # exact (one NNLS), so neither parameter has any effect. Stored normalized to
-        # None so a set_params probe re-init warns exactly once for the call that
-        # passes them and never again on unrelated set_params / clone calls.
-        for _name, _val in (
-            ("inner_max_iter", inner_max_iter),
-            ("inner_min_decrease", inner_min_decrease),
-        ):
-            if _val is not None:
-                warnings.warn(
-                    f"{_name} is deprecated and has no effect: the synthetic control "
-                    "donor weights are solved exactly (one non-negative least squares), "
-                    "so there is no inner iteration budget or tolerance to set. It will "
-                    "be removed in v5.0.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-        self.inner_max_iter = None
-        self.inner_min_decrease = None
         self.standardize = standardize
         self.alpha = alpha
         self.seed = seed

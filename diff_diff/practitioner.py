@@ -300,10 +300,11 @@ def _placebo_step() -> Dict[str, Any]:
         ),
         code=(
             "from diff_diff import run_all_placebo_tests\n"
-            "# Requires binary time indicator (post=0/1), not multi-period:\n"
+            "# time= is the calendar period column; post_periods lists its\n"
+            "# post-treatment values (the 0/1 post dummy is derived from them):\n"
             "placebo = run_all_placebo_tests(\n"
-            "    data, outcome='y', treatment='treated', time='post',\n"
-            "    unit='unit_id', pre_periods=[0], post_periods=[1],\n"
+            "    data, outcome='y', treatment='treated', time='period',\n"
+            "    unit='unit_id', pre_periods=[0, 1], post_periods=[2, 3],\n"
             "    n_permutations=500, seed=42)"
         ),
         priority="medium",

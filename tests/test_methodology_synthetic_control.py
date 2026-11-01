@@ -76,7 +76,7 @@ PREDICTORS = [
 # Behavior tests only need a VALID, cleanly-converged fit, not data-driven V quality.
 # A single start + a small outer cap gives a clean ~0.1s fit without changing what these
 # tests assert. The inner weight solve is exact (one NNLS), with no budget or tolerance
-# to set (``inner_max_iter`` / ``inner_min_decrease`` are deprecated no-ops). Pure-Python
+# to set (the former ``inner_max_iter`` / ``inner_min_decrease`` params were removed at 4.0). Pure-Python
 # coverage of the
 # production-default nested path (n_starts=4 with the _v_starts heuristic candidates) is
 # kept by the dedicated non-slow ``test_nested_production_defaults_smoke``; the @slow
@@ -1070,31 +1070,19 @@ def test_inner_solve_propagates_a_budget_exhausted_flag(monkeypatch):
     assert np.isnan(res.placebo_p_value)
 
 
-def test_inner_budget_params_are_deprecated_no_ops():
-    # inner_max_iter / inner_min_decrease (ledger M-148 / M-149): DeprecationWarning when
-    # passed, discarded to None (get_params / set_params see None), and the fit is the
-    # same as the default's. A default construction never warns.
-    df, _, _ = _make_panel(n_donors=4)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        base = SyntheticControl(seed=0, **_FAST)
-    assert base.get_params()["inner_max_iter"] is None
-    assert base.get_params()["inner_min_decrease"] is None
-    with pytest.warns(DeprecationWarning, match="inner_max_iter is deprecated and has no effect"):
-        est = SyntheticControl(seed=0, inner_max_iter=5, **_FAST)
-    with pytest.warns(
-        DeprecationWarning, match="inner_min_decrease is deprecated and has no effect"
-    ):
+def test_inner_budget_params_are_removed():
+    # inner_max_iter / inner_min_decrease (ledger M-148 / M-149, removed at 4.0 - item 9b):
+    # the constructor rejects them, get_params no longer reports them, and the
+    # transactional set_params rejects them through its probe re-init.
+    with pytest.raises(TypeError, match="inner_max_iter"):
+        SyntheticControl(seed=0, inner_max_iter=5, **_FAST)
+    with pytest.raises(TypeError, match="inner_min_decrease"):
         SyntheticControl(seed=0, inner_min_decrease=1e-3, **_FAST)
-    assert est.inner_max_iter is None and est.get_params()["inner_max_iter"] is None
-    with pytest.warns(DeprecationWarning, match="inner_min_decrease is deprecated"):
+    est = SyntheticControl(seed=0, **_FAST)
+    assert "inner_max_iter" not in est.get_params()
+    assert "inner_min_decrease" not in est.get_params()
+    with pytest.raises((TypeError, ValueError), match="inner_min_decrease"):
         est.set_params(inner_min_decrease=1e-2)
-    assert est.get_params() == base.get_params()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        a = base.fit(df, "y", "treated", "unit", "year")
-        b = est.fit(df, "y", "treated", "unit", "year")
-    assert a.att == b.att and a.donor_weights == b.donor_weights
 
 
 def test_inner_solve_is_exact_where_a_budgeted_solve_stopped():
@@ -1251,8 +1239,6 @@ def test_get_set_params_roundtrip():
         "custom_v",
         "optimizer_options",
         "n_starts",
-        "inner_max_iter",
-        "inner_min_decrease",
         "standardize",
         "alpha",
         "seed",

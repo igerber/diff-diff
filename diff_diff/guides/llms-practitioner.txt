@@ -83,8 +83,8 @@ results.se        # Standard error
 # Canonical quintet: every estimator result class above exposes the
 # headline inference as `att` / `se` / `conf_int` / `p_value` / `t_stat`
 # (spec section 5 of the 4.0 design). The staggered containers' 3.x
-# `overall_*` / `overall_att_*` spellings still resolve to the same values
-# through the 4.0 -> 5.0 deprecation window; read the canonical names.
+# `overall_*` / `overall_att_*` spellings were removed at 4.0 (AttributeError);
+# read the canonical names.
 results.att               # headline ATT (ContinuousDiD: the ATT side; ACRT stays overall_acrt)
 results.se                # its standard error
 ```
@@ -455,10 +455,12 @@ to your estimator's API. Examples:
 ```python
 from diff_diff import run_all_placebo_tests
 
-# For simple 2x2 designs (requires binary time indicator, e.g. post=0/1):
+# time= is the calendar period column; post_periods lists its post-treatment
+# values (the 0/1 post dummy for the permutation / leave-one-out tests is
+# derived from them - never pass a 0/1 indicator as time=):
 placebo = run_all_placebo_tests(
-    data, outcome='y', treatment='treated', time='post',
-    unit='unit_id', pre_periods=[0], post_periods=[1],
+    data, outcome='y', treatment='treated', time='period',
+    unit='unit_id', pre_periods=[0, 1], post_periods=[2, 3],
     n_permutations=500, seed=42,
 )
 for test_name, result in placebo.items():

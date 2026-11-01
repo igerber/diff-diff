@@ -33,7 +33,6 @@ import pandas as pd
 
 from diff_diff._deprecation import (
     LEGACY_OVERALL_QUINTET,
-    deprecated_field_property,
     migrate_renamed_state_keys,
 )
 from diff_diff.aggregation import AggregationMixin, AggregationResult
@@ -861,27 +860,6 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             sub_part = base.split("_")[1] if "_" in base else ""
             return f"{did_part}{suffix}_{sub_part}" if sub_part else f"{did_part}{suffix}"
         return base
-
-    # --- Deprecated 3.x storage names (ledger row M-057) ---
-    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
-    # annotation) so they stay descriptors, never dataclass fields - the
-    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
-    # (the LWDiDResults 3.10-alias precedent).
-    overall_att = deprecated_field_property(
-        "ChaisemartinDHaultfoeuilleResults", "overall_att", "att", removed_in="5.0"
-    )
-    overall_se = deprecated_field_property(
-        "ChaisemartinDHaultfoeuilleResults", "overall_se", "se", removed_in="5.0"
-    )
-    overall_t_stat = deprecated_field_property(
-        "ChaisemartinDHaultfoeuilleResults", "overall_t_stat", "t_stat", removed_in="5.0"
-    )
-    overall_p_value = deprecated_field_property(
-        "ChaisemartinDHaultfoeuilleResults", "overall_p_value", "p_value", removed_in="5.0"
-    )
-    overall_conf_int = deprecated_field_property(
-        "ChaisemartinDHaultfoeuilleResults", "overall_conf_int", "conf_int", removed_in="5.0"
-    )
 
     def __repr__(self) -> str:
         """Concise string representation."""

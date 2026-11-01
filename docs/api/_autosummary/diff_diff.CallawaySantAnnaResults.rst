@@ -46,11 +46,6 @@
       ~CallawaySantAnnaResults.influence_functions
       ~CallawaySantAnnaResults.is_significant
       ~CallawaySantAnnaResults.n_clusters
-      ~CallawaySantAnnaResults.overall_att
-      ~CallawaySantAnnaResults.overall_conf_int
-      ~CallawaySantAnnaResults.overall_p_value
-      ~CallawaySantAnnaResults.overall_se
-      ~CallawaySantAnnaResults.overall_t_stat
       ~CallawaySantAnnaResults.panel
       ~CallawaySantAnnaResults.pscore_fallback
       ~CallawaySantAnnaResults.pscore_trim

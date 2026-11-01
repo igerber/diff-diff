@@ -4639,7 +4639,7 @@ class TestReviewRoundCI7Guards:
 
 
 class TestV4ResultsContract:
-    """4.0 results-contract conformance (ledger rows M-146, M-151, M-152, M-153)."""
+    """4.0 results-contract conformance (ledger rows M-146, M-151, M-152 - aliases removed at 4.0 - and M-153)."""
 
     @staticmethod
     def _common_df(seed=23, n=40, T=6):
@@ -4757,18 +4757,16 @@ class TestV4ResultsContract:
         for col in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "df"):
             assert np.isnan(frame.loc[0, col]), col
 
-    # -- M-151 / M-152: pvalue / ci alias shims -------------------------------
+    # -- M-151 / M-152: pvalue / ci aliases removed at 4.0 (item 9b) ----------
     @pytest.mark.parametrize("old, new", [("pvalue", "p_value"), ("ci", "conf_int")])
-    def test_alias_properties_warn_and_relay(self, common, old, new):
+    def test_alias_properties_are_removed(self, common, old, new):
+        import inspect
+
         from diff_diff.lwdid_results import LWDiDResults
 
         assert old not in LWDiDResults.__dataclass_fields__
         assert new in LWDiDResults.__dataclass_fields__
-        with pytest.warns(
-            FutureWarning, match=rf"LWDiDResults\.{old} is deprecated.*removed in 5\.0"
-        ):
-            value = getattr(common, old)
-        assert value == getattr(common, new)
-        with pytest.raises(AttributeError):
-            setattr(common, old, value)
-        assert "removed in 5.0" in getattr(LWDiDResults, old).__doc__
+        assert inspect.getattr_static(LWDiDResults, old, None) is None
+        assert not hasattr(common, old)
+        canonical = getattr(common, new)
+        assert canonical is not None

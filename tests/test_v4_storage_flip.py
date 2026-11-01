@@ -9,11 +9,14 @@ M-058 (ContinuousDiDResults). Spec: ``docs/v4-design.md`` section 5.
 Contract pinned here, per class:
 
 1. the canonical quintet ``att`` / ``se`` / ``t_stat`` / ``p_value`` /
-   ``conf_int`` are dataclass fields; every legacy name is a plain
-   descriptor (``deprecated_field_property``), not a field;
-2. reading a legacy name emits the pinned ``FutureWarning`` text naming the
-   class (the subclass for ``DMLDiDResults``) and relays the canonical value;
-   assigning to it raises ``AttributeError``;
+   ``conf_int`` are dataclass fields;
+2. every legacy ``overall_*`` name is GONE (item 9b of the cut, 2026-11-01,
+   retired the 4.0 -> 5.0 FutureWarning shims at 4.0): it is neither a field
+   nor a descriptor and ``hasattr`` is False. Assigning a legacy name to an
+   instance now creates a plain shadow attribute (the dataclasses are not
+   slotted) - the former "wrong name fails loudly" guard was retired with
+   the descriptors; the naming guard's consumer sweep is the remaining
+   defense against legacy-name writers in the repo;
 3. a 3.x pickle state (legacy keys) loads through ``__setstate__`` into the
    canonical fields and no ``overall_*`` key lingers in ``__dict__``;
 4. a 4.0 pickle round-trips with every field present and ``to_dict()`` emits
@@ -78,8 +81,8 @@ from diff_diff.wooldridge_results import WooldridgeDiDResults
 
 CANONICAL = ("att", "se", "t_stat", "p_value", "conf_int")
 
-# Legacy property name -> canonical field, per class (what WARNS).
-PROPERTY_MAP = {
+# Legacy name -> canonical field, per class (what is GONE at 4.0).
+LEGACY_NAMES = {
     CallawaySantAnnaResults: dict(LEGACY_OVERALL_QUINTET),
     DMLDiDResults: dict(LEGACY_OVERALL_QUINTET),
     SunAbrahamResults: dict(LEGACY_OVERALL_QUINTET),
@@ -98,9 +101,9 @@ STATE_MAP = {
         if cls is ContinuousDiDResults
         else dict(LEGACY_OVERALL_QUINTET)
     )
-    for cls in PROPERTY_MAP
+    for cls in LEGACY_NAMES
 }
-CLASSES = list(PROPERTY_MAP)
+CLASSES = list(LEGACY_NAMES)
 IDS = [c.__name__ for c in CLASSES]
 
 # ``to_dataframe(level=...)`` vocabulary per class (read from each container).
@@ -257,51 +260,36 @@ def fits():
 
 
 @pytest.mark.parametrize("cls", CLASSES, ids=IDS)
-def test_canonical_quintet_are_fields_legacy_names_are_descriptors(cls):
+def test_canonical_quintet_are_fields_legacy_names_are_gone(fits, cls):
     field_names = set(cls.__dataclass_fields__)
     for name in CANONICAL:
         assert name in field_names, f"{cls.__name__}.{name} is not a dataclass field"
-    for old in PROPERTY_MAP[cls]:
+    res = fits[cls]
+    for old in LEGACY_NAMES[cls]:
         assert old not in field_names, f"{cls.__name__}.{old} is still a dataclass field"
-        assert isinstance(
-            inspect.getattr_static(cls, old), property
-        ), f"{cls.__name__}.{old} does not resolve as a property descriptor"
+        assert (
+            inspect.getattr_static(cls, old, None) is None
+        ), f"{cls.__name__}.{old} still resolves on the class (resurrected shim?)"
+        assert not hasattr(res, old), f"{cls.__name__}.{old} still readable on an instance"
     # The ACRT family on ContinuousDiD is a separate estimand and stays stored.
     if cls is ContinuousDiDResults:
         assert {"overall_acrt", "overall_acrt_se", "overall_acrt_conf_int"} <= field_names
 
 
 # ---------------------------------------------------------------------------
-# 2. Warning + relay + read-only
+# 2. DMLDiDResults inherits the storage (no DML-specific field, no shim)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cls", CLASSES, ids=IDS)
-def test_legacy_properties_warn_relay_and_reject_assignment(fits, cls):
-    res = fits[cls]
-    assert type(res) is cls
-    for old, new in PROPERTY_MAP[cls].items():
-        pattern = (
-            rf"^{cls.__name__}\.{old} is deprecated; use {new} instead\. Will be removed in 5\.0\.$"
-        )
-        with pytest.warns(FutureWarning, match=pattern):
-            got = getattr(res, old)
-        assert _nan_eq(got, getattr(res, new)), (cls.__name__, old)
-        with pytest.raises(AttributeError):
-            setattr(res, old, 1.0)
-        doc = inspect.getattr_static(cls, old).__doc__ or ""
-        assert "removed in 5.0" in doc, (cls.__name__, old, doc)
-
-
-def test_dml_warning_names_the_subclass(fits):
+def test_dml_inherits_canonical_storage_without_legacy_names(fits):
     res = fits[DMLDiDResults]
-    with pytest.warns(FutureWarning, match=r"^DMLDiDResults\.overall_att is deprecated"):
-        res.overall_att
-    # The storage is the inherited field set - no DML-specific field appeared.
     assert set(DMLDiDResults.__dataclass_fields__) >= set(
         CallawaySantAnnaResults.__dataclass_fields__
     )
-    assert "overall_att" not in DMLDiDResults.__dataclass_fields__
+    for old in LEGACY_OVERALL_QUINTET:
+        assert old not in DMLDiDResults.__dataclass_fields__
+        assert inspect.getattr_static(DMLDiDResults, old, None) is None
+        assert not hasattr(res, old)
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +323,7 @@ def test_legacy_state_loads_into_canonical_fields(fits, cls):
     _assert_no_legacy_keys(restored, cls)
     if cls is StackedDiDResults:
         assert restored.control_group == res.control_group
-    with pytest.warns(FutureWarning):
-        assert _nan_eq(restored.overall_att, res.att)
+    assert not hasattr(restored, "overall_att")
 
 
 # ---------------------------------------------------------------------------

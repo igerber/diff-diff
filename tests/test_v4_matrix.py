@@ -143,11 +143,12 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # to_dataframe level twin (M-150, 4.0-cut framing) = 132; + the LWDiD
 # results-contract rows (M-151/M-152 alias deprecations, M-153 to_dataframe
 # reshape; 4.0-cut PR 1) = 135; + the 7b cluster-policy pair (M-154 SpilloverDiD
-# df_convention, shipped 7c; M-155 the shared cluster contract) = 137.
+# df_convention, shipped 7c; M-155 the shared cluster contract) = 137; + the
+# placebo-wrapper calendar-contract pair (M-156/M-157, 4.0-cut item 9b) = 139.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 137
+ROW_COUNT_FLOOR = 139
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -207,6 +208,7 @@ _INITIAL_ID_RANGES = [
     (148, 149),
     (150, 150),
     (151, 155),
+    (156, 157),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -714,7 +716,7 @@ def test_initial_ids_never_deleted():
     4.0-cut PR 1) + M-154/M-155 (the 7b cluster-policy pair))."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 137
+    assert len(EXPECTED_INITIAL_IDS) == 139
 
 
 def test_version_tuple_pads_to_three_components():
@@ -1042,8 +1044,9 @@ def test_ledger_header_declares_cut_window():
     """The 4.0 cut window is declared (spec section 11): it names a version some row is
     scheduled at, and while the window is OPEN (``__version__`` below it) ``cut_base`` must equal
     the shipped ``__version__`` - the off-base guard's reference point. Once ``__version__``
-    reaches the window the keys are a historical record (rows scheduled past the window, e.g. the
-    5.0 field-alias removals, legitimately stay non-terminal, so nothing is asserted then)."""
+    reaches the window the keys are a historical record (a row scheduled past the window would
+    legitimately stay non-terminal, so nothing is asserted then; since item 9b retired the 5.0
+    field-alias window no such row exists)."""
     import diff_diff
 
     assert CUT_WINDOW == "4.0"
@@ -1367,8 +1370,9 @@ def _changes_at_4_0(row):
     """Does this row require reader action at the 4.0 cut?
 
     Keyed on the two LIFECYCLE version fields only - a symbol removed at 4.0, or one
-    whose deprecation warning starts firing at 4.0 (the ``field-flip`` family, removed
-    at 5.0). 113 of the 137 rows qualify.
+    whose deprecation warning starts firing at 4.0 (behavior rows such as the placebo-wrapper
+    calendar contract M-156/M-157; the ``field-flip`` family was removed at 4.0 by item 9b and
+    qualifies through ``removed_in``). 115 of the 139 rows qualify.
 
     The 24 that do not, and why (this enumeration is the contract - a reader of the
     guide must be able to trust that nothing 4.0-relevant was dropped):

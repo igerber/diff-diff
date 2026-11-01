@@ -57,11 +57,6 @@
       ~DMLDiDResults.n_clusters
       ~DMLDiDResults.n_folds
       ~DMLDiDResults.outcome_learner
-      ~DMLDiDResults.overall_att
-      ~DMLDiDResults.overall_conf_int
-      ~DMLDiDResults.overall_p_value
-      ~DMLDiDResults.overall_se
-      ~DMLDiDResults.overall_t_stat
       ~DMLDiDResults.panel
       ~DMLDiDResults.propensity_learner
       ~DMLDiDResults.pscore_fallback

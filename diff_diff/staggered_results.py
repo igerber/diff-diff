@@ -13,7 +13,6 @@ import pandas as pd
 
 from diff_diff._deprecation import (
     LEGACY_OVERALL_QUINTET,
-    deprecated_field_property,
     migrate_event_study_reference_sentinel,
     migrate_renamed_state_keys,
 )
@@ -310,27 +309,6 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     # public fields (positional-compat convention).
     reference_event_times: Optional[Tuple[Any, ...]] = None
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
-
-    # --- Deprecated 3.x storage names (ledger row M-050) ---
-    # FutureWarning from 4.0, removed at 5.0. Plain class attributes (no
-    # annotation) so they stay descriptors, never dataclass fields - the
-    # ``shimmed`` field-row shape tests/test_v4_matrix.py asserts
-    # (the LWDiDResults 3.10-alias precedent).
-    overall_att = deprecated_field_property(
-        "CallawaySantAnnaResults", "overall_att", "att", removed_in="5.0"
-    )
-    overall_se = deprecated_field_property(
-        "CallawaySantAnnaResults", "overall_se", "se", removed_in="5.0"
-    )
-    overall_t_stat = deprecated_field_property(
-        "CallawaySantAnnaResults", "overall_t_stat", "t_stat", removed_in="5.0"
-    )
-    overall_p_value = deprecated_field_property(
-        "CallawaySantAnnaResults", "overall_p_value", "p_value", removed_in="5.0"
-    )
-    overall_conf_int = deprecated_field_property(
-        "CallawaySantAnnaResults", "overall_conf_int", "conf_int", removed_in="5.0"
-    )
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Migrate 3.x pickles written under the ``overall_*`` storage names.

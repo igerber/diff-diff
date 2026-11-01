@@ -55,5 +55,6 @@
 - `tests/test_v4_matrix.py` removed-status probes: a function row that resolves to a submodule
   counts as absent; a param row absent from the explicit signature counts as removed despite
   `**kwargs`. Naming-guard allowlist extended for the kept body-local aliases, `__setstate__` keys
-  and shared vocabulary. The `diff_diff._deprecation` helpers survive for the remaining
-  M-031/M-082, PR-3 and 5.0-window shims.
+  and shared vocabulary. The `diff_diff._deprecation` helpers survived this PR for the remaining
+  M-031/M-082 and PR-3 shims (item 9b later reduced the module to its pickle-migration and
+  required-arg helpers).
