@@ -38,6 +38,7 @@
       ~SunAbrahamResults.event_study_vcov_index
       ~SunAbrahamResults.inference_df
       ~SunAbrahamResults.is_significant
+      ~SunAbrahamResults.n_clusters
       ~SunAbrahamResults.overall_att
       ~SunAbrahamResults.overall_conf_int
       ~SunAbrahamResults.overall_p_value

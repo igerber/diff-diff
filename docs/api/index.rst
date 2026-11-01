@@ -6,8 +6,11 @@ This section provides complete API documentation for all diff-diff modules.
 Estimators
 ----------
 
-Core causal-inference estimator classes - the DiD family plus synthetic control,
-regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
+Core causal-inference estimator classes - the DiD family plus synthetic control
+and regression discontinuity. The diagnostic family (the Goodman-Bacon
+decomposition, RD plots and manipulation tests, placebo tests, TWFE weight
+audits) is catalogued under Diagnostics below; parallel-trends testing, Honest
+DiD and the power tools keep their own sections:
 
 .. autosummary::
    :toctree: _autosummary
@@ -35,7 +38,6 @@ regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
    diff_diff.LWDiD
    diff_diff.DMLDiD
    diff_diff.DurationDiD
-   diff_diff.BaconDecomposition
    diff_diff.RegressionDiscontinuity
 
 Results Classes
@@ -116,7 +118,6 @@ Plotting functions and plot builders:
    diff_diff.plot_group_effects
    diff_diff.plot_sensitivity
    diff_diff.plot_honest_event_study
-   diff_diff.RDPlot
    diff_diff.plot_bacon
    diff_diff.plot_twfe_weights
    diff_diff.plot_power_curve
@@ -125,12 +126,20 @@ Plotting functions and plot builders:
 Diagnostics
 -----------
 
-Placebo tests and model diagnostics:
+The diagnostic family (4.0, spec section 3.5): tools that assess a design or
+an identifying assumption rather than estimate a treatment effect - design
+decompositions and weight audits, placebo tests, RD plots and manipulation
+tests. Class-backed members return :class:`~diff_diff.Diagnostic`-marked
+results (the placebo helpers return :class:`~diff_diff.PlaceboTestResults`;
+``run_all_placebo_tests`` bundles them in a dict); the raw-dict
+parallel-trends helpers and :class:`~diff_diff.TWFEWeightsResult` belong to
+the family in the docs only:
 
 .. autosummary::
    :toctree: _autosummary
    :nosignatures:
 
+   diff_diff.BaconDecomposition
    diff_diff.run_placebo_test
    diff_diff.placebo_timing_test
    diff_diff.placebo_group_test
@@ -140,6 +149,7 @@ Placebo tests and model diagnostics:
    diff_diff.PlaceboTestResults
    diff_diff.attgt_weights
    diff_diff.decompose_twfe_weights
+   diff_diff.RDPlot
    diff_diff.RDDensityTest
 
 Panel Profiling
@@ -375,7 +385,6 @@ Estimators
    lwdid
    dml_did
    duration_did
-   bacon
 
 Infrastructure
 ~~~~~~~~~~~~~~
@@ -400,6 +409,7 @@ Diagnostics & Inference
    :maxdepth: 2
 
    diagnostics
+   bacon
    honest_did
    power
    pretrends

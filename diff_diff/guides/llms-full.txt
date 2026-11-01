@@ -29,7 +29,7 @@ print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
 - **sklearn-like API**: All estimators use `fit()` method, `get_params()`/`set_params()` for configuration.
 - **Formula interface**: Supports R-style formulas like `"outcome ~ treated * post"`.
 - **Results objects**: Rich dataclass containers with `summary()`, `to_dict()`, `to_dataframe()`.
-- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `SDiD`, `TWFE`, `DDD`, `EDiD`, `SCM`, `Bacon`). The former `CDiD`/`Gardner`/`Stacked` aliases were removed in 4.0 - use `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`.
+- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `SDiD`, `TWFE`, `DDD`, `EDiD`, `SCM`); the diagnostic `BaconDecomposition` keeps its `Bacon` alias. The former `CDiD`/`Gardner`/`Stacked` aliases were removed in 4.0 - use `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`.
 
 ## Practitioner Workflow (based on Baker et al. 2025)
 
@@ -970,125 +970,6 @@ covariate-balance helper are documented follow-ups; missing rows are dropped
 WITH a warning (R drops silently); N < 20 falls back to full-range bandwidths
 exactly as rdrobust does (overriding manual h).
 
-### RDPlot
-
-RD plot diagnostic (Calonico, Cattaneo & Titiunik 2015), parity-targeting R
-rdrobust 4.0.0's `rdplot()`. NOT a treatment-effect estimator: builds the
-standard exploratory RD plot - per-side global order-p polynomial fits
-(default p=4, uniform kernel over each side's full range; deliberately
-different defaults from estimation) plus binned local sample means with a
-DATA-DRIVEN number of bins per side. All 8 `binselect` selectors =
-{evenly (es) / quantile (qs) spaced} x {IMSE-optimal / mimicking variance
-(mv)} x {spacings / polynomial-regression (pr) variance estimators}; the
-result reports `J`, `J_IMSE`, `J_MV`, the implied scale `rscale = J/J_IMSE`,
-and the CCT 2015 Supplement S.1 WIMSE weights (variance `1/(1+rscale^3)`,
-bias `rscale^3/(1+rscale^3)`), matching R's `summary.rdplot`.
-
-```python
-RDPlot(
-    cutoff: float = 0.0,               # Known threshold of the running variable
-    p: int = 4,                        # Global polynomial order (R's rdplot default)
-    nbins: int | tuple | None = None,  # Manual bins per side (overrides the selector)
-    binselect: str = "esmv",           # es/espr/esmv/esmvpr/qs/qspr/qsmv/qsmvpr
-    scale: float | tuple | None = None,  # Multiplies the selected J (fractional products take CCT 2015 Eq 2's ceiling; R crashes there)
-    kernel: str = "uniform",           # Weighting for the global fit within h
-    h: float | tuple | None = None,    # Global-fit window; default = full per-side range
-    support: tuple | None = None,      # (lower, upper); only WIDENS the observed range
-    masspoints: str = "adjust",        # >= 20% ties: warn + switch spacings binselect to its *pr sibling ("check" warns only; "off" disables)
-    ci: float | None = None,           # Per-bin CI level for plotted error bars (CI columns are ALWAYS computed, at 95 when None)
-    covs_drop: bool = True,            # Drop collinear covariates with a warning; False = strict error
-)
-```
-
-**fit() parameters:**
-
-```python
-rp.fit(
-    data: pd.DataFrame,
-    outcome: str,
-    running: str,
-    covariates: list[str] | None = None,  # Covariate-adjusted plot (R's covs=, covs_eval="mean"); gammas exposed as covariate_coefficients
-) -> RDPlotResult
-```
-
-The 3.8 names `outcome_col=` and `running_col=` were removed in 4.0 - use `outcome=` and `running=`.
-
-```python
-from diff_diff import RDPlot
-
-rp = RDPlot(cutoff=0.0)
-res = rp.fit(df, outcome="y", running="score")
-res.J, res.J_IMSE, res.J_MV     # selected / IMSE-optimal / mimicking-variance bins per side
-res.rscale                       # implied scale; WIMSE weights via res.wimse_variance_weight / res.wimse_bias_weight
-res.to_dataframe()               # vars_bins: R-named per-bin columns (rdplot_mean_bin/mean_x/mean_y/min_bin/max_bin/se_y/N/ci_l/ci_r)
-res.vars_poly                    # 500-point global-fit curve per side
-print(res.summary())             # R summary.rdplot layout incl. implied scale + WIMSE weights
-res.plot()                       # optional matplotlib rendering (matplotlib NOT a dependency; ImportError if absent)
-```
-
-Empty bins are dropped from vars_bins (R's tapply) while bin_avg/bin_med
-cover all partition cells; single-observation bins get se = 0 (R's NA -> 0
-fixup); n < 20 raises outright (R behavior - no fallback); a side with
-zero outcome variance pins its J to 1 with a warning and echoes R's Inf
-J_IMSE. With empty LEFT-side bins, R's own rdplot_min_bin/rdplot_max_bin
-come from mirrored grid slots and can disagree with rdplot_mean_bin - an
-R quirk replicated for parity (rdplot_mean_bin is the reliable bin
-identity). Sampling weights and R's subset= are documented seams (filter
-the DataFrame instead).
-
-### RDDensityTest
-
-Manipulation (density-discontinuity) test diagnostic (Cattaneo, Jansson &
-Ma 2020), parity-targeting R rddensity 3.0. NOT a treatment-effect
-estimator: tests the null of NO discontinuity in the running variable's
-density at the cutoff (McCrary's manipulation question) via boundary-
-adaptive local polynomial density estimation - the density is the slope of
-a kernel-weighted local polynomial regression of the rank-based EDF - with
-ROBUST BIAS-CORRECTED inference (order q = p+1 estimators at order-p
-MSE-optimal bandwidths). A significant test is evidence of sorting around
-the cutoff; a null supports (never proves) the RD continuity assumption.
-Inference assumes an i.i.d. sample with a smooth, positive density near
-the cutoff on each side (CJM Assumption 1); clustered, survey-weighted, or
-repeated-observation dependence is unsupported - there is no cluster=
-surface.
-
-```python
-RDDensityTest(
-    cutoff=0.0,
-    p=2,                        # density estimation order (1..7)
-    q=None,                     # bias-correction order; None -> p+1; q==p = conventional test
-    fitselect="unrestricted",   # or "restricted" (shared CDF/higher derivatives; only the density jumps)
-    kernel="triangular",        # / "epanechnikov" / "uniform" (R spellings accepted)
-    vcov_type="jackknife",      # R's default; or "plugin" (asymptotic)
-    h=None,                     # manual bandwidth: scalar or (h_left, h_right)
-    bwselect="comb",            # each / diff / sum / comb (median rule; restricted: min(diff, sum))
-    masspoints="adjust",        # RD-family surface: adjust (R TRUE) / check (warn only) / off
-    regularize=True,
-    n_local_min=None,           # None -> 20+p+1; 0 disables the gate (R semantics, ceil applied)
-    n_unique_min=None,
-    report_all=False,           # also report the conventional (order-p) test, R's all=TRUE
-)
-
-test = RDDensityTest()
-res = test.fit(df, running="score")
-res.t_stat, res.p_value          # robust bias-corrected manipulation test
-res.f_left, res.f_right          # per-side density estimates at the cutoff (whole-sample scale)
-res.bandwidths                   # the rdbwdensity 4-row h-table (None on manual h)
-res.to_dataframe()               # tidy left/right/diff table (+ conventional rows with report_all)
-print(res.summary())             # R-style block (Conventional row iff report_all=True)
-res.to_dict()                    # JSON-serializable scalars (+ nested 'bandwidths' when estimated)
-```
-
-Repeated running-variable values are mass-point adjusted with a warning
-(matching R massPoints=TRUE; "check" warns without adjusting, "off" is
-silent). Degenerate designs fail loud: a side of (almost) only repeated
-values, singular local fits, and degenerate selected bandwidths raise
-ValueError (R silently returns numerically meaningless output there);
-negative/zero/non-finite variance estimates degrade SEs and inference to
-NaN with a warning, and finite NEGATIVE density estimates warn. No
-confidence-interval fields, matching R's output surface (CIs belong to
-rdplotdensity, a documented seam alongside the binomial windows test).
-
 ### StackedDiD
 
 Stacked DiD estimator (Wing, Freedman & Hollingsworth 2024). Addresses TWFE bias with corrective Q-weights.
@@ -1481,105 +1362,6 @@ results = trop.fit(data, outcome='outcome', treatment='treated',
                    unit='unit', time='period')
 results.print_summary()
 ```
-
-### BaconDecomposition
-
-Goodman-Bacon (2021) decomposition of TWFE into 2x2 DiD comparisons.
-
-```python
-BaconDecomposition(
-    weights: str = "approximate",   # "approximate" or "exact"
-)
-```
-
-**Alias:** `Bacon`
-
-**fit() parameters:**
-
-```python
-bacon.fit(
-    data: pd.DataFrame,
-    outcome: str,
-    unit: str,
-    time: str,
-    first_treat: str,
-) -> BaconDecompositionResults
-```
-
-**Usage:**
-
-```python
-from diff_diff import BaconDecomposition, plot_bacon
-
-bacon = BaconDecomposition(weights="exact")
-results = bacon.fit(data, outcome='outcome', unit='unit',
-                    time='period', first_treat='first_treat')
-results.print_summary()
-plot_bacon(results)
-```
-
-### TWFE Weight Diagnostics
-
-What a TWFE regression implicitly weights on staggered data. Distinct from
-`twowayfeweights` (dCDH), which weights (unit, time) cells: these weight
-ATT(g,t) parameters. Ported from Brantly Callaway's `twfeweights` R package
-(MIT); methodology Baker, Callaway, Cunningham, Goodman-Bacon & Sant'Anna
-(2025).
-
-```python
-attgt_weights(
-    results,                        # CallawaySantAnnaResults, or a (g,t) frame
-    type="twfe",                    # "twfe" | "overall" (ATT^O) | "simple"
-    data=None, unit=None, time=None, first_treat=None,   # frame path only
-    weights=None,                   # frame path only; a fitted result uses its own survey weights
-    anticipation=None,              # frame path only; the fit's own otherwise
-) -> ATTGTWeightsResult
-
-decompose_twfe_weights(
-    data,                           # balanced long panel (it re-estimates)
-    outcome=, unit=, time=, first_treat=,
-    method="fwl",
-    covariates=None,
-    base_period="first_period",     # or "gmin1"
-    balance_covariates=None,        # enables result.covariate_balance()
-    weights=None,
-) -> TWFEDecompositionResult
-
-plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
-```
-
-`type="twfe"` requires a fit with `base_period="universal"`,
-`control_group="never_treated"` AND no covariates (R twfe_weights' three
-restrictions); it raises otherwise. ATT^O and ATT^simple weights are
-non-negative and sum to one, so comparing `implied_att` across the three
-types shows what the TWFE specification costs. The result records its
-`type=` as `.level` (`ATTGTWeightsResult.LEVELS` lists the values).
-
-Both entry points fail closed on input R never faced: NaN / `-inf` cohort
-labels (never-treated is exactly `0` or `+inf`), duplicated or non-finite
-ATT(g,t) cells, an incomplete group-time grid (`"twfe"` needs every cohort x
-period cell, the CS estimands every post cell), and sampling weights that are
-not finite, non-negative and positive-mass. A fitted result is rejected
-unless every unit-period outcome cell is present and finite and the estimator
-dropped no unit by its own complete-case rules (DMLDiD records this; results
-pickled by <= 3.12.0 carry no record and are refused). Gaps the estimator
-itself could not fill are handled rather than raised, each with a
-`UserWarning`, keyed on the cells' `skip_reason` (`missing_period`,
-`zero_treated_control`, `zero_weight_mass`): a cohort with no estimable post
-cell under the anticipation window is dropped from the table and the cohort
-shares for every `type` (`did`'s first-period drop), and a cohort that keeps
-one estimable post cell has its absent cells carved out, so `"overall"` /
-`"simple"` average over each cohort's AVAILABLE post cells (`aggte`,
-`aggregate()`). The window counts raw time units, as CallawaySantAnna does;
-`"twfe"`'s own post window stays `t >= g`. `n_negative_post` /
-`negative_post_weight_share` report the
-pathology (negative weight on POST cells); `n_negative` counts pre cells too,
-and is near-half in every staggered design because the TWFE weights sum to
-zero over the full grid.
-
-`decompose_twfe_weights` takes the raw panel rather than a fitted result
-because it re-estimates. It is tied to `attgt_weights` by an identity:
-`attgt_weights(cs, type="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
 
 ### WooldridgeDiD
 
@@ -2182,6 +1964,224 @@ Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
 
 ## Diagnostics
+
+### BaconDecomposition
+
+Goodman-Bacon (2021) decomposition of TWFE into 2x2 DiD comparisons.
+
+```python
+BaconDecomposition(
+    weights: str = "approximate",   # "approximate" or "exact"
+)
+```
+
+**Alias:** `Bacon`
+
+**fit() parameters:**
+
+```python
+bacon.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+) -> BaconDecompositionResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import BaconDecomposition, plot_bacon
+
+bacon = BaconDecomposition(weights="exact")
+results = bacon.fit(data, outcome='outcome', unit='unit',
+                    time='period', first_treat='first_treat')
+results.print_summary()
+plot_bacon(results)
+```
+
+### TWFE Weight Diagnostics
+
+What a TWFE regression implicitly weights on staggered data. Distinct from
+`twowayfeweights` (dCDH), which weights (unit, time) cells: these weight
+ATT(g,t) parameters. Ported from Brantly Callaway's `twfeweights` R package
+(MIT); methodology Baker, Callaway, Cunningham, Goodman-Bacon & Sant'Anna
+(2025).
+
+```python
+attgt_weights(
+    results,                        # CallawaySantAnnaResults, or a (g,t) frame
+    type="twfe",                    # "twfe" | "overall" (ATT^O) | "simple"
+    data=None, unit=None, time=None, first_treat=None,   # frame path only
+    weights=None,                   # frame path only; a fitted result uses its own survey weights
+    anticipation=None,              # frame path only; the fit's own otherwise
+) -> ATTGTWeightsResult
+
+decompose_twfe_weights(
+    data,                           # balanced long panel (it re-estimates)
+    outcome=, unit=, time=, first_treat=,
+    method="fwl",
+    covariates=None,
+    base_period="first_period",     # or "gmin1"
+    balance_covariates=None,        # enables result.covariate_balance()
+    weights=None,
+) -> TWFEDecompositionResult
+
+plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
+```
+
+`type="twfe"` requires a fit with `base_period="universal"`,
+`control_group="never_treated"` AND no covariates (R twfe_weights' three
+restrictions); it raises otherwise. ATT^O and ATT^simple weights are
+non-negative and sum to one, so comparing `implied_att` across the three
+types shows what the TWFE specification costs. The result records its
+`type=` as `.level` (`ATTGTWeightsResult.LEVELS` lists the values).
+
+Both entry points fail closed on input R never faced: NaN / `-inf` cohort
+labels (never-treated is exactly `0` or `+inf`), duplicated or non-finite
+ATT(g,t) cells, an incomplete group-time grid (`"twfe"` needs every cohort x
+period cell, the CS estimands every post cell), and sampling weights that are
+not finite, non-negative and positive-mass. A fitted result is rejected
+unless every unit-period outcome cell is present and finite and the estimator
+dropped no unit by its own complete-case rules (DMLDiD records this; results
+pickled by <= 3.12.0 carry no record and are refused). Gaps the estimator
+itself could not fill are handled rather than raised, each with a
+`UserWarning`, keyed on the cells' `skip_reason` (`missing_period`,
+`zero_treated_control`, `zero_weight_mass`): a cohort with no estimable post
+cell under the anticipation window is dropped from the table and the cohort
+shares for every `type` (`did`'s first-period drop), and a cohort that keeps
+one estimable post cell has its absent cells carved out, so `"overall"` /
+`"simple"` average over each cohort's AVAILABLE post cells (`aggte`,
+`aggregate()`). The window counts raw time units, as CallawaySantAnna does;
+`"twfe"`'s own post window stays `t >= g`. `n_negative_post` /
+`negative_post_weight_share` report the
+pathology (negative weight on POST cells); `n_negative` counts pre cells too,
+and is near-half in every staggered design because the TWFE weights sum to
+zero over the full grid.
+
+`decompose_twfe_weights` takes the raw panel rather than a fitted result
+because it re-estimates. It is tied to `attgt_weights` by an identity:
+`attgt_weights(cs, type="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
+
+### RDPlot
+
+RD plot diagnostic (Calonico, Cattaneo & Titiunik 2015), parity-targeting R
+rdrobust 4.0.0's `rdplot()`. NOT a treatment-effect estimator: builds the
+standard exploratory RD plot - per-side global order-p polynomial fits
+(default p=4, uniform kernel over each side's full range; deliberately
+different defaults from estimation) plus binned local sample means with a
+DATA-DRIVEN number of bins per side. All 8 `binselect` selectors =
+{evenly (es) / quantile (qs) spaced} x {IMSE-optimal / mimicking variance
+(mv)} x {spacings / polynomial-regression (pr) variance estimators}; the
+result reports `J`, `J_IMSE`, `J_MV`, the implied scale `rscale = J/J_IMSE`,
+and the CCT 2015 Supplement S.1 WIMSE weights (variance `1/(1+rscale^3)`,
+bias `rscale^3/(1+rscale^3)`), matching R's `summary.rdplot`.
+
+```python
+RDPlot(
+    cutoff: float = 0.0,               # Known threshold of the running variable
+    p: int = 4,                        # Global polynomial order (R's rdplot default)
+    nbins: int | tuple | None = None,  # Manual bins per side (overrides the selector)
+    binselect: str = "esmv",           # es/espr/esmv/esmvpr/qs/qspr/qsmv/qsmvpr
+    scale: float | tuple | None = None,  # Multiplies the selected J (fractional products take CCT 2015 Eq 2's ceiling; R crashes there)
+    kernel: str = "uniform",           # Weighting for the global fit within h
+    h: float | tuple | None = None,    # Global-fit window; default = full per-side range
+    support: tuple | None = None,      # (lower, upper); only WIDENS the observed range
+    masspoints: str = "adjust",        # >= 20% ties: warn + switch spacings binselect to its *pr sibling ("check" warns only; "off" disables)
+    ci: float | None = None,           # Per-bin CI level for plotted error bars (CI columns are ALWAYS computed, at 95 when None)
+    covs_drop: bool = True,            # Drop collinear covariates with a warning; False = strict error
+)
+```
+
+**fit() parameters:**
+
+```python
+rp.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    running: str,
+    covariates: list[str] | None = None,  # Covariate-adjusted plot (R's covs=, covs_eval="mean"); gammas exposed as covariate_coefficients
+) -> RDPlotResult
+```
+
+The 3.8 names `outcome_col=` and `running_col=` were removed in 4.0 - use `outcome=` and `running=`.
+
+```python
+from diff_diff import RDPlot
+
+rp = RDPlot(cutoff=0.0)
+res = rp.fit(df, outcome="y", running="score")
+res.J, res.J_IMSE, res.J_MV     # selected / IMSE-optimal / mimicking-variance bins per side
+res.rscale                       # implied scale; WIMSE weights via res.wimse_variance_weight / res.wimse_bias_weight
+res.to_dataframe()               # vars_bins: R-named per-bin columns (rdplot_mean_bin/mean_x/mean_y/min_bin/max_bin/se_y/N/ci_l/ci_r)
+res.vars_poly                    # 500-point global-fit curve per side
+print(res.summary())             # R summary.rdplot layout incl. implied scale + WIMSE weights
+res.plot()                       # optional matplotlib rendering (matplotlib NOT a dependency; ImportError if absent)
+```
+
+Empty bins are dropped from vars_bins (R's tapply) while bin_avg/bin_med
+cover all partition cells; single-observation bins get se = 0 (R's NA -> 0
+fixup); n < 20 raises outright (R behavior - no fallback); a side with
+zero outcome variance pins its J to 1 with a warning and echoes R's Inf
+J_IMSE. With empty LEFT-side bins, R's own rdplot_min_bin/rdplot_max_bin
+come from mirrored grid slots and can disagree with rdplot_mean_bin - an
+R quirk replicated for parity (rdplot_mean_bin is the reliable bin
+identity). Sampling weights and R's subset= are documented seams (filter
+the DataFrame instead).
+
+### RDDensityTest
+
+Manipulation (density-discontinuity) test diagnostic (Cattaneo, Jansson &
+Ma 2020), parity-targeting R rddensity 3.0. NOT a treatment-effect
+estimator: tests the null of NO discontinuity in the running variable's
+density at the cutoff (McCrary's manipulation question) via boundary-
+adaptive local polynomial density estimation - the density is the slope of
+a kernel-weighted local polynomial regression of the rank-based EDF - with
+ROBUST BIAS-CORRECTED inference (order q = p+1 estimators at order-p
+MSE-optimal bandwidths). A significant test is evidence of sorting around
+the cutoff; a null supports (never proves) the RD continuity assumption.
+Inference assumes an i.i.d. sample with a smooth, positive density near
+the cutoff on each side (CJM Assumption 1); clustered, survey-weighted, or
+repeated-observation dependence is unsupported - there is no cluster=
+surface.
+
+```python
+RDDensityTest(
+    cutoff=0.0,
+    p=2,                        # density estimation order (1..7)
+    q=None,                     # bias-correction order; None -> p+1; q==p = conventional test
+    fitselect="unrestricted",   # or "restricted" (shared CDF/higher derivatives; only the density jumps)
+    kernel="triangular",        # / "epanechnikov" / "uniform" (R spellings accepted)
+    vcov_type="jackknife",      # R's default; or "plugin" (asymptotic)
+    h=None,                     # manual bandwidth: scalar or (h_left, h_right)
+    bwselect="comb",            # each / diff / sum / comb (median rule; restricted: min(diff, sum))
+    masspoints="adjust",        # RD-family surface: adjust (R TRUE) / check (warn only) / off
+    regularize=True,
+    n_local_min=None,           # None -> 20+p+1; 0 disables the gate (R semantics, ceil applied)
+    n_unique_min=None,
+    report_all=False,           # also report the conventional (order-p) test, R's all=TRUE
+)
+
+test = RDDensityTest()
+res = test.fit(df, running="score")
+res.t_stat, res.p_value          # robust bias-corrected manipulation test
+res.f_left, res.f_right          # per-side density estimates at the cutoff (whole-sample scale)
+res.bandwidths                   # the rdbwdensity 4-row h-table (None on manual h)
+res.to_dataframe()               # tidy left/right/diff table (+ conventional rows with report_all)
+print(res.summary())             # R-style block (Conventional row iff report_all=True)
+res.to_dict()                    # JSON-serializable scalars (+ nested 'bandwidths' when estimated)
+```
+
+Repeated running-variable values are mass-point adjusted with a warning
+(matching R massPoints=TRUE; "check" warns without adjusting, "off" is
+silent). Degenerate designs fail loud: a side of (almost) only repeated
+values, singular local fits, and degenerate selected bandwidths raise
+ValueError (R silently returns numerically meaningless output there);
+negative/zero/non-finite variance estimates degrade SEs and inference to
+NaN with a warning, and finite NEGATIVE density estimates warn. No
+confidence-interval fields, matching R's output surface (CIs belong to
+rdplotdensity, a documented seam alongside the binomial windows test).
 
 ### Placebo Tests
 

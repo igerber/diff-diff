@@ -30,7 +30,9 @@ variation in treatment timing. *Journal of Econometrics*, 225(2), 254-277.
 BaconDecomposition
 ------------------
 
-Main estimator class for the Goodman-Bacon decomposition.
+Entry point of the Goodman-Bacon decomposition diagnostic (a member of the 4.0
+diagnostic family, not an estimator; its results carry the
+:class:`~diff_diff.Diagnostic` marker).
 
 .. autoclass:: diff_diff.BaconDecomposition
    :members:

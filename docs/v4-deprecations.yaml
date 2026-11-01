@@ -1004,10 +1004,11 @@ rows:
     new: null
     deprecated_in: "4.0"
     removed_in: null
-    status: planned
+    status: done
     phase: 5
-    code_refs: [README.md, diff_diff/guides/llms.txt, docs/api/index.rst, docs/index.rst, diff_diff/bacon.py, tests/test_docs_ia.py]
-    notes: "4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings (incl. docs/api/index.rst AND the docs homepage docs/index.rst, both listing Bacon as an estimator today) and estimator-count claims split into estimators + diagnostics; the flip's terminal test asserts the estimator/diagnostic grouping on the named surfaces. The Phase 2 marker introduction is gated separately by [M-091]."
+    test_ref: tests/test_v4_diagnostic_family_docs.py
+    code_refs: [README.md, diff_diff/guides/llms.txt, docs/api/index.rst, docs/index.rst, diff_diff/bacon.py, tests/test_docs_ia.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, docs/api/estimators.rst, docs/api/bacon.rst, docs/migration-4.0.md, docs/doc-deps.yaml, .github/workflows/docs-tests.yml]
+    notes: "DONE at the 4.0 cut (item 9, 2026-11-01): Bacon moved from the Estimators catalogues (README, llms.txt, llms-full.txt section + alias line, docs/api/index.rst autosummary + module toctree, docs/index.rst table) into the Diagnostics groupings; RDPlot consolidated from the API-index Visualization autosummary into Diagnostics and, with RDDensityTest and the TWFE weight diagnostics, out of the llms-full.txt Estimators section; docs/index.rst gained a Diagnostics & Sensitivity table; /docs-check classification updated; the test_ref runs in the docs-tests workflow (README-only diffs included); REGISTRY archive framing (in-place archive Notes + TOC markers + archived-sections convention paragraph) for MultiPeriodDiD, StaggeredTripleDifference and the QDiD class spelling, cross-reference QDiD rows reworded to ChangesInChanges(method='qdid'); homepage counts stay '20+' (user decision); paper.md untouched (submitted JOSS text already states 23 estimators with Bacon outside the count). Import paths and the Bacon alias unchanged. Pinned by the test_ref. ORIGINAL NOTE: 4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings (incl. docs/api/index.rst AND the docs homepage docs/index.rst, both listing Bacon as an estimator today) and estimator-count claims split into estimators + diagnostics; the flip's terminal test asserts the estimator/diagnostic grouping on the named surfaces. The Phase 2 marker introduction is gated separately by [M-091]."
   - id: M-091
     kind: behavior
     group: diagnostic-family

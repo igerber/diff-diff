@@ -503,6 +503,12 @@ argument contract) and [M-154] (the `SpilloverDiD` `df_convention` knob), both i
   `n_obs` and `n_control` are no longer in the frame (read `to_dict()`); `ci_lower`/`ci_upper`
   are `conf_int_lower`/`conf_int_upper`.
 
+- `BaconDecomposition` is re-homed into the diagnostics family ([M-090], landing at 4.0): it
+  leaves the estimator catalogues (README `## Estimators`, `llms.txt`, the API-reference
+  Estimators list, the docs homepage table) for their Diagnostics groupings, together with
+  `RDPlot` in the API reference. Docs-only - the import path, the `Bacon` alias, the results
+  class and every number are unchanged.
+
 - `BusinessReport.to_dict()` schema `2.0` -> `3.0` (landing at 4.0 with the [M-095] removal): the
   `assumption` block no longer carries the legacy `clean_control` key; read `control_group`.
   `DiagnosticReport`'s schema stays `2.0`.

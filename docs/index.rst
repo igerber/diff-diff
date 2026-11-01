@@ -30,7 +30,7 @@ It provides sklearn-like estimators with statsmodels-style output for econometri
 Key Features
 ------------
 
-- **20+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD/Control, modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked, LP-DiD), reversible and heterogeneous-adoption designs (dCDH, HAD), distributional methods (Changes-in-Changes), Regression Discontinuity, and Bacon Decomposition diagnostics
+- **20+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD/Control, modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked, LP-DiD), reversible and heterogeneous-adoption designs (dCDH, HAD), distributional methods (Changes-in-Changes), and Regression Discontinuity
 - **Modern Inference**: Robust standard errors, cluster-robust SEs, wild cluster bootstrap, and multiplier bootstrap
 - **Assumption Testing**: Parallel trends tests, placebo tests, Bacon decomposition, and comprehensive diagnostics
 - **Sensitivity Analysis**: Honest DiD (Rambachan & Roth 2023) for robust inference under parallel trends violations
@@ -189,8 +189,43 @@ Supported Estimators
      - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`
      - Triply Robust Panel with factor model adjustment (Athey et al. 2025)
+
+Diagnostics & Sensitivity
+-------------------------
+
+The diagnostic family assesses a design, an identifying assumption, or the
+robustness of an estimate; its members report no treatment-effect inference
+row of their own (see the :doc:`API reference <api/index>` Diagnostics
+section):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Diagnostic
+     - Description
    * - :class:`~diff_diff.BaconDecomposition`
-     - Goodman-Bacon decomposition diagnostics
+     - Goodman-Bacon (2021) decomposition of the TWFE estimate into its 2x2 comparisons and weights, for diagnosing TWFE bias in staggered settings
+   * - :class:`~diff_diff.RDPlot`
+     - Calonico, Cattaneo & Titiunik (2015) optimal data-driven RD plots: all 8 rdrobust ``binselect`` bin selectors, implied-scale/WIMSE-weight reporting, optional matplotlib rendering
+   * - :class:`~diff_diff.RDDensityTest`
+     - Cattaneo, Jansson & Ma (2020) density-discontinuity (manipulation) test: rddensity 3.0 parity, robust bias-corrected inference, unrestricted/restricted models, mass-point adjustment
+   * - :class:`~diff_diff.HonestDiD`
+     - Rambachan & Roth (2023) sensitivity analysis: robust CI under parallel-trends violations, breakdown values
+   * - :class:`~diff_diff.PreTrendsPower`
+     - Roth (2022) minimum detectable violation and power curves for pre-trends tests
+   * - :class:`~diff_diff.PowerAnalysis`
+     - Analytical and simulation-based MDE, sample size, and power curves for study design
+   * - :class:`~diff_diff.DiagnosticReport`
+     - Experimental preview: one-call battery of the applicable checks (parallel trends, Bacon read-out, pre-trends power, Honest DiD) for a fitted result, one status row per check in ``summary()``; no pass/fail verdict (see ``docs/methodology/REPORTING.md``)
+   * - :func:`~diff_diff.check_parallel_trends`
+     - Simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
+   * - :func:`~diff_diff.run_placebo_test`
+     - Placebo timing, group, permutation, and leave-one-out tests
+   * - :func:`~diff_diff.attgt_weights` / :func:`~diff_diff.decompose_twfe_weights`
+     - Baker et al. (2025) implicit weights a TWFE regression places on each ATT(g,t), against the ATT^O / ATT^simple targets, with the pre-period contribution (ports Callaway's ``twfeweights``)
+   * - :func:`~diff_diff.did_had_pretest_workflow`
+     - Bundled QUG / Stute / Yatchew pre-test battery for :class:`~diff_diff.HeterogeneousAdoptionDiD`, dispatched from the panel shape
 
 Indices and tables
 ------------------
