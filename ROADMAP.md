@@ -8,9 +8,9 @@ Forward-looking plan for diff-diff, organized as queued work, candidates under c
 
 Queued work, ordered by expected leverage. Each item is its own PR. Ordering is priority-sequenced, not time-committed.
 
-### 4.0 API unification
+### 4.1 `event_study()` comparison front door
 
-- **The 4.0 program: estimator consolidation + one API contract.** Three merges (TwoWayFixedEffects absorbs MultiPeriodDiD, TripleDifference absorbs StaggeredTripleDifference, ChangesInChanges absorbs QDiD), post-fit `results.aggregate()`, a canonical results quintet, and library-wide column/param unification - sequenced as a 3.9 shim release (new surface + FutureWarnings), 4.0 enforcement, and a 4.1 `event_study()` comparison front door. Normative spec: `docs/v4-design.md`; every queued deprecation is tracked in `docs/v4-deprecations.yaml` and enforced by CI (`tests/test_v4_matrix.py`).
+- **One entry point over the staggered family.** `event_study(data, outcome, unit, time, first_treat, estimator=...)` runs the chosen staggered estimator and returns the unified event-study surface, so the estimators can be compared on one call signature. Design sketch: `docs/v4-design.md` phase 6 (sketch only; specified in its own plan).
 
 ### Practitioner-ready output
 

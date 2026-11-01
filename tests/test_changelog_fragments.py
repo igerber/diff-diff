@@ -312,14 +312,26 @@ class TestCompile:
                 "20260829-bbb.md": "### Fixed\n- fix from bbb\n\n### Added\n- add from bbb\n",
                 "20260828-aaa.md": "### Fixed\n- fix from aaa\n",
                 "20260830-ccc.md": "### Internal\n- internal from ccc\n",
+                # Declared in reverse compiler order on purpose: the compiled
+                # placement must come from CATEGORIES, not fragment order.
+                "20260827-ddd.md": (
+                    "### Internal\n- internal from ddd\n\n"
+                    "### Behavioral Changes\n- behavior from ddd\n\n"
+                    "### Breaking Changes\n- breaking from ddd\n"
+                ),
             },
         )
         assert run_compile(mod, root) == 0
         text = (root / "CHANGELOG.md").read_text()
         section = text[text.index("## [1.3.0]") : text.index("## [1.2.0]")]
-        # Category order: Added before Fixed before Internal.
+        # Category order: the two breaking categories lead (a major release
+        # reads breakage first), then Added before Fixed before Internal.
         assert (
-            section.index("### Added") < section.index("### Fixed") < section.index("### Internal")
+            section.index("### Breaking Changes")
+            < section.index("### Behavioral Changes")
+            < section.index("### Added")
+            < section.index("### Fixed")
+            < section.index("### Internal")
         )
         # Within Fixed: ascending filename order, joined contiguously.
         assert "- fix from aaa\n- fix from bbb" in section

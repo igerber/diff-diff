@@ -20,7 +20,7 @@ Files that need updating:
 
 | File | Format | Line |
 |------|--------|------|
-| `diff_diff/__init__.py` | `__version__ = "X.Y.Z"` | ~134 |
+| `diff_diff/__init__.py` | `__version__ = "X.Y.Z"` | ~332 |
 | `pyproject.toml` | `version = "X.Y.Z"` | ~7 |
 | `rust/Cargo.toml` | `version = "X.Y.Z"` | ~3 |
 | `CHANGELOG.md` | Section header + comparison link | Top + bottom |

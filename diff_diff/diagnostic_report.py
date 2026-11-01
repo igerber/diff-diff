@@ -3884,8 +3884,8 @@ def _extract_scalar_headline(
     (ledger rows M-050..M-058) every scalar-headline estimator container
     stores the canonical quintet ``att`` / ``se`` / ``p_value`` /
     ``conf_int`` natively, so the table has a single row; the 3.x
-    ``overall_*`` / ``overall_att_*`` row was deleted at the cut (reading it
-    would now emit the containers' FutureWarning shims). The returned
+    ``overall_*`` / ``overall_att_*`` row was deleted at the cut (reading one of
+    those names now raises ``AttributeError``; item 9b removed the shims). The returned
     ``name`` is therefore ``"att"`` for every scalar-headline estimator (the
     last ``overall_*`` container, ``StaggeredTripleDiffResults``, was retired
     by the 4.0 DDD container unification, row M-014).

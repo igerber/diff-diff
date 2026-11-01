@@ -81,18 +81,16 @@ results = estimator.fit(df, outcome='y', treatment='treated', ...)
 print(results.summary())
 ```
 
-### Results Objects — CURRENT (3.x)
-The canonical inference quintet is `att` / `se` / `t_stat` / `p_value` /
-`conf_int` (never `.pvalue` / `.ci`). Every results class exposes all five,
-but native STORAGE varies in 3.x (`overall_att` on the staggered family,
-`avg_att` on the MultiPeriodDiD class removed at the 4.0 cut, with canonical
-names as properties). `summary()`
-everywhere; `to_dict()` / `to_dataframe()` on most classes. See
-`.claude/../docs/methodology/REGISTRY.md` per estimator.
-
-### Results Objects — 4.0 TARGET (do not write against this pre-4.0)
-Target contract: `docs/v4-design.md` section 5; per-surface lifecycle:
-`docs/v4-deprecations.yaml` (CI-enforced by `tests/test_v4_matrix.py`).
+### Results Objects — CURRENT (4.0)
+The canonical inference quintet `att` / `se` / `t_stat` / `p_value` /
+`conf_int` is the NATIVE storage on every results class since 4.0 (the 3.x
+`overall_*` names, `EventStudyResults.period_effects` and LWDiD's `.pvalue` /
+`.ci` were removed at 4.0 - `AttributeError`; 3.x pickles still load via
+`__setstate__`). `summary()` everywhere; `to_dict()` / `to_dataframe()` on
+most classes; `to_dataframe(level="event_study")` emits the unified
+`EVENT_STUDY_SCHEMA`. Contract: `docs/v4-design.md` section 5; per-surface
+lifecycle: `docs/v4-deprecations.yaml` (CI-enforced by
+`tests/test_v4_matrix.py`). See `docs/methodology/REGISTRY.md` per estimator.
 
 ### Column Naming — CURRENT (4.0)
 - `unit` unit id everywhere (the 3.x `unit_col` on HAD and `group` on dCDH

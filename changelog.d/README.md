@@ -46,9 +46,10 @@ Rules (validated by `changelog_compile.py check`):
   never blocks the release. Use inline code instead of fences.
 - Allowed categories (this list mirrors the compiler constant in
   `.claude/scripts/changelog_compile.py`; the mirror is test-pinned):
-  `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`,
-  `Performance`, `Documentation`, `Testing`, `Breaking Changes`,
-  `Behavioral Changes`, `Internal`.
+  `Breaking Changes`, `Behavioral Changes`, `Added`, `Changed`, `Deprecated`,
+  `Removed`, `Fixed`, `Security`, `Performance`, `Documentation`, `Testing`,
+  `Internal` (also the compiled section order - the two breaking categories
+  lead so a major release reads breakage first).
 - 4.0-program PRs must still name the flipped `M-xxx` row ids in the
   fragment (the `docs/v4-design.md` per-PR obligation).
 

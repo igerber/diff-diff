@@ -9,6 +9,605 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- entries live in changelog.d/*.md; compiled at release by .claude/scripts/changelog_compile.py -->
 
+## [4.0.0] - 2026-11-01
+
+### Breaking Changes
+- **`LWDiDResults.pvalue` and `LWDiDResults.ci` are removed** (ledger rows `M-151`, `M-152`): the
+  3.10-born alias properties for `p_value` / `conf_int` were first shimmed with a `FutureWarning`
+  and then removed outright at 4.0 (item 9b of the cut). Read `.p_value` / `.conf_int`.
+- **`LWDiDResults.to_dataframe()` is reshaped onto the shared results schema** (ledger row
+  `M-153`): each `level` returns `aggregate(level).to_dataframe()` - columns `level, label,
+  target, att, se, t_stat, p_value, conf_int_lower, conf_int_upper, n, weight, df` (the
+  event-study schema for `level="event_study"`) - plus LWDiD's `rolling`, `estimation_method`
+  and `vcov_type` columns. The default `"simple"` is ONE headline row; the former per-cohort
+  rows are `level="group"` (without the old trailing `"Overall"` row). The `term` / `cohort`
+  column is now `label`, `n_treated` is the schema's `n`, `n_obs` and `n_control` are no longer
+  in the frame (both stay in `to_dict()`), and `ci_lower` / `ci_upper` are
+  `conf_int_lower` / `conf_int_upper`. `to_csv()` follows and takes the same `level`.
+- **`BusinessReport.to_dict()` schema `2.0` -> `3.0`**: the StackedDiD `assumption` block no longer
+  carries the legacy `clean_control` key (read `control_group`). `DiagnosticReport`'s schema stays
+  `2.0` at this step. (Intermediate: later bullets in this release move the final 4.0 versions to
+  `BUSINESS_REPORT_SCHEMA_VERSION` 4.0 and `DIAGNOSTIC_REPORT_SCHEMA_VERSION` 3.0.)
+- Passing `aggregate=` or `balance_e=` to `CallawaySantAnna.fit`, `EfficientDiD.fit`,
+  `StackedDiD.fit`, `ChaisemartinDHaultfoeuille.fit` or `HeterogeneousAdoptionDiD.fit` (or
+  `aggregate=` to `did_had_pretest_workflow`) now raises Python's native
+  `TypeError: ... unexpected keyword argument`. `TripleDifference`'s staggered-mode
+  `aggregate=`/`balance_e=` are untouched at this step (`M-140`/`M-141`; they are REMOVED later in
+  this release by the DDD container unification bullet below).
+- **Positional slots after the removed parameters shift left.** `CallawaySantAnna`:
+  `survey_design` 9 -> 7; `EfficientDiD`: `survey_design` 9 -> 7, `store_eif` 10 -> 8;
+  `StackedDiD` (`aggregate` sat before them): `population`, `survey_design`, `covariates`
+  7/8/9 -> 6/7/8; `ChaisemartinDHaultfoeuille`: `L_max`, `covariates`, `trends_linear`,
+  `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, `survey_design` each move one
+  slot left (7..14 -> 6..13). `HeterogeneousAdoptionDiD.fit` shifts nothing (everything after
+  the removed slot is keyword-only; a seventh positional now raises). Pass these by keyword.
+- `CallawaySantAnnaResults.to_dataframe(level="event_study"|"group")` and the
+  `EfficientDiDResults` twins raise on every fresh fit (the legacy fields are always `None`);
+  use `results.aggregate(...).to_dataframe()`. (Intermediate: the `M-093` schema bullet below
+  supersedes this - since item 8b `to_dataframe(level="event_study")` recomputes the surface on
+  these classes instead of raising; `level="group"` still raises with the post-fit pointer.)
+- Passing `aggregate=` or `balance_e=` to `ImputationDiD.fit`, `TwoStageDiD.fit` or
+  `ContinuousDiD.fit` now raises Python's native `TypeError: ... unexpected keyword argument`.
+- **Positional slots after the removed parameters shift left.** `ImputationDiD` and
+  `TwoStageDiD`: `survey_design` 9 -> 7; `ContinuousDiD`: `survey_design`, `covariates`
+  8/9 -> 7/8. Pass these by keyword.
+- `aggregate('event_study', balance_e=k)` on a BOOTSTRAPPED `ImputationDiD` / `TwoStageDiD`
+  fit raises `NotImplementedError` (the relayed surface was computed unrestricted; re-fit with
+  `n_bootstrap=0` for a balanced window). Analytic fits recompute with `balance_e` as before.
+- A bootstrapped `ImputationDiD` / `TwoStageDiD` / `ContinuousDiD` fit WITH bootstrap inference
+  but WITHOUT a stored surface - a 3.9-3.13 bootstrapped plain-fit pickle, or a fit whose
+  fail-soft materialization dropped it - raises `ValueError` from `aggregate('event_study')` /
+  `aggregate('group')` (previously `NotImplementedError` from the bootstrap gate); the message
+  names the refit. A 3.9-3.13 bootstrapped pickle fitted with `balance_e=k` stores a restricted
+  surface and the relay returns it as stored.
+- **`TripleDifference.fit(time=)` in the 2x2x2 design now raises `ValueError`** naming `post=`
+  (`M-085`). Through 3.x `time=` was the deprecated alias for the 0/1 post indicator and emitted
+  a `FutureWarning` (`M-031`); since 4.0 `time` means the staggered calendar column only.
+  Supplying both `post=` and `time=` keeps raising the "pass only post=" error.
+- Keyword mapping for callers of the removed class: `eligibility=` is `partition=` on
+  `TripleDifference`; the staggered fit parameters are keyword-only; `cluster=` raises in
+  staggered mode (use `n_bootstrap > 0` for unit-level clustered inference). Users of
+  `balance[did]` stay on 3.x through that extra's `diff-diff<4` pin, where the old name still
+  resolves.
+- **`TwoWayFixedEffects.fit(time=)` in static mode now raises `ValueError`** naming `post=`
+  (`M-083`). Through 3.x `time=` was the deprecated alias for the 0/1 post indicator and
+  emitted a `FutureWarning` (`M-082`); since 4.0 `time` means the event-study calendar column
+  only. Supplying both `post=` and `time=` keeps raising the "pass only post=" error.
+- **`EventStudyResults.period_effects` is removed** (`M-016`; the compatibility view
+  this item first shipped was retired at 4.0 by item 9b - no release carried it). Through
+  the pre-release window, on a calendar surface it returned the former calendar-keyed dict of
+  per-period records (`period, effect, se, t_stat, p_value, conf_int, is_significant,
+  significance_stars`, reference period omitted; `is_significant` is evaluated at the fit's
+  `alpha`, where the removed record hard-coded 0.05; duplicate labels raise). Relative-time
+  `aggregate("event_study")` surfaces do not carry it (`AttributeError`, no warning). The
+  successor is `to_dataframe()` and the columnar arrays.
+- The 3.x "default reference_period has changed" `FutureWarning` is no longer emitted
+  (`M-007`): the event-study mode defaults to the last pre-period silently.
+- `simulate_power` and friends read the flat `att`/`se`/`p_value`/`conf_int` names from
+  unregistered custom estimators' results and raise `TypeError` naming `_EstimatorProfile`
+  otherwise (the `avg_*` fallback left with the removed container; pass `result_extractor=`
+  for other shapes).
+
+- **4.0 cut, storage flip of the headline quintet (`M-050`..`M-058`).** `CallawaySantAnnaResults` (and `DMLDiDResults`), `SunAbrahamResults`, `ImputationDiDResults`, `TwoStageDiDResults`, `StackedDiDResults`, `EfficientDiDResults`, `WooldridgeDiDResults`, `ChaisemartinDHaultfoeuilleResults` and `ContinuousDiDResults` now store the canonical `att` / `se` / `t_stat` / `p_value` / `conf_int` as their native dataclass fields (renamed in slot, so the positional constructor layout is unchanged) and take those names as constructor keywords (`overall_att=` raises `TypeError`). The 3.x `overall_att` / `overall_se` / `overall_t_stat` / `overall_p_value` / `overall_conf_int` names - and on `ContinuousDiDResults` all nine legacy spellings, the `overall_att_*` fields and the former silent `overall_se`-style aliases - are removed at 4.0 (item 9b retired the `FutureWarning` property shims this item first shipped - reading one raises `AttributeError`); they are absent from `dataclasses.fields()`, `asdict()` and `to_dict()`. 3.x pickles load unchanged (each container's `__setstate__` rewrites the legacy keys on load). The bootstrap draw containers (`bootstrap_results.overall_att_se` and siblings) are unchanged; `StaggeredTripleDiffResults` kept its `overall_*` storage at this step and is removed by the DDD container unification bullet below.
+- **Report schemas.** `DiagnosticReport.to_dict()` reports `headline_metric.name` and `target_parameter.headline_attribute` as `"att"` for the nine containers above (`"overall_att"` under 3.x); `DIAGNOSTIC_REPORT_SCHEMA_VERSION` 2.0 -> 3.0. `BusinessReport.to_dict()` reports `target_parameter.headline_attribute` likewise; `BUSINESS_REPORT_SCHEMA_VERSION` 3.0 -> 4.0 (its `headline` block carries no name key). `StaggeredTripleDiffResults` kept `headline_attribute: "overall_att"` at this step (removed by the DDD unification below).
+
+- **4.0 cut, DDD container unification (`M-014`, `M-140`, `M-141`).** `TripleDifference.fit()` returns ONE `TripleDifferenceResults` for both designs: `results.design` is `"2x2x2"` or `"staggered"`, the canonical `att` / `se` / `t_stat` / `p_value` / `conf_int` are native in both, the 2x2x2 positional layout is unchanged, and the staggered structure (`group_time_effects`, `groups`, `time_periods`, unit counts, `control_group`, `base_period`, `anticipation`, `bootstrap_results`, ...) is appended with defaults (`group_time_effects` is `{}` in the 2x2x2 design). The 3.x `StaggeredTripleDiffResults` class, its module, its `overall_*` fields and `to_dict()` keys, and its fit-time `overall_att_es` / `overall_se_es` / `overall_t_stat_es` / `overall_p_value_es` / `overall_conf_int_es` fields are REMOVED (3.x staggered pickles cannot load; 3.x 2x2x2 pickles load unchanged). The fit-time `aggregate=` / `balance_e=` keywords of `TripleDifference.fit()` are REMOVED (`TypeError`): aggregation is post-fit - `results.aggregate('event_study')` (`EventStudyResults`, `balance_e=`), `results.aggregate('group')` (`AggregationResult`) and `results.aggregate('simple')` (a one-row relay of the stored headline, both designs); bootstrapped fits REPLAY the fit-time multiplier bootstrap so sup-t bands and percentile inference match a 3.x fit-time aggregation; the 2x2x2 design fails the staggered levels closed. The paper's Eq. 4.14 overall is `results.aggregate('simple', weights='event_time')` (accepts `balance_e=`; both 3.x warnings preserved). `summary()` no longer prints the event-study / cohort / Eq. 4.14 blocks; `to_dataframe('event_study' | 'group')` raise with the post-fit pointer; `to_dataframe(level=None)` defaults to `'group_time'` in the staggered design and `'overall'` in 2x2x2 (whose one-row frame gains `design`, `pscore_trim`, `alpha`, `df_inference`). New field `df_inference` records the 2x2x2 engine's t df. `plot_group_effects` and its siblings raise `ValueError` on a 2x2x2 fit (no cells).
+- **Report schemas.** For staggered DDD fits `DiagnosticReport.to_dict()['estimator']` and `BusinessReport.to_dict()['estimator']['class_name']` read `TripleDifferenceResults`, and `target_parameter.headline_attribute` reads `"att"` (the last `"overall_att"`). Both schemas gain an additive key - DR a top-level `design`, BR `estimator.design` - `"2x2x2"` / `"staggered"` for `TripleDifferenceResults`, `None` otherwise. No version bump: `DIAGNOSTIC_REPORT_SCHEMA_VERSION` 3.0 and `BUSINESS_REPORT_SCHEMA_VERSION` 4.0 had not shipped (folded into the PR 5b bump). `power.py`'s staggered-boundary guard no longer keys on `aggregate` / `balance_e` (an `estimator_kwargs` carrying them surfaces as `fit()`'s `TypeError`).
+
+- **4.0 cut, `df_convention` default flip (`M-004`, `M-005`, `M-006`, `M-128`, `M-129`, `M-130`, `M-131`).** The analytical tail-df convention for CLUSTERED fits defaults to `"cluster"` (the Stata/fixest `t(G - 1)` reference) instead of `"residual"` (the fitted residual df `t(n - K_full)`) on `DifferenceInDifferences`, `TwoWayFixedEffects`, `LinearRegression`, `SunAbraham`, `WooldridgeDiD` (OLS arms), `StackedDiD` and `ImputationDiD` (pretrends leads); `LPDiD` already defaulted to `"cluster"` at 3.9. What moves: p-values and confidence intervals on clustered analytical fits - `TwoWayFixedEffects` (static, and event-study with `unit=`), `SunAbraham`, `WooldridgeDiD` OLS and `StackedDiD` cluster at `unit` by default, so their default fits move; `ImputationDiD` moves on the `pretrends=True` lead rows; `DifferenceInDifferences` / `LinearRegression` move only with an explicit `cluster=` / `cluster_ids=`; the analytical lanes inside bootstrapped fits (`WooldridgeDiD` per-cell inference and post-fit `aggregate()`, `ImputationDiD` bootstrapped leads) move too, as do the fake-timing / fake-group placebo diagnostics and the power simulators that relay those p-values. What does not: point estimates, standard errors and t-statistics; survey-design fits (survey df keeps precedence); `vcov_type="hc2_bm"` (Bell-McCaffrey DOF keep precedence); bootstrap percentile p-values / CIs; unclustered and Conley fits; the BJS overall/post inference of `ImputationDiD`; `WooldridgeDiD` logit/poisson arms; permutation and leave-one-out diagnostics. `df_convention="residual"` restores the 3.x inference bit-for-bit; on the surfaces where the knob is a documented no-op (non-`pretrends` `ImputationDiD`, `WooldridgeDiD` logit/poisson) the inert-config `UserWarning` now fires for an explicit `"residual"` rather than for an explicit `"cluster"`. `SyntheticDiD` inherits the flipped attribute from `DifferenceInDifferences` without reading it (no behaviour change).
+
+- `SpilloverDiD` auto-clusters at `unit` when `cluster=` is omitted ([M-080], item 7b of the 4.0 cut), mirroring `TwoWayFixedEffects`' carve-outs (explicit `cluster=` wins; the auto-cluster is dropped on the Conley path and never injected as a survey PSU). Its default standard errors, p-values and CIs move; `cluster=False` reproduces the 3.x observation-level HC1 numbers. Results report `cluster_name="unit"` / `n_clusters`. Inference stayed on the residual df at this step; the `df_convention` knob (next bullet, [M-154]) moves it to `t(G - 1)` in the same release.
+- `cluster=False` is the uniform explicit off-switch ([M-080]): the plain heteroskedasticity-robust sandwich with residual-df t inference on `TwoWayFixedEffects` (static + event-study; one-way CR2 Bell-McCaffrey under `hc2_bm`), `SunAbraham`, `WooldridgeDiD` (OLS within-transform lane with the absorbed-FE full-K rescale; logit/poisson plain QMLE sandwich) and `LPDiD` (per-horizon HC1; `if_robust` unclustered IF variance on the regression-adjustment path; implicit per-observation PSUs under a survey design); an accepted bit-identical no-op on the unit-level-by-construction estimators (`CallawaySantAnna` incl. its RC auto-PSU path, `EfficientDiD` incl. `hausman_pretest`, `DMLDiD`, `ChaisemartinDHaultfoeuille`, staggered `TripleDifference`, `LWDiD` incl. the sensitivity helpers, `HeterogeneousAdoptionDiD`, `ImputationDiD`, `TwoStageDiD`) and on the 2x2 `DifferenceInDifferences` / 2x2x2 `TripleDifference` surfaces; still rejected on `StackedDiD`. Rejected with `inference="wild_bootstrap"` (DiD/TWFE), `WooldridgeDiD(n_bootstrap > 0)` and `vcov_type="hc2_bm"` on `SunAbraham`/`WooldridgeDiD` (cluster-only Bell-McCaffrey DOF; tracked in TODO.md).
+- `cluster` accepts `str | None | False` only ([M-155], `diff_diff.utils.validate_cluster`): `True` and non-`str` column labels raise one shared `ValueError` at construction, through `set_params` and at `fit()` on every estimator exposing the parameter (DMLDiD's existing rule generalized; integer-labelled cluster columns must be renamed).
+- Cluster metadata: `DifferenceInDifferences` / `TwoWayFixedEffects` report `n_clusters` from the regression's effective cluster count on non-survey analytical fits (previously `None` unless the wild bootstrap ran); `SunAbrahamResults` gains an appended `n_clusters` field and reports `cluster_name` on clustered analytical fits (previously `None` off the Conley path), and its `summary()` renders the variance-family label on analytical non-survey fits; `TwoWayFixedEffects` under a survey design with no explicit `cluster=` reports `cluster_name=None` (the auto-cluster is never injected as a PSU).
+
+- `SpilloverDiD` gains the three-value `df_convention` knob with the 4.0 default `"cluster"` ([M-154], item 7c of the 4.0 cut): p-values and confidence intervals on its clustered lanes - the unit auto-cluster and an explicit `cluster=` - now use the Stata/fixest `t(G - 1)` reference like every other auto-clustered default, with `G` the effective cluster count reported as `n_clusters`. Point estimates, standard errors and t-statistics never move. `df_convention="residual"` restores the 3.x residual-df inference bit-for-bit; `"normal"` is deliberate z. `"cluster"` falls back to the residual df on `cluster=False` and on every `vcov_type="conley"` fit, an explicit product-kernel `cluster=` included (`"normal"` still selects z there); a `survey_design` df keeps precedence under every value; a saturated stage-2 sample stays all-NaN under every value. `SpilloverDiDResults` reports `df_convention` and `inference_df` (also in `to_dict()`).
+
+- Event-study reference rows are marked explicitly ([M-093], item 8a of the 4.0 cut): every native `event_study_effects` dict that materializes its normalization row (`StackedDiD`, `ImputationDiD`, `TwoStageDiD`, `SpilloverDiD`, the `CallawaySantAnna`/`DMLDiD` universal-base aggregation carrier) now carries `"is_reference": True` on that row and NO count key there - the 3.x `n_obs == 0` / `n_groups == 0` sentinel is retired, and every remaining zero count is a genuine count (a non-estimable horizon). `SpilloverDiD`'s event-study `att_dynamic` / `spillover_effects` frames gain a boolean `is_reference` column with `n_obs = NaN` on the reference rows (the column is float; `to_dict()` records follow). The native `to_dataframe(level="event_study")` frames of `StackedDiD` / bootstrapped `ImputationDiD` / `TwoStageDiD` rendered the reference row's `n_obs` as NaN (float column) at this step; the 8b schema rewire (next bullet) replaces those frames. `plot_event_study`, `plot_honest_event_study`, HonestDiD, PreTrendsPower and `DiagnosticReport` locate the reference by the key on their raw-dict routes - dispatch, admission, rendering and exception types are unchanged. `TwoStageDiD.summary()` now prints its genuine all-filtered horizons as NaN rows instead of a mislabeled `[ref: h]` line. 3.x pickles are migrated on load. `SunAbraham` (omitted row, `reference_period`) and `EfficientDiD` (PT-Post anchor, an estimated cell named by `reference_period`) are unchanged.
+
+- Every results class's `to_dataframe(level="event_study")` now emits the unified `EVENT_STUDY_SCHEMA` ([M-093], item 8b of the 4.0 cut): `event_time, att, se, t_stat, p_value, conf_int_lower, conf_int_upper, cband_lower, cband_upper, n, df, is_reference, estimand` - the frame `results.aggregate("event_study").to_dataframe()` returns (`CallawaySantAnna`/`DMLDiD`, `EfficientDiD`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `ContinuousDiD`, `TripleDifference` staggered, `ChaisemartinDHaultfoeuille`, HAD event-study results, `DurationDiD`, `LWDiD`) or the builder frame (`SunAbraham`, `LPDiD`, `WooldridgeDiD`, `SpilloverDiD`). The 3.x bespoke frames are gone: `relative_period` -> `event_time`; `effect` / `att_glob` / LPDiD's `coefficient` -> `att`; `conf_int_lo`/`hi`, `conf_low`/`high`, HAD's `conf_int_low`/`high` -> `conf_int_lower`/`conf_int_upper`; `n_obs` -> `n` (NaN on the `is_reference` row); dCDH's `horizon` -> `event_time` on the paper's `l1_first_switch` convention, its per-horizon `estimand` labels (`DID^pl_l` / `ref` / `DID_l`) are not carried (`estimand` is `"att"`) and its reference row is marked `is_reference` instead of `n_obs 0`. `WooldridgeDiD` and `LWDiD` append their fit-configuration columns after the schema (`cohort_trends`, `aggregation_weights`; `rolling`, `estimation_method`, `vcov_type`), and `WooldridgeDiD.to_dataframe(level="event_study")` (its default level) now RAISES before `aggregate("event_study", weights=)` instead of returning an empty frame. `CallawaySantAnna`, `EfficientDiD`, `TripleDifference` and analytical `ImputationDiD` / `TwoStageDiD` / `ContinuousDiD` no longer raise "not stored on 4.0 fits" - the level recomputes the surface from the retained kit (bootstrapped `CallawaySantAnna` / `EfficientDiD` / `TripleDifference` fits replay the fit-time bootstrap on every call; an `ImputationDiD` replicate-weight survey fit with `pretrends=True` raises `NotImplementedError` as `aggregate()` does); a kit-less pre-3.9 pickle, or a bootstrapped pickle predating the replay state, that still carries a stored dict now raises where it returned a frame. `level="group"` on those three classes still raises with the post-fit pointer. New levels: `SpilloverDiDResults.to_dataframe(level="simple" | "event_study")` (default `"simple"`, the former one-row frame; aggregate-mode fits raise on `"event_study"`), `HeterogeneousAdoptionDiDEventStudyResults.to_dataframe(level="event_study")`, `DurationDiDResults.to_dataframe(level="event_study")`. An `LPDiD` fit whose stored event-study frame is empty raises instead of returning the empty frame.
+
+- **4.0 cut, item 9b: the compatibility shims scheduled for a 5.0 removal are removed at 4.0** (maintainer
+  decision - no 4.x debt; none of these `FutureWarning` shims ever reached a release, so the released
+  3.x names break without a warned release - `docs/migration-4.0.md` is the notice). The 3.x
+  `overall_att` / `overall_se` / `overall_t_stat` / `overall_p_value` / `overall_conf_int` names on
+  `CallawaySantAnnaResults` (and `DMLDiDResults`), `SunAbrahamResults`, `ImputationDiDResults`,
+  `TwoStageDiDResults`, `StackedDiDResults`, `EfficientDiDResults`, `WooldridgeDiDResults`,
+  `ChaisemartinDHaultfoeuilleResults` and - all nine spellings, `overall_att_*` included -
+  `ContinuousDiDResults` raise `AttributeError`; read the canonical `att` / `se` / `t_stat` /
+  `p_value` / `conf_int` (`M-050`..`M-058`). 3.x pickles still load (the `__setstate__` key migration
+  stays). `EventStudyResults.period_effects` is gone; read `to_dataframe()` or the columnar arrays
+  (`M-016`). `LWDiDResults.pvalue` / `.ci` are gone; read `.p_value` / `.conf_int` (`M-151`, `M-152`).
+- **`SyntheticControl(inner_max_iter=, inner_min_decrease=)` are removed** (`M-148`, `M-149`; the
+  `DeprecationWarning` shipped in 3.13.0): passing either is a `TypeError`, and the positional
+  parameters after them (`standardize`, `alpha`, `seed`, `v_cv_t0`) move two slots left - pass
+  them by keyword.
+- **`run_placebo_test` / `run_all_placebo_tests`: `time` is the calendar column only and
+  `post_periods` is required for every `test_type`** (`M-156`, `M-157`; spec section 8 rule 1). The
+  0/1 post dummy the permutation and leave-one-out tests need is derived as
+  `data[time].isin(post_periods)`; a missing `time` column, missing/empty `post_periods`, missing
+  values in `time`, `post_periods` values absent from the column, or a pre-existing `_placebo_post`
+  column raise `ValueError` (on the suite wrapper before any test runs). Calls that passed the 0/1
+  indicator as `time=` with `post_periods=[1]` return identical numbers; calls that omitted
+  `post_periods` must add it.
+
+### Added
+- **Python 3.15 support**: `requires-python` now allows 3.15 (`<3.16`) and
+  the 3.15 classifier is declared; release wheels are built for CPython 3.15
+  on Linux (x86_64, aarch64), macOS arm64 and Windows, and CI runs the
+  Rust-backend matrix and the pure-Python fallback on 3.15. The Rust
+  extension builds against PyO3 0.30, which supports 3.15.0 final.
+- **`LWDiDResults.summary(alpha=None)` / `print_summary(alpha=None)`** join the family-wide
+  summary-alpha guard (ledger row `M-146`): a value other than the fit-time `alpha` raises
+  `ValueError` instead of being ignored; the methods previously took no `alpha` at all.
+- **`LWDiDResults.to_dataframe(level=...)` / `to_csv(path, level=...)`** gain the uniform
+  `level` selector (`"simple"` default, `"group"`, `"event_study"`) - see Breaking Changes.
+- **`DurationDiDResults.aggregate("simple")`**: a verbatim relay of the stored headline
+  quintet (`n = n_units`, `df` NaN - inference is bootstrap-only), joining the spec section 6
+  `simple` contract every aggregation adopter honours.
+- **`RDDensityTestResult.to_dict()`**: JSON-serializable scalars with native casts (NaN
+  inference passes through), the `*_conventional` block `None` unless `report_all=True`, and
+  the bandwidth-selection table nested under `bandwidths` only when it was estimated.
+
+### Changed
+- **`WooldridgeDiDResults.summary(alpha=None)`** renders the headline (simple) row only; the
+  group / calendar / event-study tables it used to render on request - and their `[pre]`/`[antic]`
+  relative-period labels - are no longer part of `summary()`. Use `aggregate(...)` /
+  `to_dataframe(level=...)`; `anticipation` is still reported on the results object.
+  `to_dataframe(level=)` now rejects an unknown level with `ValueError` instead of returning an
+  empty frame.
+- `practitioner_next_steps` no longer recognises duck-typed results that carry only the legacy
+  `estimator` attribute; `ChangesInChangesResults.method` is the routing field.
+- Runtime messages, the four `llms*.txt` guides, the API docs, the migration guide and the
+  benchmarks no longer steer users to the fit-time route on these five estimators;
+  `CallawaySantAnna`'s class docstring, `plot_event_study`, `honest_did` / `pretrends` and the
+  results-class "not stored" messages point at `results.aggregate('event_study')`.
+- **Bootstrapped `ImputationDiD` / `TwoStageDiD` / `ContinuousDiD` fits relay their event-study
+  (and, on Imputation/TwoStage, group) surface.** The deprecated keyword was the only route to
+  bootstrap event-study inference there (no per-draw state is retained for a replay), so a fit
+  with `n_bootstrap > 0` now ALWAYS computes those surfaces at fit - exactly what
+  `fit(aggregate="all")` computed, `balance_e=None` - stores them in the legacy
+  `event_study_effects` / `group_effects` fields, and `aggregate('event_study')` /
+  `aggregate('group')` RELAYS them (kit-snapshot alpha / anticipation / survey metadata; NaN
+  `df` column; `vcov` `None`) instead of raising `NotImplementedError`. Analytic fits are
+  unchanged (legacy fields `None`, kit recompute on demand). Storage rule: the legacy fields
+  hold a surface IFF the fit carries bootstrap inference. On Imputation/TwoStage a bootstrapped
+  fit that ends analytical (zero valid draws, total bootstrap failure) clears them and
+  `aggregate()` recomputes analytically. ContinuousDiD's bootstrapped kit is scalars-only, so
+  no analytical fallback exists there: a bootstrapped fit with no post-treatment cells never
+  runs its bootstrap (overall ATT already NaN with a `UserWarning`), stores no surface, and
+  `aggregate('event_study')` raises the absent-surface `ValueError`.
+  - Materialization is FAIL-SOFT with a one-shot overall-only retry: an exception while
+    building the surfaces, or a bootstrap attempt that raises / returns `None` with surfaces
+    present, leaves them `None`, emits one `UserWarning` ("... could not be materialized ...")
+    and re-runs the bootstrap overall-only (a seeded fit reproduces the first attempt's weight
+    draws), so a plain bootstrapped fit's headline quintet and its success/abort outcome are
+    unchanged by the removal. ContinuousDiD bootstrap failures still propagate as before.
+  - Consequences on bootstrapped plain fits: the aggregators' own `UserWarning`s (ImputationDiD
+    Prop-5 unidentified horizons, empty horizons, LOO single-unit auxiliaries; TwoStageDiD
+    Stage-1/Stage-2 singular or rank-deficient fallbacks) and the per-target bootstrap-stats
+    `RuntimeWarning`s now fire where a plain fit never emitted them; `summary()` prints the
+    event-study/group tables and `to_dataframe(level="event_study"|"group")` returns frames
+    instead of raising; `DiagnosticReport` / `BusinessReport` run heterogeneity (Imputation /
+    TwoStage on the relayed group dict, ContinuousDiD on the event study) and parallel trends
+    (Imputation / TwoStage) on the relayed surface instead of skipping with
+    `NotImplementedError`; `plot_event_study(results)` plots them natively. Measured cost (199
+    draws, 300 units x 12 periods): Imputation 0.01s -> 0.08s, TwoStage 0.01s -> 0.04s,
+    Continuous unchanged at 0.05s; all three default to `n_bootstrap=0`.
+- `ImputationDiD`'s inert-`df_convention` warning predicate is now exact: the per-lead inference
+  is reachable iff `pretrends=True` and the design is not replicate-weighted (`M-127`); the
+  unreachable pretrends+replicate fit-time gate is deleted (the combination is still rejected
+  post-fit by `aggregate('event_study')`).
+- Runtime messages (`plot_event_study`, the results-class "not stored" hints,
+  `_reporting_helpers`, `DiagnosticReport` docstrings), `practitioner_next_steps` advice for
+  bootstrapped ImputationDiD / TwoStageDiD / ContinuousDiD fits, the `llms*.txt` guides, the
+  ContinuousDiD API page and tutorial, the migration guide and the performance docs describe
+  the relay instead of steering users to the removed fit-time route.
+
+### Removed
+- **The 3.9 rename shims are gone (ledger rows flipped to `removed`).** Old keyword spellings
+  now raise `TypeError`: `DifferenceInDifferences.fit(time=)` -> `post=` (`M-030`),
+  `permutation_test(time=)` / `leave_one_out_test(time=)` -> `post=` (`M-137`, `M-138`),
+  `WooldridgeDiD.fit(cohort=)` -> `first_treat=` (`M-032`), `ChaisemartinDHaultfoeuille.fit(group=,
+  controls=)` -> `unit=`, `covariates=` (`M-033`, `M-034`), `twowayfeweights(group=)` -> `unit=`
+  (`M-097`), the `*_col` spellings on `HeterogeneousAdoptionDiD.fit`, `RegressionDiscontinuity.fit`,
+  `RDPlot.fit`, `joint_pretrends_test`, `joint_homogeneity_test`, `did_had_pretest_workflow`
+  (`M-035`..`M-042`, `M-088`, `M-089`, `M-098`..`M-112`) and `trim_weights(weight_col=)` ->
+  `weights=` (`M-113`), `StackedDiD(clean_control=)` -> `control_group=` (`M-043`),
+  `WooldridgeDiDResults.to_dataframe(aggregation=)` -> `level=` (`M-044`) and
+  `summary(aggregation)` (`M-087`; `summary(alpha=None)` is now the positional signature),
+  `ContinuousDiD(covariates=)` -> `fit(covariates=)` (`M-084`). The `"event"` value spelling is
+  rejected with `ValueError` on `WooldridgeDiDResults.aggregate(type=)`, `.to_dataframe(level=)` and
+  `LPDiDResults.to_dataframe(level=)` - use `"event_study"` (`M-086`, `M-150`, `M-136`).
+- **`robust=` removed** from `DifferenceInDifferences` (and so `TwoWayFixedEffects`,
+  `MultiPeriodDiD`), `TripleDifference`, `HeterogeneousAdoptionDiD` and `LinearRegression`
+  (`M-045`..`M-047`, `M-115`); `vcov_type=` is the single selector. The legacy-CR1 remap that
+  turned `robust=False` + clustering into `hc1` went with it. Positional constructor slots after
+  the removed parameter shift left by one (DiD slot 1, LinearRegression/TripleDifference slot 2,
+  HeterogeneousAdoptionDiD slot 6); `SyntheticDiD`'s inert `lambda_reg`/`zeta` (`M-001`, `M-002`,
+  constructor slots 7-8) are removed too, shifting `vcov_type` and the `conley_*` parameters two
+  slots left. Pass these by keyword.
+- **Results-field aliases removed**: `SyntheticDiDResults.placebo_effects` (`M-003`; use
+  `variance_effects`), `RegressionDiscontinuityResults.treatment_col` (`M-094`; `takeup`),
+  `StackedDiDResults.clean_control` and `StackedDiD.clean_control` (`M-095`, `M-043`;
+  `control_group`), `ChaisemartinDHaultfoeuilleResults.groups` (`M-114`; `units`),
+  `ChangesInChangesResults.estimator` (`M-143`; `method`). Their serialized dual keys are gone from
+  `to_dict()` (`treatment_col`, `clean_control`, `estimator`, Wooldridge's
+  `aggregation_weights["event"]`); 3.x pickles still load (`__setstate__` key migrations kept).
+- **The eight module-level wrapper functions are removed** (`M-070`..`M-077`): `imputation_did`,
+  `two_stage_did`, `stacked_did`, `trop`, `synthetic_control`, `triple_difference`,
+  `bacon_decompose`, `chaisemartin_dhaultfoeuille`. Call the estimator classes. `diff_diff.trop`,
+  `diff_diff.synthetic_control`, `diff_diff.stacked_did` and `diff_diff.chaisemartin_dhaultfoeuille`
+  now name the submodules (as `diff_diff.bacon` always did).
+- **The dieted aliases are removed** (`M-132`..`M-134`): `CDiD` -> `ContinuousDiD`, `Stacked` ->
+  `StackedDiD`, `Gardner` -> `TwoStageDiD`; the module `__getattr__` warning shim (`M-135`) is gone.
+- **The fit-time `aggregate=` / `balance_e=` keywords are gone on the estimators whose post-fit
+  route already existed (ledger rows flipped to `removed`).** `fit(aggregate=)` is removed from
+  `CallawaySantAnna` (`M-020`), `EfficientDiD` (`M-023`), `StackedDiD` (`M-024`),
+  `ChaisemartinDHaultfoeuille` (`M-026`) and `HeterogeneousAdoptionDiD` (`M-027`),
+  `fit(balance_e=)` from `CallawaySantAnna` (`M-117`) and `EfficientDiD` (`M-120`), and
+  `aggregate=` from `did_had_pretest_workflow` (`M-139`; the `HADPretestReport.aggregate`
+  output field survives). The successor is post-fit `results.aggregate(type, balance_e=)`; HAD
+  selects its mode from the panel shape. With the keywords go StackedDiD's fit-time
+  `group`/`all`/unknown-value `ValueError`s (`aggregate('group')` already fails closed in the
+  mixin) and the private `_VALID_AGGREGATES` sets in `had.py` / `had_pretests.py`
+  (`_infer_aggregate_mode` is the sole selector). `ImputationDiD`, `TwoStageDiD` and
+  `ContinuousDiD` lost their keywords in the same release once the bootstrapped-fit relay
+  landed (the next bullet but one).
+- **CallawaySantAnna and EfficientDiD compute no event-study/group surface at fit.** Their
+  legacy `event_study_effects` / `group_effects` fields - and CS's `cband_crit_value`,
+  `event_study_vcov`, `event_study_vcov_index`, `event_study_df` - are `None` after EVERY fit;
+  the post-fit replay (`aggregate('event_study'|'group', balance_e=)`) is the only bootstrap
+  route and is unchanged.
+- **The last fit-time `aggregate=` / `balance_e=` keywords are gone (ledger rows flipped to
+  `removed`).** `fit(aggregate=)` is removed from `ImputationDiD` (`M-021`), `TwoStageDiD`
+  (`M-022`) and `ContinuousDiD` (`M-025`), `fit(balance_e=)` from `ImputationDiD` (`M-118`)
+  and `TwoStageDiD` (`M-119`). With PR 3b's removals on CallawaySantAnna / EfficientDiD /
+  StackedDiD / dCDH / HAD this completes the aggregate-postfit group: every adopter aggregates
+  through post-fit `results.aggregate(type, balance_e=)` only; `TripleDifference`'s
+  staggered-mode keywords (`M-140`/`M-141`) were the last fit-time `aggregate=` at this step
+  and are removed in the same release by the DDD container unification (Breaking Changes
+  above). With the keywords go ContinuousDiD's
+  no-underscore `"eventstudy"` spelling and its fit-time value validation, the dead analytic
+  fit-time event-study inference arm in `continuous_did.py`, and ImputationDiD's unreachable
+  pretrends+replicate fit-time gate.
+- **The `StaggeredTripleDifference` class and its `SDDD` alias are gone** (`M-013`, `M-064`; 4.0
+  cut, PR 4a). `from diff_diff import StaggeredTripleDifference` and `SDDD` raise `ImportError`,
+  and the `diff_diff.staggered_triple_diff` module no longer exists. The staggered DDD estimator
+  is `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)` - the same engine
+  (`diff_diff/_staggered_triple_diff_engine.py`), pinned against the committed oracle in
+  `tests/test_v4_merge_ddd.py`. R's compact `control_group` spellings
+  (`"notyettreated"`/`"nevertreated"`) died with the class; the merged surface takes
+  `"not_yet_treated"`/`"never_treated"`.
+- **The `QDiD` class and the `QDiDResults` alias are gone** (`M-015`, `M-061`). The quantile-DiD
+  comparison estimator is `ChangesInChanges(method="qdid")` (same engine, identical numbers);
+  the results container is `ChangesInChangesResults` for both methods.
+- The two `pyproject.toml` pytest `filterwarnings` entries that silenced the removed classes'
+  construction `FutureWarning`s.
+- **The `MultiPeriodDiD` class, its `MultiPeriodDiDResults` container, the `PeriodEffect`
+  record and the `EventStudy` alias are gone** (`M-010`, `M-011`, `M-012`, `M-060`; 4.0 cut,
+  PR 4c-ii). `from diff_diff import MultiPeriodDiD` (and the other three names) raises
+  `ImportError`. The estimator is `TwoWayFixedEffects().fit(..., event_study=True, spec=,
+  post_periods=, reference_period=)`, which returns the unified `EventStudyResults` surface
+  natively: `spec="pooled"` is the removed class's design (bit-exact without `unit=`; with
+  `unit=` the pooled spec auto-clusters at unit), `spec="within"` is its `absorb=["unit"]`
+  design; `post_periods=` is required (the midpoint default died with the class) and the
+  post-period average `avg_att` has no successor field. Pinned field for field against the
+  pre-refactor capture `tests/fixtures/v4_twfe_event_study_oracles.json`.
+- The `pyproject.toml` pytest `filterwarnings` entry that silenced the removed class's
+  construction `FutureWarning`, the `MultiPeriodDiD` power-simulation profile
+  (`simulate_power` has no event-study profile yet; TODO row), and the `MultiPeriodDiDResults`
+  branches of DiagnosticReport / BusinessReport / `practitioner_next_steps` (both reports still
+  reject `EventStudyResults` by design; the admission TODO row records where the logic lived).
+
+### Fixed
+
+- **`DiagnosticReport` kept every event-study horizon on fractional calendars.** The parallel-trends and heterogeneity collectors keyed the derived `aggregate('event_study')` surface (and compared raw `event_study_effects` keys) through `int(k)`, so on a half-step calendar (`e = t - g` in `-1.5, -1.0, -0.5, ...`) `-1.5` merged into `-1` and `-0.5` into the treatment horizon `0`: pre-periods silently left the PT family and a violated horizon could read as a clean verdict. Integer-valued horizons keep their `int` keys; fractional horizons stay `float`, compare at their real value against the anticipation-aware boundary, and align with the covariance index for the joint Wald. Affected every post-fit event-study producer routed through the report (CallawaySantAnna included), not only the staggered DDD route this release enables.
+
+- `run_all_placebo_tests` and `run_placebo_test(test_type="permutation" | "leave_one_out")` no
+  longer fail on a multi-period calendar column: through 3.x the wrappers forwarded `time` itself as
+  the 0/1 post dummy, so `DifferenceInDifferences.fit` rejected it and the suite silently reported
+  the two tests as error dicts (tutorial 04's placebo cell printed `ERROR` lines). The dummy is now
+  derived from `post_periods`.
+
+### Security
+- **CI smoke-test lockfile refresh**: bumped the transitive `undici` (7.29.0 -> 7.30.1)
+  and `source-map-js` (1.2.1 -> 1.2.2) pins in `.github/scripts/package-lock.json`,
+  clearing all seven open Dependabot alerts. CI-only (docs search-excerpt smoke test);
+  nothing in the published wheel is affected.
+
+### Documentation
+- **4.0-cut framing** (the first PR of the 4.0 cut, at v3.13.0): `docs/v4-design.md`
+  re-synced with the library as shipped since 3.9 - the estimator roster now counts
+  LWDiD/DMLDiD/DurationDiD (27 -> 24 at 4.0, 23 estimators + Bacon in the diagnostic
+  family), the diagnostic family names the TWFE weights containers and
+  `DurationDiDPretestResults`, and section 9 carries the ten-PR cut sequence. `M-080`
+  (auto-cluster policy) re-scoped to the measured roster: static `TwoWayFixedEffects`
+  already auto-clusters at unit, `SpilloverDiD` is the one estimator whose default SE
+  moves at 4.0, `cluster=False` becomes the uniform explicit off-switch, and the
+  by-construction estimators keep no auto-cluster metadata by decision (new "Default
+  clustering roster" section in `docs/methodology/variance-conventions.md`; REGISTRY
+  Notes on SpilloverDiD, StackedDiD, ImputationDiD, TwoStageDiD, DMLDiD, DurationDiD).
+  `M-008` (`DIFF_DIFF_SOLVE_OLS_FASTPATH` default) decided: evaluated, kept off. New
+  ledger row `M-150` gives `WooldridgeDiDResults.to_dataframe(level="event")` its own
+  locator (twin of `M-136`). The migration guide's auto-cluster section, appendix and
+  orientation table follow the ledger (111 appendix rows).
+- **Tutorials 02/04/05/07/23 are rebuilt on `TwoWayFixedEffects().fit(..., event_study=True)`**
+  (`spec="within"`: unit + period fixed effects, unit-clustered SEs) ahead of the
+  MultiPeriodDiD removal (`M-010`, 4.0 cut PR 4c). Point estimates match the former
+  MultiPeriodDiD fits on these balanced panels; the SEs change because the within spec
+  clusters by unit. Tutorial 23's naive headline is the equal-weight average of the two
+  post-period coefficients computed in the cell (ATT unchanged at -4.29; the SE is now the
+  unit-clustered one), and tutorial 02's period-effects loop reads `to_dataframe()`.
+- The static `TwoWayFixedEffects().fit(..., time=...)` calls in tutorials 01/02/09 (the
+  `M-082` alias, misused there as the post dummy) are replaced: 01 passes `post="post"`;
+  02 and 09 report `TwoWayFixedEffects().decompose(...).twfe_estimate`, the unit + period
+  fixed-effects coefficient their Goodman-Bacon sections decompose (the old cells printed
+  `treated x period` artefacts: 0.6309 and 0.0001). Tutorial 02 cell 36's covariate draw is
+  seeded. Tutorials 02 and 09 are re-executed on the Rust backend, which produced the
+  committed outputs, so the seeded bootstrap cells are unchanged.
+- Tutorials 08 and 16 describe `StaggeredTripleDifference` as the removed class (4.0 cut,
+  PR 4a). `diff_diff/guides/llms-full.txt`'s event-study snippet calls `print(es.summary())`
+  (`EventStudyResults` has no `print_summary`).
+
+- `BaconDecomposition` is re-homed into the diagnostics family ([M-090], item 9 of the 4.0 cut): it leaves the estimator catalogues - README `## Estimators`, `llms.txt` `## Estimators`, the `llms-full.txt` Estimators section and its alias line, the API-reference Estimators autosummary and module toctree, and the docs homepage Supported Estimators table - for their Diagnostics groupings. `RDPlot` moves from the API-reference Visualization autosummary into Diagnostics; `RDPlot`, `RDDensityTest` and the TWFE weight diagnostics leave the `llms-full.txt` Estimators section. Docs-only: the import path, the `Bacon` alias, the results class and every number are unchanged.
+- The docs homepage gains a "Diagnostics & Sensitivity" table (BaconDecomposition, RDPlot, RDDensityTest, HonestDiD, PreTrendsPower, PowerAnalysis, DiagnosticReport, the parallel-trends / placebo / TWFE-weight functions and the HAD pretest workflow) next to the estimator table; the API-reference Estimators and Diagnostics intros describe the split.
+- `docs/methodology/REGISTRY.md` archive framing for the classes removed at 4.0: the MultiPeriodDiD and StaggeredTripleDifference sections and the QDiD class-spelling subsection open with an archive Note, the table of contents marks them *(archived)* and states the archived-sections convention, the cross-reference tables name `ChangesInChanges(method="qdid")` instead of a standalone `QDiD` estimator, and the "20-estimator count" wording is gone. The migration guide gains the [M-090] bullet.
+
+### Testing
+- `tests/test_t23_spillover_tva_drift.py`'s `naive_fit` fixture mirrors the notebook's TWFE
+  event-study headline cell, runs the fit with warnings escalated to errors, and pins the
+  post-period-average identity and the unit-clustered vcov-block SE alongside the existing
+  -4.29 endpoint.
+- The MultiPeriodDiD-fixture suites (honest_did, pretrends, methodology pretrends/honest,
+  visualization, Conley, survey, replicate weights, vcov_type, df_convention, the estimators
+  event-study behaviour pins, the event-study surface roster, the DiagnosticReport /
+  BusinessReport generic fixtures) now run on `TwoWayFixedEffects().fit(..., event_study=True)`
+  (or a static TWFE fit for the report classes); MultiPeriodDiD's own tests, the MPD-only
+  designs (multi-`absorb`, `fixed_effects=`, wild bootstrap, container-field assertions, the
+  MPD-branch consumer tests) and the MPD-vs-TWFE parity oracles are unchanged until PR 4c-ii.
+  New `tests/test_twfe_event_study_decoupling.py`, shared helpers
+  `tests/helpers/twfe_es_oracle_lanes.py`, `event_study_average.py` and
+  `event_study_surface_builders.py`; the variance-conventions inventory gains the two TWFE
+  event-study rows; a TODO row tracks the one-way HC2-BM absorbed-FE R-parity lane.
+
+### Internal
+- **Codex reviewer gpt-6 campaign pre-registration (PR-1 of 2)**: `tools/reviewer-eval`
+  pre-registers the `gpt-5.6-sol` -> `gpt-6-astra` evaluation (`DECISION_RULE.md`:
+  symmetric regression gate over every ground-truth bug, FP gate, downgrade rule,
+  verifier-confirmed leaks void a cell and contest the gate, stop conditions; the
+  2026-07 rule is archived under `campaigns/`) and splits the grader-facing text into
+  `GRADING_RUBRIC.md` (marker-based `LEAK?` flag whose list renders from
+  `reviewer_audit.LEAK_RULES`). New engines: `reviewer_verdict.py` (gates, precedence,
+  binding to the sealed artifacts, protocol guards, PROVISIONAL/DEFINITIVE) and
+  `reviewer_audit.py` (post-unblinding session-log audit, informational and
+  over-matching by design). `run_eval.py` gains `audit` and `verdict`, runs every
+  codex call under an isolated CI-faithful `CODEX_HOME`, records seven-key git
+  provenance per artifact and in the manifest, seals artifacts at run time
+  (`artifacts_sha`), binds the blinded bundle (`bundle_id`, `run_ids_sha`,
+  rubric/prompt sha) and refuses post-run stages on a dirty or moved tree; `run`
+  holds an exclusive per-subdir lock for the whole attempt, records the OK cells of
+  aborted attempts too and refuses a rerun that would re-dispatch any cell an
+  earlier attempt recorded OK; review worktree leaves are salted opaque hashes. Harness CLI re-pinned to
+  codex-cli 0.162.1 (arm `E` = gpt-6-astra @ xhigh added; CI `codex-version` pinned
+  to the same, lockstep-tested with `DEFAULT_MODEL`, the plan-review pin, the
+  control arm and the prose pins).
+- **`openai_review.py`**: `call_codex` parses codex's stderr session events into
+  `session_commands` (+ start/exec/other-event counts, truncation flag) on every
+  exit path and prints a one-line summary; `--timeout` now also caps the codex
+  backend's wall clock when passed explicitly (previously ignored there), `0`
+  means no timeout on both backends and negatives are rejected; `PRICING`
+  corrected for gpt-5.6-* and extended with gpt-6-*; gpt-6* counts as a
+  reasoning family; blinding scrubs gpt-6/astra and Unicode-dash spellings.
+- **Codex reviewer swap gpt-5.6-sol -> gpt-6.1-sol (reviewer-eval 2026-10 campaigns, PR-2)**:
+  two blinded, pre-registered 44-review campaigns on the frozen `tools/reviewer-eval`
+  harness. Campaign 1 (B = gpt-5.6-sol vs E = gpt-6-astra, both @ xhigh, k=2): mechanical
+  DEFINITIVE **NO-GO** on one regression (`s4-cs-unbalanced-nan-outcome`), accepted by the
+  user; no astra swap (`campaigns/2026-10-gpt6-VERDICT.md`). Campaign 2 (B vs F =
+  gpt-6.1-sol @ xhigh, k=2, fresh control sample, same rule re-issued for F):
+  mechanical DEFINITIVE **PARITY** with zero rule-defined regressions, zero downgrades,
+  0 vs 0 false positives, two favourable catch-status changes against one
+  UNSTABLE-to-MISSED judgment flag, ~15% lower latency and half the input price; the
+  user accepted PARITY as GO
+  (`campaigns/2026-10-gpt61sol-VERDICT.md`). Both verdicts ship with their redacted
+  grading records (`campaigns/2026-10-gpt6*-grading/`). Production pins move in lockstep
+  to `gpt-6.1-sol`: the CI workflow `model`, `openai_review.DEFAULT_MODEL` and the
+  plan-review `CODEX_MODEL` (carried over from the code-review campaign, not re-run
+  through plan-review-eval; TODO.md row), with the plan-review `CODEX_TIMEOUT_S` raised
+  2400 -> 3600 to equal the harness ceiling. Harness: arm `F` registered with the contrast
+  `(B, F)`, campaign 1's rule archived as `campaigns/2026-10-gpt6-DECISION_RULE.md`,
+  `run --configs` defaults to the last registered shape, `PRICING` gains `gpt-6.1-sol`,
+  arm F takes `role=control` (B retained as previous production), the candidate-exposure
+  gate exempts the control arm so bare `smoke` keeps working after a swap, and the
+  DEFERRED `gpt-6-sol` cost-fallback row is retired (codex-cli 0.162.1's ChatGPT-account
+  login accepts the gpt-6 Sol tier; campaign 2 was that evaluation).
+- **Dependabot npm coverage**: added an `npm` ecosystem entry for `/.github/scripts`
+  so the smoke-test toolchain gets weekly version-update PRs (grouped minor/patch)
+  instead of drifting into advisories between manual lockfile refreshes.
+- **Ledger cut window** (`docs/v4-deprecations.yaml` header `cut_window: "4.0"`,
+  `cut_base: "3.13.0"`; spec section 11): rows scheduled at 4.0 may flip terminal
+  ahead of the version bump so the removals land over many PRs while `__version__`
+  stayed 3.13.0; `tests/test_v4_matrix.py` relaxes only the early-removal guard for the
+  window version, refuses any other version bump while early-terminal rows exist, and
+  keeps due enforcement unchanged. The id snapshot and `ROW_COUNT_FLOOR` now include
+  `M-148`/`M-149` (shipped by #838 without extending them) and `M-150` (132 rows).
+  `M-091`'s roster records the four later-born `Diagnostic` containers; `M-050`'s
+  `code_refs` record that `diff_diff/_deprecation.py` survives 4.0 as pickle-migration
+  infrastructure; `M-045`/`M-115` name the legacy-CR1 remap branches their removal
+  deletes. No `maint/3.13` branch was cut (maintainer decision 2026-10-18); 3.13.x
+  patches, if ever needed, come from the `v3.13.0` tag.
+- `tests/test_v4_matrix.py` removed-status probes: a function row that resolves to a submodule
+  counts as absent; a param row absent from the explicit signature counts as removed despite
+  `**kwargs`. Naming-guard allowlist extended for the kept body-local aliases, `__setstate__` keys
+  and shared vocabulary. The `diff_diff._deprecation` helpers survived this PR for the remaining
+  M-031/M-082 and PR-3 shims (item 9b later reduced the module to its pickle-migration and
+  required-arg helpers).
+- **4.0 cut, PR 3a - tests-first migration to the post-fit aggregation containers.** The
+  test and benchmark suites now read event-study / group surfaces from
+  `results.aggregate("event_study")` / `results.aggregate("group")` (the container API that
+  has existed since 3.9) instead of the deprecated fit-time `fit(aggregate=...)` keyword and
+  the legacy `event_study_effects` / `group_effects` fields, so the keyword removals in PRs 3b
+  and 3c land against already-migrated suites. No library source changes and no ledger row
+  flips in this PR; the fit-time keywords still work and still warn. Bootstrapped
+  ImputationDiD / TwoStageDiD / ContinuousDiD sites stay on the fit-time route until PR 3c
+  adds the post-fit relay for them.
+- **Committed per-backend aggregation oracles.** `tests/test_aggregate_contract.py` no longer
+  uses the fit-time route as its numerical reference: every analytic surface is pinned at
+  `rtol=1e-12` (confidence-interval bounds at `1e-9`: scipy's `t.ppf` moved by up to 3.4e-11
+  relative between 1.13 and 1.14+) and every bootstrapped CS / EfficientDiD replay at the
+  replay-parity tolerances against `tests/fixtures/v4_aggregate_oracles.json`, captured on the unmodified
+  tree at `8724fecd` by `tests/_capture_v4_aggregate_oracles.py` under both weight backends
+  (see `tests/fixtures/README.md`). New `tests/helpers/legacy_surface.py` (`es_dict`,
+  `group_dict`, `legacy_standin`) gives consumer tests a faithful stand-in for the 3.x
+  fit-time surface where their subject is the native (legacy-pickle) route.
+- **Benchmarks** (`benchmarks/python/benchmark_callaway.py`, `benchmark_imputation.py`, the
+  `speed_review` scripts) call `aggregate()` post-fit inside the timed region and emit the
+  same JSON row shape the R refresh joins on.
+- `docs/v4-design.md` section 9 records the three-way split of cut-sequence item 3 (3a
+  tests-first, 3b mechanical removals, 3c the Imputation/TwoStage/ContinuousDiD removals +
+  relay).
+- `tests/test_aggregate_contract.py`: the `Test*Shim` classes, fit-time fixtures and
+  inertness comparisons for the five estimators are retired in favour of `Test*Removal`
+  pins (TypeError, signature, positional-slot binding); the committed oracle fixture is the
+  numerical reference. `tests/_capture_v4_aggregate_oracles.py` is marked historical (it
+  drives the removed route; runnable only at the recorded `captured_at_head`). Naming-guard
+  allowlist entries for the `llms.txt` / `llms-full.txt` canonical post-fit `aggregate`
+  vocabulary. Ledger row `M-093` records that CS/EfficientDiD populate the legacy fields on
+  no fit. `warn_deprecated_kwarg` loses its last library caller and is retained (spec section
+  8 rule 11) with a direct unit pin.
+- `tests/test_aggregate_contract.py`: the remaining `Test*Shim` classes, fit-time fixtures and
+  fail-closed bootstrap pins are retired for `Test*Removal` pins (TypeError, signature,
+  positional-slot binding) and relay pins - the relayed surfaces equal the stored legacy dicts
+  row-for-row and match the per-backend bootstrap oracles - plus failure-injection pins for the
+  fail-soft materialization and the storage rule. The estimator suites, `DiagnosticReport`,
+  `event_study_surface` (bootstrapped Imputation / TwoStage / Continuous enrolled as genuine
+  native producers) and practitioner tests take their relay pins; the module-level
+  FutureWarning filters for the fit-time route are gone. Naming-guard allowlist entries for the
+  guides' post-fit `aggregate` vocabulary are finalized. Ledger row `M-093` gains the fit-side
+  table of which producers populate the legacy fields; `M-127` records the exact predicate.
+  `docs/v4-design.md` section 6 carries the relay amendment and the HYBRIDS paragraph; section 9
+  marks sub-item 3c shipped.
+- The three StaggeredTripleDifference suites (`tests/test_staggered_triple_diff.py`,
+  `tests/test_methodology_staggered_triple_diff.py`, `tests/test_survey_staggered_ddd.py`) are
+  ported to `TripleDifference`'s staggered mode (keyword fits; the R golden's compact
+  `control_group` values are mapped), so the engine keeps its behavior, methodology and survey
+  coverage. `tests/test_v4_merge_ddd.py` / `tests/test_v4_merge_cic.py` drop their old-vs-new
+  parity lanes for `Test*Removal` pins; the two capture scripts are marked historical and
+  `make_2x2` lives in the CiC merge test.
+- Ledger: `M-013`/`M-015` -> `removed`, `M-061`/`M-064`/`M-085` -> `done`; `M-031` keeps
+  `shimmed` with `warning: null`; `M-080` drops the deleted module from its `code_refs`.
+  Spec: cut-sequence item 4 split into 4a/4b/4c, the cross-row rule gains its alias clause.
+  `docs/doc-deps.yaml` re-primes the `staggered_triple_diff` group on the results module.
+- `tests/test_v4_matrix.py` no longer requires `StaggeredTripleDifference`/`QDiD` worked-example
+  owners in the migration guide; the two autosummary stubs are deleted; REGISTRY keeps the
+  `## StaggeredTripleDifference` and `### QDiD` sections as the engine's methodology record
+  (archive framing lands with `M-090`).
+- `docs/v4-design.md` cut-sequence item 4b marked shipped; item 4c lists the two remaining
+  markdown-only MultiPeriodDiD mentions (06 cell 34, 16 cell 40). `docs/doc-deps.yaml` maps
+  the TWFE module to tutorials 01/02/04/05/07/09/23. No ledger row flips.
+- **The TWFE event-study surface is built directly from the shared core's payload**
+  (4.0 cut, PR 4c-i; ledger rows `M-010` / `M-011`): `DifferenceInDifferences._fit_event_study_core`
+  returns a private `_EventStudyCorePayload`, `TwoWayFixedEffects.fit(..., event_study=True)`
+  builds its `EventStudyResults` from it via `results_base._from_event_study_payload`, and only
+  `MultiPeriodDiD.fit` still wraps the payload into `MultiPeriodDiDResults`. `_from_mpd` and the
+  payload route share one calendar-surface builder, so they cannot drift; a committed oracle
+  captured on the pre-refactor tree (`tests/fixtures/v4_twfe_event_study_oracles.json`, capture
+  script `tests/_capture_v4_merge_mpd_oracles.py`) pins every field of the TWFE surface and of
+  its MultiPeriodDiD twin across eleven variance lanes. No user-visible behavior changes.
+- Spec item 4c is split into 4c-i (this PR) and 4c-ii (the removals); the 4c-ii bullet records
+  the `spec="within"` benchmark-arm relabel and the `M-016` view's record type (user decisions
+  2026-10-24). Ledger `M-010` / `M-011` notes updated; no status flips.
+- PR 4c-ii-b (docs/benchmarks half of the MultiPeriodDiD removal): REGISTRY / REPORTING /
+  survey-theory / METHODOLOGY_REVIEW and the remaining user-doc prose stop describing the
+  removed class as live; TODO rows 33/35/38/95/99 and three DEFERRED rows that governed the
+  class are reworded or retired. The oracle fixture `tests/fixtures/v4_twfe_event_study_oracles.
+  json` drops its `mpd_twin` records and the lane metadata loses its MPD twin fields (the TWFE
+  records are byte-identical); the capture script documents the per-lane capture SHAs.
+- Benchmarks: the live event-study arm is the new `benchmarks/python/benchmark_twfe_event_study.py`
+  (`spec="within"`, `cluster="unit"`; parity against R `fixest::feols(... | unit)` verified
+  locally - ATT to 2e-12, SE to 0.0%, per-period effects correlation 1.000);
+  `benchmark_multiperiod.py` and `benchmarks/refresh_2026_07/` stay frozen because that harness
+  runs inside pinned 3.5.3/3.7.0 venvs that predate `event_study=True`.
+- `DifferenceInDifferences._fit_event_study_core` serves only the TWFE event-study mode
+  (`post_periods` required by the core; `include_treatment_main` / `cluster_override`
+  keyword-required); the private payload is pruned to the fields the surface builder reads.
+  The clustered `hc2_bm` contrast batch keeps the former post-period-average column as the
+  batch-relative Bell-McCaffrey DOF guard's anchor so per-period NaN masks stay bit-identical
+  (REGISTRY Note; TODO row for the guard redesign). `build_event_study_surface` opens with an
+  `isinstance(EventStudyResults)` passthrough.
+- Ledger: `M-010`/`M-011`/`M-012` -> `removed`, `M-060`/`M-007`/`M-083` -> `done`, `M-016`
+  -> `shimmed` on `diff_diff:EventStudyResults.period_effects`, `M-082` keeps `shimmed` with
+  `warning: null`. Spec item 4c-ii carries the SHIPPED note incl. the three recorded
+  deviations (anchor column, new live benchmark script, DR/BR branch deletion).
+- Tests: the MPD-only tests are deleted or re-fixtured onto `cs_fit` / the TWFE surface
+  (`tests/test_v4_merge_mpd.py` carries the removal, `M-016` and `M-007` pins and the anchor
+  pin); the oracle fixture gains two clustered `hc2_bm` lanes captured at `d45d5316` before
+  the core pruning (its `mpd_twin` records are pruned in PR 4c-ii-b); the clustered
+  per-period CR2 DOF R/clubSandwich pin and the event-study covariate-collision guard are
+  migrated to TWFE; variance-conventions `twfe_es_*` rows re-pinned (`tail_df` 5) and the table
+  regenerated. The methodology/benchmark prose half and the oracle fixture's
+  `mpd_twin` prune follow in PR 4c-ii-b.
+- 4.0 cut, PR 5a-ii (the documentation half of cut-sequence item 5's reader migration,
+  split from PR 5a because the combined diff exceeded the AI review input budget): every
+  documented read of the 3.x `overall_att` / `overall_se` / `overall_t_stat` /
+  `overall_p_value` / `overall_conf_int` names (and ContinuousDiD's `overall_att_*`
+  spellings) on the nine `M-050`..`M-058` containers - RTD pages, the bundled
+  `llms*.txt` guides, tutorial code cells, the tutorial drift tests that mirror them
+  (tutorial 32's code-cell hash pins re-pinned), benchmark scripts and the carousel
+  generator - now reads the canonical `att` / `se` / `t_stat` / `p_value` / `conf_int`
+  quintet. No user-visible behaviour change (the canonical names already resolve);
+  committed notebook outputs are unchanged except tutorial 18's echoed guidance string.
+  Bootstrap draw containers (`bootstrap_results.overall_att_se`) and R / golden-JSON
+  interface keys are untouched.
+- 4.0 cut, PR 5a (the reader half of cut-sequence item 5, the `M-050`..`M-058` storage
+  flip): every in-repo reader of the 3.x `overall_att` / `overall_se` / `overall_t_stat` /
+  `overall_p_value` / `overall_conf_int` field names (and ContinuousDiD's `overall_att_*`
+  spellings) on the nine flipping containers in SOURCE and TESTS - consumers, the
+  containers' own `summary()` / `to_dict()` / `__repr__` / aggregation bodies, and every
+  test suite - now reads the canonical `att` / `se` /
+  `t_stat` / `p_value` / `conf_int` quintet. No user-visible change: the canonical names
+  already resolve as properties, numbers are bit-identical and nothing warns yet; the
+  storage flip itself, the `FutureWarning` shims and the report-schema changes follow in
+  PR 5b; the documentation / guides / tutorial / benchmark half of the reader migration
+  is PR 5a-ii (split off because the combined diff exceeded the AI review input budget). `power.py`'s `_extract_staggered` (a silent `getattr` fallback chain over the old
+  names) is deleted - the staggered power profiles use `_extract_simple`; the
+  `practitioner_next_steps` `overall_att` fallback is gone. Bootstrap draw containers
+  (`CSBootstrapResults.overall_att_se` and siblings) and `StaggeredTripleDiffResults`
+  (unified at cut item 6) are untouched.
+
+- Ledger rows `M-050`..`M-058` flip to `shimmed` with `tests/test_v4_storage_flip.py` as their `test_ref`; `diff_diff._deprecation` gains `LEGACY_OVERALL_QUINTET` and `migrate_renamed_state_keys` (the pickle-migration infrastructure); `DMLDiDResults` re-declares the five shims so the warning names the subclass (naming-guard allowlist reason reworded); `_extract_scalar_headline`'s legacy alias row is deleted; `tests/test_result_aliases.py` pins the post-flip direction (SDDD kept in the 3.x direction); the API autosummary stubs are regenerated; the bootstrap draw containers' payload names are recorded as a REGISTRY `Note` (user decision 2026-10-26); spec item 5 carries its SHIPPED note.
+
+- Ledger rows `M-014`, `M-140`, `M-141` flip to `removed` with `tests/test_v4_unify_ddd.py` as their `test_ref`; `diff_diff/staggered_triple_diff_results.py` is renamed to `diff_diff/triple_diff_results.py` (hosting the unified container, re-exported from `triple_diff.py`); the staggered engine attaches the CallawaySantAnna aggregation kit (`staggered.py`'s `_build_aggregation_kit` on the eligibility-zeroed precomputed copy, plus the `ddd_df_survey_original` bookkeeping key for the Eq. 4.14 df rule); report consumers dispatch on the design through `_reporting_helpers.results_design` / `is_staggered_ddd` (DR's `_DESIGN_APPLICABILITY` / `_DESIGN_PT_METHOD`); the practitioner handler gains a staggered branch; `docs/api/_autosummary` regenerated; the spec's section 4.2 / section 6 / item-6 SHIPPED notes and the REGISTRY `## TripleDifference` post-fit Note record the mechanics and the `weights='event_time'` decision.
+
+- Ledger rows `M-004`..`M-006` and `M-128`..`M-131` flip to `done` with `tests/test_v4_inference_defaults.py` as their `test_ref`; the spec's section 7 / item 7 SHIPPED notes and item 10 now record the deferred bulk re-execution of the nine tutorials whose clustered-default outputs moved (24 re-executed here if its outputs moved); the REGISTRY TwoWayFixedEffects clustered-CR1 inference-df note is relabelled a plain Note (the default now matches fixest) and the SunAbraham / ImputationDiD / StackedDiD / WooldridgeDiD / LPDiD tail-df notes read the 4.0 default; `TestDfConvention`, `test_moderate_t_pins_cluster_df_convention` and the per-estimator knob suites pin the G-1 default against explicit `"residual"` baselines (every default-vs-`"cluster"` comparison became default-vs-`"residual"` so none passes vacuously); `test_ci_matches_r_twfe` tightens to machine precision; the variance-conventions audit matrix keeps its residual-df rows as explicit `"residual"` arms (the K_full accounting pins) and gains eight G-1 `_default_df` twins (three in the fast set), with `docs/methodology/variance-conventions.md` regenerated; the committed TWFE event-study oracle lanes `pooled_cluster_unit` / `within_cluster_unit` and the ImputationDiD `pretrends_all` contract lanes name the `"residual"` convention they were captured under (metadata-only, no oracle number touched); the `DEFERRED.md` Version-gated (v4) row is retired.
+
+- Ledger: M-080 and the new M-155 (shared cluster contract) -> `done`; new M-154 (SpilloverDiD `df_convention`, item 7c) -> `planned`; pinned by `tests/test_v4_cluster_policy.py`. Tutorial 23 section 6 shows the four-row SE table (CR1 at unit, HC1 via `cluster=False`, Conley lag 0 / lag 1) and was re-executed; `tests/test_t23_spillover_tva_drift.py` pins the new default and the table's source.
+
+- Ledger: M-154 -> `done`, pinned by `tests/test_v4_spillover_df_convention.py`; the df ladder is the pure helper `spillover._resolve_inference_df` (survey df -> saturation -> `utils.resolve_tail_df`). The variance-conventions matrix gains the `spillover_cluster_unit` / `spillover_cluster_unit_default_df` rows; the REGISTRY `df_convention` knob roster, `docs/methodology/variance-conventions.md`, the migration guide, `llms-full.txt` and `docs/api/spillover.rst` describe the knob; tutorial 23 re-validated (it prints no p-values or CIs).
+
+- `results_base._from_relative_dict` reads only the `is_reference` key and the named `reference_period` (the zero-count heuristic is gone; a keyed row with a finite nonzero effect raises); `_deprecation.migrate_event_study_reference_sentinel` is the single place the retired sentinel is still recognized, run by the carriers' `__setstate__` (`SpilloverDiDResults` gained one; aggregate-mode frames untouched). Ledger: M-093 gains `test_ref` (`tests/test_v4_sentinel_retirement.py`) and stays `planned` until 8b (the `to_dataframe(level="event_study")` schema rewire on every results class, incl. the dCDH native frame's `estimand 'ref'` row). REGISTRY (SpilloverDiD, StackedDiD/ImputationDiD/TwoStageDiD, the plotting Notes), the migration guide, `llms-full.txt` and `docs/api/spillover.rst` describe the marking.
+
+- The routing rule is the M-153 LWDiD precedent (`aggregate(level).to_dataframe()` on the `AggregationMixin` classes, `build_event_study_surface(self).to_dataframe()` elsewhere); `results_base._ABSENT_SURFACE_HINTS` gains a `SunAbrahamResults` entry. Ledger: M-093 flips to `done` with `test_ref` `tests/test_v4_event_study_schema.py` (the cross-producer schema-prefix / route-equality / error-contract pins; `tests/test_v4_sentinel_retirement.py` keeps the 8a pins) and a tenth amendment note; `docs/v4-design.md` section 5 now states the PREFIX rule and item 8 is complete. REGISTRY (CS, EfficientDiD, Imputation/TwoStage/Stacked relay and reference-row Notes, DDD, HAD, plus new to_dataframe-schema Notes for dCDH, SunAbraham, WooldridgeDiD, LPDiD, DurationDiD and SpilloverDiD), the migration guide, `llms-full.txt`, the practitioner guide, `docs/api/wooldridge_etwfe.rst` and `docs/api/spillover.rst` describe the frame; notebooks 16 (re-executed, outputs refreshed and prose reconciled - it leaves the TODO.md tutorial re-execution row), 19 (reads `event_time`/`att`/`is_reference`) and 14 (export prose) updated. TODO.md gains the `level='group'` relay row.
+
+- Ledger row M-090 flips to `done` with `tests/test_v4_diagnostic_family_docs.py` as its `test_ref`; the test pins the estimators/diagnostics split on README, `llms.txt`, `llms-full.txt`, `docs/index.rst`, `docs/api/index.rst` and the REGISTRY archive framing, and runs in the docs-tests workflow (README-only diffs now trigger that lane). `docs/doc-deps.yaml` points the diagnostic modules at the new homepage table; the `/docs-check` classification table files Bacon as a diagnostics-class entry.
+
+- Ledger rows `M-016`, `M-050`..`M-058`, `M-151`, `M-152` flip to `removed` at 4.0 with
+  `deprecated_in: null` (no release warned); `M-148`/`M-149` flip to `removed` with
+  `deprecated_in: 3.13.0`; new behavior rows `M-156`/`M-157` (`tests/test_diagnostics.py`); the
+  ledger header, spec ladder, section 5/8/9/11 notes and the phase-5 roster carry dated amendments.
+  `diff_diff._deprecation` is reduced to the pickle-migration (`LEGACY_OVERALL_QUINTET`,
+  `migrate_renamed_state_keys`, `migrate_event_study_reference_sentinel`) and required-arg
+  (`NOT_SUPPLIED`, `require_arg`) helpers - `deprecated_field_property`, `resolve_renamed_kwarg`,
+  `warn_deprecated_kwarg` and `deprecated_kwarg_message` are deleted with their last consumers.
+  With the descriptors gone, assigning a legacy name to a results instance creates a shadow
+  attribute instead of raising (the non-slotted dataclasses) - the naming guard's consumer sweep
+  is the in-repo defense. Naming guard: the `DMLDiDResults.overall_att` surface entry and the
+  `_deprecation.py` `placebo_effects` consumer entry are deleted, the two placebo wrappers join the
+  rule-1 calendar `time` inventory, and the retired token families' remaining in-repo hits
+  (body-local `overall_att` names, the kept `__setstate__` key maps, methodology history) are
+  allowlisted. API autosummary stubs regenerated; TODO.md's placebo-wrapper redesign row closed;
+  tutorial 17 re-executed (its stored practitioner snippet echoed the old `time='post'` advice).
+
 ## [3.13.0] - 2026-10-17
 
 ### Added
@@ -6004,6 +6603,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[4.0.0]: https://github.com/igerber/diff-diff/compare/v3.13.0...v4.0.0
 [3.13.0]: https://github.com/igerber/diff-diff/compare/v3.12.0...v3.13.0
 [3.12.0]: https://github.com/igerber/diff-diff/compare/v3.11.1...v3.12.0
 [3.11.1]: https://github.com/igerber/diff-diff/compare/v3.11.0...v3.11.1

@@ -438,7 +438,7 @@ of `docs/v4-design.md`; `source="TwoWayFixedEffects"`, `estimation_spec` and
 the authoritative `post_periods` partition recorded as provenance). The
 static 0/1-dummy contract below is unchanged; in event-study mode `time=` is
 the CALENDAR column (keyword), and the static dummy parameter is `post=`
-(row M-082; `time=` remains its deprecated alias through 3.9).
+(row M-082; `time=` was its deprecated alias through 3.13 and raises in static mode since 4.0, row M-083).
 
 *Designs:*
 ```
