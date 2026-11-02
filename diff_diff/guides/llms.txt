@@ -4,6 +4,7 @@
 
 diff-diff offers a catalog of estimators (the `## Estimators` list below is the authoritative roster) covering basic 2x2 DiD, causal duration analysis for absorbing outcomes, modern staggered adoption methods, reversible (non-absorbing) treatments, advanced panel estimators, nonlinear models, sharp regression discontinuity designs, and diagnostic tools. It supports robust and cluster-robust standard errors, wild cluster bootstrap, formula and column-name interfaces, fixed effects (dummy and absorbed), complex survey designs (strata/PSU/FPC, replicate weights, design-based variance), and publication-ready output. The optional Rust backend accelerates compute-intensive estimators like Synthetic DiD and TROP.
 
+
 - Install: `pip install diff-diff`
 - License: MIT
 - Dependencies: numpy, pandas, scipy (no statsmodels dependency)
@@ -56,6 +57,7 @@ The site is organized into 5 sections, each with a landing page:
 - [API Reference](https://diff-diff.readthedocs.io/en/stable/api/index.html): Full API documentation for all estimators, results classes, diagnostics, and utilities
 
 ## Estimators
+- [ChainedDiD](https://diff-diff.readthedocs.io/en/stable/api/chained_did.html): Experimental native chained DiD for incomplete panels. `ChainedDiD(alpha=0.05, cluster=None).fit(data, outcome, unit, time, first_treat, covariates=None)`. Binary absorbing treatment, never-treated controls, zero anticipation, static covariates, IPW, PT-post and full-catalogue identity GMM. No observation correction: each used pair must preserve covariates and actual changes within cohort. Retains zero-/one-outcome units in population weights; unsupported required cells invalidate their summary. Unit HC0 or cluster CR1 analytical covariance and normal pointwise intervals. Canonical att/se and `aggregate("simple"|"event_study")`. No simultaneous bands, survey, PT-all, OR/DR or arbitrary-attrition support. Direct earlier diagnostics are not PT-post restrictions. Pinned R agreement is bounded: the incomplete continuous-covariate case uses a different propensity-fitting criterion. Small-sample qualification remains open. Pairs require two observed units per arm; exclusions are recorded. Singleton exclusions and retained pairs below 20 units per arm or control ESS 20 warn. These are safeguards, not calibration guarantees: identity GMM ignores pair precision and sparse-pair intervals can be anti-conservative. Mixed diagnostic event rows exclude structural reference identities; aggregation_weights(level) reports constituent weights and availability.
 
 - [DifferenceInDifferences](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Basic 2x2 DiD with robust/cluster-robust SEs, wild bootstrap, formula interface, and fixed effects
 - [TwoWayFixedEffects](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Panel data DiD with unit and time fixed effects via within-transformation or dummies; `event_study=True` estimates per-period effects (spec='within'|'pooled') returning the unified EventStudyResults surface

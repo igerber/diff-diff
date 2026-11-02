@@ -185,6 +185,8 @@ Supported Estimators
      - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners (panel or declared repeated cross sections; survey/cluster support); Caetano et al. (2026) bad-control score via ``fit(bad_control=)`` (bad-control lane: panel only, ``cluster=`` only)
    * - :class:`~diff_diff.DurationDiD`
      - Deaner & Ku (2026) causal duration DiD for binary absorbing outcomes; untreated-hazard restriction (common dynamics or proportional hazards), whole-individual bootstrap bands
+   * - :class:`~diff_diff.ChainedDiD`
+     - Bellégo, Benatia & Dortet-Bernadet (2025) chained IPW for overlapping incomplete panels; experimental, identity GMM and PT-post
    * - :class:`~diff_diff.RegressionDiscontinuity`
      - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`

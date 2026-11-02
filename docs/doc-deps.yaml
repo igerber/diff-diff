@@ -21,6 +21,9 @@
 # Members resolve to the first entry (the primary module) for doc lookup.
 # ────────────���─────────────────────────────────────────────────────────
 groups:
+  chained_did:
+    - diff_diff/chained_did.py
+    - diff_diff/chained_did_results.py
   twfe_weights:
     - diff_diff/twfe_weights.py
     - diff_diff/twfe_weights_results.py
@@ -110,8 +113,36 @@ groups:
 # Source-to-docs mappings
 # ────────���─────────────────────────��───────────────────────────────────
 sources:
+  diff_diff/chained_did.py:
+    drift_risk: high
+    docs:
+      - path: docs/api/chained_did.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "ChainedDiD"
+        type: methodology
+      - path: docs/methodology/chained-did-pseudocode.md
+        type: methodology
+      - path: docs/methodology/chained-did-validation.md
+        type: methodology
+      - path: docs/methodology/chained-did-validation-followup.md
+        type: methodology
+      - path: docs/methodology/chained-did-review-remediation.md
+        type: methodology
+      - path: docs/methodology/chained-did-oracle-diagnostic.md
+        type: methodology
+      - path: docs/tutorials/34_chained_did.ipynb
+        type: tutorial
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
 
   # ── Base estimators ──────��───────────────────────────────────────────
+
+  diff_diff/chained_did_results.py:
+    drift_risk: high
+    docs:
+      - path: docs/api/chained_did.rst
+        type: api_reference
 
   diff_diff/estimators.py:
     drift_risk: medium

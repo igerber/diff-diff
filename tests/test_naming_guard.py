@@ -511,6 +511,7 @@ _RULE1_TIME_SURFACES = (
     "BusinessReport.__init__[time]",
     "CallawaySantAnna.diagnose_propensity[time]",
     "CallawaySantAnna.fit[time]",
+    "ChainedDiD.fit[time]",
     "ChaisemartinDHaultfoeuille.fit[time]",
     "DMLDiD.fit[time]",
     "DurationDiD.fit[time]",
@@ -1004,6 +1005,10 @@ _CS_GROUPS_READER = (
 )
 
 CONSUMER_ALLOWLIST = {
+    ("groups", "docs/methodology/chained-did-validation.md"): (
+        "historical baseline-failure evidence quoting DMLDiDResults.groups, "
+        "not a reader of dCDH's removed unit-id field (M-114)"
+    ),
     # ---- 4.0 cut, PR 2: readers that survive the 59 shim removals on purpose ----
     # (a) KEPT `__setstate__` legacy-key migrations - a quoted old key is how a
     # 3.x pickle is recognised; spec section 5 keeps them through 4.0.
