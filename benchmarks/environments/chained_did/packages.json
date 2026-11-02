@@ -1,0 +1,487 @@
+{
+  "R": "R version 4.5.2 (2025-10-31)",
+  "platform": "x86_64-pc-linux-gnu",
+  "packages": [
+    {
+      "Package": "BH",
+      "Version": "1.90.0-1",
+      "Built": "4.5.2",
+      "_row": "BH"
+    },
+    {
+      "Package": "bigmemory",
+      "Version": "4.6.6",
+      "Built": "4.5.2",
+      "_row": "bigmemory"
+    },
+    {
+      "Package": "bigmemory.sri",
+      "Version": "0.1.8",
+      "Built": "4.5.2",
+      "_row": "bigmemory.sri"
+    },
+    {
+      "Package": "BMisc",
+      "Version": "1.4.10",
+      "Built": "4.5.2",
+      "_row": "BMisc"
+    },
+    {
+      "Package": "cdid",
+      "Version": "1.1.0.0",
+      "Built": "4.5.2",
+      "_row": "cdid"
+    },
+    {
+      "Package": "cli",
+      "Version": "3.6.6",
+      "Built": "4.5.2",
+      "_row": "cli"
+    },
+    {
+      "Package": "cpp11",
+      "Version": "0.5.5",
+      "Built": "4.5.2",
+      "_row": "cpp11"
+    },
+    {
+      "Package": "data.table",
+      "Version": "1.18.6.1",
+      "Built": "4.5.2",
+      "_row": "data.table"
+    },
+    {
+      "Package": "did",
+      "Version": "2.5.1",
+      "Built": "4.5.2",
+      "_row": "did"
+    },
+    {
+      "Package": "docopt",
+      "Version": "0.7.2",
+      "Built": "4.5.2",
+      "_row": "docopt"
+    },
+    {
+      "Package": "dplyr",
+      "Version": "1.2.1",
+      "Built": "4.5.2",
+      "_row": "dplyr"
+    },
+    {
+      "Package": "DRDID",
+      "Version": "1.3.0",
+      "Built": "4.5.2",
+      "_row": "DRDID"
+    },
+    {
+      "Package": "dreamerr",
+      "Version": "1.5.0",
+      "Built": "4.5.2",
+      "_row": "dreamerr"
+    },
+    {
+      "Package": "farver",
+      "Version": "2.1.2",
+      "Built": "4.5.2",
+      "_row": "farver"
+    },
+    {
+      "Package": "fastglm",
+      "Version": "0.1.2",
+      "Built": "4.5.2",
+      "_row": "fastglm"
+    },
+    {
+      "Package": "Formula",
+      "Version": "1.2-6",
+      "Built": "4.5.2",
+      "_row": "Formula"
+    },
+    {
+      "Package": "generics",
+      "Version": "0.1.4",
+      "Built": "4.5.2",
+      "_row": "generics"
+    },
+    {
+      "Package": "ggplot2",
+      "Version": "4.0.3",
+      "Built": "4.5.2",
+      "_row": "ggplot2"
+    },
+    {
+      "Package": "glue",
+      "Version": "1.8.1",
+      "Built": "4.5.2",
+      "_row": "glue"
+    },
+    {
+      "Package": "gtable",
+      "Version": "0.3.6",
+      "Built": "4.5.2",
+      "_row": "gtable"
+    },
+    {
+      "Package": "isoband",
+      "Version": "0.3.0",
+      "Built": "4.5.2",
+      "_row": "isoband"
+    },
+    {
+      "Package": "jsonlite",
+      "Version": "2.0.0",
+      "Built": "4.5.2",
+      "_row": "jsonlite"
+    },
+    {
+      "Package": "labeling",
+      "Version": "0.4.3",
+      "Built": "4.5.2",
+      "_row": "labeling"
+    },
+    {
+      "Package": "lifecycle",
+      "Version": "1.0.5",
+      "Built": "4.5.2",
+      "_row": "lifecycle"
+    },
+    {
+      "Package": "littler",
+      "Version": "0.3.22",
+      "Built": "4.5.2",
+      "_row": "littler"
+    },
+    {
+      "Package": "magrittr",
+      "Version": "2.0.5",
+      "Built": "4.5.2",
+      "_row": "magrittr"
+    },
+    {
+      "Package": "pbapply",
+      "Version": "1.7-5",
+      "Built": "4.5.2",
+      "_row": "pbapply"
+    },
+    {
+      "Package": "pillar",
+      "Version": "1.11.1",
+      "Built": "4.5.2",
+      "_row": "pillar"
+    },
+    {
+      "Package": "pkgconfig",
+      "Version": "2.0.3",
+      "Built": "4.5.2",
+      "_row": "pkgconfig"
+    },
+    {
+      "Package": "purrr",
+      "Version": "1.2.2",
+      "Built": "4.5.2",
+      "_row": "purrr"
+    },
+    {
+      "Package": "R6",
+      "Version": "2.6.1",
+      "Built": "4.5.2",
+      "_row": "R6"
+    },
+    {
+      "Package": "RColorBrewer",
+      "Version": "1.1-3",
+      "Built": "4.5.2",
+      "_row": "RColorBrewer"
+    },
+    {
+      "Package": "Rcpp",
+      "Version": "1.1.2",
+      "Built": "4.5.2",
+      "_row": "Rcpp"
+    },
+    {
+      "Package": "RcppArmadillo",
+      "Version": "15.6.2-1",
+      "Built": "4.5.2",
+      "_row": "RcppArmadillo"
+    },
+    {
+      "Package": "RcppEigen",
+      "Version": "0.3.4.0.2",
+      "Built": "4.5.2",
+      "_row": "RcppEigen"
+    },
+    {
+      "Package": "remotes",
+      "Version": "2.5.0",
+      "Built": "4.5.2",
+      "_row": "remotes"
+    },
+    {
+      "Package": "rlang",
+      "Version": "1.3.0",
+      "Built": "4.5.2",
+      "_row": "rlang"
+    },
+    {
+      "Package": "S7",
+      "Version": "0.2.2",
+      "Built": "4.5.2",
+      "_row": "S7"
+    },
+    {
+      "Package": "scales",
+      "Version": "1.4.0",
+      "Built": "4.5.2",
+      "_row": "scales"
+    },
+    {
+      "Package": "stringi",
+      "Version": "1.8.9",
+      "Built": "4.5.2",
+      "_row": "stringi"
+    },
+    {
+      "Package": "stringmagic",
+      "Version": "1.3.0",
+      "Built": "4.5.2",
+      "_row": "stringmagic"
+    },
+    {
+      "Package": "stringr",
+      "Version": "1.6.0",
+      "Built": "4.5.2",
+      "_row": "stringr"
+    },
+    {
+      "Package": "tibble",
+      "Version": "3.3.1",
+      "Built": "4.5.2",
+      "_row": "tibble"
+    },
+    {
+      "Package": "tidyr",
+      "Version": "1.3.2",
+      "Built": "4.5.2",
+      "_row": "tidyr"
+    },
+    {
+      "Package": "tidyselect",
+      "Version": "1.2.1",
+      "Built": "4.5.2",
+      "_row": "tidyselect"
+    },
+    {
+      "Package": "trust",
+      "Version": "0.1-9",
+      "Built": "4.5.2",
+      "_row": "trust"
+    },
+    {
+      "Package": "utf8",
+      "Version": "1.2.6",
+      "Built": "4.5.2",
+      "_row": "utf8"
+    },
+    {
+      "Package": "uuid",
+      "Version": "1.2-2",
+      "Built": "4.5.2",
+      "_row": "uuid"
+    },
+    {
+      "Package": "vctrs",
+      "Version": "0.7.3",
+      "Built": "4.5.2",
+      "_row": "vctrs"
+    },
+    {
+      "Package": "viridisLite",
+      "Version": "0.4.3",
+      "Built": "4.5.2",
+      "_row": "viridisLite"
+    },
+    {
+      "Package": "withr",
+      "Version": "3.0.3",
+      "Built": "4.5.2",
+      "_row": "withr"
+    },
+    {
+      "Package": "base",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "base"
+    },
+    {
+      "Package": "boot",
+      "Version": "1.3-32",
+      "Built": "4.5.2",
+      "_row": "boot"
+    },
+    {
+      "Package": "class",
+      "Version": "7.3-23",
+      "Built": "4.5.2",
+      "_row": "class"
+    },
+    {
+      "Package": "cluster",
+      "Version": "2.1.8.1",
+      "Built": "4.5.2",
+      "_row": "cluster"
+    },
+    {
+      "Package": "codetools",
+      "Version": "0.2-20",
+      "Built": "4.5.2",
+      "_row": "codetools"
+    },
+    {
+      "Package": "compiler",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "compiler"
+    },
+    {
+      "Package": "datasets",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "datasets"
+    },
+    {
+      "Package": "foreign",
+      "Version": "0.8-90",
+      "Built": "4.5.2",
+      "_row": "foreign"
+    },
+    {
+      "Package": "graphics",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "graphics"
+    },
+    {
+      "Package": "grDevices",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "grDevices"
+    },
+    {
+      "Package": "grid",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "grid"
+    },
+    {
+      "Package": "KernSmooth",
+      "Version": "2.23-26",
+      "Built": "4.5.2",
+      "_row": "KernSmooth"
+    },
+    {
+      "Package": "lattice",
+      "Version": "0.22-7",
+      "Built": "4.5.2",
+      "_row": "lattice"
+    },
+    {
+      "Package": "MASS",
+      "Version": "7.3-65",
+      "Built": "4.5.2",
+      "_row": "MASS"
+    },
+    {
+      "Package": "Matrix",
+      "Version": "1.7-4",
+      "Built": "4.5.2",
+      "_row": "Matrix"
+    },
+    {
+      "Package": "methods",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "methods"
+    },
+    {
+      "Package": "mgcv",
+      "Version": "1.9-3",
+      "Built": "4.5.2",
+      "_row": "mgcv"
+    },
+    {
+      "Package": "nlme",
+      "Version": "3.1-168",
+      "Built": "4.5.2",
+      "_row": "nlme"
+    },
+    {
+      "Package": "nnet",
+      "Version": "7.3-20",
+      "Built": "4.5.2",
+      "_row": "nnet"
+    },
+    {
+      "Package": "parallel",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "parallel"
+    },
+    {
+      "Package": "rpart",
+      "Version": "4.1.24",
+      "Built": "4.5.2",
+      "_row": "rpart"
+    },
+    {
+      "Package": "spatial",
+      "Version": "7.3-18",
+      "Built": "4.5.2",
+      "_row": "spatial"
+    },
+    {
+      "Package": "splines",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "splines"
+    },
+    {
+      "Package": "stats",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "stats"
+    },
+    {
+      "Package": "stats4",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "stats4"
+    },
+    {
+      "Package": "survival",
+      "Version": "3.8-3",
+      "Built": "4.5.2",
+      "_row": "survival"
+    },
+    {
+      "Package": "tcltk",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "tcltk"
+    },
+    {
+      "Package": "tools",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "tools"
+    },
+    {
+      "Package": "utils",
+      "Version": "4.5.2",
+      "Built": "4.5.2",
+      "_row": "utils"
+    }
+  ],
+  "session": ["R version 4.5.2 (2025-10-31)", "Platform: x86_64-pc-linux-gnu", "Running under: Ubuntu 24.04.4 LTS", "", "Matrix products: default", "BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 ", "LAPACK: /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblasp-r0.3.26.so;  LAPACK version 3.12.0", "", "locale:", " [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              ", " [3] LC_TIME=en_US.UTF-8        LC_COLLATE=en_US.UTF-8    ", " [5] LC_MONETARY=en_US.UTF-8    LC_MESSAGES=en_US.UTF-8   ", " [7] LC_PAPER=en_US.UTF-8       LC_NAME=C                 ", " [9] LC_ADDRESS=C               LC_TELEPHONE=C            ", "[11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       ", "", "time zone: Etc/UTC", "tzcode source: system (glibc)", "", "attached base packages:", "[1] stats     graphics  grDevices utils     datasets  methods   base     ", "", "loaded via a namespace (and not attached):", "[1] compiler_4.5.2 tools_4.5.2    jsonlite_2.0.0"]
+}

@@ -44,6 +44,8 @@ from diff_diff.business_report import (
     BusinessContext,
     BusinessReport,
 )
+from diff_diff.chained_did import ChainedDiD
+from diff_diff.chained_did_results import ChainedDiDResults
 from diff_diff.chaisemartin_dhaultfoeuille import (
     ChaisemartinDHaultfoeuille,
     TWFEWeightsResult,
@@ -331,6 +333,8 @@ SCM = SyntheticControl
 
 __version__ = "4.0.0"
 __all__ = [
+    "ChainedDiD",
+    "ChainedDiDResults",
     # Estimators
     "DifferenceInDifferences",
     "TwoWayFixedEffects",
