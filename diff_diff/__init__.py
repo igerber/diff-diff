@@ -329,7 +329,7 @@ CiC = ChangesInChanges
 RDD = RegressionDiscontinuity
 SCM = SyntheticControl
 
-__version__ = "3.13.0"
+__version__ = "4.0.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",

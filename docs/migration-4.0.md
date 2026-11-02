@@ -1,9 +1,12 @@
 # Migrating to 4.0
 
 ```{note}
-This describes the **upcoming 4.0 release**. Most of the renames below can be adopted from
-3.9 onward, well before 4.0 lands — the new spellings and the old ones both work during the
-deprecation window, so you can migrate incrementally and silence the warnings as you go.
+This describes the **4.0 release**. 3.9-3.13 shipped `FutureWarning` shims for most of the
+renames below, so code migrated during 3.x already runs on 4.0 unchanged. Two caveats: the
+surfaces that break without a warned release are marked in their sections (the results fields,
+`period_effects`, `LWDiDResults.pvalue`/`.ci`), and the inference defaults that moved
+(`df_convention` -> `"cluster"` on seven estimators, SpilloverDiD auto-clustering) change the
+NUMBERS of warning-free code - §6 shows how to reproduce 3.x values exactly.
 ```
 
 diff-diff 4.0 removes the deprecated surface that 3.9 shipped warnings for, merges three pairs
@@ -157,8 +160,8 @@ it is the same engine. `method="cic"` is the default and encodes Athey–Imbens'
 
 ## Renamed parameters
 
-Most renames are mechanical: the new spelling already exists, so you can adopt it today and the
-old one keeps working until 4.0. See the appendix for the full list, and the
+Most renames are mechanical: the new spelling has existed since 3.9, and the old one worked
+through 3.13 and is gone at 4.0. See the appendix for the full list, and the
 [R Comparison](r_comparison.rst) page for how these names map onto the R packages.
 
 Three families need more than a search-and-replace:
@@ -594,8 +597,9 @@ numeric default moved.
 
 **Additive API and container changes.** The unified `EventStudyResults` surface, the
 `AggregationResult` container, and the `Diagnostic` marker base on the diagnostic result roster.
-The alias-diet `__getattr__` shim also landed here: `CDiD`, `Stacked` and `Gardner` still import
-but now emit a `FutureWarning`, and they no longer appear in `dir()`/`vars()`.
+The alias-diet `__getattr__` shim also landed here: `CDiD`, `Stacked` and `Gardner` kept importing
+with a `FutureWarning` through 3.13 (hidden from `dir()`/`vars()`) and were retired at 4.0
+([M-132] [M-133] [M-134]).
 
 ## Appendix: every 4.0 change
 

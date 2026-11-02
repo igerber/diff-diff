@@ -408,7 +408,8 @@ and covariate-adjusted specifications.)
 
 3. **Deprecation warnings for unused parameters** (`sun_abraham.py`, `fit()`):
    Added `FutureWarning` for `min_pre_periods` and `min_post_periods` parameters that
-   are accepted but never used (no-op). These will be removed in a future version.
+   are accepted but never used (no-op). These were subsequently removed (neither name
+   is accepted by `SunAbraham.fit` any more).
 
 4. **Removed event-time truncation at [-20, 20]** (`sun_abraham.py`):
    Removed the hardcoded cap `max(min(...), -20)` / `min(max(...), 20)` to match
@@ -1087,8 +1088,8 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 6. **Deprecated `lambda_reg` and `zeta` params; new params are `zeta_omega` and
    `zeta_lambda`**. The old parameters had unclear semantics and did not correspond to
    the paper's notation. The new parameters directly match the paper and R package
-   naming conventions. `lambda_reg` and `zeta` are deprecated with warnings and will
-   be removed in a future release.
+   naming conventions. `lambda_reg` and `zeta` were deprecated with warnings through
+   3.x and removed at 4.0 (ledger M-001/M-002).
 
 **Outstanding Concerns:**
 - Cross-language parity anchor against R's default `synthdid::vcov(method="bootstrap")`
@@ -1105,7 +1106,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
    in REGISTRY.md §SyntheticDiD `Note (default variance_method deviation from R)`.
 2. **Parameter names**: `zeta_omega` / `zeta_lambda` (matching the paper's notation);
    R uses `eta.omega` / `eta.lambda`. The deprecated Python aliases `lambda_reg` / `zeta`
-   from prior releases emit `DeprecationWarning` and will be removed in a future release.
+   from prior releases were removed at 4.0 (ledger M-001/M-002).
 
 ---
 

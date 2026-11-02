@@ -7,7 +7,7 @@ User Guide
 
 The methods behind the library: scholarly references, validation against R
 and Python implementations, performance benchmarks, the migration guide for
-the upcoming 4.0 release, and the methodology registry documenting every
+the 4.0 release, and the methodology registry documenting every
 estimator's equations and edge cases.
 
 .. grid:: 1 2 2 3
@@ -37,7 +37,7 @@ estimator's equations and edge cases.
       :link: migration-4.0
       :link-type: doc
 
-      Every breaking change in the upcoming 4.0 release, with the one-line
+      Every breaking change in the 4.0 release, with the one-line
       fix for each and a codemod table for the mechanical renames.
 
    .. grid-item-card:: Benchmarks

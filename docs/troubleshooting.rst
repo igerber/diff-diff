@@ -294,8 +294,8 @@ Performance Issues
 .. code-block:: python
 
    # TWFE already handles unit + time FE via within-transformation
-   # (post= is the 0/1 post-treatment dummy; the deprecated time= alias
-   # still works through 3.9)
+   # (post= is the 0/1 post-treatment dummy; the 3.x time= alias for it
+   # raises since 4.0 - time= is the event-study calendar column)
    twfe = TwoWayFixedEffects()
    results = twfe.fit(data, outcome='y', treatment='treated',
                       unit='unit_id', post='post')

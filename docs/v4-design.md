@@ -1,6 +1,8 @@
 # diff-diff 4.0 Design Specification
 
-**Status: LIVING - normative until the 4.0 cut.**
+**Status: CLOSED at 4.0.0 (2026-11-01) - the historical record of the 4.0 program. Normative
+through the cut; no longer binding on post-4.0 work except where a section says so (the
+section 8 naming rules remain the live vocabulary contract via `tests/test_naming_guard.py`).**
 
 **Review contract:** every Phase 2-5 PR of the 4.0 program is reviewed against
 this document. A PR that deviates from it must edit this document (and the
@@ -11,13 +13,16 @@ a review reject.
 intentionally do NOT exist at HEAD. `tests/test_v4_matrix.py` enforces their
 absence until their phase ships, and flips to enforcing their presence when the
 matrix row flips. Nothing in this document is an undocumented deviation; it is
-the documentation.
+the documentation. (Amended 2026-11-01, item 10: phases 1-5 have shipped, so every
+3.9/4.0 symbol described here exists at HEAD; the phase-6 4.1 `event_study()` front door
+is the one surface still described but not built - sketch only, specified in its own plan.)
 
 Companion artifacts: `docs/v4-deprecations.yaml` (the lifecycle ledger - single
 source of truth for every old/new/version/status fact; this prose never
 restates per-row lifecycle data and instead cites rows as `[M-###]`),
-`tests/test_v4_matrix.py` (enforcement), ROADMAP.md "4.0 API unification"
-(program pointer).
+`tests/test_v4_matrix.py` (enforcement), ROADMAP.md "4.1 `event_study()` comparison
+front door" (the program's one remaining queued item; the "4.0 API unification" entry
+was retired at the release, 2026-11-01).
 
 All decisions below were locked with the maintainer on 2026-07-18 (six program
 decisions + eight naming-checkpoint decisions), with dated addenda: 2026-07-19
@@ -25,7 +30,9 @@ decisions + eight naming-checkpoint decisions), with dated addenda: 2026-07-19
 consolidation-scope decisions appended to the section 8 checkpoint list) and
 2026-10-18 (the 4.0-cut framing at v3.13.0: the cut-window rule in sections 2
 and 11, the roster refresh in sections 3.1/3.5, the M-080 re-scope and the
-M-008 decision in section 7, and the 4.0 cut sequence in section 9).
+M-008 decision in section 7, and the 4.0 cut sequence in section 9), and 2026-11-01
+(item 10, the release amendments: window closed, `maint/3.13` recorded as never cut,
+tutorial facts corrected).
 Sections 3-8 are the target surface; section 9 maps it onto PRs.
 
 ---
@@ -80,7 +87,10 @@ declares (`cut_window: "4.0"`, `cut_base: "3.13.0"`; mechanics in section 11).
 only by the release PR, which closes the window. Because main carries removals
 from the first cut PR onwards, 3.13.x patches come from a `maint/3.13` branch
 cut at tag `v3.13.0` BEFORE the first cut PR merges (fix lands on main,
-cherry-pick back) - the maint/3.8 rule re-instantiated one major later.
+cherry-pick back) - the maint/3.8 rule re-instantiated one major later. (Spent
+2026-11-01: the release PR bumped `__version__` to 4.0.0 and closed the window. No
+`maint/3.13` branch was cut - maintainer decision 2026-10-18, reaffirmed after PR 2; no
+3.13.x patch was requested.)
 
 **Warning categories:** all NEW shims emit `FutureWarning` (visible to end
 users by default). Pre-existing `DeprecationWarning` sites keep their category
@@ -1072,7 +1082,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] + its results-field mirror [M-143] (shipped: tests/test_v4_merge_cic.py; method= is keyword-only and lowercase-only, the QDiD CLASS is deprecated while the METHOD is not, and ChangesInChangesResults.estimator -> .method carries a dual-key to_dict() window through 3.9) |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] removed at 4.0 (item 9b; the planned 5.0 window was retired); storage flips [M-050..M-058] (their 4.0 -> 5.0 shims retired at 4.0, item 9b); default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; placebo-wrapper calendar contract [M-156] [M-157] (item 9b); warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (DeprecationWarning in 3.13.0, removed at 4.0 - item 9b); the LWDiD result-alias pair [M-151] [M-152] (removed at 4.0, item 9b); docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | SHIPPED 2026-11-01 (items 1-9b + the release, item 10). Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] removed at 4.0 (item 9b; the planned 5.0 window was retired); storage flips [M-050..M-058] (their 4.0 -> 5.0 shims retired at 4.0, item 9b); default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; placebo-wrapper calendar contract [M-156] [M-157] (item 9b); warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (DeprecationWarning in 3.13.0, removed at 4.0 - item 9b); the LWDiD result-alias pair [M-151] [M-152] (removed at 4.0, item 9b); docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -1133,11 +1143,12 @@ cut's PR order; order and rationale only - the M-id rosters live in the
 phase-5 cell above and the lifecycle facts in the ledger. Every PR lands on
 main under the section 2 cut window with `__version__` unchanged; each flips
 its rows terminal and names them in its changelog fragment (3a excepted: a
-tests-first PR that flips no rows).
+tests-first PR that flips no rows). (Window closed by item 10, 2026-11-01.)
 
-0. Spec/ledger refresh (the PR that wrote this subsection): the cut-window
-   rule, the roster/M-080/M-008 amendments, the [M-150] locator, the id
-   snapshot repair, and the `maint/3.13` branch cut.
+0. Spec/ledger refresh (Shipped, #854 - the PR that wrote this subsection): the
+   cut-window rule, the roster/M-080/M-008 amendments, the [M-150] locator and
+   the id snapshot repair; the `maint/3.13` branch cut it also listed was NOT
+   performed (maintainer decision 2026-10-18).
 1. New-estimator conformance - additive signatures plus ONE schema reshape:
    `LWDiDResults.summary(alpha=None)`, `to_dataframe(level=)` (the reshape,
    [M-153]), rows for its `pvalue`/`ci` aliases [M-151] [M-152] (lifecycle in
@@ -1303,18 +1314,32 @@ tests-first PR that flips no rows).
     `tests/test_v4_storage_flip.py`, `tests/test_v4_merge_mpd.py`,
     `tests/test_methodology_synthetic_control.py`, `tests/test_lwdid.py` and
     `tests/test_diagnostics.py`.
-10. Release: bump to 4.0.0 (closes the cut window), changelog compile,
-    migration-guide retitle, due gate green; re-execute (Rust backend) the
+10. Release (SHIPPED 2026-11-01): `__version__` 4.0.0 closes the cut window;
+    `CHANGELOG.md` `[4.0.0]` compiled from the 26 fragments (the compiler's category
+    order now leads with Breaking Changes / Behavioral Changes); migration guide
+    and user guide flipped to present tense; the repo-wide deprecation grep re-run
+    (recorded in the 4.0-cut checklist below). Tutorials: of the eight the TODO row
+    listed, only 02_staggered_did and 09_real_world_examples carried committed
+    outputs, and both were re-executed on the Rust backend (movers exactly the 7a
+    p-values/CIs and the 7b `Std. errors: ... G=` lines; point estimates and SEs
+    unchanged); 01/04/05/07/11/13 have never carried outputs (nbmake-validated);
+    16_wooldridge_etwfe was refreshed at 8b. Movers outside the list:
+    27_cic_distributional_effects (the M-030 `post=` spelling in the practitioner
+    text) re-executed; 25_synthetic_control_policy re-executed - its committed
+    confidence-set / in-time-placebo outputs were a stale capture (the probe at its
+    own last commit, #842, already prints the refreshed numbers on the Python
+    backend, so no 4.0 commit moved them); 32_dml_did's Python-backend bootstrap
+    outputs left as captured (a backend-only difference, not a 4.0 mover).
+    Original scope statement, kept as history: re-execute (Rust backend) the
     tutorials whose clustered-default outputs moved at item 7a and were
-    deliberately left stale - 01_basic_did, 02_staggered_did,
-    04_parallel_trends, 05_honest_did, 07_pretrends_power,
-    09_real_world_examples, 11_imputation_did, 13_stacked_did,
-    16_wooldridge_etwfe (NOT 16_survey_did: the survey df wins) - plus any
-    8/9 movers; 24 is handled in 7a and 23 in 7b and re-validated in 7c (it
-    prints no p-values or CIs, so 7c moved no committed output). 7b's label changes also drift every committed tutorial
-    that renders an analytical DiD/TWFE summary (", G=" on the variance line)
-    or a SunAbraham summary (the new "Std. errors:" line, e.g. 02) - all
-    within the nine-notebook set above.
+    deliberately left stale - 01_basic_did, 02_staggered_did, 04_parallel_trends,
+    05_honest_did, 07_pretrends_power, 09_real_world_examples, 11_imputation_did,
+    13_stacked_did, 16_wooldridge_etwfe (NOT 16_survey_did: the survey df wins) -
+    plus any 8/9 movers; 24 is handled in 7a and 23 in 7b and re-validated in 7c
+    (it prints no p-values or CIs, so 7c moved no committed output). 7b's label
+    changes also drift every committed tutorial that renders an analytical
+    DiD/TWFE summary (", G=" on the variance line) or a SunAbraham summary (the
+    new "Std. errors:" line, e.g. 02) - all within the nine-notebook set above.
 
 Ordering constraints: 4a before 4b before 4c-i before 4c-ii; 4 before 5 and 6; 5 before 6
 (the unified DDD container is born canonical); 7a before 7b before 7c; 7 and 8
@@ -1386,7 +1411,16 @@ major"/"flip") to catch anything born outside the matrix. RUN 2026-10-18 at
 v3.13.0 (4.0-cut framing): every FutureWarning/DeprecationWarning site (25
 direct, 52 via the `_deprecation.py` helpers, 12 Sphinx `.. deprecated::`
 directives, the module `__getattr__`) resolves to a ledger row - nothing was
-born outside the matrix in 3.10-3.13. Re-run once more in the release PR.
+born outside the matrix in 3.10-3.13. RE-RUN 2026-11-01 at 4.0.0 (item 10, the
+release PR): 0 warning-emitting FutureWarning/DeprecationWarning sites remain in
+`diff_diff/` (the three textual hits are history comments), 0 warning-emitting
+`_deprecation.py` helper call sites (the four shim helpers were deleted at 9b;
+`require_arg`/`NOT_SUPPLIED` are required-arg plumbing, not deprecation), 0 Sphinx
+`.. deprecated::` directives, no module `__getattr__` - every lifecycle fact is a
+ledger row; the prose sweep (`docs/*.rst`, `docs/*.md`, README, CONTRIBUTING,
+METHODOLOGY_REVIEW) found four stale present-tense sentences, all fixed in the
+release PR (METHODOLOGY_REVIEW `lambda_reg`/`zeta` x2 and `min_*_periods`,
+troubleshooting `time=` alias, REGISTRY M-082 alias note).
 
 ## 10. Migration-guide skeleton (`docs/migration-4.0.md`, written in Phase 4)
 
@@ -1580,7 +1614,8 @@ enforcement is unchanged - at `cut_window` every scheduled row must be
 terminal, exactly as before. The release PR bumps `__version__` to
 `cut_window`, which closes the window; the keys stay as a historical record
 (`test_ledger_header_declares_cut_window` asserts `cut_base == __version__`
-only while the window is open).
+only while the window is open). (Closed 2026-11-01 by the 4.0.0 bump; the header
+keys remain as the historical record.)
 
 **Cross-row migration rule.** Removing a symbol requires migrating, in the
 same diff, every other row whose locators or `code_refs` reference it (e.g.

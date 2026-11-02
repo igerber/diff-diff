@@ -11,7 +11,8 @@
 #
 # FORWARD-REFERENCE NOTE (for reviewers): `new` locators on `planned` rows name
 # 3.9/4.0 surface that intentionally does NOT exist at HEAD; the enforcement
-# test asserts their ABSENCE until the owning phase ships.
+# test asserts their ABSENCE until the owning phase ships. (Historical since 4.0.0:
+# no `planned` rows remain.)
 #
 # FORMAT CONTRACT (parsed by a purpose-built scanner, no PyYAML): an optional
 # HEADER of single-line version scalars above `rows:` (today the cut-window
@@ -30,6 +31,8 @@
 # over many PRs; `__version__` must stay at `cut_base` until the release PR bumps
 # to `cut_window` (any other bump fails tests/test_v4_matrix.py's off-base
 # guard). The keys stay as a historical record once the window has closed.
+# CLOSED 2026-11-01: the release PR (item 10) bumped __version__ to 4.0.0; keys
+# kept as the historical record.
 cut_window: "4.0"
 cut_base: "3.13.0"
 

@@ -36,6 +36,8 @@ from pathlib import Path
 # order. changelog.d/README.md mirrors this list; the mirror is pinned by
 # tests/test_changelog_fragments.py (README<->compiler parity test).
 CATEGORIES = (
+    "Breaking Changes",
+    "Behavioral Changes",
     "Added",
     "Changed",
     "Deprecated",
@@ -45,8 +47,6 @@ CATEGORIES = (
     "Performance",
     "Documentation",
     "Testing",
-    "Breaking Changes",
-    "Behavioral Changes",
     "Internal",
 )
 
