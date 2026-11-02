@@ -6,6 +6,8 @@ This library implements methods from the following scholarly works.
 Difference-in-Differences
 -------------------------
 
+- **Wang, J., Sant'Anna, P. H. C., Chernozhukov, V., & Cinelli, C. (2026).** "Omitted Variable Bias in Difference-in-Differences Designs." *arXiv preprint arXiv:2609.19386*. https://arxiv.org/abs/2609.19386
+
 - **Ashenfelter, O., & Card, D. (1985).** "Using the Longitudinal Structure of Earnings to Estimate the Effect of Training Programs." *The Review of Economics and Statistics*, 67(4), 648-660. https://doi.org/10.2307/1924810
 
 - **Card, D., & Krueger, A. B. (1994).** "Minimum Wages and Employment: A Case Study of the Fast-Food Industry in New Jersey and Pennsylvania." *The American Economic Review*, 84(4), 772-793. https://www.jstor.org/stable/2118030
