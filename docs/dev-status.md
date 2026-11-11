@@ -174,6 +174,24 @@ Every workflow's Linux job uses `runs-on: ubuntu-24.04`, not `ubuntu-latest` (pi
 Un-pin only after both are fixed upstream and verified on a throwaway branch. The ARM
 matrix entries already used the GitHub-hosted `ubuntu-24.04-arm` label and are unchanged.
 
+## macOS wheel runner pinned to `macos-15`
+
+`build-wheels.yml`'s macOS ARM64 job uses `runs-on: macos-15` (changed from `macos-14` on
+2026-11-11). GitHub retired the macOS 14 images from GitHub Actions on 2026-11-02
+([runner-images#13518](https://github.com/actions/runner-images/issues/13518)); after that
+date every `macos-14` job is rejected before it starts (`The configuration
+'macos-14-arm64-us-default' is not supported`), and because `publish.yml`'s upload job
+`needs` the whole wheel matrix, a release could not publish at all.
+
+- The job only runs at release time and on a manual `release-build-check.yml` dispatch
+  (the PR-triggered run is `linux_only`), so a retired label is invisible to PR CI. Run
+  `gh workflow run release-build-check.yml --ref <branch>` after any runner-label change.
+- The label is pinned rather than `macos-latest` so an image rollover cannot change the
+  release build unannounced. When GitHub announces the macOS 15 retirement, move the pin
+  and re-run the full-matrix rehearsal, checking that the wheels keep the
+  `macosx_11_0_arm64` platform tag.
+- `rust-test.yml`'s test matrix intentionally stays on `macos-latest`.
+
 ## MMM tutorial environments (notebooks 29 / 30)
 
 The two executed MMM calibration tutorials need frameworks that CANNOT share one
