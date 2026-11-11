@@ -6939,6 +6939,12 @@ where δ is the target effect.
 
 **Reference Period Normalization**
 
+ChainedDiD event-study containers retain their fitted cohort references.
+Explicitly selecting an existing structural reference preserves stored intervals,
+including unavailable intervals. Selecting a different reference raises
+an error because the plotter cannot refit that inference. The general explicit
+normalisation behaviour below continues to apply to other producers.
+
 Normalization only occurs when `reference_period` is **explicitly specified** by the user:
 
 - **Explicit `reference_period=X`**: Normalizes effects (subtracts ref effect), sets ref SE to NaN
@@ -8229,3 +8235,18 @@ estimator-focused:
 - **v1.2** (2026-03-24): Added Survey-Aware Bootstrap section (Phase 6)
 - **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators
+
+
+## ChainedDiD
+
+- **Reference:** Bellégo, Benatia and Dortet-Bernadet, doi:10.1016/j.jeconom.2024.105783.
+- **Implementation:** `chained_did.py` constructs all supported pairwise IPW moments and recovers supported post-treatment contrasts with identity GMM. `chained_did_results.py` retains original-unit contributions in the shared AggregationKit.
+- **Note:** Experimental restricted implementation: binary absorbing treatment, never-treated controls, zero anticipation, static complete covariates and PT-post. Earlier profile parameters remain unrestricted; reported pre-period cells are separate direct comparisons.
+- **Note:** Baseline sampling preserves the joint covariate/actual-change law within each cohort for every used pair; no conditional observation correction is fitted. Treatment IPW does not repair arbitrary attrition.
+- **Note:** Pairs require at least two observed units per arm; excluded candidates retain counts and reasons. Singleton exclusions and retained pairs below 20 units per arm or control ESS 20 trigger a warning. These thresholds do not qualify inference. Identity GMM ignores pair precision; sparse pairs can worsen precision and produce anti-conservative intervals.
+- **Note:** Mixed event-study diagnostic rows exclude structural reference identities; `aggregation_weights(level)` exposes constituent cohort/date weights and availability.
+- **Note:** The full catalogue identity metric is retained. Support is a contrast row-space condition; minimum-norm coordinates are never reported as supported effects. No covariance inverse, regularisation or optimal-efficiency claim.
+- **Note:** Link contributions include the pair propensity-score Jacobian and both mean normalisations. Stored contributions are O(1/n); covariance is estimator-scale. Post-fit cohort-share uncertainty and shared controls remain in joint inference.
+- **Note:** Every supplied unit remains in registry masses and cluster counts. Missing-outcome rows retain dates/units. Summaries fail closed when a scheduled cell is unsupported, rather than renormalising to a different target.
+- **Deviation from R:** Identity GMM is fixed rather than cdid's default optimal weighting. Cluster covariance applies the declared K/(K-1) CR1 factor, which the reference harness reconciles explicitly. Simultaneous bands, PT-all, NYT, OR/DR, observation corrections and survey designs are not implemented.
+- **Validation:** Independent hand/stratum and multiplier-covariance tests; planned V01-V16 gates in `chained-did-proposal.md`. The Python qualification manifest records executed scenarios separately. The pinned R environment is now executed: eight fixtures agree, while incomplete continuous covariates use a different propensity-score criterion. Fresh qualification still misses four n=1,000 coverage limits; see `chained-did-validation-followup.md`. The same-panel Gaussian oracle diagnostic in `chained-did-oracle-diagnostic.md` separates covariance-estimation failure from precision loss; its successful design-weight prototype remains benchmark-only and does not qualify production inference.

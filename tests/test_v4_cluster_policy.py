@@ -178,9 +178,10 @@ ROSTER = _cluster_roster()
 CTOR_KW = {"SpilloverDiD": {"rings": [0.0, D_BAR_KM]}, "LPDiD": LP_CTOR}
 
 
-def test_roster_is_the_sixteen_documented_classes():
+def test_roster_is_the_seventeen_documented_classes():
     assert {c.__name__ for c in ROSTER} == {
         "CallawaySantAnna",
+        "ChainedDiD",
         "ChaisemartinDHaultfoeuille",
         "DMLDiD",
         "DifferenceInDifferences",
@@ -281,6 +282,7 @@ def _fit_recipes(panel, spill_panel):
         "ImputationDiD": ({}, panel, SA_KW),
         "TwoStageDiD": ({}, panel, SA_KW),
         "CallawaySantAnna": ({}, panel, SA_KW),
+        "ChainedDiD": ({}, panel, SA_KW),
         "EfficientDiD": ({}, panel, SA_KW),
         "LPDiD": (LP_CTOR, panel, LP_KW),
         "SpilloverDiD": (

@@ -20,6 +20,7 @@ DiD and the power tools keep their own sections:
    diff_diff.TwoWayFixedEffects
    diff_diff.SyntheticDiD
    diff_diff.CallawaySantAnna
+   diff_diff.ChainedDiD
    diff_diff.ChaisemartinDHaultfoeuille
    diff_diff.SunAbraham
    diff_diff.ImputationDiD
@@ -52,6 +53,7 @@ Result containers returned by estimators:
    diff_diff.DiDResults
    diff_diff.SyntheticDiDResults
    diff_diff.CallawaySantAnnaResults
+   diff_diff.ChainedDiDResults
    diff_diff.CSBootstrapResults
    diff_diff.GroupTimeEffect
    diff_diff.ChaisemartinDHaultfoeuilleResults
@@ -367,6 +369,7 @@ Estimators
 
    estimators
    staggered
+   chained_did
    chaisemartin_dhaultfoeuille
    imputation
    stacked_did

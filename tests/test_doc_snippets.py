@@ -569,7 +569,10 @@ def test_lwdid_dr_examples_exercise_dr_path():
         fitted = [
             v
             for v in ns.values()
-            if hasattr(v, "att") and hasattr(v, "se") and np.isscalar(getattr(v, "att"))
+            if not isinstance(v, type)
+            and hasattr(v, "att")
+            and hasattr(v, "se")
+            and np.isscalar(getattr(v, "att"))
         ]
         assert fitted, f"api/lwdid.rst dr block{idx} produced no fitted results"
         for res in fitted:

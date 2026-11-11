@@ -86,6 +86,9 @@ def plot_event_study(
         are normalized (ref effect subtracted) and ref SE is set to NaN.
         When None and auto-inferred from results, only hollow marker styling
         is applied (no normalization). If None, tries to infer from results.
+        ChainedDiD containers preserve their fitted structural references:
+        selecting an existing reference retains stored intervals; selecting
+        another period raises rather than reconstructing inference.
     pre_periods : list, optional
         List of pre-treatment periods. Used for shading.
     post_periods : list, optional
@@ -188,6 +191,8 @@ def plot_event_study(
     """
     from scipy import stats as scipy_stats
 
+    from diff_diff.results_base import EventStudyResults
+
     # Track if reference_period was explicitly provided by user
     reference_period_explicit = reference_period is not None
 
@@ -212,6 +217,18 @@ def plot_event_study(
         ) = _extract_plot_data(results, periods, pre_periods, post_periods, reference_period)
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
+            reference_period_explicit = False
+        if (
+            isinstance(results, EventStudyResults)
+            and results.source == "ChainedDiD"
+            and reference_period_explicit
+        ):
+            # Chained targets have fitted cohort references; plotting cannot refit their inference.
+            if reference_period not in results.reference_periods:
+                raise ValueError(
+                    "ChainedDiD event studies retain their fitted reference periods; "
+                    "plotting cannot renormalise their inference."
+                )
             reference_period_explicit = False
         # Channel selection: the band channel when the user wants
         # simultaneous bands; otherwise the POINTWISE channel - the
