@@ -77,7 +77,10 @@ jobs:
   build-macos-arm:
     name: Build macOS ARM64 wheels
     if: ${{ !inputs.linux_only }}
-    runs-on: macos-14
+    # Pinned (not macos-latest) so an image rollover cannot change the release
+    # build unannounced. macos-14 was retired from GitHub Actions on 2026-11-02;
+    # see docs/dev-status.md "macOS wheel runner pinned to macos-15".
+    runs-on: macos-15
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
