@@ -704,8 +704,8 @@ prefer CS otherwise (fewer moving parts). Both
 handle declared repeated cross sections via ``panel=False``, and both
 carry pweight survey designs, replicate-weight designs, and ``cluster=``
 there (DMLDiD's survey lane is a documented library extension of Chang's
-i.i.d. theory; DMLDiD's replicate variance is per-cell AND aggregate,
-exceeding CS's per-cell convention).
+i.i.d. theory; both compute replicate variance per-cell AND in
+aggregate).
 
 **Example**::
 

@@ -2417,8 +2417,11 @@ def compute_replicate_if_variance(
 
     Returns
     -------
-    float
-        Replicate-based variance estimate.
+    variance : float
+        Replicate-based variance estimate (NaN when fewer than two replicate
+        estimates are finite).
+    n_valid : int
+        Number of replicate columns that produced a finite estimate.
     """
     psi = np.asarray(psi, dtype=np.float64).ravel()
     rep_weights = resolved.replicate_weights
@@ -2524,6 +2527,26 @@ def compute_replicate_if_variance(
         return scale * result, n_valid
     else:
         raise ValueError(f"Unknown replicate method: {method}")
+
+
+def cap_replicate_df(base_df: Optional[float], n_valid: int) -> int:
+    """Inference df for one replicate-variance statistic: ``min(design df, n_valid - 1)``.
+
+    ``base_df`` is the replicate design df (QR rank of the analysis-weight
+    matrix minus 1, :attr:`ResolvedSurveyDesign.df_survey`) and ``n_valid`` the
+    number of replicate columns that produced a finite estimate for this
+    statistic (second return value of :func:`compute_replicate_if_variance`).
+    The design df is a CEILING: a dropped replicate can only reduce it, never
+    replace it - on a rank-deficient replicate matrix ``n_valid - 1`` exceeds
+    the design df, and using it would be anti-conservative.
+
+    Returns ``0`` - the ``safe_inference`` sentinel for NaN inference - when the
+    design df is undefined (``None``, QR rank <= 1), when it is already the
+    ``0`` sentinel, or when fewer than two replicates are valid.
+    """
+    if base_df is None:
+        return 0
+    return max(min(int(base_df), int(n_valid) - 1), 0)
 
 
 def compute_replicate_refit_variance(
