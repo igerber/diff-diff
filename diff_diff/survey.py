@@ -2549,6 +2549,32 @@ def cap_replicate_df(base_df: Optional[float], n_valid: int) -> int:
     return max(min(int(base_df), int(n_valid) - 1), 0)
 
 
+def reduced_replicate_df(base_df: Optional[float], n_valid: int) -> Optional[int]:
+    """Strictly reduced replicate df, or ``None`` when no override applies.
+
+    For sites that keep a working df seeded from the design df and only
+    *override* it for a statistic whose replicates dropped. Returns
+    ``min(base_df, n_valid - 1)`` only when the design df is defined and
+    positive, at least two replicates are valid, and the result is strictly
+    below ``base_df``. Otherwise returns ``None`` ("keep the working df"):
+
+    - an undefined design df (``None`` or the ``0`` sentinel) stays undefined -
+      it is never replaced by ``n_valid - 1``;
+    - ``n_valid - 1 >= base_df`` leaves the design df in place (never raised);
+    - fewer than two valid replicates means that statistic's variance is NaN,
+      so its inference is NaN at any df and it must not change the df of any
+      other statistic.
+
+    Same arithmetic as :func:`cap_replicate_df`, which is the form for
+    statistic-local dfs and for refit paths where one joint vcov prices every
+    statistic.
+    """
+    if base_df is None or base_df <= 0 or n_valid < 2:
+        return None
+    reduced = int(n_valid) - 1
+    return reduced if reduced < int(base_df) else None
+
+
 def compute_replicate_refit_variance(
     refit_fn: Callable[[np.ndarray], np.ndarray],
     full_sample_estimate: np.ndarray,

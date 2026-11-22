@@ -1570,7 +1570,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         se: float
         with np.errstate(over="ignore", invalid="ignore"):
             if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
-                from diff_diff.survey import compute_replicate_if_variance
+                from diff_diff.survey import cap_replicate_df, compute_replicate_if_variance
 
                 variance, n_valid_rep = compute_replicate_if_variance(
                     inf_full, resolved_survey_unit
@@ -1579,16 +1579,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     se = float("nan")
                 else:
                     se = float(np.sqrt(variance))
-                # Per-cell df: min(design df, n_valid - 1) — the dCDH
-                # _effective_df_survey rule, inlined. n_valid is computed
-                # over the WHOLE replicate columns, so it equals R for every
-                # cell in practice (defensive; REGISTRY Note).
-                if df_survey is not None:
-                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
-                else:
-                    # Undefined replicate df (QR rank <= 1): df=0 sentinel
-                    # -> NaN inference (CS sentinel parity).
-                    df_survey = 0
+                # Per-cell df: the library-wide cap min(design df,
+                # n_valid - 1), with an undefined design df (QR rank <= 1)
+                # mapped to the 0 sentinel -> NaN inference. For a finite IF
+                # the cap never binds (design df <= n_valid - 1; REGISTRY
+                # Note).
+                df_survey = cap_replicate_df(df_survey, n_valid_rep)
             elif (
                 resolved_survey_unit is not None
                 and getattr(resolved_survey_unit, "psu", None) is not None
@@ -2663,7 +2659,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         se: float
         with np.errstate(over="ignore", invalid="ignore"):
             if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
-                from diff_diff.survey import compute_replicate_if_variance
+                from diff_diff.survey import cap_replicate_df, compute_replicate_if_variance
 
                 variance, n_valid_rep = compute_replicate_if_variance(
                     inf_full, resolved_survey_unit
@@ -2672,10 +2668,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     se = float("nan")
                 else:
                     se = float(np.sqrt(variance))
-                if df_survey is not None:
-                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
-                else:
-                    df_survey = 0
+                df_survey = cap_replicate_df(df_survey, n_valid_rep)
             elif (
                 resolved_survey_unit is not None
                 and getattr(resolved_survey_unit, "psu", None) is not None
@@ -3189,11 +3182,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 reference_event_times = tuple(sorted(ref_event_times))
 
         # Overall ATT (simple aggregation over post-treatment finite cells).
-        # overall_effective_df is non-None only when replicate variance
-        # dropped replicates (n_valid < R). MIN-CAP, not CS's replace: the
-        # QR-rank design df stays the ceiling (CS's replace convention can
-        # RAISE df above the design df — anti-conservative; deliberate
-        # documented divergence, REGISTRY DMLDiD Note + replicate-df min-cap TODO row).
+        # overall_effective_df is non-None only when dropped replicates
+        # strictly lower the design df (the shared _se_from_psi contract,
+        # survey.reduced_replicate_df): the QR-rank design df is the ceiling.
+        # The min() below is therefore redundant with the shared rule and
+        # kept as a local guard.
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )

@@ -925,7 +925,11 @@ class StackedDiD(BaseEstimator):
             # Override df when replicate replicates were dropped
             if _n_valid_rep_sd is not None and resolved_stacked is not None:
                 if _n_valid_rep_sd < resolved_stacked.n_replicates:
-                    _survey_df = _n_valid_rep_sd - 1 if _n_valid_rep_sd > 1 else 0
+                    # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                    # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                    from diff_diff.survey import cap_replicate_df
+
+                    _survey_df = cap_replicate_df(_survey_df, _n_valid_rep_sd)
                     if survey_metadata is not None:
                         survey_metadata.df_survey = _survey_df if _survey_df > 0 else None
             # Use BM contrast DOF for hc2_bm. Fail-closed: when the
@@ -1012,7 +1016,11 @@ class StackedDiD(BaseEstimator):
         )
         if _n_valid_rep_sd is not None and resolved_stacked is not None:
             if _n_valid_rep_sd < resolved_stacked.n_replicates:
-                _survey_df_overall = _n_valid_rep_sd - 1 if _n_valid_rep_sd > 1 else 0
+                # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                from diff_diff.survey import cap_replicate_df
+
+                _survey_df_overall = cap_replicate_df(_survey_df_overall, _n_valid_rep_sd)
                 if survey_metadata is not None:
                     survey_metadata.df_survey = (
                         _survey_df_overall if _survey_df_overall > 0 else None

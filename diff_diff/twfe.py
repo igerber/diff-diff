@@ -884,7 +884,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # Replicate-refit path is only reached with a resolved design.
             assert resolved_survey is not None
             if _n_valid_rep_twfe < resolved_survey.n_replicates:
-                _df_rep = _n_valid_rep_twfe - 1 if _n_valid_rep_twfe > 1 else 0
+                # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                from diff_diff.survey import cap_replicate_df
+
+                _df_rep = cap_replicate_df(_df_rep, _n_valid_rep_twfe)
             if survey_metadata is not None:
                 survey_metadata.df_survey = _df_rep if _df_rep > 0 else None
             t_stat, p_value, conf_int = _safe_inf(att, se, alpha=self.alpha, df=_df_rep)

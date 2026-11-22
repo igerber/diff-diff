@@ -861,7 +861,11 @@ class DifferenceInDifferences(BaseEstimator):
             # Replicate-refit path is only reached with a resolved design.
             assert resolved_survey is not None
             if _n_valid_rep < resolved_survey.n_replicates:
-                _df_rep = _n_valid_rep - 1 if _n_valid_rep > 1 else 0
+                # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                from diff_diff.survey import cap_replicate_df
+
+                _df_rep = cap_replicate_df(_df_rep, _n_valid_rep)
             if survey_metadata is not None:
                 survey_metadata.df_survey = _df_rep if _df_rep > 0 else None
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=_df_rep)
@@ -913,6 +917,17 @@ class DifferenceInDifferences(BaseEstimator):
             _inference_df_used = (
                 float(inference.df) if inference.df is not None and inference.df > 0 else None
             )
+            # Replicate design whose failed solves lowered the df below the
+            # design df: the regression used reg.survey_df_, so metadata (and
+            # summary()) must report that df, not the design df.
+            if (
+                survey_metadata is not None
+                and resolved_survey is not None
+                and getattr(resolved_survey, "uses_replicate_variance", False)
+                and reg.survey_df_ is not None
+                and survey_metadata.df_survey != reg.survey_df_
+            ):
+                survey_metadata.df_survey = reg.survey_df_
 
         r_squared = compute_r_squared(y, residuals)
 
@@ -2101,14 +2116,19 @@ class DifferenceInDifferences(BaseEstimator):
 
         if resolved_survey is not None and resolved_survey.df_survey is not None:
             df = resolved_survey.df_survey
-        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        # Replicate df: rank-deficient → NaN inference; dropped replicates cap
+        # the df at min(df, n_valid - 1)
         if _uses_replicate_mp:
             # The flag definition above guarantees this (mypy can't track it).
             assert resolved_survey is not None
             if resolved_survey.df_survey is None:
                 df = 0  # rank-deficient replicate → NaN inference
             if _n_valid_rep_mp is not None and _n_valid_rep_mp < resolved_survey.n_replicates:
-                df = _n_valid_rep_mp - 1 if _n_valid_rep_mp > 1 else 0
+                # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                from diff_diff.survey import cap_replicate_df
+
+                df = cap_replicate_df(df, _n_valid_rep_mp)
                 if survey_metadata is not None:
                     survey_metadata.df_survey = df if df > 0 else None
 

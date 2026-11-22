@@ -1207,8 +1207,8 @@ class SunAbraham(BaseEstimator):
             if survey_metadata is not None and survey_metadata.df_survey is not None
             else None
         )
-        # Replicate df: rank-deficient → NaN inference (dropped-replicate
-        # override happens after replicate refit below)
+        # Replicate df: rank-deficient → NaN inference (the dropped-replicate
+        # cap min(df, n_valid - 1) is applied after the replicate refit below)
         if _uses_replicate_sa and _sa_survey_df is None:
             _sa_survey_df = 0  # rank-deficient replicate → NaN inference
 
@@ -1436,7 +1436,11 @@ class SunAbraham(BaseEstimator):
             # Replicate-refit path is only reached with a resolved design.
             assert resolved_survey is not None
             if _n_valid_rep_sa < resolved_survey.n_replicates:
-                _sa_survey_df = _n_valid_rep_sa - 1 if _n_valid_rep_sa > 1 else 0
+                # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+                # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+                from diff_diff.survey import cap_replicate_df
+
+                _sa_survey_df = cap_replicate_df(_sa_survey_df, _n_valid_rep_sa)
             if survey_metadata is not None:
                 survey_metadata.df_survey = (
                     _sa_survey_df if _sa_survey_df and _sa_survey_df > 0 else None
@@ -1496,6 +1500,8 @@ class SunAbraham(BaseEstimator):
                 )
                 return np.array([ce_r.get(k, np.nan) for k in _keys_ordered])
 
+            # n_valid is not consumed here: cohort effects store effect / se /
+            # weight only (no t-stat, p-value or CI), so no df prices them.
             _vcov_cohort_rep, _ = compute_replicate_refit_variance(
                 _refit_sa_cohort, _full_cohort_vec, resolved_survey
             )

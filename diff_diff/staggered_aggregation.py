@@ -849,8 +849,14 @@ class CallawaySantAnnaAggregationMixin:
         variance estimator the per-event-time and simple-aggregation SE paths use:
         replicate-weight variance, full survey-design variance, or the simple
         ``sqrt(sum(psi^2))``. Callers must guard emptiness/finiteness first.
-        Returns ``(se, effective_df)``; ``effective_df`` is non-None only for
-        replicate designs that dropped replicates.
+        Returns ``(se, effective_df)``; ``effective_df`` is non-None only when
+        a replicate design dropped replicates AND that strictly lowers the
+        design df (``survey.reduced_replicate_df``). It is never above the
+        design df, never set on an undefined design df, and never set for a
+        statistic with fewer than two valid replicates (NaN variance), so the
+        relays that consume it (``if eff_df is not None: df = eff_df`` and the
+        event-study / group ``min``) can neither raise the df nor let one
+        degenerate statistic change another's.
         """
         resolved_survey = (
             precomputed.get("resolved_survey_unit") if precomputed is not None else None
@@ -860,13 +866,21 @@ class CallawaySantAnnaAggregationMixin:
             and hasattr(resolved_survey, "uses_replicate_variance")
             and resolved_survey.uses_replicate_variance
         ):
-            from diff_diff.survey import compute_replicate_if_variance
+            from diff_diff.survey import compute_replicate_if_variance, reduced_replicate_df
 
             variance, n_valid_rep = compute_replicate_if_variance(psi_total, resolved_survey)
-            # Compute effective df for this statistic (don't mutate shared state)
+            # Effective df for this statistic (don't mutate shared state).
+            # The design df comes from the fit-cached precomputed value:
+            # ResolvedSurveyDesign.df_survey runs a pivoted QR on the
+            # replicate matrix on every access, and an all-zero replicate
+            # column makes n_valid < R for EVERY horizon / group.
             effective_df = None
             if n_valid_rep < resolved_survey.n_replicates:
-                effective_df = n_valid_rep - 1 if n_valid_rep > 1 else 0
+                if precomputed is not None and "df_survey" in precomputed:
+                    design_df = precomputed["df_survey"]
+                else:
+                    design_df = resolved_survey.df_survey
+                effective_df = reduced_replicate_df(design_df, n_valid_rep)
             if np.isnan(variance):
                 se = np.nan
             else:

@@ -2326,7 +2326,7 @@ def _efficient_survey_panel(seed=5, replicate=False, degenerate=None):
 
     degenerate: None | "dropped" (2 all-zero replicate columns ->
     n_valid = n_replicates - 2) | "undefined" (all but one column all-zero
-    -> n_valid <= 1 -> working df None, the load-bearing degenerate state).
+    -> rank 1, undefined design df: the working df is the 0 sentinel).
     """
     import numpy as np
 
@@ -2558,17 +2558,18 @@ class TestEfficientAggregate:
             assert _assert_analytic_inference_contract(es, alpha=plain.alpha) > 0
 
     def test_replicate_undefined_df_degenerate(self):
-        # n_valid <= 1: the working df degenerates to None mid-fit. The
-        # post-overall snapshot carries that state; the container's scalar
-        # df_survey resolves to the 0.0 replicate-undefined sentinel (the
-        # shared resolver ladder), NOT the raw survey_metadata value the
-        # is-not-None guard leaves finite - this arm is the discriminator
-        # for the carrier's metadata copy. The per-row df column is NaN
-        # (the 0 sentinel NaNs the inference triple).
+        # n_valid <= 1 on a rank-1 replicate matrix: the design df is
+        # undefined, so the working df is the 0 sentinel from the seed on
+        # (a dropped replicate never rewrites it - not to None, which
+        # would be a z-reference, and not to n_valid - 1). The
+        # post-overall snapshot carries that sentinel; the container's
+        # scalar df_survey resolves to the 0.0 replicate-undefined
+        # sentinel and the per-row df column is NaN (the sentinel NaNs
+        # the inference triple).
         d, rep_cols = _efficient_survey_panel(replicate=True, degenerate="undefined")
         sd = _efficient_survey_design(rep_cols)
         plain = _fit_efficient(d, survey_design=sd)
-        assert plain._aggregation_kit.bookkeeping["df_survey"] is None
+        assert plain._aggregation_kit.bookkeeping["df_survey"] == 0
         es = plain.aggregate("event_study")
         assert es.df_survey == 0.0
         assert np.all(np.isnan(np.asarray(es.df, dtype=float)))

@@ -454,15 +454,16 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         # Carrier + shared builder: EDiD is a _from_relative_dict producer,
         # so the recomputed dict rides the same route as the fit-time
         # surface. The carrier's survey_metadata is a COPY whose df_survey
-        # is the kit's post-overall snapshot - _recompute_unit_survey_
-        # metadata's is-not-None guard can leave the raw metadata at the
-        # resolved design's finite value when the governing df degenerated
-        # to None (n_valid <= 1), and the copy keeps the container honest
-        # there (in non-degenerate fits the two agree and the copy is
-        # inert). Copying also keeps the parent's metadata unmutated.
+        # is the kit's post-overall snapshot, so the container reports the
+        # df that actually governed the fit's inference (in non-degenerate
+        # fits it equals the raw metadata value and the copy is inert).
+        # Copying also keeps the parent's metadata unmutated.
         meta = self.survey_metadata
         if meta is not None:
-            meta = dataclasses.replace(meta, df_survey=bk["df_survey"])
+            # The kit df is the 0 sentinel on a replicate design whose df is
+            # undefined; metadata keeps None for that state (the resolver
+            # ladder maps None + replicate_method back to the 0.0 sentinel).
+            meta = dataclasses.replace(meta, df_survey=(bk["df_survey"] or None))
         # The carrier's PROVENANCE fields also come from the kit snapshots
         # (CI review R2): the reference_period property and the container's
         # alpha/anticipation must reflect the FIT's regime, not a possibly
@@ -498,11 +499,12 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
 
         ``df`` is the kit's post-overall ``df_survey`` snapshot - the very
         value fit passed to ``safe_inference`` for the overall row - NOT
-        ``resolve_inference_df(self)``: ``survey_metadata.df_survey`` can
-        diverge from the governing df in the degenerate replicate case
-        (``n_valid <= 1`` sets the working df to None while the metadata
-        keeps the resolved design's finite value), and the snapshot is
-        provenance-exact in every state. None → all-NaN df column;
+        ``resolve_inference_df(self)``: the snapshot is the value that
+        governed the fit's inference and is provenance-exact in every
+        state (a replicate-variance call that drops replicates can only
+        lower the working df; one with fewer than two valid replicates
+        leaves it unchanged and NaNs only its own statistic).
+        None → all-NaN df column;
         the replicate-undefined 0-sentinel row NaNs out via post_init.
         Bootstrapped fits relay the stored quintet verbatim (percentile
         se/p/CI beside the finite ``safe_inference`` t) with a NaN df
