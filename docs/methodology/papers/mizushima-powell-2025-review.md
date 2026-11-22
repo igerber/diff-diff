@@ -715,7 +715,7 @@ What the paper's exercises use (not a proposed library contract):
 
 Library facts in this section are limited to class names, inference-related constructor arguments, and the existing simulation result fields. Every correspondence is by cited source or by name; implementation correspondence was not audited.
 
-- **Estimator roster.** The library ships these staggered-family estimator classes: `TwoWayFixedEffects`, `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `ChaisemartinDHaultfoeuille`, `EfficientDiD`, `WooldridgeDiD`, `LPDiD`, and `SyntheticDiD`.
+- **Estimator roster.** The library ships these related DiD estimator classes: `TwoWayFixedEffects`, `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `ChaisemartinDHaultfoeuille`, `EfficientDiD`, `WooldridgeDiD`, `LPDiD`, and `SyntheticDiD`. Of these, `SyntheticDiD` requires block treatment (all treated units treated at the same time) and does not accept staggered adoption.
 
   | Paper column | Source the paper attributes it to | Library class (by cited source; implementation correspondence not audited) |
   |---|---|---|
