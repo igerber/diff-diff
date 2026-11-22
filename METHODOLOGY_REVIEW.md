@@ -83,6 +83,7 @@ The catalog grew incrementally over several quarters, so formats vary across the
 | PreTrendsPower | `pretrends.py` | `pretrends` package | **Complete** | 2026-05-19 |
 | PowerAnalysis | `power.py` | `pwr` / `DeclareDesign` | **Complete** | 2026-05-31 |
 | PlaceboTests | `diagnostics.py` | Bertrand-Duflo-Mullainathan (2004); base-R exact-enumeration parity | **Complete** | 2026-06-26 |
+| DesignDiagnosis | `design.py` | No R parity target (`DeclareDesign` diagnoses simulated designs); internal exact enumeration | **Complete** | 2026-11-22 |
 
 ### Cross-Cutting Inference Features
 
@@ -1306,6 +1307,36 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 - Only the **equicorrelated** special case of Burlig Eq. 2 is implemented (single ρ); the fully general SCR form (independent ψ^B/ψ^A/ψ^X) is not.
 
 **Tests:** `tests/test_methodology_power.py` (Bloom Table 1; 2×2 + panel closed forms; Monte-Carlo; round-trip; validation guards; R parity) + `tests/test_power.py`. R goldens at `benchmarks/data/r_power_golden.json` (generator `benchmarks/R/generate_power_golden.R`).
+
+---
+
+#### DesignDiagnosis
+
+| Field | Value |
+|-------|-------|
+| Module | `design.py` |
+| Primary References | Bertrand, Duflo & Mullainathan (2004) - placebo assignment on real data, unit resampling, rejection rates, additive effect injection; Mizushima & Powell (2025) - staggered placebos; Coglianese & Fang (2026) - shared placebo events across estimators; Blair, Cooper, Coppock & Humphreys (2019) - diagnosands. Paper reviews under `docs/methodology/papers/`. |
+| R Reference | None. `DeclareDesign` implements Blair et al.'s diagnosis on simulated data, not placebo assignment on a user's panel; the source papers distribute no placebo generator. |
+| Status | **Complete** |
+| Last Review | 2026-11-22 |
+
+**Verified components:**
+- Placebo assignment follows the declared design: exact treated count, adoption periods drawn from `cohort_periods`, absorbing treatment, never-treated controls, effect injected only from each unit's own adoption on - `tests/test_design.py::TestPlaceboGenerator`.
+- All eight supported estimators recover an injected effect under common timing, and the six staggered ones under staggered timing - `TestRecovery`.
+- Every estimator and every effect size sees the same placebo draws, including under `seed=None` - `TestPlaceboDraws`.
+- With the panel held fixed, the rejection rate agrees with exact enumeration of all C(6,3) assignments - `TestPlaceboDraws::test_fixed_panel_matches_exact_enumeration`.
+- The outcome-blind truncation never reads rows from the first real adoption on - `TestOutcomeBlindGuard`.
+- Paper-shaped findings on simulated panels - `tests/test_methodology_design.py`: with AR(1) outcomes (rho = 0.8, 50 units x 21 periods) classical TWFE standard errors reject a true null far above the nominal level while unit-clustered ones are near it (Bertrand et al.); with 2 of 40 units treated, asymptotic inference over-rejects, and with 20 it is near nominal (Mizushima-Powell).
+
+**Deviations and library choices (documented in REGISTRY `## DesignDiagnosis`):**
+- The size check, the minimum detectable effect on real data, the two-pre-period minimum and the data fingerprint have no paper source.
+- A fit with non-finite inference is excluded from every rate; `simulate_power` alone counts it as a non-rejection.
+- RMSE is the existing `ddof = 1` form, not Blair et al.'s root mean squared error.
+- Adoption periods are declared; Bertrand et al.'s randomly drawn passage year is not implemented.
+
+**Not validated:** no R parity; the source papers' CPS tables are not reproduced.
+
+**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
 
 ---
 

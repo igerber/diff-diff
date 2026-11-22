@@ -222,6 +222,8 @@ section):
      - Simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
    * - :func:`~diff_diff.run_placebo_test`
      - Placebo timing, group, permutation, and leave-one-out tests
+   * - :func:`~diff_diff.diagnose_design`
+     - Design diagnosis on your own untreated panel: placebo assignments that follow the planned design, with each candidate estimator's size, power, bias, RMSE, coverage and minimum detectable effect (Bertrand, Duflo & Mullainathan 2004; Blair et al. 2019)
    * - :func:`~diff_diff.attgt_weights` / :func:`~diff_diff.decompose_twfe_weights`
      - Baker et al. (2025) implicit weights a TWFE regression places on each ATT(g,t), against the ATT^O / ATT^simple targets, with the pre-period contribution (ports Callaway's ``twfeweights``)
    * - :func:`~diff_diff.did_had_pretest_workflow`

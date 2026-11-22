@@ -45,6 +45,7 @@ This document provides the academic foundations and key implementation requireme
    - [HonestDiD](#honestdid)
    - [PreTrendsPower](#pretrendspower)
    - [PowerAnalysis](#poweranalysis)
+   - [DesignDiagnosis](#designdiagnosis)
 
 **Archived sections.** Sections marked *archived* are the methodology record of classes removed at the 4.0 cut (ledger rows M-010, M-013, M-015 - [M-090], cut item 9): each opens with an archive Note naming the surviving surface that runs the same estimation core, and the body is kept verbatim in the removed class's vocabulary. They are not live entry points.
 
@@ -6949,6 +6950,90 @@ where δ is the target effect.
 - [x] Sample size calculation given MDE and target power
 - [x] Simulation-based power for complex designs
 - [x] Cluster adjustment for clustered designs (within-unit `rho` + survey `deff`)
+
+---
+
+## DesignDiagnosis
+
+**Primary source:**
+- Bertrand, M., Duflo, E., & Mullainathan, S. (2004). How Much Should We Trust Differences-in-Differences Estimates? *The Quarterly Journal of Economics*, 119(1), 249-275. https://doi.org/10.1162/003355304772839588 - placebo assignment on real untreated data, unit resampling, rejection rates, additive effect injection. Paper review: `docs/methodology/papers/bertrand-duflo-mullainathan-2004-review.md`.
+- Mizushima, Y., & Powell, D. (2025). Inference with Modern Difference-in-Differences Methods. SSRN working paper 5221387 (unpublished). - placebo staggered adoption, rejection rates across estimators. Paper review: `docs/methodology/papers/mizushima-powell-2025-review.md`.
+- Coglianese, J., & Fang, J. A. (2026). An Evaluation of Difference-in-Differences Methods Using Placebo Event Studies. Finance and Economics Discussion Series 2026-045, Board of Governors of the Federal Reserve System. https://doi.org/10.17016/FEDS.2026.045 - several estimators evaluated on the same placebo events. Paper review: `docs/methodology/papers/coglianese-fang-2026-review.md`.
+- Blair, G., Cooper, J., Coppock, A., & Humphreys, M. (2019). Declaring and Diagnosing Research Designs. *American Political Science Review*, 113(3), 838-859. https://doi.org/10.1017/S0003055419000194 - the diagnosand vocabulary (bias, RMSE, power, coverage). Paper review: `docs/methodology/papers/blair-2019-review.md`.
+
+**Module:** `diff_diff/design.py` (`diagnose_design`, `DesignDiagnosisResults`)
+
+**Scope:** On a user's own untreated panel, repeatedly assign placebo treatments that follow a declared design, optionally add a known effect to the placebo-treated observations, fit every candidate on the same placebo draws, and report per candidate the rejection rate under no effect (size), and power, bias, RMSE and coverage at each injected effect, plus an optional minimum detectable effect. Supported: `DifferenceInDifferences`, `TwoWayFixedEffects`, `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `EfficientDiD`, under absorbing binary treatment with common or staggered timing. The run is outcome-blind: no real treatment effect is estimated. It complements `## PlaceboTests` (single placebo fits and a permutation test for one fitted `DifferenceInDifferences`) and `## PowerAnalysis` (power on synthetic data); it shares the simulation loop of the latter.
+
+**Key implementation requirements:**
+
+*Outcome-blind guard:*
+- The panel must be untreated. When `first_treat` is given, every row at or after the earliest real adoption (the smallest finite positive value; 0, `inf` and NaN mean never-treated) is dropped before anything else and counted in `n_dropped`. A unit already treated in the first period is refused by name.
+- When `first_treat` is not given, untreated status is the caller's declaration and is not verified; the results record this as `first_treat=None` and `summary()` says so.
+
+*Declared design:*
+- The number of placebo-treated units is fixed per replicate (`n_treated`, or `int(n_units * treatment_fraction)`), as in the source designs (BDM p.256: "exactly half the states"; Mizushima-Powell p.13: 5, 10 or 25 states).
+- `cohort_periods` lists the planned adoption periods as values of the calendar column. One value is a common adoption date (BDM footnote 15 reports runs with the treatment year fixed). Two or more values are a staggered design in which each placebo-treated unit draws its period independently and uniformly from the list (BDM footnote 22; Mizushima-Powell p.13). Treatment is absorbing and untreated units are never-treated (Mizushima-Powell p.13).
+
+*Placebo replicate:*
+```
+1. (resample_units=True) draw N units with replacement, each with its whole
+   series; a unit drawn twice becomes two distinct units          [BDM p.258]
+2. draw the treated set without replacement, size n_treated       [BDM p.256]
+3. assign each treated unit its adoption period g_i from cohort_periods
+4. Y*_it = Y_it + delta * 1{i treated, t >= g_i}                  [BDM pp.259, 261]
+5. fit every candidate on that same frame      [Coglianese-Fang p.16: one set
+                                                of placebo events for all]
+```
+
+*Reported quantities* (per candidate and injected effect `delta`, over the `R` scored replicates; names are those of `SimulationPowerResults`):
+```
+rejection_rate = power = (1/R) sum_r 1{p_r < alpha}          size when delta = 0
+mean_estimate  = (1/R) sum_r tau_hat_r
+bias           = mean_estimate - delta
+std_estimate   = sample SD of tau_hat_r (ddof = 1)
+rmse           = sqrt(bias^2 + std_estimate^2)
+coverage       = (1/R) sum_r 1{CI_r contains delta}
+```
+The injected effect is constant over treated unit-periods, so `delta` is the value of the overall ATT every supported candidate targets, and coverage and bias are scored against it. BDM report the rejection rate with and without an injected effect; bias, RMSE and coverage are Blair et al.'s diagnosands (their Table 1), not quantities BDM or Mizushima-Powell tabulate.
+
+*Standard errors / inference:* none of its own. Each replicate uses the fitted candidate's own p-value and confidence interval; `alpha` must equal the candidate's own level.
+
+*Edge cases:*
+- A replicate whose fit raises `ValueError`, `LinAlgError`, `KeyError`, `RuntimeError` or `ZeroDivisionError`, or returns non-finite `att` / `se` / `p_value` / interval bounds, is excluded from every rate and counted (`n_simulation_failures`; `n_nan_inference` is the non-finite part).
+- A cell in which every replicate is lost is reported with NaN statistics and zero scored replicates; the run continues.
+- Any other exception propagates.
+- Fail-closed pre-flight: a candidate that cannot produce a finite, scalar fit on any of the first five placebo replicates is refused with its first error before the run starts.
+
+**Deviations and library choices:**
+- **Note (failure policy):** three kinds of failure are kept apart. Programming errors propagate, as in `simulate_power` (see the narrow-exception Note under `## PowerAnalysis`). Configuration errors are refused by the pre-flight. Data-dependent losses are counted and excluded. One difference from `simulate_power` alone, which counts a NaN p-value as a non-rejection: here a fit with non-finite inference is excluded, because a candidate that returns NaN inference would otherwise look conservative.
+- **Note (size check):** `size_controlled` is a library rule with no paper source. It is evaluated on the no-effect run in this order: false when nothing was scored; false when more than 10% of the replicates were lost (the threshold at which `simulate_power` already warns), since a candidate that fails on hard draws would otherwise look better than it is; otherwise true exactly when `rejection_rate <= alpha + 1.96 * sqrt(alpha * (1 - alpha) / R)`. Candidates are returned in input order and never ranked; the check is on null performance only.
+- **Note (minimum detectable effect):** no source paper computes an MDE on real data. When `power` is given, the MDE is found by `simulate_mde`'s bisection on the injected effect, only for candidates that pass the size check, with the search bracket seeded from the candidate's own no-effect `std_estimate` so that it starts on the outcome's scale. It is reported as NaN when the bracket fails, when power at effect 0 already reaches the target, when a search step loses every replicate, or when more than 10% of the fits in the search are lost. The search draws its own placebo replicates per step: reproducible from `seed`, but not the draws used for the reported power cells.
+- **Note (RMSE):** `rmse` is the existing `SimulationPowerResults` field, `sqrt(bias^2 + std_estimate^2)` with the `ddof = 1` standard deviation. Blair et al. define RMSE as the root of the plain mean squared error, so the variance term here is larger by the factor `R / (R - 1)`.
+- **Note (fixed versus resampled outcomes):** `resample_units=True` is the default. With `resample_units=False` the panel is used as observed and only the assignment is random; BDM note that in that case "the exact rejection rate we should expect is not known, and may be different from 5 percent even for a correctly sized test" (p.258), so the size check against `alpha` carries that caveat. Mizushima-Powell and Coglianese-Fang assign placebos on fixed outcomes.
+- **Note (declared adoption dates):** adoption periods are declared, not drawn. BDM's main design draws one passage year at random from an interior window; that variant is not implemented. Each declared period must be a period of the untreated panel with at least two earlier periods (a library minimum).
+- **Note (units as the assignment level):** treatment is assigned, and units are resampled, at the level of the `unit` column. Designs whose assignment or dependence sits above the unit (survey designs, clusters of units) are not supported; `survey_design` is refused. With `resample_units=True`, a candidate whose `cluster` names a column other than the unit column is refused: a unit drawn twice gets a fresh id in the unit column only, so its copies would share one cluster and the candidate's inference would no longer be the one it has on the real panel. With `resample_units=False` the panel and its clusters are used as observed, so any cluster column is accepted.
+- **Note (anticipation):** a candidate with a non-zero `anticipation` is refused. Its aggregate averages periods before adoption, where no effect is injected, so bias and coverage would be scored against the wrong target.
+- **Note (common-timing candidates):** `DifferenceInDifferences` and `TwoWayFixedEffects` are fitted with a time-invariant group indicator and one post indicator, so they are refused under a staggered declaration.
+- **Note (calendar gaps):** `StackedDiD` needs the period just before adoption to exist. On a calendar with gaps it is refused by the pre-flight when every declared adoption period follows a gap; otherwise the affected replicates are counted as losses.
+- **Note (bootstrap reproducibility):** `seed` fixes the placebo draws only. A candidate configured for bootstrap inference with its own `seed=None` is not reproducible; a warning says so and its configuration is not altered.
+- **Note (balanced panels):** the panel must be balanced with no missing outcomes and a numeric calendar column.
+- **Note (data fingerprint):** `data_sha256` is the SHA-256 of a canonical text of the panel actually used (every column, rows sorted by unit and period, columns sorted by name, one JSON line of type-tagged cells per row; column labels must be distinct as strings), so it does not depend on row order, column order or the pandas version. It has no paper source; it exists so that a later analysis can be checked against the diagnosed sample.
+
+**Reference implementation(s):**
+- None to match. The source papers run their placebo procedures on their own US state-level data with their own code, and none distributes a placebo generator (BDM: only block-bootstrap code is offered, "available upon request"; Mizushima-Powell name the Stata estimation commands they call but reference no replication code; Coglianese-Fang name no software). R `DeclareDesign` implements Blair et al.'s diagnosis on simulated data, not placebo assignment on a user's panel. There is no R parity target.
+- Validation is therefore internal: exact enumeration of all assignments on a six-unit panel, exact recovery of an injected effect, shared placebo draws across candidates, and the papers' qualitative findings reproduced on simulated panels (serially correlated outcomes make unclustered standard errors over-reject while unit-clustered ones are near nominal; very few treated units make asymptotic inference over-reject). The papers' own tables are not reproduced.
+
+**Requirements checklist:**
+- [x] Placebo assignment follows the declared design; treated count exact; absorbing; untreated units never-treated: `tests/test_design.py::TestPlaceboGenerator`
+- [x] Injected effect recovered by all eight candidates (common timing) and the six staggered ones (staggered timing): `TestRecovery`
+- [x] Same placebo draws for every candidate and every effect, including `seed=None`: `TestPlaceboDraws`
+- [x] Fixed-panel rejection rate agrees with exact enumeration of all assignments: `TestPlaceboDraws::test_fixed_panel_matches_exact_enumeration`
+- [x] Outcome-blind truncation never reads rows from the first real adoption on: `TestOutcomeBlindGuard`
+- [x] Failure policy (bugs propagate, pre-flight refusal, counted losses) and the size check boundaries: `TestFailurePolicy`, `TestSizeGate`
+- [x] Serial correlation: unclustered standard errors over-reject, unit-clustered are near nominal (BDM, in shape): `tests/test_methodology_design.py::TestSerialCorrelationOverRejection`
+- [x] Few treated units over-reject under asymptotic inference (Mizushima-Powell, in shape): `TestFewTreatedUnits`
+- [x] Power rises with the injected effect; the MDE is near the normal multiplier for a correctly sized test: `TestEffectInjection`, `TestDocumentedChoices`
 
 ---
 

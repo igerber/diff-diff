@@ -391,6 +391,25 @@ Power Analysis
 
   Establishes the power gains from multiple pre/post periods in panel experiments (the ``(m+r)/(mr)`` period factor); the ψ = 0 special case of Burlig, Preonas & Woerman (2020) Eq. 2.
 
+Design Diagnosis
+----------------
+
+- **Bertrand, M., Duflo, E., & Mullainathan, S. (2004).** "How Much Should We Trust Differences-in-Differences Estimates?" *The Quarterly Journal of Economics*, 119(1), 249-275. https://doi.org/10.1162/003355304772839588
+
+  Source for placebo assignment on real untreated data, resampling whole units, the rejection rate under no effect, and power by adding a known effect to the placebo-treated observations, as implemented in ``diagnose_design``. See ``docs/methodology/REGISTRY.md`` ``## DesignDiagnosis``.
+
+- **Mizushima, Y., & Powell, D. (2025).** "Inference with Modern Difference-in-Differences Methods." SSRN working paper 5221387. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5221387
+
+  Unpublished working paper. Placebo staggered adoption and rejection rates across estimators; documents over-rejection when few units are treated.
+
+- **Coglianese, J., & Fang, J. A. (2026).** "An Evaluation of Difference-in-Differences Methods Using Placebo Event Studies." Finance and Economics Discussion Series 2026-045, Board of Governors of the Federal Reserve System. https://doi.org/10.17016/FEDS.2026.045
+
+  Evaluates many estimators on one shared set of placebo events.
+
+- **Blair, G., Cooper, J., Coppock, A., & Humphreys, M. (2019).** "Declaring and Diagnosing Research Designs." *American Political Science Review*, 113(3), 838-859. https://doi.org/10.1017/S0003055419000194
+
+  Source of the diagnosand vocabulary (bias, RMSE, power, coverage) that ``diagnose_design`` reports.
+
 MMM Calibration Interop
 -----------------------
 

@@ -75,6 +75,7 @@ from diff_diff.datasets import (
     load_prop99,
     load_walmart,
 )
+from diff_diff.design import DesignDiagnosisResults, diagnose_design
 from diff_diff.diagnostic_report import (
     DIAGNOSTIC_REPORT_SCHEMA_VERSION,
     DiagnosticReport,
@@ -492,6 +493,9 @@ __all__ = [
     "simulate_mde",
     "simulate_power",
     "simulate_sample_size",
+    # Design diagnosis
+    "DesignDiagnosisResults",
+    "diagnose_design",
     # Pre-trends power analysis
     "PreTrendsPower",
     "PreTrendsPowerResults",
