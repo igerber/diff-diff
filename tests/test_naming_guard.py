@@ -1368,6 +1368,9 @@ CONSUMER_ALLOWLIST = {
         "(the invalid `aggregate=event` recommendation was corrected "
         "with M-027)"
     ),
+    ("estimator", "docs/methodology/papers/blair-2019-review.md"): (
+        "listing of the simulate_power `estimator` argument spelling - no CiC surface involved"
+    ),
     ("aggregate", "docs/methodology/variance-conventions.md"): (
         "canonical post-fit aggregate() vocabulary only (zero fit-time kwarg "
         "sites since the 4.0 PR 3c sweep removed the deprecated-route clause)"
