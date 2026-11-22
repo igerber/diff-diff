@@ -2444,7 +2444,7 @@ checking `size_controlled` first. An estimator that over-rejects under no effect
 asymptotic inference with very few treated units) shows inflated power.
 
 **Refusals:** unbalanced panels, missing outcomes, non-numeric `time`, a
-non-zero `anticipation`, an estimator `alpha` different from `alpha`,
+non-zero `anticipation`, `vcov_type="conley"`, an estimator `alpha` different from `alpha`,
 DifferenceInDifferences / TwoWayFixedEffects under a staggered declaration, and
 the fit keywords `formula`, `survey_design`, `post_periods` and the column-role
 names, and (with the default `resample_units=True`) an estimator whose

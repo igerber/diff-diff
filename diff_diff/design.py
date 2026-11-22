@@ -602,6 +602,14 @@ def _validate_estimators(
                 f"injected, so bias and coverage would be scored against the wrong "
                 f"target. diagnose_design supports anticipation=0 only."
             )
+        if params.get("vcov_type") == "conley":
+            raise ValueError(
+                f"Estimator '{label}' uses vcov_type='conley', which diagnose_design "
+                f"does not support. {name} takes its Conley time dimension from the "
+                f"0/1 post indicator, so on a multi-period panel every pre-period "
+                f"would count as one period and the spatial and serial terms would "
+                f"be wrong; resampled copies of a unit would also share one location."
+            )
         cluster = params.get("cluster")
         # StackedDiD's ``cluster`` is a mode ("unit" / "unit_subexp"), not a column.
         if resample_units and name != "StackedDiD" and isinstance(cluster, str) and cluster != unit:
@@ -675,7 +683,9 @@ def _prepare_panel(
             raise ValueError(f"'{first_treat}' must be numeric (0, inf or NaN = never treated).")
         if (data.groupby(unit)[first_treat].nunique(dropna=False) > 1).any():
             raise ValueError(f"'{first_treat}' must be constant within each unit.")
-        values = data[first_treat].to_numpy(dtype=float)
+        # na_value: a nullable column (Int64 / Float64) marks never-treated
+        # units with pd.NA, which older pandas will not convert on its own.
+        values = data[first_treat].to_numpy(dtype=float, na_value=np.nan)
         if np.any(values[np.isfinite(values)] < 0):
             raise ValueError(f"'{first_treat}' has negative values.")
         adopted = np.isfinite(values) & (values > 0)
@@ -691,7 +701,7 @@ def _prepare_panel(
                     f"Drop always-treated units before calling diagnose_design."
                 )
             earliest = float(values[adopted].min())
-            keep = data[time].to_numpy(dtype=float) < earliest
+            keep = _period_values(data[time]).astype(float) < earliest
             n_dropped = int((~keep).sum())
             panel = data.loc[keep]
 
@@ -746,6 +756,13 @@ def _validate_cohort_periods(cohort_periods: Any, periods: np.ndarray) -> List[A
                 f"needed."
             )
     return declared
+
+
+def _period_values(column: pd.Series) -> np.ndarray:
+    """The calendar column as a plain numpy array (handles nullable dtypes)."""
+    if pd.api.types.is_integer_dtype(column):
+        return column.to_numpy(dtype=np.int64)
+    return column.to_numpy(dtype=float)
 
 
 def _resolve_n_treated(
@@ -812,7 +829,7 @@ def _make_placebo_generator(
     """
     n_periods = panel[time].nunique()
     n_units = len(panel) // n_periods
-    period_values = panel[time].to_numpy()[:n_periods]
+    period_values = _period_values(panel[time])[:n_periods]
     time_tiled = np.tile(period_values, n_units)
     offsets = np.arange(n_periods)
     outcome_position = panel.columns.get_loc(outcome)
@@ -1188,7 +1205,7 @@ def diagnose_design(
     effects = _resolve_effect_sizes(effect_sizes)
 
     panel, n_dropped = _prepare_panel(data, outcome, unit, time, first_treat)
-    periods = np.sort(panel[time].unique())
+    periods = np.unique(_period_values(panel[time]))
     n_periods = len(periods)
     n_units = panel[unit].nunique()
     if n_periods < _MIN_PRE_PERIODS + 1:

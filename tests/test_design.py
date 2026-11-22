@@ -284,6 +284,34 @@ class TestOutcomeBlindGuard:
         assert result.n_dropped == 0
         assert result.n_periods == 8
 
+    @pytest.mark.parametrize("dtype", ["Int64", "Float64"])
+    def test_nullable_first_treat_with_pd_na(self, dtype):
+        """pd.NA marks never-treated units in a nullable column."""
+        panel = make_panel(n_units=20, n_periods=10, seed=64)
+        plain = panel.assign(ft=np.where(panel["unit"] < 5, 8.0, np.nan))
+        nullable = panel.assign(
+            ft=pd.array([8 if u < 5 else pd.NA for u in panel["unit"]], dtype=dtype)
+        )
+        assert nullable["ft"].isna().any()
+        expected = run(plain, [DifferenceInDifferences()], cohort_periods=[5], first_treat="ft")
+        result = run(nullable, [DifferenceInDifferences()], cohort_periods=[5], first_treat="ft")
+        assert result.n_periods == 7  # periods 8 onward are dropped
+        assert result.n_dropped == expected.n_dropped == 20 * 3
+        np.testing.assert_allclose(
+            estimates(result, "DifferenceInDifferences"),
+            estimates(expected, "DifferenceInDifferences"),
+        )
+
+    def test_nullable_integer_calendar_column(self):
+        panel = make_panel(seed=65)
+        expected = run(panel, [DifferenceInDifferences(), CallawaySantAnna()])
+        nullable = panel.assign(period=panel["period"].astype("Int64"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = run(nullable, [DifferenceInDifferences(), CallawaySantAnna()])
+        for label in ("DifferenceInDifferences", "CallawaySantAnna"):
+            np.testing.assert_allclose(estimates(result, label), estimates(expected, label))
+
     def test_always_treated_unit_is_named(self):
         panel = make_panel(seed=14)
         panel["ft"] = np.where(panel["unit"] == 3, 1, 0)
@@ -886,7 +914,11 @@ class TestMDE:
 
 
 class TestConfigurations:
-    def test_conley_did_gets_the_unit_column(self):
+    @pytest.mark.parametrize("estimator_class", [DifferenceInDifferences, TwoWayFixedEffects])
+    @pytest.mark.parametrize("lag_cutoff", [0, 1])
+    @pytest.mark.parametrize("resample_units", [True, False])
+    def test_conley_candidates_are_refused(self, estimator_class, lag_cutoff, resample_units):
+        """Their Conley calendar would be the 0/1 post indicator, not the period."""
         panel = make_panel(n_units=20, n_periods=8, seed=52)
         rng = np.random.default_rng(0)
         coords = pd.DataFrame(
@@ -897,15 +929,14 @@ class TestConfigurations:
             }
         )
         panel = panel.merge(coords, on="unit")
-        estimator = DifferenceInDifferences(
+        estimator = estimator_class(
             vcov_type="conley",
             conley_coords=("lat", "lon"),
             conley_cutoff_km=500.0,
-            conley_lag_cutoff=1,
+            conley_lag_cutoff=lag_cutoff,
         )
-        result = run(panel, [estimator], n_simulations=5)
-        assert result.results["DifferenceInDifferences"][0].n_simulations == 5
-        assert "lat" in result.data_columns
+        with pytest.raises(ValueError, match="vcov_type='conley'"):
+            run(panel, [estimator], resample_units=resample_units)
 
     def test_fit_keyword_reaches_every_estimator(self):
         panel = make_panel(seed=53)
