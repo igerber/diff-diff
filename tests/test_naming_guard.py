@@ -1298,6 +1298,9 @@ CONSUMER_ALLOWLIST = {
     ("estimator", "docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2017-review.md"): (
         "RDD paper review's own use of the word - no CiC surface involved"
     ),
+    ("estimator", "docs/methodology/papers/coglianese-fang-2026-review.md"): (
+        "listing of the simulate_power `estimator` argument spelling - no CiC surface involved"
+    ),
     ("lambda_reg", "diff_diff/prep.py"): (
         "rank_control_units' own independent regularization param - not the "
         "removed SyntheticDiD kwarg (M-001)"
@@ -1393,6 +1396,10 @@ CONSUMER_ALLOWLIST = {
     ),
     ("time", "docs/methodology/papers/wooldridge-2023-review.md"): (
         "canonical calendar column prose in the shipped-API description, not the M-030 overload"
+    ),
+    ("time", "docs/methodology/papers/coglianese-fang-2026-review.md"): (
+        "canonical calendar column in the listing of existing placebo-diagnostic "
+        "argument spellings, not the M-030 overload"
     ),
     ("time", "diff_diff/lwdid_sensitivity.py"): (
         "internal refits pass the canonical calendar column through to "
