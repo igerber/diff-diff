@@ -1317,9 +1317,9 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         # Replicate-weight variance tracker: each _compute_se call under
         # a replicate design returns n_valid (number of replicate columns
         # that produced a finite estimate). The effective df_survey is
-        # min(n_valid) - 1 across all IF sites — matches the precedent in
-        # `diff_diff/efficient_did.py:1133-1135` and
-        # `diff_diff/triple_diff.py:676-686`. Under TSL (analytical),
+        # min(design df, min(n_valid) - 1) across all IF sites - the
+        # library-wide cap (`survey.cap_replicate_df`), applied here as ONE
+        # global minimum (see `_effective_df_survey`). Under TSL (analytical),
         # _compute_se returns None for n_valid and df_survey falls through
         # to resolved_survey.df_survey (= n_psu - n_strata).
         _replicate_n_valid_list: List[int] = []
@@ -8140,9 +8140,14 @@ def _effective_df_survey(
     ``min(resolved_survey.df_survey, min(n_valid) - 1)`` when both are
     defined.
 
-    Matches the precedent in ``diff_diff/efficient_did.py:1133-1135``
-    and ``diff_diff/triple_diff.py:676-686`` (both reduce, not
-    replace). Under TSL (analytical) or non-survey fits,
+    Same arithmetic as the library-wide rule
+    :func:`diff_diff.survey.cap_replicate_df` (dropped replicates cap the
+    design df, never replace it), with two dCDH-specific differences: it
+    returns ``None`` rather than the ``0`` sentinel when the df is
+    undefined (``_inference_df`` maps that to the sentinel), and it is ONE
+    global minimum over every IF site, so a late site with fewer than two
+    valid replicates turns every surface's inference NaN (fail-closed).
+    Under TSL (analytical) or non-survey fits,
     ``replicate_n_valid_list`` is empty and this falls through to the
     design-level df. Returns ``None`` when either the base df is
     undefined (rank ≤ 1) or the reduced df would be < 1 — preserving

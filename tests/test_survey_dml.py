@@ -1078,9 +1078,9 @@ class TestReplicateDesigns:
     def test_overall_df_caps_never_replaces(self, panel_replicate_df, monkeypatch):
         # The CAP-vs-REPLACE discriminator: a rank-deficient-but-usable
         # design (duplicated replicate columns -> QR rank 5, df_survey = 4)
-        # plus a spy n_valid with n_valid - 1 = 6 > 4. CS's replace
-        # convention would report df = 6; DMLDiD's min-cap must keep 4
-        # (deliberate documented divergence; REGISTRY DMLDiD Note).
+        # plus a spy n_valid with n_valid - 1 = 6 > 4. A replace rule
+        # would report df = 6; the library-wide cap must keep 4
+        # (REGISTRY Survey Data Support, replicate-df Note).
         from scipy import stats as _stats
 
         from diff_diff import survey as _survey_mod
@@ -1186,15 +1186,12 @@ class TestReplicateDesigns:
         with pytest.raises(NotImplementedError):
             panel_replicate.aggregate("total")
 
-    def test_es_df_pins_inherited_replace_convention(self, panel_replicate_df, monkeypatch):
-        # The SHARED event-study aggregation path REPLACES the design df
-        # with min(non_none effective dfs) (staggered_aggregation.py) —
-        # the inherited CS convention, NOT the fit-level min-cap. To
-        # discriminate, the design must be rank-deficient (df_survey = 4)
-        # with spy n_valid - 1 = 6 > 4: replace reports 6, a cap would
-        # report 4. Pinned at 6 so the follow-up flip to min-cap (TODO.md
-        # replicate-df min-cap row: every replace-style relay site) is detectable;
-        # latent in practice (n_valid == R on well-formed designs).
+    def test_es_df_caps_never_replaces(self, panel_replicate_df, monkeypatch):
+        # The SHARED event-study aggregation path (staggered_aggregation.py
+        # _se_from_psi + the min over horizons) CAPS the design df: a
+        # dropped replicate can only lower it. To discriminate, the design
+        # must be rank-deficient (df_survey = 4) with spy n_valid - 1 = 6
+        # > 4: the former replace rule reported 6, the cap keeps 4.
         from diff_diff import survey as _survey_mod
 
         df, rep_cols = panel_replicate_df
@@ -1211,14 +1208,14 @@ class TestReplicateDesigns:
 
         def reduce_n_valid(psi, resolved_arg):
             var, _n_valid = original(psi, resolved_arg)
-            return var, 7  # < R = 8 -> effective df 6 at the shared site
+            return var, 7  # < R = 8; n_valid - 1 = 6 exceeds the design df
 
         monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_n_valid)
         es = res.aggregate("event_study")
         df_vals = np.asarray(es.df, dtype=float)
         finite = df_vals[np.isfinite(df_vals)]
         assert finite.size > 0
-        assert np.all(finite == 6.0)  # inherited replace; a min-cap would give 4
+        assert np.all(finite == 4.0)  # the design df is the ceiling
 
     def test_replicate_fit_keeps_stratified_folds(self, panel_replicate):
         # Replicate designs have psu None by mutual exclusion -> the

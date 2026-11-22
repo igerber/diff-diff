@@ -677,15 +677,22 @@ class TripleDifference(
         # When survey design is active, use survey df (n_PSU - n_strata)
         if survey_metadata is not None and survey_metadata.df_survey is not None:
             df = survey_metadata.df_survey
-            # Override with effective replicate df only when replicates were dropped
+            # Dropped replicates can only LOWER the design df (never replace
+            # it): survey.reduced_replicate_df returns None unless
+            # min(df, n_valid - 1) is a strict reduction from >= 2 valid
+            # replicates.
             if (
                 hasattr(self, "_replicate_n_valid")
                 and self._replicate_n_valid is not None
                 and resolved_survey is not None
                 and self._replicate_n_valid < resolved_survey.n_replicates
             ):
-                df = self._replicate_n_valid - 1
-                survey_metadata.df_survey = self._replicate_n_valid - 1
+                from diff_diff.survey import reduced_replicate_df
+
+                _reduced_df = reduced_replicate_df(df, self._replicate_n_valid)
+                if _reduced_df is not None:
+                    df = _reduced_df
+                    survey_metadata.df_survey = _reduced_df
             # df <= 0 means insufficient rank for t-based inference
             if df is not None and df <= 0:
                 df = 0  # Forces NaN from t-distribution

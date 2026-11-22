@@ -103,10 +103,20 @@ class _EfficientAggregationMixin:
     five attributes declared below — this is the ``_EDiDKitAggregator``
     contract (``efficient_did_results.py``): the post-fit path constructs a
     fresh throwaway host per ``aggregate()`` call, so the ONE mutation these
-    methods perform (``_compute_survey_eif_se`` writes ``self._survey_df``
-    when a degenerate replicate design drops replicates) lands on the
+    methods perform (``_note_replicate_n_valid`` lowers ``self._survey_df``
+    when a replicate-variance call drops replicates) lands on the
     throwaway, never on the retained kit — preserving the aggregate()
     immutability contract.
+
+    That mutation is a monotone ``min`` and fires only on a strict reduction
+    from at least two valid replicates (``survey.reduced_replicate_df``): the
+    working df is never raised above the design df it was seeded from, an
+    undefined design df stays the ``0`` sentinel, and a statistic with fewer
+    than two valid replicates (NaN variance, NaN inference at any df) leaves
+    the df of every other statistic untouched. On the influence-function path
+    the design df never exceeds ``n_valid - 1`` for a finite EIF (QR rank <=
+    number of nonzero replicate columns), so in practice the working df stays
+    the design df.
     """
 
     # Typed host-attribute contract (mypy attr-defined; the
@@ -119,6 +129,23 @@ class _EfficientAggregationMixin:
     _unit_level_weights: Optional[np.ndarray]
 
     # -- Survey SE helpers ----------------------------------------------------
+
+    def _note_replicate_n_valid(self, n_valid: int) -> None:
+        """Lower the working df for a replicate-variance call that dropped replicates.
+
+        The base is the CURRENT working df, which was seeded from the unit-level
+        design df and is only ever lowered here - equivalent to capping the
+        design df, without re-reading ``df_survey`` (a QR on every access).
+        See the class docstring for the contract.
+        """
+        resolved = self._unit_resolved_survey
+        if resolved is None or n_valid >= resolved.n_replicates:
+            return
+        from diff_diff.survey import reduced_replicate_df
+
+        reduced = reduced_replicate_df(self._survey_df, n_valid)
+        if reduced is not None:
+            self._survey_df = reduced
 
     def _compute_survey_eif_se(self, eif_vals: np.ndarray) -> float:
         """Compute SE from EIF scores using Taylor Series Linearization.
@@ -139,9 +166,7 @@ class _EfficientAggregationMixin:
             variance, n_valid = compute_replicate_if_variance(
                 psi_scaled, self._unit_resolved_survey
             )
-            # Update survey df to reflect effective replicate count
-            if n_valid < self._unit_resolved_survey.n_replicates:
-                self._survey_df = n_valid - 1 if n_valid > 1 else None
+            self._note_replicate_n_valid(n_valid)
             return float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
 
         from diff_diff.survey import compute_survey_vcov
@@ -304,7 +329,10 @@ class _EfficientAggregationMixin:
             ):
                 from diff_diff.survey import compute_replicate_if_variance
 
-                variance, _ = compute_replicate_if_variance(psi_total, self._unit_resolved_survey)
+                variance, n_valid = compute_replicate_if_variance(
+                    psi_total, self._unit_resolved_survey
+                )
+                self._note_replicate_n_valid(n_valid)
             else:
                 from diff_diff.survey import compute_survey_if_variance
 
@@ -444,9 +472,10 @@ class _EfficientAggregationMixin:
                 ):
                     from diff_diff.survey import compute_replicate_if_variance
 
-                    variance, _ = compute_replicate_if_variance(
+                    variance, n_valid = compute_replicate_if_variance(
                         psi_total, self._unit_resolved_survey
                     )
+                    self._note_replicate_n_valid(n_valid)
                 else:
                     from diff_diff.survey import compute_survey_if_variance
 

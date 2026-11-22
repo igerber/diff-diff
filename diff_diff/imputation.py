@@ -690,7 +690,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
 
         # Survey degrees of freedom for t-distribution inference
         _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
-        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        # Replicate df: rank-deficient → NaN inference (dropped replicates cap
+        # the df at min(df, n_valid - 1) in the replicate-refit override)
         if _uses_replicate_imp and _survey_df is None:
             _survey_df = 0  # rank-deficient replicate → NaN inference
 

@@ -192,6 +192,7 @@ class _ContinuousDiDAggregationMixin:
                     if_es[uid] -= w * ee_control[k] / p_0 / n_total_gt
 
             # Compute SE: survey-aware TSL or standard sqrt(sum(IF^2))
+            es_df: Optional[int] = survey_df
             if unit_resolved_es is not None:
                 if unit_resolved_es.uses_replicate_variance:
                     from diff_diff.survey import compute_replicate_if_variance
@@ -200,6 +201,15 @@ class _ContinuousDiDAggregationMixin:
                     psi_es = unit_resolved_es.weights * if_es
                     variance, _nv = compute_replicate_if_variance(psi_es, unit_resolved_es)
                     es_se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+                    # Statistic-local df: a dropped replicate can only lower
+                    # the fit's working df for THIS horizon, never raise it
+                    # (survey.reduced_replicate_df; None = keep survey_df).
+                    if _nv < unit_resolved_es.n_replicates:
+                        from diff_diff.survey import reduced_replicate_df
+
+                        _reduced_df = reduced_replicate_df(survey_df, _nv)
+                        if _reduced_df is not None:
+                            es_df = _reduced_df
                 else:
                     X_ones_es = np.ones((n_units, 1))
                     tsl_scale_es = float(unit_resolved_es.weights.sum())
@@ -209,7 +219,7 @@ class _ContinuousDiDAggregationMixin:
             else:
                 es_se = float(np.sqrt(np.sum(if_es**2)))
 
-            t_stat, p_val, ci_es = safe_inference(info_e["effect"], es_se, self.alpha, df=survey_df)
+            t_stat, p_val, ci_es = safe_inference(info_e["effect"], es_se, self.alpha, df=es_df)
             info_e["se"] = es_se
             info_e["t_stat"] = t_stat
             info_e["p_value"] = p_val

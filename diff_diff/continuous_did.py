@@ -2097,7 +2097,12 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                     nonlocal _rep_n_valid
                     psi_scaled = _w_rep * if_vals
                     v, nv = compute_replicate_if_variance(psi_scaled, unit_resolved)
-                    _rep_n_valid = min(_rep_n_valid, nv)  # worst-case valid count
+                    # Worst-case valid count over statistics that HAVE a
+                    # variance. A statistic with fewer than two valid
+                    # replicates has a NaN variance (NaN inference at any df)
+                    # and must not change the df of the other statistics.
+                    if nv >= 2:
+                        _rep_n_valid = min(_rep_n_valid, nv)
                     return float(np.sqrt(max(v, 0.0))) if np.isfinite(v) else np.nan
 
                 overall_att_se = _rep_se(if_att_glob)
@@ -2139,16 +2144,21 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
 
         # Return unit-level survey df and resolved design for metadata recomputation
-        # Only override with n_valid-based df when replicates were actually dropped
+        # Dropped replicates can only LOWER the design df, never replace it
+        # (survey.reduced_replicate_df): an undefined design df stays None
+        # (mapped to the NaN-inference sentinel by the caller).
         if (
             resolved_survey is not None
             and hasattr(resolved_survey, "uses_replicate_variance")
             and resolved_survey.uses_replicate_variance
         ):
+            from diff_diff.survey import reduced_replicate_df
+
+            unit_df_survey = unit_resolved.df_survey
             if _rep_n_valid < unit_resolved.n_replicates:
-                unit_df_survey = _rep_n_valid - 1 if _rep_n_valid > 1 else None
-            else:
-                unit_df_survey = unit_resolved.df_survey
+                _reduced_df = reduced_replicate_df(unit_df_survey, _rep_n_valid)
+                if _reduced_df is not None:
+                    unit_df_survey = _reduced_df
         else:
             unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
 

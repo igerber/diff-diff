@@ -1833,7 +1833,11 @@ class _ImputationAggregationMixin:
         assert resolved_survey is not None
         survey_df_final = survey_df_seed
         if _n_valid_rep_imp < resolved_survey.n_replicates:
-            survey_df_final = _n_valid_rep_imp - 1 if _n_valid_rep_imp > 1 else 0
+            # Dropped replicates CAP the df at min(df, n_valid - 1); they never
+            # replace it (a rank-deficient replicate matrix has df < n_valid - 1).
+            from diff_diff.survey import cap_replicate_df
+
+            survey_df_final = cap_replicate_df(survey_df_seed, _n_valid_rep_imp)
 
         # Override event-study SEs from vcov diagonal
         for i, e in enumerate(_sorted_rel_times):

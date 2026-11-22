@@ -4900,11 +4900,18 @@ class LinearRegression:
                         _effective_survey_design,
                         weight_type=_fit_weight_type,
                     )
-                # Store effective replicate df only when replicates were dropped
+                # Dropped replicates can only LOWER the rank-based design df
+                # (survey.reduced_replicate_df); None = use the design df.
+                # An undefined design df therefore stays None whether or not a
+                # replicate dropped, and get_inference() takes its
+                # "undefined survey d.f." warning + NaN branch.
+                self._replicate_df = None
                 if _n_valid_rep < _effective_survey_design.n_replicates:
-                    self._replicate_df = _n_valid_rep - 1 if _n_valid_rep > 1 else None
-                else:
-                    self._replicate_df = None  # use rank-based df from design
+                    from diff_diff.survey import reduced_replicate_df
+
+                    self._replicate_df = reduced_replicate_df(
+                        _effective_survey_design.df_survey, _n_valid_rep
+                    )
             else:
                 from diff_diff.survey import compute_survey_vcov
 
