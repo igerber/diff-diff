@@ -1193,7 +1193,7 @@ class TestReplicateDesigns:
         # discriminate, the design must be rank-deficient (df_survey = 4)
         # with spy n_valid - 1 = 6 > 4: replace reports 6, a cap would
         # report 4. Pinned at 6 so the follow-up flip to min-cap (TODO.md
-        # CS-parity row: all five replace-style relay sites) is detectable;
+        # replicate-df min-cap row: every replace-style relay site) is detectable;
         # latent in practice (n_valid == R on well-formed designs).
         from diff_diff import survey as _survey_mod
 

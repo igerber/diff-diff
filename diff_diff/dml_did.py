@@ -3193,7 +3193,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # dropped replicates (n_valid < R). MIN-CAP, not CS's replace: the
         # QR-rank design df stays the ceiling (CS's replace convention can
         # RAISE df above the design df — anti-conservative; deliberate
-        # documented divergence, REGISTRY DMLDiD Note + CS-parity TODO row).
+        # documented divergence, REGISTRY DMLDiD Note + replicate-df min-cap TODO row).
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )

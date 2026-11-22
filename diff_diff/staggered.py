@@ -110,6 +110,170 @@ def _linear_regression(
     return beta, residuals
 
 
+def _scatter_per_gt_if(inf_info: Optional[Dict[str, Any]], n: int) -> Optional[np.ndarray]:
+    """Scatter a per-(g,t) influence payload into a length-``n`` vector.
+
+    Returns ``None`` when the payload is malformed: ``inf_info`` is ``None``,
+    lacks one of ``treated_idx`` / ``control_idx`` / ``treated_inf`` /
+    ``control_inf``, or carries an index outside ``[0, n)``. ``n`` is the
+    length of the design's index space (units on the panel path, observations
+    on the RCS path).
+    """
+    if (
+        inf_info is None
+        or "treated_inf" not in inf_info
+        or "control_inf" not in inf_info
+        or "treated_idx" not in inf_info
+        or "control_idx" not in inf_info
+    ):
+        return None
+    treated_idx = np.asarray(inf_info["treated_idx"])
+    control_idx = np.asarray(inf_info["control_idx"])
+    treated_inf = np.asarray(inf_info["treated_inf"])
+    control_inf = np.asarray(inf_info["control_inf"])
+    if (
+        treated_idx.size > 0
+        and (treated_idx.max(initial=-1) >= n or treated_idx.min(initial=0) < 0)
+    ) or (
+        control_idx.size > 0
+        and (control_idx.max(initial=-1) >= n or control_idx.min(initial=0) < 0)
+    ):
+        return None
+    # Index arrays are unique within each cell by construction at every
+    # producer (np.where on disjoint masks), so fancy += is exact — same
+    # scatter contract as staggered_aggregation._combined_if_fast, without
+    # np.add.at's unbuffered-ufunc overhead (runs once per (g,t) cell under
+    # a PSU or replicate design).
+    psi_per_index = np.zeros(n)
+    if treated_idx.size:
+        psi_per_index[treated_idx] += treated_inf
+    if control_idx.size:
+        psi_per_index[control_idx] += control_inf
+    return psi_per_index
+
+
+def _replicate_se_from_per_gt_if(
+    inf_info: Optional[Dict[str, Any]],
+    resolved_survey: "Any",
+) -> Tuple[float, int]:
+    """Replicate-weight SE for a single (g,t) ATT; returns ``(se, n_valid)``.
+
+    IF-reweighting (``compute_replicate_if_variance``) on the scattered cell
+    influence function - the same psi and the same variance routine the
+    aggregate ``_se_from_psi`` path consumes, so a cell's SE is coherent with
+    the overall / event-study / group SEs of the same fit.
+
+    Fail-closed contract (no fallback to the unit-level SE - under a replicate
+    design that would silently report a different estimator's variance):
+
+    * malformed payload or a non-finite influence value -> ``(NaN, 0)``;
+    * replicate variance non-finite or ``<= 0`` (e.g. a cell no replicate
+      column perturbs) -> NaN SE. This is stricter than the aggregate path,
+      which clamps a zero / negative variance to a ``0.0`` SE; inference is NaN
+      either way.
+    """
+    psi = _scatter_per_gt_if(inf_info, len(resolved_survey.weights))
+    if psi is None or not np.all(np.isfinite(psi)):
+        return float("nan"), 0
+    from diff_diff.survey import compute_replicate_if_variance
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        variance, n_valid = compute_replicate_if_variance(psi, resolved_survey)
+    if not np.isfinite(variance) or variance <= 0.0:
+        return float("nan"), int(n_valid)
+    return float(np.sqrt(variance)), int(n_valid)
+
+
+def _design_se_for_cell(
+    inf_info: Optional[Dict[str, Any]],
+    resolved_survey: "Any",
+    se_unit: float,
+    df: Optional[float],
+) -> Tuple[float, Optional[float]]:
+    """Per-(g,t) SE and inference df under the fit's survey design.
+
+    The single per-cell contract for every CS-family producer
+    (CallawaySantAnna's panel / RCS paths and the staggered TripleDifference
+    engine). ``se_unit`` is the producer's own unit-level SE and ``df`` the
+    fit's (sentinelled) survey df; returns the ``(se, df)`` the cell's
+    inference must use:
+
+    * **replicate design** -> the replicate IF variance of the cell's
+      influence function, with the CELL-LOCAL df
+      ``cap_replicate_df(df, n_valid)`` (``min(design df, n_valid - 1)``;
+      never written back to the fit's survey df);
+    * **PSU present** (explicit or synthesized from bare ``cluster=``) -> the
+      CR1 helper's 3-valued contract (float = use, NaN = propagate, ``None`` =
+      keep ``se_unit``); df unchanged;
+    * **otherwise** (no design, weights-only, strata-only, FPC-only) ->
+      ``(se_unit, df)`` unchanged: the full design enters the aggregate SEs
+      only on those lanes (REGISTRY CallawaySantAnna per-cell Note).
+    """
+    if resolved_survey is None:
+        return se_unit, df
+    if getattr(resolved_survey, "uses_replicate_variance", False):
+        from diff_diff.survey import cap_replicate_df
+
+        se_rep, n_valid = _replicate_se_from_per_gt_if(inf_info, resolved_survey)
+        return se_rep, cap_replicate_df(df, n_valid)
+    if getattr(resolved_survey, "psu", None) is not None and inf_info is not None:
+        se_cluster = _cluster_robust_se_from_per_gt_if(inf_info, resolved_survey)
+        if se_cluster is not None:
+            return se_cluster, df
+    return se_unit, df
+
+
+def _sentinelled_survey_df(precomputed: Any) -> Optional[float]:
+    """The fit's survey df for per-cell inference, with the replicate sentinel.
+
+    ``precomputed["df_survey"]``, except that a replicate design whose df is
+    undefined (QR rank <= 1) maps to ``0`` so ``safe_inference`` returns NaN
+    inference instead of falling back to the normal reference.
+    """
+    if precomputed is None:
+        return None
+    df_survey_val = precomputed.get("df_survey")
+    resolved = precomputed.get("resolved_survey_unit")
+    if (
+        df_survey_val is None
+        and resolved is not None
+        and getattr(resolved, "uses_replicate_variance", False)
+    ):
+        return 0
+    return df_survey_val
+
+
+def _safe_inference_batch_by_df(
+    effects: np.ndarray,
+    ses: np.ndarray,
+    cell_dfs: Sequence[Optional[float]],
+    alpha: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``safe_inference_batch`` with a per-cell df, grouped by distinct df.
+
+    Cells are never pooled onto another cell's df: a degenerate cell carrying
+    the ``0`` sentinel cannot NaN the inference of its batch neighbours. With
+    finite influence functions every cell of a design carries the same df, so
+    this is a single ``safe_inference_batch`` call.
+    """
+    n = len(effects)
+    t_stats = np.full(n, np.nan)
+    p_values = np.full(n, np.nan)
+    ci_lowers = np.full(n, np.nan)
+    ci_uppers = np.full(n, np.nan)
+    df_arr = np.array([np.nan if d is None else float(d) for d in cell_dfs], dtype=float)
+    none_mask = np.isnan(df_arr)
+    groups: List[Tuple[np.ndarray, Optional[float]]] = []
+    if np.any(none_mask):
+        groups.append((np.where(none_mask)[0], None))
+    for value in np.unique(df_arr[~none_mask]):
+        groups.append((np.where(df_arr == value)[0], float(value)))
+    for idx, df_value in groups:
+        t, p, lo, hi = safe_inference_batch(effects[idx], ses[idx], alpha=alpha, df=df_value)
+        t_stats[idx], p_values[idx], ci_lowers[idx], ci_uppers[idx] = t, p, lo, hi
+    return t_stats, p_values, ci_lowers, ci_uppers
+
+
 def _cluster_robust_se_from_per_gt_if(
     inf_info: Dict[str, Any],
     resolved_survey: "Any",
@@ -153,41 +317,20 @@ def _cluster_robust_se_from_per_gt_if(
       these cases the helper cannot evaluate the contract; caller falls
       back to the unit-level SE returned by the underlying estimation
       method (no PSU is in play, so unit-level is the documented default).
+    * **NaN (non-finite IF)** — the scattered influence function carries a
+      non-finite entry. ``_compute_stratified_psu_meat`` sums per PSU with a
+      NaN-skipping ``groupby(...).sum()``, so without this guard a partly-NaN
+      cell IF would yield a FINITE clustered SE while every aggregate over the
+      same IF is NaN.
     """
-    if (
-        inf_info is None
-        or "treated_inf" not in inf_info
-        or "control_inf" not in inf_info
-        or "treated_idx" not in inf_info
-        or "control_idx" not in inf_info
-    ):
-        return None
-    treated_idx = np.asarray(inf_info["treated_idx"])
-    control_idx = np.asarray(inf_info["control_idx"])
-    treated_inf = np.asarray(inf_info["treated_inf"])
-    control_inf = np.asarray(inf_info["control_inf"])
     psu_array = getattr(resolved_survey, "psu", None)
     if psu_array is None:
         return None
-    n = len(psu_array)
-    if (
-        treated_idx.size > 0
-        and (treated_idx.max(initial=-1) >= n or treated_idx.min(initial=0) < 0)
-    ) or (
-        control_idx.size > 0
-        and (control_idx.max(initial=-1) >= n or control_idx.min(initial=0) < 0)
-    ):
+    psi_per_index = _scatter_per_gt_if(inf_info, len(psu_array))
+    if psi_per_index is None:
         return None
-    # Index arrays are unique within each cell by construction at every
-    # producer (np.where on disjoint masks), so fancy += is exact — same
-    # scatter contract as staggered_aggregation._combined_if_fast, without
-    # np.add.at's unbuffered-ufunc overhead (runs once per (g,t) cell when
-    # cluster= is set).
-    psi_per_index = np.zeros(n)
-    if treated_idx.size:
-        psi_per_index[treated_idx] += treated_inf
-    if control_idx.size:
-        psi_per_index[control_idx] += control_inf
+    if not np.all(np.isfinite(psi_per_index)):
+        return float("nan")
     # Route through the shared survey helper so the per-cell variance
     # gets the same G/(G-1) finite-sample correction, PSU centering,
     # FPC handling, and lonely-PSU/G<2→NaN behavior as overall +
@@ -1239,6 +1382,10 @@ class CallawaySantAnna(
         atts = []
         ses = []
         task_keys = []
+        # Per-cell inference df (see _design_se_for_cell): the fit's
+        # sentinelled survey df, tightened cell-locally on replicate designs.
+        cell_dfs: List[Optional[float]] = []
+        df_survey_val = _sentinelled_survey_df(precomputed)
 
         for g, t, base_col, post_col, base_period_val in tasks:
             treated_mask = cohort_masks[g]
@@ -1363,43 +1510,28 @@ class CallawaySantAnna(
             }
             influence_func_info[(g, t)] = inf_info_gt
 
-            # Cluster-aware per-(g,t) SE: aggregate the per-(g,t) IF by
-            # PSU when a survey design (explicit OR synthesized from bare
-            # cluster=) provides one. Bit-equal to pre-PR when psu is None.
-            rsu_for_gt = precomputed.get("resolved_survey_unit")
-            if rsu_for_gt is not None and getattr(rsu_for_gt, "psu", None) is not None:
-                se_cluster = _cluster_robust_se_from_per_gt_if(inf_info_gt, rsu_for_gt)
-                # se_cluster is float (use), NaN (cluster-undefined, propagate),
-                # or None (malformed, keep unit-level). Per the helper's
-                # contract, NaN is a deliberate signal that the survey/PSU
-                # variance is unidentified (e.g., G<2, lonely-PSU removed
-                # all strata) — propagating NaN here causes safe_inference
-                # to NaN-out the full per-cell inference surface, which is
-                # the documented CS contract (feedback_no_silent_failures).
-                if se_cluster is not None:
-                    se = se_cluster
-                    group_time_effects[(g, t)]["se"] = se
+            # Design-aware per-(g,t) SE (see _design_se_for_cell): replicate
+            # designs -> replicate IF variance with a cell-local df; a PSU
+            # (explicit OR synthesized from bare cluster=) -> CR1 on the cell
+            # IF, where NaN is the deliberate "clustered variance
+            # unidentified" signal (e.g. G<2, lonely-PSU removed all strata)
+            # and propagates to NaN the cell's whole inference surface
+            # (feedback_no_silent_failures). Bit-equal to the unit-level SE
+            # on every other lane.
+            se, cell_df = _design_se_for_cell(
+                inf_info_gt, precomputed.get("resolved_survey_unit"), se, df_survey_val
+            )
+            group_time_effects[(g, t)]["se"] = se
 
             atts.append(att)
             ses.append(se)
+            cell_dfs.append(cell_df)
             task_keys.append((g, t))
 
-        # Batch inference for all (g,t) pairs at once
+        # Batch inference for all (g,t) pairs, each on its own df
         if task_keys:
-            df_survey_val = precomputed.get("df_survey")
-            # Guard: replicate design with undefined df → NaN inference
-            if (
-                df_survey_val is None
-                and precomputed.get("resolved_survey_unit") is not None
-                and hasattr(precomputed["resolved_survey_unit"], "uses_replicate_variance")
-                and precomputed["resolved_survey_unit"].uses_replicate_variance
-            ):
-                df_survey_val = 0
-            t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
-                np.array(atts),
-                np.array(ses),
-                alpha=self.alpha,
-                df=df_survey_val,
+            t_stats, p_values, ci_lowers, ci_uppers = _safe_inference_batch_by_df(
+                np.array(atts), np.array(ses), cell_dfs, self.alpha
             )
             for idx, key in enumerate(task_keys):
                 group_time_effects[key]["t_stat"] = float(t_stats[idx])
@@ -1447,6 +1579,10 @@ class CallawaySantAnna(
         atts = []
         ses = []
         task_keys = []
+        # Per-cell inference df (see _design_se_for_cell): the fit's
+        # sentinelled survey df, tightened cell-locally on replicate designs.
+        cell_dfs: List[Optional[float]] = []
+        df_survey_val = _sentinelled_survey_df(precomputed)
         n_nan_cells = 0
         skipped_missing_period: List[Tuple] = []
         skipped_empty_cell: List[Tuple] = []
@@ -1792,20 +1928,20 @@ class CallawaySantAnna(
                 }
                 influence_func_info[(g, t)] = inf_info_gt
 
-                # Cluster-aware per-(g,t) SE — see same pattern in
-                # _compute_all_att_gt_vectorized.
-                rsu_for_gt = precomputed.get("resolved_survey_unit")
-                if rsu_for_gt is not None and getattr(rsu_for_gt, "psu", None) is not None:
-                    se_cluster = _cluster_robust_se_from_per_gt_if(inf_info_gt, rsu_for_gt)
-                    # Propagate NaN (cluster-undefined) per the helper's
-                    # contract — see _compute_all_att_gt_vectorized site
-                    # for the same pattern.
-                    if se_cluster is not None:
-                        se = se_cluster
-                        group_time_effects[(g, t)]["se"] = se
+                # Design-aware per-(g,t) SE — same contract as
+                # _compute_all_att_gt_vectorized. NOTE: this producer is
+                # routed only when the fit has NO survey design (fit()'s
+                # `not has_survey` gate; bare cluster= also resolves one), so
+                # today the call is a pass-through. It is kept so the per-cell
+                # contract holds if that routing gate is ever lifted.
+                se, cell_df = _design_se_for_cell(
+                    inf_info_gt, precomputed.get("resolved_survey_unit"), se, df_survey_val
+                )
+                group_time_effects[(g, t)]["se"] = se
 
                 atts.append(att)
                 ses.append(se)
+                cell_dfs.append(cell_df)
                 task_keys.append((g, t))
 
         if n_nan_cells > 0:
@@ -1816,21 +1952,10 @@ class CallawaySantAnna(
                 stacklevel=2,
             )
 
-        # Batch inference
+        # Batch inference, each cell on its own df
         if task_keys:
-            # Use survey df for replicate designs (propagated from precomputed)
-            _ipw_dr_df = precomputed.get("df_survey") if precomputed is not None else None
-            # Guard: replicate design with undefined df → NaN inference
-            if (
-                _ipw_dr_df is None
-                and precomputed is not None
-                and precomputed.get("resolved_survey_unit") is not None
-                and hasattr(precomputed["resolved_survey_unit"], "uses_replicate_variance")
-                and precomputed["resolved_survey_unit"].uses_replicate_variance
-            ):
-                _ipw_dr_df = 0
-            t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
-                np.array(atts), np.array(ses), alpha=self.alpha, df=_ipw_dr_df
+            t_stats, p_values, ci_lowers, ci_uppers = _safe_inference_batch_by_df(
+                np.array(atts), np.array(ses), cell_dfs, self.alpha
             )
             for idx, key in enumerate(task_keys):
                 group_time_effects[key]["t_stat"] = float(t_stats[idx])
@@ -2432,31 +2557,20 @@ class CallawaySantAnna(
                             ),
                         )
                     else:
-                        # Cluster-aware per-(g,t) SE on the RCS path. RC
-                        # IF indices are per-obs (vs per-unit on the panel
-                        # path); the corresponding PSU array is
-                        # ``resolved_survey.psu`` (length n_obs), not
-                        # ``resolved_survey_unit.psu``. Bit-equal to pre-PR
-                        # when psu is None.
+                        # Design-aware per-(g,t) SE on the RCS path (see
+                        # _design_se_for_cell). RC IF indices are per-obs
+                        # (vs per-unit on the panel path); the matching
+                        # design is the per-obs ``resolved_survey`` (length
+                        # n_obs). Bit-equal to the unit-level SE when the
+                        # design has neither a PSU nor replicate weights.
                         rs_for_gt = precomputed.get("resolved_survey") if precomputed else None
-                        if (
-                            rs_for_gt is not None
-                            and getattr(rs_for_gt, "psu", None) is not None
-                            and inf_info is not None
-                        ):
-                            se_cluster = _cluster_robust_se_from_per_gt_if(inf_info, rs_for_gt)
-                            # Propagate NaN (cluster-undefined) per the
-                            # helper's contract — see
-                            # _compute_all_att_gt_vectorized for the
-                            # pattern.
-                            if se_cluster is not None:
-                                se_gt = se_cluster
+                        se_gt, cell_df = _design_se_for_cell(inf_info, rs_for_gt, se_gt, df_survey)
 
                         t_stat, p_val, ci = safe_inference(
                             att_gt,
                             se_gt,
                             alpha=self.alpha,
-                            df=df_survey,
+                            df=cell_df,
                         )
 
                         gte_entry = {
@@ -2542,31 +2656,25 @@ class CallawaySantAnna(
                             ),
                         )
                     else:
-                        # Cluster-aware per-(g,t) SE: when a survey PSU is
-                        # in play (explicit OR synthesized from bare
-                        # cluster=), aggregate the per-(g,t) IF by PSU
-                        # and use CR1 Liang-Zeger SE instead of the
-                        # unit-level diff-of-means SE returned by OR/IPW/DR.
-                        # Preserves bit-equality when psu is None.
-                        rsu_for_gt = precomputed.get("resolved_survey_unit")
-                        if (
-                            rsu_for_gt is not None
-                            and getattr(rsu_for_gt, "psu", None) is not None
-                            and inf_info is not None
-                        ):
-                            se_cluster = _cluster_robust_se_from_per_gt_if(inf_info, rsu_for_gt)
-                            # Propagate NaN (cluster-undefined) per the
-                            # helper's contract — see
-                            # _compute_all_att_gt_vectorized for the
-                            # pattern.
-                            if se_cluster is not None:
-                                se_gt = se_cluster
+                        # Design-aware per-(g,t) SE (see _design_se_for_cell):
+                        # replicate designs -> replicate IF variance with a
+                        # cell-local df; a survey PSU (explicit OR
+                        # synthesized from bare cluster=) -> CR1 Liang-Zeger
+                        # on the cell IF instead of the unit-level SE
+                        # returned by OR/IPW/DR. Bit-equal to that
+                        # unit-level SE on every other lane.
+                        se_gt, cell_df = _design_se_for_cell(
+                            inf_info,
+                            precomputed.get("resolved_survey_unit"),
+                            se_gt,
+                            df_survey,
+                        )
 
                         t_stat, p_val, ci = safe_inference(
                             att_gt,
                             se_gt,
                             alpha=self.alpha,
-                            df=df_survey,
+                            df=cell_df,
                         )
 
                         gte_entry = {

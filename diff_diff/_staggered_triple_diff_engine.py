@@ -36,7 +36,7 @@ from diff_diff.linalg import (
     _rank_guarded_inv,
     solve_logit,
 )
-from diff_diff.staggered import _build_aggregation_kit
+from diff_diff.staggered import _build_aggregation_kit, _design_se_for_cell
 from diff_diff.triple_diff_results import TripleDifferenceResults
 from diff_diff.utils import safe_inference, validate_anticipation
 
@@ -463,13 +463,6 @@ class _StaggeredTripleDiffEngineMixin:
                     if len(gc_labels) == 1:
                         se_gt = float(np.sqrt(np.sum(inf_gmm**2) / size_gt**2))
 
-                    if not np.isfinite(se_gt) or se_gt <= 0:
-                        se_gt = np.nan
-
-                    t_stat, p_value, conf_int = safe_inference(
-                        att_gmm, se_gt, alpha=self.alpha, df=df_survey
-                    )
-
                     # Rescale IF for mixin compatibility.
                     # R stores IF * (n/size_gt) in inf_func_mat, then uses
                     # SE = sqrt(sum(IF^2)/n^2) = sqrt(sum(psi^2)) with psi = IF/n.
@@ -488,6 +481,36 @@ class _StaggeredTripleDiffEngineMixin:
                     control_idx = np.where(nonzero_mask)[0]
                     control_inf = inf_gmm_scaled[control_idx]
                     n_control = int(np.sum(nonzero_mask))
+                    inf_info_gt = {
+                        "treated_idx": treated_idx,
+                        "control_idx": control_idx,
+                        "treated_inf": treated_inf,
+                        "control_inf": control_inf,
+                    }
+
+                    # Design-aware per-(g,t) SE - the CallawaySantAnna per-cell
+                    # contract (staggered._design_se_for_cell). Under a
+                    # replicate or PSU design the cell SE comes from the
+                    # GMM-combined IF (the psi the aggregates consume) through
+                    # the design variance: replicate IF variance with a
+                    # cell-local df, or CR1 on the PSU totals (NaN = clustered
+                    # variance unidentified, propagated). Every other fit
+                    # keeps `se_gt` bit-identically - R's GMM formula for
+                    # multi-comparison-group cells, sqrt(sum(IF^2))/size_gt
+                    # for single-comparison-group ones.
+                    se_gt, cell_df = _design_se_for_cell(
+                        inf_info_gt,
+                        precomputed.get("resolved_survey_unit"),
+                        se_gt,
+                        df_survey,
+                    )
+
+                    if not np.isfinite(se_gt) or se_gt <= 0:
+                        se_gt = np.nan
+
+                    t_stat, p_value, conf_int = safe_inference(
+                        att_gmm, se_gt, alpha=self.alpha, df=cell_df
+                    )
 
                     group_time_effects[(g, t)] = {
                         "effect": att_gmm,
@@ -498,12 +521,7 @@ class _StaggeredTripleDiffEngineMixin:
                         "n_treated": n_treated,
                         "n_control": n_control,
                     }
-                    influence_func_info[(g, t)] = {
-                        "treated_idx": treated_idx,
-                        "control_idx": control_idx,
-                        "treated_inf": treated_inf,
-                        "control_inf": control_inf,
-                    }
+                    influence_func_info[(g, t)] = inf_info_gt
                     comparison_group_counts[(g, t)] = len(gc_labels)
                     gmm_weights_store[(g, t)] = dict(zip(gc_labels, gmm_w.tolist()))
 

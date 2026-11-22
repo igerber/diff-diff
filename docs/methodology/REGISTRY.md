@@ -1362,7 +1362,7 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - **Note (deviation from R):** Panel DR control augmentation is normalized by treated mass (`sw_t_sum` or `n_t`) rather than control IPW mass (`sum(w_cont)`). R's `DRDID::drdid_panel` uses `mean(w.cont)` as the control normalizer. Both are consistent asymptotically (under correct model specification, `E[w_cont] = E[D]` so the normalizers converge), but they differ in finite samples when IPW reweighting doesn't perfectly balance. The treated-mass normalization is simpler and matches the `did::att_gt` convention where ATT is defined per treated unit. Aligning to `DRDID::drdid_panel`'s exact `w.cont` normalization is deferred.
 - **Note:** PS nuisance IF corrections follow DRDID's M-estimation convention: `asy_lin_rep_psi` is computed on O(1) psi scale (matching R's `asy.lin.rep.ps = score %*% Hessian.ps`), then the correction `asy_lin_rep_psi @ M2` is converted to the library's O(1/n) phi convention via a single `/n` division. OR corrections use the same phi-scale pattern via `solve(X'WX)` (unnormalized Hessian).
 - **Note:** CallawaySantAnna panel reg+covariates per-cell IF (survey AND unweighted) carries `DRDID::reg_did_panel`'s full OLS estimation-effect term (v3.7). The treated IF is unchanged: `inf_treated_i = (sw_i/sum(sw_treated)) * (resid_i - ATT)` (unweighted collapse `(resid-ATT)/n_t`). The control IF is `inf_control_i = -(sw_i * wls_resid_i) * proj_i` where `proj_i = 1/sum(sw_control) + (x_i - x̄_c)' G^{-1} (x̄_t - x̄_c)` with `G` the centered (weighted) control Gram and `x̄_t`/`x̄_c` the (weighted) treated/control covariate means — algebraically identical to R's `asy.lin.rep.ols %*% M1 / mean(w.treat)` but evaluated in the centered basis, which is offset-invariant (the raw Gram squares the design's conditioning; a large constant covariate offset would otherwise push the equilibrated rank check below threshold and silently truncate a genuine direction). The intercept-only collapse is exactly `-resid_c/n_c`. HISTORY: the pre-v3.7 IF used the raw-residual plug-in (`-sw_c_norm * wls_resid_i`), documented at the time as "asymptotically valid but may be conservative" — that rationale was WRONG: the omitted term is mean-zero (WLS orthogonality), which is why point estimates always matched R at ~1e-11, but its variance contribution is first-order, leaving per-cell SEs 4-13% and aggregated SEs 3-20% from R, and ANTI-conservative on some fixtures (0.958x on the two-period golden). Per-cell parity vs R goldens is now ~5e-12 (`tests/test_csdid_ported.py`, `tests/test_methodology_callaway.py::TestDRDIDPanelIFParity`). SEs pass weight-scale-invariance tests (only weight ratios enter every term).
-- **Note (deviation from R):** Per-cell ATT(g,t) SEs under survey weights use influence-function-based variance (matching R's `did::att_gt` analytical SE path) rather than full Taylor-series linearization. When strata/PSU/FPC are present, analytical aggregated SEs (`n_bootstrap=0`) use `compute_survey_if_variance()` on the combined IF/WIF; bootstrap aggregated SEs (`n_bootstrap>0`) use PSU-level multiplier weights.
+- **Note (deviation from R):** Per-cell ATT(g,t) SEs under a survey design are computed from the cell's influence function (the same psi the aggregates consume), by lane (one dispatch, `staggered._design_se_for_cell`): (a) **weights-only, strata-only and FPC-only** designs use the weighted IF sqrt-sum `sqrt(sum(psi^2))` (matching R's `did::att_gt` analytical SE path rather than full Taylor-series linearization - on these lanes the full design enters the aggregated SEs only); (b) a **PSU** (explicit `SurveyDesign(psu=...)` or synthesized from bare `cluster=`) uses `compute_survey_if_variance()` on the cell IF - CR1 on the PSU totals, with strata/FPC when declared; (c) **replicate-weight** designs use `compute_replicate_if_variance()` on the cell IF, with the CELL-LOCAL inference df `min(df_survey, n_valid - 1)` (`survey.cap_replicate_df`; never written back to `survey_metadata.df_survey`; an undefined design df - QR rank <= 1 - gives NaN inference). R's `did` has no replicate-weight support, so (c) is a library extension; on a delete-one-PSU JK1 design (c) equals (b) on the same PSUs exactly (algebraic identity, pinned by `tests/test_per_cell_design_se.py`). Fail-closed rules on (b)/(c): a cell IF with a non-finite entry gives a NaN SE (the PSU variance routine sums per PSU with NaN-skipping, so without the guard it would report a finite SE); under (c) a zero, negative or non-finite replicate variance (e.g. a cell no replicate column perturbs) gives a NaN SE - stricter than the aggregate path, which clamps a zero or negative variance to a `0.0` SE (a NaN variance is NaN on both); inference is NaN either way. Before this convention (through 4.0.0) lane (c) reported the lane-(a) SE, so a replicate-design cell's SE/p-value/CI ignored the design while the aggregates on the same fit honored it. Aggregated SEs: when strata/PSU/FPC are present, analytical aggregated SEs (`n_bootstrap=0`) use `compute_survey_if_variance()` on the combined IF/WIF, and replicate designs use `compute_replicate_if_variance()` on it; bootstrap aggregated SEs (`n_bootstrap>0`) use PSU-level multiplier weights (replicate x bootstrap is rejected).
 
 - **Note:** Repeated cross-sections (`panel=False`, Phase 7b): supports surveys like BRFSS, ACS annual, and CPS monthly where units are not followed over time. Uses cross-sectional DRDID (Sant'Anna & Zhao 2020, Section 4): `reg` matches `DRDID::reg_did_rc` (Eq 2.2), `dr` matches `DRDID::drdid_rc` (locally efficient, Eq 3.3+3.4 with 4 OLS fits), `ipw` matches `DRDID::std_ipw_did_rc`. Per-observation influence functions instead of per-unit. All three estimation methods support covariates and survey weights.
 - **Note:** Panel and RCS influence functions use the library-wide `phi_i = psi_i / n` convention (SE = `sqrt(sum(phi^2))`, algebraically equivalent to R's `sd(psi)*sqrt(n-1)/n`). Leading IF terms are computed on psi scale and divided by n; PS nuisance corrections are computed on psi scale (`score @ solve(Hessian)`) with a single `/n` conversion to phi.
@@ -3366,11 +3366,13 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   flip, along with the inherited replace-style event-study/group
   aggregation sites in shared code (latent — they fire only when
   `n_valid < R`) and the staggered-DDD engine twins, is tracked in the
-  TODO.md CS-parity row. `df_survey is None` (rank ≤ 1) → NaN inference
-  (df=0 sentinel local to `safe_inference`; `survey_metadata.df_survey`
-  keeps `None`). PER-CELL replicate SEs EXCEED CS's per-cell convention
-  (CS leaves per-cell SEs on the weighted sqrt-sum under replicates) —
-  a deliberate documented divergence, same TODO row. Degenerate cells
+  TODO.md replicate-df min-cap row. `df_survey is None` (rank ≤ 1) → NaN
+  inference (df=0 sentinel local to `safe_inference`;
+  `survey_metadata.df_survey` keeps `None`). PER-CELL replicate SEs use
+  the same IF-reweighting convention as CallawaySantAnna's replicate lane
+  (CallawaySantAnna per-cell Note; CS's cells cap their df through
+  `survey.cap_replicate_df`, the same `min(df_survey, n_valid − 1)`
+  inference outcome as the inline rule here). Degenerate cells
   (zero or non-finite replicate variance, e.g. a cell no replicate
   column perturbs) fail closed to NaN inference PER-CELL — stricter than
   the shared aggregate path, which clamps negatives and can report a 0.0
@@ -4577,9 +4579,11 @@ confidence bands (sup-t) for event study.
   treated/control IF components, PS correction via logistic Hessian and score
   function, hessian = (X'WX)^{-1} * n_pair. Three-DiD IF combination weights
   use `w_j = n_cell / n_pair_j` (matching R's att_dr). GMM Omega estimated via
-  sample covariance (ddof=1). Per-(g,t) SE uses R's GMM formula
+  sample covariance (ddof=1). On fits WITHOUT a PSU or replicate-weight
+  survey design, the per-(g,t) SE uses R's GMM formula
   `sqrt(1 / (n * sum(Omega_inv)))` for multiple comparison groups, or
-  `sqrt(sum(IF^2) / n^2)` for single comparison group.
+  `sqrt(sum(IF^2) / n^2)` for single comparison group; under a PSU or
+  replicate design it is design-based (see the survey Note below).
 - **Deviation from R:** Propensity scores are clipped to `[pscore_trim, 1-pscore_trim]`
   (default 0.01). R's `triplediff` uses hard exclusion (`keep_ps`) for control units
   with `pscore >= 0.995` but does not apply a lower bound. The soft-clipping approach
@@ -4588,14 +4592,32 @@ confidence bands (sup-t) for event study.
 - **Note:** On the surviving staggered surface `cluster=` raises (see the
   TripleDifference section); the removed class accepted it without wiring it to
   the analytical SE computation. The multiplier bootstrap provides unit-level
-  clustering. Full cluster-robust analytical SEs are deferred.
+  clustering. Cluster-robust analytical SEs through the bare `cluster=`
+  parameter are deferred; a PSU declared through
+  `survey_design=SurveyDesign(psu=...)` IS honored analytically, per cell and
+  in aggregate (next Note).
 - **Note:** Full survey design support (pweight only). Survey weights enter
   propensity score estimation (weighted IRLS), outcome regression (WLS), and
   Riesz representer computation. IF combination weights (w1/w2/w3) use
   survey-weighted cell sizes. Aggregated SEs use `compute_survey_if_variance()`
-  (TSL) or `compute_replicate_if_variance()` (replicate weights). Bootstrap
-  uses PSU-level multiplier weights. The R `triplediff` package does not
-  support survey weights.
+  (TSL) or `compute_replicate_if_variance()` (replicate weights). Per-(g,t)
+  SEs follow the CallawaySantAnna per-cell contract
+  (`staggered._design_se_for_cell`), applied to the GMM-combined influence
+  function - the psi the aggregates consume - for single- and
+  multi-comparison-group cells alike: a PSU design uses
+  `compute_survey_if_variance()` on the cell IF (CR1 on PSU totals; an
+  unidentified clustered variance, e.g. a single PSU, propagates as a NaN
+  SE), a replicate design uses `compute_replicate_if_variance()` with the
+  cell-local df `min(df_survey, n_valid - 1)`. Weights-only, strata-only and
+  FPC-only designs keep the non-design per-(g,t) formulas above (the full
+  design enters the aggregated SEs only). Fail-closed rules match
+  CallawaySantAnna: a non-finite cell IF, or a zero / negative / non-finite
+  replicate variance, gives a NaN SE where the aggregate path clamps a zero
+  or negative variance to `0.0`. Through 4.0.0 the per-(g,t) SE ignored PSU
+  and replicate designs (it stayed on the non-design formulas while the
+  aggregates were design-based). Bootstrap uses PSU-level multiplier
+  weights. The R `triplediff` package does not support survey weights, so the
+  design-based per-(g,t) SE is a library extension.
 
 *Edge cases:*
 - Single comparison group: GMM reduces to w=[1], no matrix inversion
@@ -7916,9 +7938,13 @@ ContinuousDiD, EfficientDiD):
 
 - **Formula**: `V_design = sum_h (1-f_h) * (n_h/(n_h-1)) * sum_j (psi_hj - psi_h_bar)^2`
   where `psi_hj = sum_{i in PSU j} psi_i` and `psi_i` is the combined IF (standard + WIF).
-- **Note:** Per-(g,t) cell SEs use the simpler IF-based formula `sqrt(sum(psi^2))` which
-  already incorporates survey weights. Only aggregated SEs (overall, event study, group)
-  use the full design-based variance.
+- **Note:** Per-(g,t) cell SEs follow a three-lane convention on the cell's own IF
+  (CallawaySantAnna per-cell survey Note, `staggered._design_se_for_cell`): weights-only,
+  strata-only and FPC-only designs use the IF sqrt-sum `sqrt(sum(psi^2))`, which already
+  incorporates survey weights - on those lanes only the aggregated SEs (overall, event
+  study, group) use the full design-based variance; a declared PSU uses the design
+  variance above on the cell IF; a replicate-weight design uses the replicate IF
+  variance with the cell-local df `min(df_survey, n_valid - 1)`.
 
 **TROP Cross-Classified Strata**:
 
@@ -7993,9 +8019,11 @@ variance from the distribution of replicate estimates.
   t-based inference.
 - **Note:** Replicate-weight support matrix (13 of 20 public estimators):
   - **Supported**: CallawaySantAnna (reg/ipw/dr with or without covariates,
-    no bootstrap; IF-based replicate variance is covariate-agnostic),
+    no bootstrap; IF-based replicate variance is covariate-agnostic, PER-CELL
+    and aggregate),
     ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
-    TripleDifference (all methods; staggered mode IF-based),
+    TripleDifference (all methods; staggered mode IF-based, per-cell and
+    aggregate),
     DifferenceInDifferences (no-absorb via LinearRegression dispatch,
     absorb via estimator-level refit), the TwoWayFixedEffects event-study
     mode (`spec="pooled"` via `compute_replicate_vcov`, `spec="within"` via
@@ -8008,7 +8036,7 @@ variance from the distribution of replicate estimates.
     multi-horizon and placebo paths; replicate + `n_bootstrap > 0` rejected
     — see the ChaisemartinDHaultfoeuille Notes for the allocator contract),
     DMLDiD (IF-reweighting on the augmented cross-fitted scores, PER-CELL
-    and aggregate — exceeds CS's per-cell convention; replicate +
+    and aggregate; replicate +
     `cluster=` and replicate + bootstrap rejected — see the DMLDiD
     replicate Note)
   - **Rejected with NotImplementedError**: SyntheticDiD, TROP
