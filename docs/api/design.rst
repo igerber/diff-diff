@@ -23,9 +23,11 @@ estimated at any point: pass pre-treatment data only, or pass ``first_treat`` so
 that every period from the earliest real adoption onward is dropped.
 
 Estimators are reported in the order you pass them and are never ranked. An
-estimator whose no-effect rejection rate is above the nominal level, or that
-loses more than 10% of its replicates, fails the size check; its power is not
-meaningful and no minimum detectable effect is reported for it.
+estimator fails the size check when its no-effect rejection rate is above
+``alpha + 1.96 * sqrt(alpha * (1 - alpha) / R)`` - the nominal level plus a Monte
+Carlo allowance for the ``R`` replicates scored - or when it loses more than 10%
+of its replicates. Its power is then not meaningful and no minimum detectable
+effect is reported for it.
 
 The methodology, its sources and the choices that have no paper source are in
 the Methodology Registry under ``DesignDiagnosis``.
