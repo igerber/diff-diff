@@ -2314,55 +2314,17 @@ def _design_checks(
         except (KeyError, ValueError) as exc:
             problems["data_sha256"] = f"unavailable: {exc}"
 
-        absent = [column for column in (unit, time) if column not in data.columns]
-        if absent:
-            requested = timing if (first_treat is not None or treatment is not None) else ()
-            for item in ("n_units", "is_balanced") + requested:
-                problems[item] = f"column(s) {absent} not in data"
-        else:
-            n_units = int(data[unit].nunique())
-            periods = pd.unique(data[time])
-            realized["n_units"] = n_units
-            realized["is_balanced"] = bool(
-                not data.duplicated([unit, time]).any() and len(data) == n_units * len(periods)
+        requested = timing if (first_treat is not None or treatment is not None) else ()
+        try:
+            _realized_design(
+                data, unit, time, first_treat, treatment, post, requested, realized, problems
             )
-            if first_treat is not None:
-                problem, values = _realized_first_treat(data, unit, first_treat)
-                if problem is not None:
-                    for item in timing:
-                        problems[item] = problem
-                else:
-                    realized_cohorts = sorted(set(values))
-                    realized["n_treated"] = len(values)
-                    realized["n_cohorts"] = len(realized_cohorts)
-                    try:
-                        realized["n_post_by_cohort"] = [
-                            int(np.sum(periods >= cohort)) for cohort in realized_cohorts
-                        ]
-                    except TypeError:
-                        problems["n_post_by_cohort"] = (
-                            f"'{time}' cannot be compared with '{first_treat}'"
-                        )
-            elif treatment is not None:
-                if treatment not in data.columns:
-                    problems["n_treated"] = problems["n_cohorts"] = (
-                        f"column {treatment!r} not in data"
-                    )
-                elif (data.groupby(unit)[treatment].nunique(dropna=False) > 1).any():
-                    problems["n_treated"] = problems["n_cohorts"] = "varies within unit"
-                else:
-                    n_treated = int((data.groupby(unit)[treatment].first() == 1).sum())
-                    realized["n_treated"] = n_treated
-                    realized["n_cohorts"] = 1 if n_treated else 0
-                if post is not None:
-                    if post not in data.columns:
-                        problems["n_post_by_cohort"] = f"column {post!r} not in data"
-                    elif (data.groupby(time)[post].nunique(dropna=False) > 1).any():
-                        problems["n_post_by_cohort"] = "varies within period"
-                    else:
-                        realized["n_post_by_cohort"] = [
-                            int((data.groupby(time)[post].first() == 1).sum())
-                        ]
+        except (KeyError, TypeError, ValueError) as exc:
+            # reconcile() does not raise because of what the analysis frame
+            # looks like: a check that could not be read is a deviation.
+            for item in ("n_units", "is_balanced") + requested:
+                if item not in realized:
+                    problems.setdefault(item, f"could not be read: {exc}")
 
     rows_out = []
     for item, value in locked.items():
@@ -2375,12 +2337,94 @@ def _design_checks(
     return rows_out
 
 
+def _column_problem(data: pd.DataFrame, column: Any) -> Optional[str]:
+    """Why ``column`` cannot be read from ``data``, or None when it can."""
+    count = sum(1 for label in data.columns if label is column or label == column)
+    if count == 0:
+        return f"column {column!r} not in data"
+    if count > 1:
+        return f"column label {column!r} appears {count} times in data"
+    return None
+
+
+def _realized_design(
+    data: pd.DataFrame,
+    unit: str,
+    time: str,
+    first_treat: Optional[str],
+    treatment: Optional[str],
+    post: Optional[str],
+    requested: Tuple[str, ...],
+    realized: Dict[str, Any],
+    problems: Dict[str, str],
+) -> None:
+    """Read the realized design from the analysis frame into ``realized``.
+
+    Every column that is read must be present exactly once and, for the unit
+    and period identifiers, complete: a row whose unit or period is missing
+    cannot be placed, so the unit count, the balance and the timing are then
+    reported as deviations and never as matches.
+    """
+    panel_items = ("n_units", "is_balanced") + requested
+    unreadable = [text for text in (_column_problem(data, c) for c in (unit, time)) if text]
+    if unreadable:
+        for item in panel_items:
+            problems[item] = "; ".join(unreadable)
+        return
+    incomplete = [column for column in (unit, time) if data[column].isna().any()]
+    if incomplete:
+        for item in panel_items:
+            problems[item] = f"missing values in column(s) {incomplete}"
+        return
+
+    n_units = int(data[unit].nunique())
+    periods = pd.unique(data[time])
+    realized["n_units"] = n_units
+    realized["is_balanced"] = bool(
+        not data.duplicated([unit, time]).any() and len(data) == n_units * len(periods)
+    )
+    if first_treat is not None:
+        problem, values = _realized_first_treat(data, unit, first_treat)
+        if problem is not None:
+            for item in requested:
+                problems[item] = problem
+            return
+        realized_cohorts = sorted(set(values))
+        realized["n_treated"] = len(values)
+        realized["n_cohorts"] = len(realized_cohorts)
+        try:
+            realized["n_post_by_cohort"] = [
+                int(np.sum(periods >= cohort)) for cohort in realized_cohorts
+            ]
+        except TypeError:
+            problems["n_post_by_cohort"] = f"'{time}' cannot be compared with '{first_treat}'"
+    elif treatment is not None:
+        problem = _column_problem(data, treatment)
+        if problem is not None:
+            problems["n_treated"] = problems["n_cohorts"] = problem
+        elif (data.groupby(unit)[treatment].nunique(dropna=False) > 1).any():
+            problems["n_treated"] = problems["n_cohorts"] = "varies within unit"
+        else:
+            n_treated = int((data.groupby(unit)[treatment].first() == 1).sum())
+            realized["n_treated"] = n_treated
+            realized["n_cohorts"] = 1 if n_treated else 0
+        if post is not None:
+            problem = _column_problem(data, post)
+            if problem is not None:
+                problems["n_post_by_cohort"] = problem
+            elif (data.groupby(time)[post].nunique(dropna=False) > 1).any():
+                problems["n_post_by_cohort"] = "varies within period"
+            else:
+                realized["n_post_by_cohort"] = [int((data.groupby(time)[post].first() == 1).sum())]
+
+
 def _realized_first_treat(
     data: pd.DataFrame, unit: str, first_treat: str
 ) -> Tuple[Optional[str], List[float]]:
     """Each treated unit's adoption period, or why it cannot be read."""
-    if first_treat not in data.columns:
-        return f"column {first_treat!r} not in data", []
+    problem = _column_problem(data, first_treat)
+    if problem is not None:
+        return problem, []
     if not pd.api.types.is_numeric_dtype(data[first_treat]):
         return f"'{first_treat}' is not numeric", []
     if (data.groupby(unit)[first_treat].nunique(dropna=False) > 1).any():

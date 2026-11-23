@@ -1623,6 +1623,57 @@ class TestReconcile:
         reconciliation = self.reconcile(lock, unit="store", data=frame)
         assert deviating(reconciliation) == {"unit", "n_units", "is_balanced"}
 
+    @pytest.mark.parametrize("column", ["unit", "period"])
+    def test_missing_identifier_is_never_a_match(self, staggered, column):
+        panel, lock = staggered
+        frame = analysis_frame(panel)
+        frame[column] = frame[column].astype(float)
+        # One row after the diagnosed periods loses its identifier, so the
+        # diagnosed rows (and their fingerprint) are intact. Counting distinct
+        # units alone would still see a complete panel.
+        row = (frame["unit"] == 19) & (frame["period"] == frame["period"].max())
+        frame.loc[row, column] = np.nan
+        reconciliation = self.reconcile(lock, first_treat="g", data=frame)
+        assert statuses(reconciliation)["data_sha256"] == "match"
+        assert deviating(reconciliation) == {
+            "n_units",
+            "is_balanced",
+            "n_treated",
+            "n_cohorts",
+            "n_post_by_cohort",
+        }
+        assert reconciliation.status == "deviates"
+        balance = next(c for c in reconciliation.checks if c["item"] == "is_balanced")
+        assert balance["realized"] == f"missing values in column(s) ['{column}']"
+
+    @pytest.mark.parametrize("column", ["unit", "period", "g"])
+    def test_duplicate_column_label_deviates_and_does_not_raise(self, staggered, column):
+        panel, lock = staggered
+        frame = analysis_frame(panel)
+        doubled = pd.concat([frame, frame[[column]]], axis=1)
+        reconciliation = self.reconcile(lock, first_treat="g", data=doubled)
+        assert reconciliation.status == "deviates"
+        timing = {"n_treated", "n_cohorts", "n_post_by_cohort"}
+        panel_items = {"n_units", "is_balanced"} if column != "g" else set()
+        assert timing | panel_items <= deviating(reconciliation)
+        reason = next(c for c in reconciliation.checks if c["item"] == "n_treated")["realized"]
+        assert reason == f"column label '{column}' appears 2 times in data"
+
+    @pytest.mark.parametrize(
+        "column, items",
+        [("treated", {"n_treated", "n_cohorts"}), ("post", {"n_post_by_cohort"})],
+    )
+    def test_duplicate_group_or_post_label_deviates(self, two_group, column, items):
+        frame, lock = two_group
+        doubled = pd.concat([frame, frame[[column]]], axis=1)
+        reconciliation = self.reconcile(
+            lock, DifferenceInDifferences(), treatment="treated", post="post", data=doubled
+        )
+        assert reconciliation.status == "deviates"
+        assert items <= deviating(reconciliation)
+        reason = next(c for c in reconciliation.checks if c["item"] == sorted(items)[0])
+        assert reason["realized"] == f"column label '{column}' appears 2 times in data"
+
     def test_what_is_not_checked(self, staggered):
         panel, lock = staggered
         without_data = statuses(self.reconcile(lock))
