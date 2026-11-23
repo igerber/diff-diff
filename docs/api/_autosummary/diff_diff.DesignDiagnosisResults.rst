@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~DesignDiagnosisResults.__init__
+      ~DesignDiagnosisResults.lock
       ~DesignDiagnosisResults.print_summary
       ~DesignDiagnosisResults.summary
       ~DesignDiagnosisResults.to_dataframe
@@ -49,4 +50,6 @@
       ~DesignDiagnosisResults.n_dropped
       ~DesignDiagnosisResults.data_sha256
       ~DesignDiagnosisResults.data_columns
+      ~DesignDiagnosisResults.n_holdout
+      ~DesignDiagnosisResults.time_periods
 

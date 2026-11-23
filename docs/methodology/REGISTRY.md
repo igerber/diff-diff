@@ -6961,9 +6961,9 @@ where δ is the target effect.
 - Coglianese, J., & Fang, J. A. (2026). An Evaluation of Difference-in-Differences Methods Using Placebo Event Studies. Finance and Economics Discussion Series 2026-045, Board of Governors of the Federal Reserve System. https://doi.org/10.17016/FEDS.2026.045 - several estimators evaluated on the same placebo events. Paper review: `docs/methodology/papers/coglianese-fang-2026-review.md`.
 - Blair, G., Cooper, J., Coppock, A., & Humphreys, M. (2019). Declaring and Diagnosing Research Designs. *American Political Science Review*, 113(3), 838-859. https://doi.org/10.1017/S0003055419000194 - the diagnosand vocabulary (bias, RMSE, power, coverage). Paper review: `docs/methodology/papers/blair-2019-review.md`.
 
-**Module:** `diff_diff/design.py` (`diagnose_design`, `DesignDiagnosisResults`)
+**Module:** `diff_diff/design.py` (`diagnose_design`, `DesignDiagnosisResults`, `DesignDiagnosisResults.lock`, `DesignLock`, `DesignLock.reconcile`, `DesignReconciliationResults`, `DESIGN_LOCK_SCHEMA_VERSION`)
 
-**Scope:** On a user's own untreated panel, repeatedly assign placebo treatments that follow a declared design, optionally add a known effect to the placebo-treated observations, fit every candidate on the same placebo draws, and report per candidate the rejection rate under no effect (size), and power, bias, RMSE and coverage at each injected effect, plus an optional minimum detectable effect. Supported: `DifferenceInDifferences`, `TwoWayFixedEffects`, `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `EfficientDiD`, under absorbing binary treatment with common or staggered timing. The run is outcome-blind: no real treatment effect is estimated. It complements `## PlaceboTests` (single placebo fits and a permutation test for one fitted `DifferenceInDifferences`) and `## PowerAnalysis` (power on synthetic data); it shares the simulation loop of the latter.
+**Scope:** On a user's own untreated panel, repeatedly assign placebo treatments that follow a declared design, optionally add a known effect to the placebo-treated observations, fit every candidate on the same placebo draws, and report per candidate the rejection rate under no effect (size), and power, bias, RMSE and coverage at each injected effect, plus an optional minimum detectable effect. Supported: `DifferenceInDifferences`, `TwoWayFixedEffects`, `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `EfficientDiD`, under absorbing binary treatment with common or staggered timing. The run is outcome-blind: no real treatment effect is estimated. It complements `## PlaceboTests` (single placebo fits and a permutation test for one fitted `DifferenceInDifferences`) and `## PowerAnalysis` (power on synthetic data); it shares the simulation loop of the latter. When several candidates are compared, the last periods are held out of the comparison; the chosen candidate is then rerun with them and recorded as a design lock, and the analysis that is finally run can be reconciled against that lock.
 
 **Key implementation requirements:**
 
@@ -6997,6 +6997,32 @@ coverage       = (1/R) sum_r 1{CI_r contains delta}
 ```
 The injected effect is constant over treated unit-periods, so `delta` is the value of the overall ATT every supported candidate targets, and coverage and bias are scored against it. BDM report the rejection rate with and without an injected effect; bias, RMSE and coverage are Blair et al.'s diagnosands (their Table 1), not quantities BDM or Mizushima-Powell tabulate.
 
+*Held-out periods* (library choice, no paper source):
+```
+n_post    = number of periods of the untreated panel at or after max(cohort_periods)
+n_holdout = 0                 one candidate
+          = n_post // 2       several candidates (ValueError if that is 0)
+          = the caller's value, 0 <= n_holdout <= n_post - 1
+comparison panel = untreated panel without its last n_holdout periods
+```
+- Held-out rows are removed by period value before any outcome is validated, fingerprinted or fitted; `data_sha256`, `n_periods`, `n_obs` and `time_periods` describe the comparison panel. `n_dropped` still counts only the rows removed by truncation at the earliest real adoption.
+- `DesignDiagnosisResults.lock(label, data)` reruns the one chosen candidate on the untreated panel with the held-out periods included, at the adoption dates exactly as declared, with the comparison's replicate count and the seed `SeedSequence([seed, 1])`. The lock reports that run. With `n_holdout = 0` there is no rerun and the lock reports the chosen candidate's comparison rows.
+- The panel passed to `lock` must have the compared periods followed by exactly `n_holdout` later ones, and its fingerprint on the compared periods must equal `data_sha256`; otherwise it is refused.
+
+*Design lock and reconciliation:*
+- `DesignLock` records the chosen candidate (label, class name, constructor parameters, extra `fit()` keywords), the declared design, the panel fingerprint and period values, the comparison rows of every candidate that was compared, the chosen candidate's reported rows, its size check and MDE, the library version and a schema version. All values are plain JSON data; NaN statistics are stored as `null`.
+- `DesignLock.reconcile(estimator, outcome=, unit=, time=, ...)` compares an analysis with the lock item by item and labels it `pre-specified` when every check that was run matches and `deviates` otherwise. Reconciling the planned and the realized design, and reporting which it is, follows Blair et al. (p.852); the items, the binary label and everything else about the mechanism are library choices.
+```
+always:        estimator_name, params.<name>, estimator_kwargs.<key>, outcome, unit, time
+with results:  alpha
+with data:     data_sha256     fingerprint of the rows in the locked periods
+               n_units
+               is_balanced     one row per (unit, period), every unit in every period
+               n_treated       units with a finite positive first_treat (or treatment == 1)
+               n_cohorts       distinct finite positive first_treat values (1 under treatment)
+               n_post_by_cohort   per cohort, the number of periods at or after adoption
+```
+
 *Standard errors / inference:* none of its own. Each replicate uses the fitted candidate's own p-value and confidence interval; `alpha` must equal the candidate's own level.
 
 *Edge cases:*
@@ -7004,6 +7030,10 @@ The injected effect is constant over treated unit-periods, so `delta` is the val
 - A cell in which every replicate is lost is reported with NaN statistics and zero scored replicates; the run continues.
 - Any other exception propagates.
 - Fail-closed pre-flight: a candidate that cannot produce a finite, scalar fit on any of the first five placebo replicates is refused with its first error before the run starts.
+- Several candidates with the latest adoption in the final period: the default held-out count is zero periods, which is refused with a message naming `n_holdout=0`.
+- `lock` refuses: a missing `data` when periods were held out; a panel whose periods or fingerprint differ from the diagnosed one; a stored candidate whose parameters were changed after the diagnosis; a parameter or `fit()` keyword that is not JSON data or is a non-finite number (`diagnose_design` warns about these before the run).
+- `reconcile` does not raise because of what the analysis looks like: a missing column, an adoption column that varies within a unit, a `post` column that varies within a period, or a realized parameter that is not JSON data is reported as a deviation. Items whose inputs were not passed are reported as `not checked`.
+- A lock whose content no longer matches its `sha256` is refused by `from_dict`, `from_json`, `reconcile` and `to_estimator`.
 
 **Deviations and library choices:**
 - **Note (failure policy):** three kinds of failure are kept apart. Programming errors propagate, as in `simulate_power` (see the narrow-exception Note under `## PowerAnalysis`). Configuration errors are refused by the pre-flight. Data-dependent losses are counted and excluded. One difference from `simulate_power` alone, which counts a NaN p-value as a non-rejection: here a fit with non-finite inference is excluded, because a candidate that returns NaN inference would otherwise look conservative.
@@ -7019,7 +7049,14 @@ The injected effect is constant over treated unit-periods, so `delta` is the val
 - **Note (calendar gaps):** `StackedDiD` needs the period just before adoption to exist. On a calendar with gaps it is refused by the pre-flight when every declared adoption period follows a gap; otherwise the affected replicates are counted as losses.
 - **Note (bootstrap reproducibility):** `seed` fixes the placebo draws only. A candidate configured for bootstrap inference with its own `seed=None` is not reproducible; a warning says so and its configuration is not altered.
 - **Note (balanced panels):** the panel must be balanced with no missing outcomes and a numeric calendar column.
-- **Note (data fingerprint):** `data_sha256` is the SHA-256 of a canonical text of the panel actually used (every column, rows sorted by unit and period, columns sorted by name, one JSON line of type-tagged cells per row; column labels must be distinct as strings), so it does not depend on row order, column order or the pandas version. It has no paper source; it exists so that a later analysis can be checked against the diagnosed sample.
+- **Note (data fingerprint):** `data_sha256` is the SHA-256 of a canonical text of the panel actually used (every column, rows sorted by unit and period, columns sorted by name, one JSON line of tagged cells per row; column labels must be distinct as strings), so it does not depend on row order, column order or the pandas version. Missing values, booleans, strings and numbers carry different tags; numbers are encoded by value, so `1` and `1.0` are the same cell. pandas stores an integer column as float as soon as one row is missing, and a storage-type tag would make the digest of some rows depend on rows outside them (held-out rows, or the later periods of an analysis frame). It has no paper source; it exists so that the lock step and a later analysis can be checked against the diagnosed sample. Because it covers every column the diagnosed frame had, a column whose values change in the locked periods makes the `data_sha256` check of `reconcile` deviate - including an adoption column that was all never-treated at diagnosis and holds the real dates at analysis; keep such a column out of the diagnosed frame.
+- **Note (held-out periods):** comparing several candidates and then quoting the chosen one's power from the same runs overstates it. Holding out the last periods and rerunning only the chosen candidate is a library choice with no paper source, as is the default count (half the post window of the latest adoption period, rounded down). The lock run uses the declared adoption dates on the full untreated panel, so its data overlaps the comparison's, and the comparison is run on a post window `n_holdout` periods shorter than the one the lock reports; window length can change the candidates' relative power. How much selection inflation the rerun removes is not validated numerically.
+- **Note (lock seed and second label):** the lock run's seed is derived from the recorded seed and is not an argument, so the run cannot be re-rolled. A held-out run for a second label on the same results emits a warning, since the two runs would amount to a second comparison; it is not refused (a fresh `diagnose_design` call would get around a refusal).
+- **Note (binary label):** `reconcile` returns `pre-specified` or `deviates` and does not grade the size of a deviation; any checked item that differs gives `deviates`. `pre-specified` covers the listed checks only: it does not certify aspects of the analysis data that are not listed.
+- **Note (declaration check):** fitted results do not record the constructor parameters or column names that produced them, so `reconcile` compares what the analyst passes (the estimator instance, the column names, the `fit()` keywords) with the lock. A `results` object must be the estimator's own `results_`, and its `alpha` is compared; a parameter changed with `set_params()` after fitting cannot be detected. `DesignLock.to_estimator()` builds the locked estimator, so that fitting from the lock cannot drift from it.
+- **Note (realized timing):** adoption dates are not reconciled. Placebo dates lie inside the diagnosed panel and real ones after it, so they cannot be equal. What carries over is the number of cohorts, the number of treated units, the length of each cohort's post window, and a balanced panel; the number of pre-periods is not reconciled.
+- **Note (lock file):** `sha256` is the SHA-256 of the lock's canonical JSON (sorted keys, no whitespace, NaN not allowed). It detects accidental edits and is not a signature. `DESIGN_LOCK_SCHEMA_VERSION` is `"1.0"`; a lock with a different major version is refused on load.
+- **Note (lockable configurations):** a lock must be able to rebuild the estimator exactly, so a parameter or `fit()` keyword that is not a JSON scalar, list or string-keyed mapping, or that is a non-finite number (for example `epv_threshold=inf`, or a callable `conley_metric`), is refused by `lock`.
 
 **Reference implementation(s):**
 - None to match. The source papers run their placebo procedures on their own US state-level data with their own code, and none distributes a placebo generator (BDM: only block-bootstrap code is offered, "available upon request"; Mizushima-Powell name the Stata estimation commands they call but reference no replication code; Coglianese-Fang name no software). R `DeclareDesign` implements Blair et al.'s diagnosis on simulated data, not placebo assignment on a user's panel. There is no R parity target.
@@ -7035,6 +7072,11 @@ The injected effect is constant over treated unit-periods, so `delta` is the val
 - [x] Serial correlation: unclustered standard errors over-reject, unit-clustered are near nominal (BDM, in shape): `tests/test_methodology_design.py::TestSerialCorrelationOverRejection`
 - [x] Few treated units over-reject under asymptotic inference (Mizushima-Powell, in shape): `TestFewTreatedUnits`
 - [x] Power rises with the injected effect; the MDE is near the normal multiplier for a correctly sized test: `TestEffectInjection`, `TestDocumentedChoices`
+- [x] Held-out rows are not read by the comparison (also for an integer outcome that pandas stores as float); default count and its refusal: `tests/test_design.py::TestHoldout`
+- [x] The lock run equals a plain run of the chosen candidate on the full panel at the derived seed; only that candidate is fitted; mismatched panels are refused: `TestLock`
+- [x] JSON round trip, hash check, schema version, refusal of configurations that cannot be rebuilt: `TestLockSerialization`, `TestToEstimator`
+- [x] One test per reconciled item, including realized timing, panel balance and the two-group path: `TestReconcile`
+- [x] Lock run of a correctly sized candidate is near nominal on serially correlated data: `tests/test_methodology_design.py::TestHeldOutRun`
 
 ---
 

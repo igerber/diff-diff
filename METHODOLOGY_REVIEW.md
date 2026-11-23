@@ -83,7 +83,7 @@ The catalog grew incrementally over several quarters, so formats vary across the
 | PreTrendsPower | `pretrends.py` | `pretrends` package | **Complete** | 2026-05-19 |
 | PowerAnalysis | `power.py` | `pwr` / `DeclareDesign` | **Complete** | 2026-05-31 |
 | PlaceboTests | `diagnostics.py` | Bertrand-Duflo-Mullainathan (2004); base-R exact-enumeration parity | **Complete** | 2026-06-26 |
-| DesignDiagnosis | `design.py` | No R parity target (`DeclareDesign` diagnoses simulated designs); internal exact enumeration | **Complete** | 2026-11-22 |
+| DesignDiagnosis | `design.py` | No R parity target (`DeclareDesign` diagnoses simulated designs); internal exact enumeration | **Complete** | 2026-11-23 |
 
 ### Cross-Cutting Inference Features
 
@@ -1318,7 +1318,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 | Primary References | Bertrand, Duflo & Mullainathan (2004) - placebo assignment on real data, unit resampling, rejection rates, additive effect injection; Mizushima & Powell (2025) - staggered placebos; Coglianese & Fang (2026) - shared placebo events across estimators; Blair, Cooper, Coppock & Humphreys (2019) - diagnosands. Paper reviews under `docs/methodology/papers/`. |
 | R Reference | None. `DeclareDesign` implements Blair et al.'s diagnosis on simulated data, not placebo assignment on a user's panel; the source papers distribute no placebo generator. |
 | Status | **Complete** |
-| Last Review | 2026-11-22 |
+| Last Review | 2026-11-23 |
 
 **Verified components:**
 - Placebo assignment follows the declared design: exact treated count, adoption periods drawn from `cohort_periods`, absorbing treatment, never-treated controls, effect injected only from each unit's own adoption on - `tests/test_design.py::TestPlaceboGenerator`.
@@ -1328,15 +1328,21 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 - The outcome-blind truncation never reads rows from the first real adoption on - `TestOutcomeBlindGuard`.
 - Paper-shaped findings on simulated panels - `tests/test_methodology_design.py`: with AR(1) outcomes (rho = 0.8, 50 units x 21 periods) classical TWFE standard errors reject a true null far above the nominal level while unit-clustered ones are near it (Bertrand et al.); with 2 of 40 units treated, asymptotic inference over-rejects, and with 20 it is near nominal (Mizushima-Powell).
 
+- Held-out periods are not read by the comparison, including for an integer outcome that pandas stores as float - `tests/test_design.py::TestHoldout`.
+- The lock run equals a plain run of the chosen estimator on the full panel at the derived seed, and fits only that estimator - `TestLock`; on the AR(1) panel its size for unit-clustered TWFE is near nominal - `tests/test_methodology_design.py::TestHeldOutRun`.
+- The design lock round-trips through JSON, detects edits, and rebuilds each of the eight estimators - `TestLockSerialization`, `TestToEstimator`.
+- Reconciliation reports each deviating item (class, parameter, fit keyword, column name, `alpha`, diagnosed data, unit count, balance, treated count, cohort count, post-window length) - `TestReconcile`.
+
 **Deviations and library choices (documented in REGISTRY `## DesignDiagnosis`):**
 - The size check, the minimum detectable effect on real data, the two-pre-period minimum and the data fingerprint have no paper source.
+- Held-out periods, their default count, the derived lock seed, the lock file hash and the binary `pre-specified` / `deviates` label are library choices; only the idea of reconciling the planned and the realized design is from Blair et al. (p.852). `reconcile` is a declaration check: fitted results do not record their configuration. The reduction in selection inflation from the held-out rerun is not validated numerically.
 - A fit with non-finite inference is excluded from every rate; `simulate_power` alone counts it as a non-rejection.
 - RMSE is the existing `ddof = 1` form, not Blair et al.'s root mean squared error.
 - Adoption periods are declared; Bertrand et al.'s randomly drawn passage year is not implemented.
 
 **Not validated:** no R parity; the source papers' CPS tables are not reproduced.
 
-**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
+**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract, held-out periods, lock, reconcile) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
 
 ---
 

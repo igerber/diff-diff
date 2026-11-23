@@ -48,6 +48,7 @@ def ar1_panel(n_units, n_periods, rho, seed, unit_sd=1.0):
 def diagnose(panel, estimators, **kwargs):
     kwargs.setdefault("seed", 7)
     kwargs.setdefault("progress", False)
+    kwargs.setdefault("n_holdout", 0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return diagnose_design(panel, "y", "unit", "period", estimators, **kwargs)
@@ -223,3 +224,57 @@ class TestDocumentedChoices:
         for label, cells in result.results.items():
             assert cells[1].mean_estimate == pytest.approx(1.0, abs=0.15), label
             assert cells[1].power > cells[0].power, label
+
+
+@pytest.fixture(scope="module")
+def locked():
+    """The AR(1) comparison with held-out periods, and the lock of one variant."""
+    panel = ar1_panel(50, 21, 0.8, seed=1)
+    result = diagnose(
+        panel,
+        {
+            "twfe_classical": TwoWayFixedEffects(vcov_type="classical"),
+            "twfe_clustered": TwoWayFixedEffects(),
+        },
+        cohort_periods=[11],
+        treatment_fraction=0.5,
+        effect_sizes=[0.5],
+        n_simulations=300,
+        n_holdout=None,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        lock = result.lock("twfe_clustered", data=panel, progress=False)
+    return result, lock
+
+
+class TestHeldOutRun:
+    """Library choice (REGISTRY ``## DesignDiagnosis``, held-out periods).
+
+    The comparison leaves the last periods unread; the lock reruns the chosen
+    estimator with them, on fresh placebo draws. Nothing here validates how
+    much winner's-curse inflation that removes; the tests pin that the lock
+    run is a correctly sized, separate run of the declared design.
+    """
+
+    def test_default_holds_out_half_the_post_window(self, locked):
+        result, lock = locked
+        # Periods 11..21 follow adoption: 11 // 2 = 5 held out of the comparison.
+        assert result.n_holdout == 5
+        assert result.n_periods == 16
+        assert lock.n_periods == 21
+
+    def test_lock_run_of_a_correctly_sized_estimator_is_near_nominal(self, locked):
+        _, lock = locked
+        null = lock.holdout_results[0]
+        assert null["true_effect"] == 0.0
+        assert null["rejection_rate"] < 0.12
+        assert lock.size_controlled is True
+
+    def test_lock_run_is_separate_from_the_comparison(self, locked):
+        result, lock = locked
+        compared = result.results["twfe_clustered"]
+        for cell, row in zip(compared, lock.holdout_results):
+            assert row["true_effect"] == cell.true_effect
+            assert row["mean_estimate"] != cell.mean_estimate
+            assert row["n_simulations"] == cell.n_simulations
