@@ -47,7 +47,6 @@
       ~DesignLock.cohort_periods
       ~DesignLock.resample_units
       ~DesignLock.seed
-      ~DesignLock.n_holdout
       ~DesignLock.n_units
       ~DesignLock.n_periods
       ~DesignLock.n_obs
@@ -55,7 +54,7 @@
       ~DesignLock.data_sha256
       ~DesignLock.data_columns
       ~DesignLock.comparison_results
-      ~DesignLock.holdout_results
+      ~DesignLock.rerun_results
       ~DesignLock.size_controlled
       ~DesignLock.mde
       ~DesignLock.sha256

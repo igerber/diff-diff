@@ -29,29 +29,40 @@ Carlo allowance for the ``R`` replicates scored - or when it loses more than 10%
 of its replicates. Its power is then not meaningful and no minimum detectable
 effect is reported for it.
 
-**Held-out periods.** Comparing several estimators and then quoting the chosen
-one's power from the same runs overstates it. When more than one estimator is
-passed, the last periods of the panel are therefore held out of the comparison:
-by default half of the periods at or after the latest adoption period, rounded
-down (``n_holdout``; pass ``n_holdout=0`` to compare on the whole panel). Those
-rows are not read by :func:`~diff_diff.diagnose_design`.
+**What it does not test.** Placebo treatment is assigned at random, so these runs
+test inference - size and power - on your panel's own error structure. They do
+not test parallel trends: a design that passes the size check can still be
+biased if treatment goes to units on a different trend.
 
 **Design lock.** :meth:`~diff_diff.DesignDiagnosisResults.lock` records one
-estimator as the pre-specified choice. If periods were held out it reruns that
-estimator alone, with them included and with fresh placebo draws, and the
-:class:`~diff_diff.DesignLock` reports that run. The lock is plain JSON data:
-write ``lock.to_json()`` to a file and read it back with
+estimator and its configuration as a :class:`~diff_diff.DesignLock`. Comparing
+several estimators and then quoting the chosen one's power from the same runs
+overstates it, so when more than one estimator was diagnosed, ``lock`` first
+reruns the chosen one alone on the same panel with new placebo draws (pass the
+panel again as ``data=``) and the lock reports that run. The rerun removes the
+part of the overstatement that comes from the draws; the part that comes from
+the panel itself remains - about one percentage point of power in the library's
+simulations (Methodology Registry, ``Note (lock rerun)``). With one estimator
+nothing was chosen and there is no rerun, so a search made of separate
+one-estimator calls is not corrected. The lock is plain JSON data: write
+``lock.to_json()`` to a file and read it back with
 :meth:`~diff_diff.DesignLock.from_json`.
 
 **Reconcile.** After the analysis, :meth:`~diff_diff.DesignLock.reconcile` checks
 it against the lock item by item - estimator class, every constructor parameter,
 ``fit()`` keywords, column names, and, when the analysis data is passed, the
-fingerprint of the diagnosed periods and the realized design - and labels it
-``pre-specified`` or ``deviates``. It compares what you declare with the lock:
-fitted results do not record the parameters that produced them, so
-:meth:`~diff_diff.DesignLock.to_estimator` is provided to build the estimator
-straight from the lock. ``pre-specified`` covers the listed checks only, and a
-deviation is not graded.
+fingerprint of the diagnosed periods and the realized design - and returns the
+status ``match`` or ``deviates``. Two limits on what ``match`` means:
+
+- It compares what you declare with the lock. Fitted results do not record the
+  parameters that produced them, so :meth:`~diff_diff.DesignLock.to_estimator`
+  is provided to build the estimator straight from the lock.
+- The lock does not record when it was made. ``match`` says the analysis agrees
+  with the lock on the checks that were run; whether the design was fixed before
+  the outcomes were seen depends on when you saved or registered the lock file.
+
+A deviation is not graded, and checks whose inputs were not passed are reported
+as ``not checked`` next to the status.
 
 The methodology, its sources and the choices that have no paper source are in
 the Methodology Registry under ``DesignDiagnosis``.
@@ -126,8 +137,8 @@ Example
    null_run = result.results["cs"][0]
    print(null_run.rejection_rate, result.size_controlled["cs"], result.mde["cs"])
 
-Three estimators were compared, so the last periods of ``panel`` were held out
-(``result.n_holdout``). Locking the choice reruns it with them:
+Three estimators were compared, so locking the choice reruns it alone, with new
+placebo draws:
 
 .. code-block:: python
 
@@ -135,7 +146,7 @@ Three estimators were compared, so the last periods of ``panel`` were held out
 
    from diff_diff import DesignLock
 
-   lock = result.lock("cs", data=panel)     # reruns "cs" only, held-out periods included
+   lock = result.lock("cs", data=panel)     # reruns "cs" only, on the same panel
    lock.print_summary()
    Path("design_lock.json").write_text(lock.to_json())
 
@@ -157,13 +168,11 @@ Later, once the study has run:
        data=analysis,
        results=fit,
    )
-   print(check.status)                      # "pre-specified" or "deviates"
+   print(check.status)                      # "match" or "deviates"
    check.to_dataframe()                     # one row per checked item
 
 A staggered design declares several adoption periods; each placebo-treated unit
-draws its period from the list. With two estimators, periods are held out by
-default, so the latest adoption period must leave at least two periods at or
-after it (here the panel runs through 2023):
+draws its period from the list:
 
 .. code-block:: python
 

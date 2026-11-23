@@ -82,9 +82,6 @@ def run(panel, estimators, **kwargs):
     kwargs.setdefault("n_simulations", 20)
     kwargs.setdefault("seed", 11)
     kwargs.setdefault("progress", False)
-    # Held-out periods are tested in TestHoldout; everywhere else the
-    # comparison runs on the whole panel.
-    kwargs.setdefault("n_holdout", 0)
     return diagnose_design(panel, "y", "unit", "period", estimators, **kwargs)
 
 
@@ -455,7 +452,6 @@ class TestRefusals:
                 # StackedDiD's cluster="unit" is a mode, not a column name.
                 {"did": DifferenceInDifferences(cluster="store"), "stacked": StackedDiD()},
                 cohort_periods=[6],
-                n_holdout=0,
                 treatment_fraction=0.5,
                 n_simulations=5,
                 seed=1,
@@ -970,7 +966,7 @@ class TestConfigurations:
 
 
 # ---------------------------------------------------------------------------
-# Held-out periods, the design lock and reconcile
+# The design lock and reconcile
 # ---------------------------------------------------------------------------
 
 NUMERIC = ["power", "rejection_rate", "mean_estimate", "bias", "rmse", "mean_se", "coverage"]
@@ -1014,77 +1010,55 @@ def analysis_frame(panel, n_new=3, cohorts=((9, range(10)),)):
     return frame
 
 
-class TestHoldout:
-    def test_default_is_zero_for_one_estimator(self):
-        result = run(make_panel(seed=70), [DifferenceInDifferences()], n_holdout=None)
-        assert result.n_holdout == 0
-        assert result.n_periods == 8
-        assert result.time_periods == list(range(1, 9))
+def ar1_panel(n_units=30, n_periods=12, rho=0.8, seed=0):
+    """Unit effects plus strongly serially correlated noise."""
+    rng = np.random.default_rng(seed)
+    noise = np.empty((n_units, n_periods))
+    noise[:, 0] = rng.normal(size=n_units)
+    for period in range(1, n_periods):
+        noise[:, period] = rho * noise[:, period - 1] + np.sqrt(1 - rho**2) * rng.normal(
+            size=n_units
+        )
+    y = rng.normal(size=n_units)[:, None] + noise
+    return pd.DataFrame(
+        {
+            "unit": np.repeat(np.arange(n_units), n_periods),
+            "period": np.tile(np.arange(1, n_periods + 1), n_units),
+            "y": y.ravel(),
+        }
+    )
 
-    def test_default_is_half_the_post_window_for_several(self):
+
+def diagnosed(seed=80, single=False, **kwargs):
+    """A panel and its diagnosis: two estimators (lock reruns), or one (it does not)."""
+    panel = make_panel(n_periods=10, seed=seed)
+    kwargs.setdefault("cohort_periods", [6])
+    kwargs.setdefault("effect_sizes", [1.0])
+    kwargs.setdefault("n_simulations", 12)
+    default = {"did": DifferenceInDifferences()}
+    if not single:
+        default["twfe"] = TwoWayFixedEffects()
+    estimators = kwargs.pop("estimators", default)
+    return panel, run(panel, estimators, **kwargs)
+
+
+class TestDiagnosedPanel:
+    def test_whole_panel_is_compared(self):
         panel = make_panel(n_periods=12, seed=71)
         result = run(
             panel,
             [DifferenceInDifferences(), TwoWayFixedEffects()],
             cohort_periods=[7],
-            n_holdout=None,
             n_simulations=5,
         )
-        # Periods 7..12 are at or after adoption: 6 // 2 = 3 held out.
-        assert result.n_holdout == 3
-        assert result.n_periods == 9
-        assert result.n_obs == 20 * 9
-        assert result.time_periods == list(range(1, 10))
-        assert result.n_dropped == 0
-        assert result.to_dict()["n_holdout"] == 3
-        assert result.to_dict()["time_periods"] == list(range(1, 10))
-        assert "Held-out periods:" in result.summary()
+        assert result.n_periods == 12 and result.n_obs == 20 * 12
+        assert result.time_periods == list(range(1, 13))
+        assert result.to_dict()["time_periods"] == list(range(1, 13))
 
-    def test_default_raises_when_adoption_is_the_final_period(self):
-        with pytest.raises(ValueError, match="n_holdout=0"):
-            run(
-                make_panel(seed=72),
-                [DifferenceInDifferences(), TwoWayFixedEffects()],
-                cohort_periods=[8],
-                n_holdout=None,
-            )
-
-    @pytest.mark.parametrize("value", [3, -1])
-    def test_out_of_range_is_refused(self, value):
-        # Adoption at 6 on periods 1..8: at most 2 can be held out.
-        with pytest.raises(ValueError, match="out of range"):
-            run(make_panel(seed=73), [DifferenceInDifferences()], n_holdout=value)
-
-    @pytest.mark.parametrize("value", [True, 1.0, "1"])
-    def test_non_integer_is_refused(self, value):
-        with pytest.raises(ValueError, match="non-negative integer"):
-            run(make_panel(seed=73), [DifferenceInDifferences()], n_holdout=value)
-
-    def test_numpy_integer_and_single_estimator_are_honoured(self):
-        result = run(make_panel(seed=74), [DifferenceInDifferences()], n_holdout=np.int64(2))
-        assert result.n_holdout == 2
-        assert result.time_periods == list(range(1, 7))
-
-    @pytest.mark.parametrize("integer_outcome", [False, True])
-    def test_held_out_rows_are_not_read(self, integer_outcome):
-        panel = make_panel(n_periods=10, seed=75)
-        if integer_outcome:
-            panel["y"] = np.round(panel["y"] * 10).astype(int)
-        estimators = {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()}
-        kwargs = dict(cohort_periods=[6], n_holdout=2, effect_sizes=[1.0], n_simulations=8)
-        base = run(panel, estimators, **kwargs)
-
-        changed = panel.copy()
-        held_out = changed["period"] > 8
-        changed.loc[held_out, "y"] = changed.loc[held_out, "y"] + 1000
-        missing = panel.copy()
-        missing["y"] = missing["y"].astype(float)
-        missing.loc[held_out, "y"] = np.nan  # an integer column is now stored as float
-
-        for other_panel in (changed, missing):
-            other = run(other_panel, estimators, **kwargs)
-            assert other.data_sha256 == base.data_sha256
-            pd.testing.assert_frame_equal(other.to_dataframe(), base.to_dataframe())
+    def test_summary_says_what_the_runs_test(self):
+        _, result = diagnosed(single=True)
+        assert "not parallel trends" in result.summary()
+        assert "not parallel trends" in result.lock().summary()
 
     def test_numbers_are_fingerprinted_by_value(self):
         assert _encode_cell(1) == _encode_cell(1.0) == _encode_cell(np.int64(1))
@@ -1093,26 +1067,32 @@ class TestHoldout:
         assert _encode_cell("1") != _encode_cell(1)
         assert _encode_cell(np.inf) != _encode_cell(-np.inf)
 
-    def test_truncation_happens_before_the_held_out_split(self):
+    def test_truncated_panel_locks(self):
         panel = make_panel(n_periods=10, seed=76)
         panel["ft"] = np.where(panel["unit"] < 5, 9, 0)
         estimators = {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()}
-        result = run(
-            panel,
-            estimators,
-            cohort_periods=[5],
-            first_treat="ft",
-            n_holdout=None,
-            n_simulations=6,
-        )
-        # Truncated to periods 1..8; periods 5..8 follow adoption: 2 held out.
+        result = run(panel, estimators, cohort_periods=[5], first_treat="ft", n_simulations=6)
+        # Truncated at the earliest real adoption: periods 1..8 are diagnosed.
         assert result.n_dropped == 2 * 20
-        assert result.n_holdout == 2
-        assert result.time_periods == list(range(1, 7))
+        assert result.time_periods == list(range(1, 9))
         lock = result.lock("did", data=panel, progress=False)
         assert lock.time_periods == list(range(1, 9))
         assert lock.n_periods == 8
         assert lock.first_treat == "ft"
+        assert lock.rerun_results
+
+    def test_adoption_in_the_final_period_with_several_estimators(self):
+        panel = make_panel(seed=72)
+        result = run(
+            panel,
+            {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
+            cohort_periods=[8],
+            n_simulations=6,
+        )
+        assert result.time_periods == list(range(1, 9))
+        lock = result.lock("twfe", data=panel, progress=False)
+        assert lock.cohort_periods == [8]
+        assert [row["true_effect"] for row in lock.rerun_results] == [0.0]
 
     def test_unlockable_parameter_warns_before_the_run(self):
         estimator = CallawaySantAnna(epv_threshold=np.inf)
@@ -1122,22 +1102,9 @@ class TestHoldout:
             result.lock()
 
 
-def diagnosed(seed=80, **kwargs):
-    panel = make_panel(n_periods=10, seed=seed)
-    kwargs.setdefault("cohort_periods", [6])
-    kwargs.setdefault("n_holdout", None)
-    kwargs.setdefault("effect_sizes", [1.0])
-    kwargs.setdefault("n_simulations", 12)
-    estimators = kwargs.pop(
-        "estimators", {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()}
-    )
-    return panel, run(panel, estimators, **kwargs)
-
-
 class TestLock:
-    def test_held_out_run_needs_data(self):
+    def test_several_estimators_need_data(self):
         _, result = diagnosed()
-        assert result.n_holdout == 2
         with pytest.raises(ValueError, match="pass data="):
             result.lock("did")
 
@@ -1162,14 +1129,14 @@ class TestLock:
         extra = pd.concat(
             [panel, panel[panel["period"] == 10].assign(period=11)], ignore_index=True
         )
-        with pytest.raises(ValueError, match=r"other periods found: \[9, 10, 11\]"):
+        with pytest.raises(ValueError, match=r"other periods found: \[11\]"):
             result.lock("did", data=extra)
-        with pytest.raises(ValueError, match="periods of the diagnosed panel"):
+        with pytest.raises(ValueError, match=r"Diagnosed periods missing: \[10\]"):
             result.lock("did", data=panel[panel["period"] != 10])
-        with pytest.raises(ValueError, match=r"Compared periods missing: \[4\]"):
+        with pytest.raises(ValueError, match=r"Diagnosed periods missing: \[4\]"):
             result.lock("did", data=panel[panel["period"] != 4])
 
-    def test_held_out_run_is_a_plain_run_on_the_full_panel(self):
+    def test_rerun_is_a_plain_run_of_the_chosen_estimator(self):
         panel, result = diagnosed()
         lock = result.lock("did", data=panel, progress=False)
         expected = run(
@@ -1181,19 +1148,18 @@ class TestLock:
             seed=lock_seed(result.seed),
         )
         np.testing.assert_allclose(
-            pd.DataFrame(lock.holdout_results)[NUMERIC].to_numpy(dtype=float),
+            pd.DataFrame(lock.rerun_results)[NUMERIC].to_numpy(dtype=float),
             expected.to_dataframe()[NUMERIC].to_numpy(dtype=float),
             rtol=1e-12,
         )
-        assert lock.n_holdout == 2
+        # The lock describes the diagnosed panel: the rerun uses the same rows.
         assert lock.n_periods == 10 and lock.n_obs == 200
         assert lock.time_periods == list(range(1, 11))
-        assert lock.data_sha256 == expected.data_sha256
-        assert lock.data_sha256 != result.data_sha256
+        assert lock.data_sha256 == result.data_sha256 == expected.data_sha256
         assert lock.size_controlled == expected.size_controlled["did"]
         # The comparison rows of every estimator are kept alongside.
         assert [row["label"] for row in lock.comparison_results] == ["did", "did", "twfe", "twfe"]
-        pd.testing.assert_frame_equal(lock.to_dataframe(), pd.DataFrame(lock.holdout_results))
+        pd.testing.assert_frame_equal(lock.to_dataframe(), pd.DataFrame(lock.rerun_results))
         # The locked rows are a different run from the comparison rows.
         compared = result.to_dataframe().query("label == 'did'")[NUMERIC].to_numpy(dtype=float)
         assert not np.allclose(compared, lock.to_dataframe()[NUMERIC].to_numpy(dtype=float))
@@ -1218,8 +1184,8 @@ class TestLock:
             first = result.lock("did", data=panel, progress=False)
             second = result.lock("did", data=panel, progress=False)
         assert first == second
-        assert not [w for w in caught if "already used" in str(w.message)]
-        with pytest.warns(UserWarning, match="already used for \\['did'\\]"):
+        assert not [w for w in caught if "already made" in str(w.message)]
+        with pytest.warns(UserWarning, match="already made for \\['did'\\]"):
             result.lock("twfe", data=panel, progress=False)
 
     def test_progress_prints_one_line_per_effect(self, capsys):
@@ -1228,29 +1194,67 @@ class TestLock:
         lines = [line for line in capsys.readouterr().out.splitlines() if "lock: did" in line]
         assert len(lines) == 2
 
-    def test_size_failing_estimator_warns_and_is_recorded(self):
-        _, result = diagnosed(n_holdout=0)
+    def test_size_failure_without_a_rerun_warns_and_is_recorded(self):
+        _, result = diagnosed(single=True)
         result.size_controlled["did"] = False
         with pytest.warns(UserWarning, match="did not pass the size check"):
             lock = result.lock("did")
         assert lock.size_controlled is False
+        assert lock.rerun_results == []
 
-    def test_estimator_changed_after_the_diagnosis_is_refused(self):
-        _, result = diagnosed(n_holdout=0)
+    def test_rerun_fails_the_size_check_the_comparison_passed(self):
+        panel = ar1_panel(seed=3)
+        result = run(
+            panel,
+            {"classical": TwoWayFixedEffects(vcov_type="classical"), "twfe": TwoWayFixedEffects()},
+            cohort_periods=[7],
+            effect_sizes=[1.0],
+            n_simulations=60,
+        )
+        result.size_controlled["classical"] = True  # as if the comparison had passed it
+        with pytest.warns(UserWarning, match="different verdicts for 'classical'") as caught:
+            lock = result.lock("classical", data=panel, progress=False)
+        assert lock.size_controlled is False
+        assert lock.rerun_results[0]["size_controlled"] is False
+        message = next(str(w.message) for w in caught if "different verdicts" in str(w.message))
+        compared, rerun = result.results["classical"][0], lock.rerun_results[0]
+        assert f"Comparison: no-effect rejection rate {compared.rejection_rate:.1%}" in message
+        assert f"{compared.n_simulations} scored, {compared.n_simulation_failures} lost" in message
+        assert f"rerun: no-effect rejection rate {rerun['rejection_rate']:.1%}" in message
+        assert f"{rerun['n_simulations']} scored, {rerun['n_simulation_failures']} lost" in message
+        assert "passed" in message and "failed" in message
+        assert "size_controlled=False" in message and "not meaningful" in message
+        assert "NO (rerun); comparison: yes" in lock.summary()
+
+    def test_rerun_passes_the_size_check_the_comparison_failed(self):
+        panel, result = diagnosed(n_simulations=40)
+        result.size_controlled["twfe"] = False  # as if the comparison had failed it
+        with pytest.warns(UserWarning, match="different verdicts for 'twfe'") as caught:
+            lock = result.lock("twfe", data=panel, progress=False)
+        assert lock.size_controlled is True
+        message = next(str(w.message) for w in caught if "different verdicts" in str(w.message))
+        assert "size_controlled=True" in message and "not meaningful" not in message
+        assert "yes (rerun); comparison: NO" in lock.summary()
+
+    @pytest.mark.parametrize("single", [True, False])
+    def test_estimator_changed_after_the_diagnosis_is_refused(self, single):
+        panel, result = diagnosed(single=single)
         result.estimators["did"].set_params(cluster="unit")
         with pytest.raises(ValueError, match="changed after the diagnosis"):
-            result.lock("did")
+            result.lock("did", data=panel, progress=False)
 
-    @pytest.mark.parametrize("n_holdout", [0, 2])
-    def test_fit_keywords_changed_after_the_diagnosis(self, n_holdout):
+    @pytest.mark.parametrize("single", [True, False])
+    def test_fit_keywords_changed_after_the_diagnosis(self, single):
         panel = make_panel(n_periods=10, seed=85)
         panel["x"] = np.random.default_rng(2).normal(size=len(panel))
         covariates = ["x"]
+        estimators = {"did": DifferenceInDifferences()}
+        if not single:
+            estimators["twfe"] = TwoWayFixedEffects()
         result = run(
             panel,
-            {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
+            estimators,
             cohort_periods=[6],
-            n_holdout=n_holdout,
             n_simulations=5,
             estimator_kwargs={"covariates": covariates},
         )
@@ -1259,21 +1263,20 @@ class TestLock:
         assert result.estimator_kwargs == {"covariates": ["x"]}
         lock = result.lock("did", data=panel, progress=False)
         assert lock.estimator_kwargs == {"covariates": ["x"]}
+        assert bool(lock.rerun_results) is (not single)
         # Editing the stored keywords is refused.
         result.estimator_kwargs["covariates"].clear()
         with pytest.raises(ValueError, match="estimator_kwargs was changed after"):
             result.lock("did", data=panel, progress=False)
 
-    def test_column_swapped_for_a_same_named_one_is_refused(self):
+    @pytest.mark.parametrize("single", [True, False])
+    def test_column_swapped_for_a_same_named_one_is_refused(self, single):
         panel, _ = diagnosed()
         panel[1] = np.arange(len(panel), dtype=float)
-        result = run(
-            panel,
-            {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
-            cohort_periods=[6],
-            n_holdout=2,
-            n_simulations=5,
-        )
+        estimators = {"did": DifferenceInDifferences()}
+        if not single:
+            estimators["twfe"] = TwoWayFixedEffects()
+        result = run(panel, estimators, cohort_periods=[6], n_simulations=5)
         lock = result.lock("did", data=panel, progress=False)
         swapped = panel.copy()
         swapped["1"] = swapped[1]  # the diagnosed values, under a string label
@@ -1286,17 +1289,16 @@ class TestLock:
         assert statuses(reconciliation)["data_sha256"] == "deviates"
         assert reconciliation.status == "deviates"
 
-    def test_without_held_out_periods_no_data_is_needed(self):
+    def test_one_estimator_needs_no_data_and_makes_no_rerun(self):
         panel = make_panel(seed=82)
         # A calendar with gaps cannot be rebuilt from a period count.
         panel["period"] = panel["period"].map(dict(zip(range(1, 9), [1, 2, 4, 5, 7, 8, 10, 11])))
         result = run(panel, [DifferenceInDifferences()], cohort_periods=[8], n_simulations=6)
         lock = result.lock(progress=False)
-        assert lock.n_holdout == 0
-        assert lock.holdout_results == []
+        assert lock.rerun_results == []
         assert lock.time_periods == [1, 2, 4, 5, 7, 8, 10, 11]
         assert lock.data_sha256 == result.data_sha256
-        assert "not confirmed on held-out periods" in lock.summary()
+        assert "comparison run (one estimator, nothing was chosen)" in lock.summary()
         pd.testing.assert_frame_equal(
             lock.to_dataframe()[NUMERIC], result.to_dataframe()[NUMERIC], check_dtype=False
         )
@@ -1314,7 +1316,6 @@ class TestLock:
             panel,
             {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
             cohort_periods=[6],
-            n_holdout=2,
             n_simulations=5,
         )
         assert result.data_columns == ["1", "period", "unit", "y"]
@@ -1337,8 +1338,9 @@ class TestLock:
         assert lock.schema_version == DESIGN_LOCK_SCHEMA_VERSION == "1.0"
         text = lock.summary()
         assert "did (DifferenceInDifferences)" in text and lock.sha256 in text
-        assert "held-out run" in text
+        assert "rerun of the chosen estimator (new placebo draws, same panel)" in text
         assert repr(lock).startswith("DesignLock(label='did'")
+        assert "rerun=True" in repr(lock)
 
 
 class TestLockSerialization:
@@ -1354,6 +1356,8 @@ class TestLockSerialization:
         payload = json.loads(text)
         assert payload["schema_version"] == DESIGN_LOCK_SCHEMA_VERSION
         assert set(payload) == {f.name for f in dataclasses.fields(DesignLock)}
+        # The rerun rows are part of what is serialized and hashed.
+        assert len(payload["rerun_results"]) == 2
         # to_dict returns copies.
         lock.to_dict()["params"]["alpha"] = 0.5
         assert lock.params["alpha"] == 0.05
@@ -1389,7 +1393,6 @@ class TestLockSerialization:
             panel,
             {"did": DifferenceInDifferences(cluster="unit"), "twfe": TwoWayFixedEffects()},
             cohort_periods=[6],
-            n_holdout=None,
             n_simulations=30,
             power=0.8,
         )
@@ -1401,7 +1404,7 @@ class TestLockSerialization:
         assert DesignLock.from_json(lock.to_json()) == lock
 
     def test_cell_that_could_not_be_scored_round_trips(self):
-        _, result = diagnosed(n_holdout=0)
+        _, result = diagnosed(single=True)
         result.results["did"][1] = _failed_cell(1.0, 0.05, "DifferenceInDifferences", 12)
         lock = result.lock("did")
         failed = lock.comparison_results[1]
@@ -1443,7 +1446,7 @@ class TestToEstimator:
         ids=lambda est: type(est).__name__,
     )
     def test_rebuilds_the_locked_estimator(self, estimator):
-        _, result = diagnosed(n_holdout=0, n_simulations=3)
+        _, result = diagnosed(single=True, n_simulations=3)
         params = _json_value(estimator.get_params(), "params")
         lock = relock(
             result.lock("did", progress=False),
@@ -1455,11 +1458,11 @@ class TestToEstimator:
         assert not getattr(built, "is_fitted_", False)
         assert _json_value(built.get_params(), "params") == params
         reconciliation = lock.reconcile(built, outcome="y", unit="unit", time="period")
-        assert reconciliation.status == "pre-specified"
+        assert reconciliation.status == "match"
         assert not deviating(reconciliation)
 
     def test_unsupported_class_name_is_refused(self):
-        _, result = diagnosed(n_holdout=0, n_simulations=3)
+        _, result = diagnosed(single=True, n_simulations=3)
         lock = relock(result.lock("did", progress=False), estimator_name="SyntheticDiD")
         with pytest.raises(ValueError, match="not one of"):
             lock.to_estimator()
@@ -1502,7 +1505,7 @@ class TestReconcile:
         kwargs.setdefault("time", "period")
         return lock.reconcile(estimator, **kwargs)
 
-    def test_matching_analysis_is_pre_specified(self, staggered):
+    def test_matching_analysis_matches(self, staggered):
         panel, lock = staggered
         frame = analysis_frame(panel)
         estimator = lock.to_estimator()
@@ -1510,7 +1513,7 @@ class TestReconcile:
             warnings.simplefilter("ignore")
             fit = estimator.fit(frame, outcome="y", unit="unit", time="period", first_treat="g")
         reconciliation = self.reconcile(lock, estimator, first_treat="g", data=frame, results=fit)
-        assert reconciliation.status == "pre-specified"
+        assert reconciliation.status == "match"
         assert set(statuses(reconciliation).values()) == {"match"}
         assert reconciliation.label == "cs"
         assert reconciliation.lock_sha256 == lock.sha256
@@ -1522,7 +1525,7 @@ class TestReconcile:
         frame = analysis_frame(panel)
         frame["g"] = frame["g"].astype(float).replace(0.0, np.inf)
         reconciliation = self.reconcile(lock, first_treat="g", data=frame)
-        assert reconciliation.status == "pre-specified"
+        assert reconciliation.status == "match"
 
     def test_estimator_class(self, staggered):
         _, lock = staggered
@@ -1624,7 +1627,7 @@ class TestReconcile:
         panel, lock = staggered
         without_data = statuses(self.reconcile(lock))
         assert all(without_data[item] == "not checked" for item in self.DATA)
-        assert self.reconcile(lock).status == "pre-specified"
+        assert self.reconcile(lock).status == "match"
         with_data = statuses(self.reconcile(lock, data=analysis_frame(panel)))
         for item in ("n_treated", "n_cohorts", "n_post_by_cohort"):
             assert with_data[item] == "not checked"
@@ -1657,7 +1660,7 @@ class TestReconcile:
         reconciliation = self.reconcile(
             lock, estimator, treatment="treated", post="post", data=frame
         )
-        assert reconciliation.status == "pre-specified"
+        assert reconciliation.status == "match"
         assert not [s for s in statuses(reconciliation).values() if s == "deviates"]
         without_post = statuses(self.reconcile(lock, estimator, treatment="treated", data=frame))
         assert without_post["n_post_by_cohort"] == "not checked"
@@ -1708,3 +1711,21 @@ class TestReconcile:
         assert repr(reconciliation).startswith("DesignReconciliationResults(status='deviates'")
         for name in ("att", "se", "t_stat", "p_value", "conf_int"):
             assert not hasattr(reconciliation, name)
+
+    def test_status_is_never_shown_without_the_checks_not_run(self, staggered):
+        frame, lock = staggered
+        analysis = analysis_frame(frame)
+        # No data and no results: seven checks are not run.
+        partial = self.reconcile(lock)
+        skipped = sum(1 for check in partial.checks if check["status"] == "not checked")
+        assert partial.status == "match" and skipped == 7
+        assert f"match - {skipped} not checked" in partial.summary()
+        assert f"not_checked={skipped})" in repr(partial)
+        assert "does not\nsay when the design was fixed" in partial.summary()
+        # Everything passed: nothing is left unchecked and the status stands alone.
+        estimator = lock.to_estimator()
+        fit = estimator.fit(analysis, outcome="y", unit="unit", time="period", first_treat="g")
+        full = self.reconcile(lock, estimator, first_treat="g", data=analysis, results=fit)
+        assert full.status == "match"
+        assert "not checked" not in full.summary().split("Checks:")[0]
+        assert "not_checked=0)" in repr(full)

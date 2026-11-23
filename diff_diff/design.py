@@ -13,11 +13,15 @@ The run is outcome-blind: no real treatment effect is ever estimated. When a
 real treatment column is supplied, every period from the earliest real
 adoption onward is dropped before anything else happens.
 
-When several estimators are compared, the last periods are held out of the
-comparison. :meth:`DesignDiagnosisResults.lock` then reruns the one chosen
-estimator with those periods included and records the choice as a
-:class:`DesignLock`; :meth:`DesignLock.reconcile` checks the analysis that was
-finally run against it.
+Placebo treatment is assigned at random, so the diagnosis tests inference
+(size, power) on the panel's own error structure. It does not test parallel
+trends.
+
+:meth:`DesignDiagnosisResults.lock` records one estimator and its
+configuration as a :class:`DesignLock`. When several estimators were compared
+it first reruns the chosen one alone with new placebo draws and reports that
+run. :meth:`DesignLock.reconcile` checks the analysis that was finally run
+against the lock.
 
 References
 ----------
@@ -118,6 +122,12 @@ _MAX_LOST_SHARE = 0.10
 _MIN_PRE_PERIODS = 2
 _MAX_ERROR_MESSAGES = 5
 
+# Printed by both summaries: what a placebo diagnosis does and does not test.
+_SCOPE_LINES = (
+    "Placebo treatment is assigned at random, so these runs test inference",
+    "(size, power) on this panel's error structure, not parallel trends.",
+)
+
 
 # ---------------------------------------------------------------------------
 # Results container
@@ -171,17 +181,13 @@ class DesignDiagnosisResults(Diagnostic):
     seed : int
         Seed of the placebo draws (resolved to a concrete value).
     n_units, n_periods, n_obs : int
-        Shape of the panel actually used (without held-out periods).
+        Shape of the panel actually used.
     n_dropped : int
-        Rows removed by truncating at the earliest real adoption. Held-out
-        rows are not counted here.
+        Rows removed by truncating at the earliest real adoption.
     data_sha256 : str
         Fingerprint of the panel actually used.
     data_columns : list of str
         Columns the fingerprint covers.
-    n_holdout : int
-        Trailing periods of the untreated panel that were held out of the
-        comparison and not read. :meth:`lock` uses them.
     time_periods : list
         Period values of the panel actually used.
     """
@@ -211,13 +217,12 @@ class DesignDiagnosisResults(Diagnostic):
     n_dropped: int
     data_sha256: str
     data_columns: List[str]
-    n_holdout: int
     time_periods: List[Any]
     # The configuration as diagnosed (lock() refuses one that was changed
-    # afterwards) and the labels a held-out run was made for.
+    # afterwards) and the labels lock() has rerun.
     _params: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
     _fit_keywords: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
-    _holdout_labels: List[str] = field(default_factory=list, repr=False, compare=False)
+    _rerun_labels: List[str] = field(default_factory=list, repr=False, compare=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -288,7 +293,6 @@ class DesignDiagnosisResults(Diagnostic):
             "n_dropped": self.n_dropped,
             "data_sha256": self.data_sha256,
             "data_columns": list(self.data_columns),
-            "n_holdout": self.n_holdout,
             "time_periods": list(self.time_periods),
             "size_controlled": dict(self.size_controlled),
             "mde": dict(self.mde),
@@ -312,7 +316,6 @@ class DesignDiagnosisResults(Diagnostic):
             if self.first_treat is not None
             else "declared by caller (no first_treat column given; not verified)"
         )
-        held_out = f"{self.n_holdout} (not read; used by lock())" if self.n_holdout else "0 (none)"
         lines = [
             "=" * width,
             "Design Diagnosis (placebo assignments on the supplied panel)".center(width),
@@ -322,7 +325,6 @@ class DesignDiagnosisResults(Diagnostic):
             f"{'Untreated status:':<32} {untreated}",
             f"{'Placebo-treated units:':<32} {self.n_treated}",
             f"{'Adoption periods (' + timing + '):':<32} {list(self.cohort_periods)}",
-            f"{'Held-out periods:':<32} {held_out}",
             f"{'Units resampled:':<32} {self.resample_units}",
             f"{'Significance level (alpha):':<32} {self.alpha:.3f}",
             f"{'Seed:':<32} {self.seed}",
@@ -362,6 +364,7 @@ class DesignDiagnosisResults(Diagnostic):
                 "Estimators are listed in input order and are not ranked. 'Size OK' is",
                 "a check on the no-effect runs only; power for an estimator that fails",
                 "it is not meaningful.",
+                *_SCOPE_LINES,
                 "=" * width,
             ]
         )
@@ -378,13 +381,16 @@ class DesignDiagnosisResults(Diagnostic):
         progress: bool = True,
     ) -> "DesignLock":
         """
-        Record one estimator as the pre-specified choice.
+        Record one estimator and its configuration as a :class:`DesignLock`.
 
-        When periods were held out of the comparison (``n_holdout > 0``),
-        the chosen estimator alone is rerun on the panel with those periods
-        included, with fresh placebo draws, and the lock reports that run.
-        Its numbers were not used to compare estimators, so they are not
-        inflated by the choice.
+        When several estimators were diagnosed, the chosen one alone is rerun
+        on the same panel with new placebo draws, and the lock reports that
+        run. The rerun's draws were not used to choose, which removes the
+        part of the overstatement of the chosen estimator's power that comes
+        from the draws. The part that comes from the panel itself remains
+        (about one percentage point in the library's simulations; see the
+        methodology registry). When one estimator was diagnosed nothing was
+        chosen, so there is no rerun and the lock reports the diagnosis.
 
         Parameters
         ----------
@@ -393,24 +399,31 @@ class DesignDiagnosisResults(Diagnostic):
             when one estimator was diagnosed.
         data : pd.DataFrame, optional
             The panel that was passed to :func:`diagnose_design`. Required
-            when ``n_holdout > 0`` (the results do not keep the panel). Its
-            fingerprint must match ``data_sha256`` on the periods that were
-            compared.
+            when several estimators were diagnosed (the results do not keep
+            the panel). Its periods and fingerprint must match the diagnosed
+            panel (``time_periods``, ``data_sha256``).
         progress : bool, default=True
-            Print one line per effect of the held-out run.
+            Print one line per effect of the rerun.
 
         Returns
         -------
         DesignLock
-            The pre-specified design. Write ``lock.to_json()`` to a file to
-            keep it; :meth:`DesignLock.reconcile` checks an analysis against
-            it.
+            The recorded design. Write ``lock.to_json()`` to a file to keep
+            it; :meth:`DesignLock.reconcile` checks an analysis against it.
+            The lock does not record when it was made.
 
         Notes
         -----
-        The held-out run uses a seed derived from the recorded one, so it
-        cannot be re-rolled. Running it for a second label emits a warning:
-        the two runs would amount to a second comparison.
+        The rerun uses a seed derived from the recorded one, so it cannot be
+        re-rolled. A rerun for a second label emits a warning: the two runs
+        would amount to a second comparison.
+
+        The lock's ``size_controlled`` is the rerun's verdict. If it differs
+        from the comparison's verdict a warning states both.
+
+        A search made of separate :func:`diagnose_design` calls with one
+        estimator each is not visible here: each of those locks reports its
+        own diagnosis, with no rerun.
         """
         return _lock(self, label, data, progress)
 
@@ -842,8 +855,7 @@ def _untreated_rows(
 ) -> Tuple[pd.DataFrame, int]:
     """Drop every row from the earliest real adoption on.
 
-    Reads only the ``unit``, ``time`` and ``first_treat`` columns, so the
-    caller can remove held-out periods before any outcome is looked at.
+    Reads only the ``unit``, ``time`` and ``first_treat`` columns.
     """
     if not isinstance(data, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame.")
@@ -918,36 +930,6 @@ def _check_panel(panel: pd.DataFrame, outcome: str, unit: str, time: str) -> pd.
             f"{n_periods} periods."
         )
     return panel.sort_values([unit, time], kind="mergesort").reset_index(drop=True)
-
-
-def _resolve_n_holdout(
-    n_holdout: Optional[int], n_estimators: int, periods: np.ndarray, declared: List[Any]
-) -> int:
-    """How many trailing periods the comparison leaves unread."""
-    n_post = int(np.sum(periods >= max(declared)))
-    if n_holdout is None:
-        if n_estimators == 1:
-            return 0
-        count = n_post // 2
-        if count == 0:
-            raise ValueError(
-                f"Several estimators are compared, so periods are held out of the "
-                f"comparison by default, but the latest adoption period "
-                f"{max(declared)!r} is the final period of the untreated panel and "
-                f"nothing can be held out. Declare an earlier adoption period, or "
-                f"pass n_holdout=0 to compare on the whole panel."
-            )
-        return count
-    if isinstance(n_holdout, bool) or not isinstance(n_holdout, (int, np.integer)):
-        raise ValueError(f"n_holdout must be a non-negative integer, got {n_holdout!r}.")
-    count = int(n_holdout)
-    if not 0 <= count <= n_post - 1:
-        raise ValueError(
-            f"n_holdout={count} is out of range: the latest adoption period "
-            f"{max(declared)!r} has {n_post} period(s) at or after it, and at least "
-            f"one must stay in the comparison (0 <= n_holdout <= {n_post - 1})."
-        )
-    return count
 
 
 def _select_columns(frame: pd.DataFrame, data_columns: Sequence[str]) -> pd.DataFrame:
@@ -1412,7 +1394,6 @@ def diagnose_design(
     estimator_kwargs: Optional[Dict[str, Any]] = None,
     seed: Optional[int] = None,
     progress: bool = True,
-    n_holdout: Optional[int] = None,
 ) -> DesignDiagnosisResults:
     """
     Diagnose a planned DiD design on your own untreated panel.
@@ -1480,14 +1461,6 @@ def diagnose_design(
         Seed of the placebo draws. ``None`` draws one and records it.
     progress : bool, default=True
         Print one line per estimator and effect.
-    n_holdout : int, optional
-        Trailing periods of the untreated panel to hold out of the comparison.
-        They are not read here; :meth:`DesignDiagnosisResults.lock` reruns the
-        chosen estimator with them included, so its reported power is not
-        taken from the runs that were used to choose it. ``None`` holds out
-        nothing for a single estimator and, for several, half of the periods
-        at or after the latest adoption period (rounded down); if that is
-        zero the call raises. Pass ``0`` to compare on the whole panel.
 
     Returns
     -------
@@ -1540,15 +1513,7 @@ def diagnose_design(
             f"least {_MIN_PRE_PERIODS + 1} are needed."
         )
     declared = _validate_cohort_periods(cohort_periods, all_periods)
-    held_out = _resolve_n_holdout(n_holdout, len(resolved), all_periods, declared)
-    if held_out:
-        # Held-out rows are removed by period value alone, before any outcome
-        # is validated, hashed or fitted.
-        periods = all_periods[:-held_out]
-        keep = np.isin(_period_values(untreated[time]), periods)
-        untreated = untreated.loc[keep]
-    else:
-        periods = all_periods
+    periods = all_periods
     panel = _check_panel(untreated, outcome, unit, time)
     n_periods = len(periods)
     n_units = panel[unit].nunique()
@@ -1653,7 +1618,6 @@ def diagnose_design(
         n_dropped=n_dropped,
         data_sha256=data_sha256,
         data_columns=data_columns,
-        n_holdout=held_out,
         time_periods=periods.tolist(),
         _params={label: _snapshot(est.get_params()) for label, est in resolved.items()},
         _fit_keywords=_snapshot(fit_extras),
@@ -1668,10 +1632,18 @@ _ABSENT = "<absent>"
 _MATCH = "match"
 _DEVIATES = "deviates"
 _NOT_CHECKED = "not checked"
-_PRE_SPECIFIED = "pre-specified"
 # Lock fields whose NaN entries (a cell that could not be scored, an MDE that
 # was not reported) are stored as None.
-_RECORD_FIELDS = ("comparison_results", "holdout_results", "mde")
+_RECORD_FIELDS = ("comparison_results", "rerun_results", "mde")
+
+
+def _size_facts(run: str, null: Any, verdict: bool) -> str:
+    """One run's no-effect facts, for the warning about differing verdicts."""
+    return (
+        f"{run}: no-effect rejection rate {_fmt_rate(null.rejection_rate)}, "
+        f"{int(null.n_simulations)} scored, {int(null.n_simulation_failures)} lost, "
+        f"{'passed' if verdict else 'failed'}"
+    )
 
 
 def _lock(
@@ -1717,60 +1689,53 @@ def _lock(
         )
 
     outcome, unit, time = diagnosis.outcome, diagnosis.unit, diagnosis.time
-    if diagnosis.n_holdout > 0 and data is None:
+    # Several estimators were compared, so one was chosen: rerun it alone on
+    # draws the choice did not see. With one estimator nothing was chosen.
+    rerun = len(labels) > 1
+    if rerun and data is None:
         raise ValueError(
-            f"{diagnosis.n_holdout} period(s) were held out of the comparison, so "
-            f"lock() needs the panel to rerun '{label}' with them: pass data= (the "
+            f"{len(labels)} estimators were diagnosed, so lock() reruns '{label}' "
+            f"alone with new placebo draws and needs the panel: pass data= (the "
             f"frame given to diagnose_design)."
         )
 
-    n_units, n_periods, n_obs = diagnosis.n_units, diagnosis.n_periods, diagnosis.n_obs
     time_periods = list(diagnosis.time_periods)
-    data_sha256 = diagnosis.data_sha256
-    size_ok = diagnosis.size_controlled[label]
+    compared_ok = diagnosis.size_controlled[label]
+    size_ok = compared_ok
     mde = diagnosis.mde[label]
-    holdout_records: List[Dict[str, Any]] = []
+    rerun_records: List[Dict[str, Any]] = []
+    rerun_null: Any = None
 
     if data is not None:
         untreated, _ = _untreated_rows(data, outcome, unit, time, diagnosis.first_treat)
         untreated = _select_columns(untreated, diagnosis.data_columns)
         found_periods = np.unique(_period_values(untreated[time])).tolist()
-        n_compared = len(time_periods)
-        if (
-            found_periods[:n_compared] != time_periods
-            or len(found_periods) - n_compared != diagnosis.n_holdout
-        ):
+        if found_periods != time_periods:
             missing = [period for period in time_periods if period not in found_periods]
             other = [period for period in found_periods if period not in time_periods]
             raise ValueError(
-                f"data does not have the periods of the diagnosed panel: expected the "
-                f"{n_compared} compared period(s) followed by {diagnosis.n_holdout} "
-                f"held-out one(s). Compared periods missing: {missing}; other periods "
-                f"found: {other}."
+                f"data does not have the periods of the diagnosed panel. Diagnosed "
+                f"periods missing: {missing}; other periods found: {other}."
             )
-        compared = untreated.loc[np.isin(_period_values(untreated[time]), time_periods)]
-        digest, _ = _data_fingerprint(compared, unit, time)
+        digest, _ = _data_fingerprint(untreated, unit, time)
         if digest != diagnosis.data_sha256:
             raise ValueError(
-                "data is not the panel that was diagnosed: its fingerprint on the "
-                "compared periods differs from data_sha256."
+                "data is not the panel that was diagnosed: its fingerprint differs "
+                "from data_sha256."
             )
 
-        if diagnosis.n_holdout > 0:
-            if diagnosis._holdout_labels and label not in diagnosis._holdout_labels:
+        if rerun:
+            if diagnosis._rerun_labels and label not in diagnosis._rerun_labels:
                 warnings.warn(
-                    f"The held-out periods were already used for "
-                    f"{diagnosis._holdout_labels}. A held-out run for '{label}' as "
-                    f"well makes the two runs a second comparison: do not use them "
-                    f"to choose between estimators.",
+                    f"A rerun was already made for {diagnosis._rerun_labels}. A rerun "
+                    f"for '{label}' as well makes the two runs a second comparison: "
+                    f"do not use them to choose between estimators.",
                     UserWarning,
                     stacklevel=3,
                 )
-            full = _check_panel(untreated, outcome, unit, time)
-            n_units = full[unit].nunique()
-            n_periods = len(found_periods)
+            panel = _check_panel(untreated, outcome, unit, time)
             generator = _make_placebo_generator(
-                full,
+                panel,
                 outcome,
                 unit,
                 time,
@@ -1779,7 +1744,7 @@ def _lock(
                 diagnosis.resample_units,
             )
             fit_kwargs = _fit_kwargs(chosen, outcome, unit, time, dict(diagnosis.estimator_kwargs))
-            # Derived, not an argument: the held-out run cannot be re-rolled.
+            # Derived, not an argument: the rerun cannot be re-rolled.
             lock_seed = int(np.random.SeedSequence([int(diagnosis.seed), 1]).generate_state(1)[0])
             null = diagnosis.results[label][0]
             n_simulations = int(null.n_simulations) + int(null.n_simulation_failures)
@@ -1793,8 +1758,8 @@ def _lock(
                 diagnosis.effect_sizes,
                 generator,
                 fit_kwargs,
-                n_units,
-                n_periods,
+                diagnosis.n_units,
+                diagnosis.n_periods,
                 n_simulations,
                 diagnosis.alpha,
                 diagnosis.target_power,
@@ -1802,14 +1767,24 @@ def _lock(
                 progress,
                 stacklevel=5,
             )
-            holdout_records = _records(label, cells, size_ok, nan_counts, mde)
-            n_obs = len(full)
-            time_periods = found_periods
-            data_sha256, _ = _data_fingerprint(full, unit, time)
-            if label not in diagnosis._holdout_labels:
-                diagnosis._holdout_labels.append(label)
+            rerun_records = _records(label, cells, size_ok, nan_counts, mde)
+            rerun_null = cells[0]
+            if label not in diagnosis._rerun_labels:
+                diagnosis._rerun_labels.append(label)
 
-    if not size_ok:
+    if rerun_null is not None and size_ok != compared_ok:
+        # Both runs' facts and no conclusion about the cause: the size check
+        # can fail on lost replicates as well as on the rejection rate.
+        meaning = "" if size_ok else " Its power is not meaningful."
+        warnings.warn(
+            f"The size check gives different verdicts for '{label}'. "
+            f"{_size_facts('Comparison', diagnosis.results[label][0], compared_ok)}; "
+            f"{_size_facts('rerun', rerun_null, size_ok)}. The lock records the "
+            f"rerun's verdict, size_controlled={size_ok}.{meaning}",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif not size_ok:
         warnings.warn(
             f"'{label}' did not pass the size check on the no-effect runs the lock "
             f"reports, so its power is not meaningful. The lock records "
@@ -1839,15 +1814,14 @@ def _lock(
         "cohort_periods": diagnosis.cohort_periods,
         "resample_units": diagnosis.resample_units,
         "seed": diagnosis.seed,
-        "n_holdout": diagnosis.n_holdout,
-        "n_units": n_units,
-        "n_periods": n_periods,
-        "n_obs": n_obs,
+        "n_units": diagnosis.n_units,
+        "n_periods": diagnosis.n_periods,
+        "n_obs": diagnosis.n_obs,
         "time_periods": time_periods,
-        "data_sha256": data_sha256,
+        "data_sha256": diagnosis.data_sha256,
         "data_columns": diagnosis.data_columns,
         "comparison_results": diagnosis.to_dataframe().to_dict("records"),
-        "holdout_results": holdout_records,
+        "rerun_results": rerun_records,
         "size_controlled": size_ok,
         "mde": mde,
     }
@@ -1861,7 +1835,7 @@ def _lock(
 @dataclass(frozen=True)
 class DesignLock(Diagnostic):
     """
-    A pre-specified design: the estimator chosen before the analysis.
+    A recorded design: one estimator, its configuration and its diagnosis.
 
     Made by :meth:`DesignDiagnosisResults.lock`. It records the chosen
     estimator and its configuration, the declared design, a fingerprint of
@@ -1869,6 +1843,10 @@ class DesignLock(Diagnostic):
     size, power, bias, RMSE, coverage and minimum detectable effect. All
     values are plain JSON data, so ``DesignLock.from_json(lock.to_json())``
     equals ``lock``.
+
+    The lock does not record when it was made. Whether a design was fixed
+    before the outcomes were seen depends on when the lock file was saved or
+    registered, which the library cannot check.
 
     Attributes
     ----------
@@ -1903,12 +1881,9 @@ class DesignLock(Diagnostic):
     resample_units : bool
         Whether units were resampled in each replicate.
     seed : int
-        Seed of the comparison. The held-out run uses a seed derived from it.
-    n_holdout : int
-        Periods held out of the comparison.
+        Seed of the comparison. The rerun uses a seed derived from it.
     n_units, n_periods, n_obs : int
-        Shape of the panel the reported numbers come from: the panel with the
-        held-out periods when a held-out run was made, else the compared one.
+        Shape of the diagnosed panel.
     time_periods : list
         Its period values.
     data_sha256 : str
@@ -1918,12 +1893,14 @@ class DesignLock(Diagnostic):
     comparison_results : list of dict
         One record per estimator and effect from the comparison, for every
         estimator that was compared.
-    holdout_results : list of dict
-        The chosen estimator's records from the held-out run; empty when no
-        periods were held out.
+    rerun_results : list of dict
+        The chosen estimator's records from the rerun (the chosen estimator
+        alone, new placebo draws, same panel). Empty when one estimator was
+        diagnosed: nothing was chosen, so there was no rerun.
     size_controlled : bool
         Whether the chosen estimator passed the size check in the run the
-        lock reports.
+        lock reports (the rerun when there was one). The comparison's
+        verdict is in ``comparison_results``.
     mde : float or None
         Its minimum detectable effect; ``None`` when not reported.
     sha256 : str
@@ -1949,7 +1926,6 @@ class DesignLock(Diagnostic):
     cohort_periods: List[Any]
     resample_units: bool
     seed: int
-    n_holdout: int
     n_units: int
     n_periods: int
     n_obs: int
@@ -1957,7 +1933,7 @@ class DesignLock(Diagnostic):
     data_sha256: str
     data_columns: List[str]
     comparison_results: List[Dict[str, Any]]
-    holdout_results: List[Dict[str, Any]]
+    rerun_results: List[Dict[str, Any]]
     size_controlled: bool
     mde: Optional[float]
     sha256: str
@@ -1966,7 +1942,7 @@ class DesignLock(Diagnostic):
         """Concise string representation."""
         return (
             f"DesignLock(label={self.label!r}, estimator_name={self.estimator_name!r}, "
-            f"n_holdout={self.n_holdout}, sha256={self.sha256[:12]!r}...)"
+            f"rerun={bool(self.rerun_results)}, sha256={self.sha256[:12]!r}...)"
         )
 
     def __hash__(self) -> int:
@@ -2049,13 +2025,16 @@ class DesignLock(Diagnostic):
         Returns
         -------
         pd.DataFrame
-            ``holdout_results`` when a held-out run was made, otherwise the
-            chosen estimator's rows of ``comparison_results``.
+            ``rerun_results`` when a rerun was made, otherwise the chosen
+            estimator's rows of ``comparison_results``.
         """
-        if self.holdout_results:
-            return pd.DataFrame(copy.deepcopy(self.holdout_results))
-        rows = [row for row in self.comparison_results if row.get("label") == self.label]
-        return pd.DataFrame(copy.deepcopy(rows))
+        if self.rerun_results:
+            return pd.DataFrame(copy.deepcopy(self.rerun_results))
+        return pd.DataFrame(copy.deepcopy(self._compared_rows()))
+
+    def _compared_rows(self) -> List[Dict[str, Any]]:
+        """The chosen estimator's rows of the comparison."""
+        return [row for row in self.comparison_results if row.get("label") == self.label]
 
     def summary(self) -> str:
         """
@@ -2069,15 +2048,21 @@ class DesignLock(Diagnostic):
         width = 78
         timing = "common" if len(self.cohort_periods) == 1 else "staggered"
         source = (
-            f"held-out run ({self.n_holdout} period(s) the comparison did not read)"
-            if self.holdout_results
-            else "comparison run (not confirmed on held-out periods)"
+            "rerun of the chosen estimator (new placebo draws, same panel)"
+            if self.rerun_results
+            else "comparison run (one estimator, nothing was chosen)"
         )
+        size_text = "yes" if self.size_controlled else "NO"
+        compared_rows = self._compared_rows()
+        if self.rerun_results and compared_rows:
+            compared_ok = bool(compared_rows[0].get("size_controlled"))
+            if compared_ok != self.size_controlled:
+                size_text += f" (rerun); comparison: {'yes' if compared_ok else 'NO'}"
         compared = list(dict.fromkeys(str(row.get("label")) for row in self.comparison_results))
         mde_text = f"{self.mde:.4g}" if self.mde is not None else "-"
         lines = [
             "=" * width,
-            "Design Lock (pre-specified design)".center(width),
+            "Design Lock".center(width),
             "=" * width,
             "",
             f"{'Chosen:':<32} {self.label} ({self.estimator_name})",
@@ -2087,7 +2072,7 @@ class DesignLock(Diagnostic):
             f"{'Adoption periods (' + timing + '):':<32} {list(self.cohort_periods)}",
             f"{'Significance level (alpha):':<32} {self.alpha:.3f}",
             f"{'Reported numbers from:':<32} {source}",
-            f"{'Size OK:':<32} {'yes' if self.size_controlled else 'NO'}",
+            f"{'Size OK:':<32} {size_text}",
             f"{'MDE:':<32} {mde_text}",
             "",
             "-" * width,
@@ -2104,6 +2089,8 @@ class DesignLock(Diagnostic):
             )
         lines.extend(
             [
+                "",
+                *_SCOPE_LINES,
                 "",
                 f"diff-diff {self.diff_diff_version}, lock schema {self.schema_version}",
                 f"sha256 {self.sha256}",
@@ -2124,8 +2111,8 @@ class DesignLock(Diagnostic):
         -------
         estimator
             A fresh, unfitted instance of ``estimator_name`` configured with
-            ``params``. Fitting it, with ``estimator_kwargs``, is the
-            pre-specified analysis.
+            ``params``. Fitting it, with ``estimator_kwargs``, is the locked
+            analysis.
         """
         self._verify()
         if self.estimator_name not in _SUPPORTED_ESTIMATORS:
@@ -2180,16 +2167,16 @@ class DesignLock(Diagnostic):
         Returns
         -------
         DesignReconciliationResults
-            One check per item and an overall ``status``: ``"pre-specified"``
-            when every check that was run matches, otherwise ``"deviates"``.
+            One check per item and an overall ``status``: ``"match"`` when
+            every check that was run matches, otherwise ``"deviates"``.
 
         Notes
         -----
         This compares what the analyst declares with the lock. Fitted results
         do not record the constructor parameters or column names that
         produced them, so a parameter changed with ``set_params()`` after
-        fitting cannot be detected. ``"pre-specified"`` covers the listed
-        checks only.
+        fitting cannot be detected. ``"match"`` covers the listed checks
+        that were run, and says nothing about when the design was fixed.
 
         The data fingerprint covers every column the diagnosed panel had, on
         the locked periods. A column whose values changed there deviates;
@@ -2235,7 +2222,7 @@ class DesignLock(Diagnostic):
 
         deviates = any(check["status"] == _DEVIATES for check in checks)
         return DesignReconciliationResults(
-            status=_DEVIATES if deviates else _PRE_SPECIFIED,
+            status=_DEVIATES if deviates else _MATCH,
             checks=checks,
             label=self.label,
             lock_sha256=self.sha256,
@@ -2413,8 +2400,9 @@ class DesignReconciliationResults(Diagnostic):
     Attributes
     ----------
     status : str
-        ``"pre-specified"`` when every check that was run matches the lock,
-        otherwise ``"deviates"``. The size of a deviation is not graded.
+        ``"match"`` when every check that was run matches the lock,
+        otherwise ``"deviates"``. The size of a deviation is not graded, and
+        checks whose inputs were not passed are ``"not checked"``.
     checks : list of dict
         One entry per reconciled item, with keys ``item``, ``locked``,
         ``realized`` and ``status`` (``"match"``, ``"deviates"`` or
@@ -2433,9 +2421,11 @@ class DesignReconciliationResults(Diagnostic):
     def __repr__(self) -> str:
         """Concise string representation."""
         n_deviating = sum(1 for check in self.checks if check["status"] == _DEVIATES)
+        n_skipped = sum(1 for check in self.checks if check["status"] == _NOT_CHECKED)
         return (
             f"DesignReconciliationResults(status={self.status!r}, "
-            f"checks={len(self.checks)}, deviating={n_deviating})"
+            f"checks={len(self.checks)}, deviating={n_deviating}, "
+            f"not_checked={n_skipped})"
         )
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -2481,13 +2471,15 @@ class DesignReconciliationResults(Diagnostic):
         counts = {status: 0 for status in (_MATCH, _DEVIATES, _NOT_CHECKED)}
         for check in self.checks:
             counts[check["status"]] = counts.get(check["status"], 0) + 1
+        # The status is never shown without the checks that were not run.
+        skipped = f" - {counts[_NOT_CHECKED]} not checked" if counts[_NOT_CHECKED] else ""
         lines = [
             "=" * width,
             "Design Reconciliation (analysis vs. design lock)".center(width),
             "=" * width,
             "",
             f"{'Locked estimator:':<24} {self.label}",
-            f"{'Status:':<24} {self.status}",
+            f"{'Status:':<24} {self.status}{skipped}",
             f"{'Checks:':<24} {counts[_MATCH]} match, {counts[_DEVIATES]} deviate, "
             f"{counts[_NOT_CHECKED]} not checked",
             f"{'Lock sha256:':<24} {self.lock_sha256}",
@@ -2511,8 +2503,9 @@ class DesignReconciliationResults(Diagnostic):
         lines.extend(
             [
                 "",
-                "'pre-specified' means every check that was run matches the lock. It is",
-                "a statement about the listed items only, and deviations are not graded.",
+                "'match' means every check that was run agrees with the lock. It covers",
+                "what was declared to reconcile() and the listed items only; it does not",
+                "say when the design was fixed, and deviations are not graded.",
                 "=" * width,
             ]
         )

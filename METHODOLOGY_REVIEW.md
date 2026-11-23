@@ -1328,21 +1328,22 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 - The outcome-blind truncation never reads rows from the first real adoption on - `TestOutcomeBlindGuard`.
 - Paper-shaped findings on simulated panels - `tests/test_methodology_design.py`: with AR(1) outcomes (rho = 0.8, 50 units x 21 periods) classical TWFE standard errors reject a true null far above the nominal level while unit-clustered ones are near it (Bertrand et al.); with 2 of 40 units treated, asymptotic inference over-rejects, and with 20 it is near nominal (Mizushima-Powell).
 
-- Held-out periods are not read by the comparison, including for an integer outcome that pandas stores as float - `tests/test_design.py::TestHoldout`.
-- The lock run equals a plain run of the chosen estimator on the full panel at the derived seed, and fits only that estimator - `TestLock`; on the AR(1) panel its size for unit-clustered TWFE is near nominal - `tests/test_methodology_design.py::TestHeldOutRun`.
+- The whole untreated panel is compared; a truncated panel locks with its diagnosed periods; several estimators with adoption in the final period diagnose and lock - `tests/test_design.py::TestDiagnosedPanel`.
+- With several estimators the lock reruns the chosen one alone: the rerun equals a plain run of that estimator on the same panel at the derived seed, and fits only that estimator; the lock records the rerun's size verdict and warns with both runs' rates and counts when it differs from the comparison's - `TestLock`. On the AR(1) panel the rerun's size for unit-clustered TWFE is near nominal - `tests/test_methodology_design.py::TestLockRerun`.
+- Simulation evidence for the rerun (`benchmarks/python/design_lock_rerun.py` -> `benchmarks/data/design_lock_rerun.json`, five scenarios of 400 panels): the chosen estimator's rerun sits within about 1.4pp of its reference power, the comparison's own number within about 2.4pp, and holding periods out of the comparison (evaluated, not adopted) moves the rerun by under 1pp - `TestLockRerunEvidence`.
 - The design lock round-trips through JSON, detects edits, and rebuilds each of the eight estimators - `TestLockSerialization`, `TestToEstimator`.
 - Reconciliation reports each deviating item (class, parameter, fit keyword, column name, `alpha`, diagnosed data, unit count, balance, treated count, cohort count, post-window length) - `TestReconcile`.
 
 **Deviations and library choices (documented in REGISTRY `## DesignDiagnosis`):**
 - The size check, the minimum detectable effect on real data, the two-pre-period minimum and the data fingerprint have no paper source.
-- Held-out periods, their default count, the derived lock seed, the lock file hash and the binary `pre-specified` / `deviates` label are library choices; only the idea of reconciling the planned and the realized design is from Blair et al. (p.852). `reconcile` is a declaration check: fitted results do not record their configuration. The reduction in selection inflation from the held-out rerun is not validated numerically.
+- The lock rerun, the derived lock seed, the lock file hash and the binary `match` / `deviates` status are library choices; only the idea of reconciling the planned and the realized design is from Blair et al. (p.852). `reconcile` is a declaration check: fitted results do not record their configuration. `match` says the analysis agrees with the lock on the checks run; the lock does not record when it was made. The rerun removes the draw-level part of the overstatement from choosing; the panel-level part (about 1pp in the simulation) remains, and a search made of separate one-estimator calls gets no rerun. Random placebo assignment tests inference, not parallel trends.
 - A fit with non-finite inference is excluded from every rate; `simulate_power` alone counts it as a non-rejection.
 - RMSE is the existing `ddof = 1` form, not Blair et al.'s root mean squared error.
 - Adoption periods are declared; Bertrand et al.'s randomly drawn passage year is not implemented.
 
 **Not validated:** no R parity; the source papers' CPS tables are not reproduced.
 
-**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract, held-out periods, lock, reconcile) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
+**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract, lock, reconcile) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
 
 ---
 

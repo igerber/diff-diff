@@ -2420,8 +2420,8 @@ size = null_run.rejection_rate               # should be near alpha
 ok = result.size_controlled["cs"]            # False -> power is not meaningful
 mde = result.mde["cs"]                       # NaN unless size is controlled
 
-# Several estimators were compared, so the last periods were held out
-# (result.n_holdout). Lock the choice: only "cs" is rerun, with those periods.
+# Several estimators were compared, so locking the choice reruns "cs" alone on
+# the same panel with new placebo draws; the lock reports that run.
 lock = result.lock("cs", data=panel)
 open("design_lock.json", "w").write(lock.to_json())
 
@@ -2433,7 +2433,7 @@ fit = estimator.fit(analysis, outcome="sales", unit="store", time="year",
                     first_treat="adopted")
 check = lock.reconcile(estimator, outcome="sales", unit="store", time="year",
                        first_treat="adopted", data=analysis, results=fit)
-check.status                                 # "pre-specified" or "deviates"
+check.status                                 # "match" or "deviates"
 check.to_dataframe()                         # item, locked, realized, status
 ```
 
@@ -2441,28 +2441,33 @@ check.to_dataframe()                         # item, locked, realized, status
 `{label: estimator}` to compare variants of one class), `cohort_periods`
 (required), `treatment_fraction` or `n_treated` (exactly one), `effect_sizes`,
 `n_simulations=500`, `alpha=0.05`, `power=None`, `first_treat=None`,
-`resample_units=True`, `estimator_kwargs=None`, `seed=None`, `progress=True`,
-`n_holdout=None`.
+`resample_units=True`, `estimator_kwargs=None`, `seed=None`, `progress=True`.
 
-**Held-out periods:** with more than one estimator, the last `n_holdout` periods
-are not read by the comparison (default: half of the periods at or after the
-latest adoption period, rounded down; an error if that is zero; `n_holdout=0`
-compares on the whole panel). `result.lock(label, data=panel)` reruns only the
-chosen estimator with them, on fresh placebo draws, so its reported power is not
-taken from the runs used to choose it. `data` is required when periods were held
-out and must be the diagnosed panel.
+**What it does not test:** placebo treatment is assigned at random, so the runs
+test inference (size, power) on the panel's error structure, not parallel trends.
+
+**Lock rerun:** with more than one estimator, `result.lock(label, data=panel)`
+reruns only the chosen estimator on the same panel with new placebo draws and
+reports that run (`data` is required and must be the diagnosed panel). The rerun
+removes the part of the overstatement of the chosen estimator's power that comes
+from the draws; the part that comes from the panel itself remains (about one
+percentage point in the library's simulations). With one estimator there is no
+rerun, so a search made of separate one-estimator calls is not corrected. The
+lock's `size_controlled` is the rerun's verdict; a warning states both verdicts
+when they differ.
 
 **`DesignLock`:** plain JSON data. Fields include `label`, `estimator_name`,
 `params`, `estimator_kwargs`, the declared design, `time_periods`,
 `data_sha256`, `comparison_results` (every estimator compared),
-`holdout_results` (the chosen one's rerun), `size_controlled`, `mde`,
+`rerun_results` (the chosen one's rerun; empty with one estimator),
+`size_controlled`, `mde`,
 `schema_version` (`DESIGN_LOCK_SCHEMA_VERSION`), `sha256`. Methods:
 `to_json()`, `to_dict()`, `DesignLock.from_json()`, `DesignLock.from_dict()`,
 `to_estimator()`, `reconcile()`, `to_dataframe()`, `summary()`.
 
 **`lock.reconcile(estimator, outcome=, unit=, time=, first_treat= | treatment=
 (+ post=), estimator_kwargs=, data=, results=)`** returns
-`DesignReconciliationResults` with `status` (`"pre-specified"` or `"deviates"`)
+`DesignReconciliationResults` with `status` (`"match"` or `"deviates"`)
 and `checks` (one per item: `estimator_name`, `params.<name>`,
 `estimator_kwargs.<key>`, `outcome`, `unit`, `time`, `alpha`, and with `data`:
 `data_sha256`, `n_units`, `is_balanced`, `n_treated`, `n_cohorts`,
@@ -2470,7 +2475,9 @@ and `checks` (one per item: `estimator_name`, `params.<name>`,
 whose inputs were not passed are `"not checked"`. It compares what you declare
 with the lock (fitted results do not record their configuration), does not
 compare adoption dates (placebo dates lie inside the diagnosed panel), and
-`"pre-specified"` covers the listed checks only.
+`"match"` covers the checks that were run only. The lock does not record when it
+was made, so `"match"` does not establish that the design was fixed before the
+outcomes were seen.
 
 **Supported estimators:** DifferenceInDifferences, TwoWayFixedEffects (common
 timing only), CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD,
@@ -2479,7 +2486,7 @@ StackedDiD, EfficientDiD (common or staggered timing).
 **Returns** `DesignDiagnosisResults`: `results` (label -> list of
 `SimulationPowerResults`, aligned with `effect_sizes`; the first is the
 no-effect run), `size_controlled`, `n_nan_inference`, `mde`, `mde_results`,
-the declared design, `seed`, `data_sha256`, `n_holdout`, `time_periods`.
+the declared design, `seed`, `data_sha256`, `time_periods`.
 Methods: `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()`,
 `lock()`.
 
