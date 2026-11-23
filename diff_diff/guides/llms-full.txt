@@ -2389,6 +2389,67 @@ sim_result = simulate_power(
 )
 ```
 
+## Design Diagnosis
+
+Check a planned design on your own UNTREATED panel before any real analysis.
+`diagnose_design` assigns placebo treatments that follow the declared design,
+optionally adds a known effect to the placebo-treated observations, and fits
+every listed estimator on the same placebo draws. It never estimates a real
+treatment effect.
+
+```python
+from diff_diff import CallawaySantAnna, ImputationDiD, TwoWayFixedEffects, diagnose_design
+
+# `panel`: balanced, pre-treatment only (or pass first_treat= to truncate at
+# the earliest real adoption). One row per unit and period.
+result = diagnose_design(
+    panel, outcome="sales", unit="store", time="year",
+    estimators={"twfe": TwoWayFixedEffects(), "cs": CallawaySantAnna(),
+                "imputation": ImputationDiD()},
+    cohort_periods=[2019],       # planned adoption period(s); 2+ values = staggered
+    n_treated=12,                # or treatment_fraction=0.2
+    effect_sizes=[0.02, 0.05],   # injected effects on the outcome scale; 0 always runs
+    n_simulations=500,
+    power=0.80,                  # optional: minimum detectable effect search
+    seed=1,
+)
+result.print_summary()
+table = result.to_dataframe()    # one row per estimator and effect size
+null_run = result.results["cs"][0]           # SimulationPowerResults at effect 0
+size = null_run.rejection_rate               # should be near alpha
+ok = result.size_controlled["cs"]            # False -> power is not meaningful
+mde = result.mde["cs"]                       # NaN unless size is controlled
+```
+
+**Parameters:** `data`, `outcome`, `unit`, `time`, `estimators` (list, or dict
+`{label: estimator}` to compare variants of one class), `cohort_periods`
+(required), `treatment_fraction` or `n_treated` (exactly one), `effect_sizes`,
+`n_simulations=500`, `alpha=0.05`, `power=None`, `first_treat=None`,
+`resample_units=True`, `estimator_kwargs=None`, `seed=None`, `progress=True`.
+
+**Supported estimators:** DifferenceInDifferences, TwoWayFixedEffects (common
+timing only), CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD,
+StackedDiD, EfficientDiD (common or staggered timing).
+
+**Returns** `DesignDiagnosisResults`: `results` (label -> list of
+`SimulationPowerResults`, aligned with `effect_sizes`; the first is the
+no-effect run), `size_controlled`, `n_nan_inference`, `mde`, `mde_results`,
+the declared design, `seed`, `data_sha256`. Methods: `summary()`,
+`print_summary()`, `to_dataframe()`, `to_dict()`.
+
+**Reading the output:** estimators come back in input order and are never
+ranked - do not pick the one with the highest power or the smallest MDE without
+checking `size_controlled` first. An estimator that over-rejects under no effect
+(for example unclustered standard errors with serially correlated outcomes, or
+asymptotic inference with very few treated units) shows inflated power.
+
+**Refusals:** unbalanced panels, missing outcomes, non-numeric `time`, a
+non-zero `anticipation`, `vcov_type="conley"`, an estimator `alpha` different from `alpha`,
+DifferenceInDifferences / TwoWayFixedEffects under a staggered declaration, and
+the fit keywords `formula`, `survey_design`, `post_periods` and the column-role
+names, and (with the default `resample_units=True`) an estimator whose
+`cluster` names a column other than `unit`.
+
 ## Pre-Trends Power Analysis
 
 ```python

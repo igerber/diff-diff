@@ -513,6 +513,9 @@ _RULE1_TIME_SURFACES = (
     "CallawaySantAnna.fit[time]",
     "ChaisemartinDHaultfoeuille.fit[time]",
     "DMLDiD.fit[time]",
+    # diagnose_design takes the calendar period column, and its results
+    # container echoes that column name.
+    "DesignDiagnosisResults.time",
     "DurationDiD.fit[time]",
     "ChangesInChanges.fit[time]",
     "ContinuousDiD.fit[time]",
@@ -537,6 +540,7 @@ _RULE1_TIME_SURFACES = (
     "agent_workflow[time]",
     "check_parallel_trends[time]",
     "check_parallel_trends_robust[time]",
+    "diagnose_design[time]",
     "did_had_pretest_workflow[time]",
     "equivalence_test_trends[time]",
     "joint_homogeneity_test[time]",

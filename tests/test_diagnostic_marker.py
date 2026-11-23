@@ -41,6 +41,7 @@ DIAGNOSTIC_ROSTER = [
     "SimulationPowerResults",
     "SimulationMDEResults",
     "SimulationSampleSizeResults",
+    "DesignDiagnosisResults",
     "PlaceboTestResults",
     "QUGTestResults",
     "StuteTestResults",

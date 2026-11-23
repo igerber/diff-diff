@@ -250,6 +250,18 @@ Power analysis for study design:
    diff_diff.simulate_mde
    diff_diff.simulate_sample_size
 
+Design Diagnosis
+----------------
+
+Size and power of candidate estimators on your own untreated panel:
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.diagnose_design
+   diff_diff.DesignDiagnosisResults
+
 Pre-Trends Power Analysis
 -------------------------
 
@@ -412,6 +424,7 @@ Diagnostics & Inference
    bacon
    honest_did
    power
+   design
    pretrends
    twfe_weights
 

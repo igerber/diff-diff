@@ -1440,6 +1440,41 @@ sources:
       - path: docs/index.rst
         type: user_guide
         note: "Diagnostics & Sensitivity table row"
+      - path: docs/methodology/REGISTRY.md
+        section: "DesignDiagnosis"
+        type: methodology
+        note: "diagnose_design drives simulate_power / simulate_mde unchanged: the replicate-seed stream, the unregistered-estimator fit path, the narrow exception list and the MDE bracket are relied on"
+
+  diff_diff/design.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "DesignDiagnosis"
+        type: methodology
+      - path: docs/methodology/papers/bertrand-duflo-mullainathan-2004-review.md
+        type: methodology
+        note: "Placebo assignment on real data, unit resampling, additive effect injection"
+      - path: docs/methodology/papers/mizushima-powell-2025-review.md
+        type: methodology
+        note: "Staggered placebo adoption; few-treated-unit over-rejection"
+      - path: docs/methodology/papers/coglianese-fang-2026-review.md
+        type: methodology
+        note: "Several estimators on the same placebo events"
+      - path: docs/methodology/papers/blair-2019-review.md
+        type: methodology
+        note: "Diagnosand vocabulary (bias, RMSE, power, coverage)"
+      - path: docs/api/design.rst
+        type: api_reference
+      - path: docs/index.rst
+        type: user_guide
+        note: "Diagnostics & Sensitivity table row"
+      - path: README.md
+        type: user_guide
+        note: "Diagnostics & Sensitivity catalog line"
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        type: user_guide
 
   # ── Survey support ─────────────────────────────────────────────────
 
