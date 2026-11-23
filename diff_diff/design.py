@@ -213,9 +213,10 @@ class DesignDiagnosisResults(Diagnostic):
     data_columns: List[str]
     n_holdout: int
     time_periods: List[Any]
-    # Each estimator's parameters as diagnosed (lock() refuses an instance
-    # that was changed afterwards) and the labels a held-out run was made for.
+    # The configuration as diagnosed (lock() refuses one that was changed
+    # afterwards) and the labels a held-out run was made for.
     _params: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
+    _fit_keywords: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
     _holdout_labels: List[str] = field(default_factory=list, repr=False, compare=False)
 
     def __repr__(self) -> str:
@@ -683,14 +684,19 @@ def _json_value(value: Any, path: str, nonfinite: str = "raise") -> Any:
     raise ValueError(f"{path} holds a {type(value).__name__}, which cannot be written as JSON")
 
 
-def _params_snapshot(estimator: Any) -> Dict[str, Any]:
-    """Each constructor parameter as JSON data, or a marker when it has none."""
+def _snapshot(values: Mapping[str, Any]) -> Dict[str, Any]:
+    """Each value as JSON data, or a marker when it has no JSON form.
+
+    Taken at diagnosis time and compared again in ``lock()``: the stored
+    estimators and ``fit()`` keywords are live objects, and a lock must record
+    the configuration that produced the numbers it reports.
+    """
     snapshot: Dict[str, Any] = {}
-    for name, value in estimator.get_params().items():
+    for name, value in values.items():
         try:
-            snapshot[name] = _json_value(value, name)
+            snapshot[str(name)] = _json_value(value, str(name))
         except ValueError:
-            snapshot[name] = ["<not lockable>", repr(value)]
+            snapshot[str(name)] = ["<not lockable>", repr(value)]
     return snapshot
 
 
@@ -947,6 +953,12 @@ def _resolve_n_holdout(
 def _select_columns(frame: pd.DataFrame, data_columns: Sequence[str]) -> pd.DataFrame:
     """The columns a fingerprint covers, found by their names as strings."""
     by_name = {str(c): c for c in frame.columns}
+    if len(by_name) != len(frame.columns):
+        # Otherwise a diagnosed column could be swapped for a same-named one.
+        raise ValueError(
+            "data has column labels that are equal as strings (for example 1 and "
+            "'1'), so the diagnosed columns cannot be identified. Rename them."
+        )
     missing = [name for name in data_columns if name not in by_name]
     if missing:
         raise ValueError(f"Column(s) {missing} of the diagnosed panel are not in data.")
@@ -1516,7 +1528,8 @@ def diagnose_design(
         raise ValueError(f"power must satisfy alpha < power < 1, got {power}.")
 
     resolved = _resolve_estimators(estimators)
-    fit_extras = dict(estimator_kwargs or {})
+    # A private copy: the caller's dict and the lists in it stay theirs.
+    fit_extras = copy.deepcopy(dict(estimator_kwargs or {}))
     effects = _resolve_effect_sizes(effect_sizes)
 
     untreated, n_dropped = _untreated_rows(data, outcome, unit, time, first_treat)
@@ -1642,7 +1655,8 @@ def diagnose_design(
         data_columns=data_columns,
         n_holdout=held_out,
         time_periods=periods.tolist(),
-        _params={label: _params_snapshot(est) for label, est in resolved.items()},
+        _params={label: _snapshot(est.get_params()) for label, est in resolved.items()},
+        _fit_keywords=_snapshot(fit_extras),
     )
 
 
@@ -1680,11 +1694,20 @@ def _lock(
     chosen = diagnosis.estimators[label]
 
     snapshot = diagnosis._params.get(label)
-    if snapshot is not None and _params_snapshot(chosen) != snapshot:
+    if snapshot is not None and _snapshot(chosen.get_params()) != snapshot:
         raise ValueError(
             f"The estimator stored under '{label}' was changed after the diagnosis "
             f"(its parameters no longer match the ones that were diagnosed). Run "
             f"diagnose_design again with the configuration you want to lock."
+        )
+    if (
+        diagnosis._fit_keywords is not None
+        and _snapshot(diagnosis.estimator_kwargs) != diagnosis._fit_keywords
+    ):
+        raise ValueError(
+            "estimator_kwargs was changed after the diagnosis (it no longer matches "
+            "the fit() keywords that were diagnosed). Run diagnose_design again with "
+            "the configuration you want to lock."
         )
     problems = _unlockable(chosen, diagnosis.estimator_kwargs)
     if problems:

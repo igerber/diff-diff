@@ -1241,6 +1241,51 @@ class TestLock:
         with pytest.raises(ValueError, match="changed after the diagnosis"):
             result.lock("did")
 
+    @pytest.mark.parametrize("n_holdout", [0, 2])
+    def test_fit_keywords_changed_after_the_diagnosis(self, n_holdout):
+        panel = make_panel(n_periods=10, seed=85)
+        panel["x"] = np.random.default_rng(2).normal(size=len(panel))
+        covariates = ["x"]
+        result = run(
+            panel,
+            {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
+            cohort_periods=[6],
+            n_holdout=n_holdout,
+            n_simulations=5,
+            estimator_kwargs={"covariates": covariates},
+        )
+        # The caller's own list is not the one the results keep.
+        covariates.clear()
+        assert result.estimator_kwargs == {"covariates": ["x"]}
+        lock = result.lock("did", data=panel, progress=False)
+        assert lock.estimator_kwargs == {"covariates": ["x"]}
+        # Editing the stored keywords is refused.
+        result.estimator_kwargs["covariates"].clear()
+        with pytest.raises(ValueError, match="estimator_kwargs was changed after"):
+            result.lock("did", data=panel, progress=False)
+
+    def test_column_swapped_for_a_same_named_one_is_refused(self):
+        panel, _ = diagnosed()
+        panel[1] = np.arange(len(panel), dtype=float)
+        result = run(
+            panel,
+            {"did": DifferenceInDifferences(), "twfe": TwoWayFixedEffects()},
+            cohort_periods=[6],
+            n_holdout=2,
+            n_simulations=5,
+        )
+        lock = result.lock("did", data=panel, progress=False)
+        swapped = panel.copy()
+        swapped["1"] = swapped[1]  # the diagnosed values, under a string label
+        swapped[1] = 0.0  # the diagnosed column, changed
+        with pytest.raises(ValueError, match="equal as strings"):
+            result.lock("did", data=swapped, progress=False)
+        reconciliation = lock.reconcile(
+            DifferenceInDifferences(), outcome="y", unit="unit", time="period", data=swapped
+        )
+        assert statuses(reconciliation)["data_sha256"] == "deviates"
+        assert reconciliation.status == "deviates"
+
     def test_without_held_out_periods_no_data_is_needed(self):
         panel = make_panel(seed=82)
         # A calendar with gaps cannot be rebuilt from a period count.

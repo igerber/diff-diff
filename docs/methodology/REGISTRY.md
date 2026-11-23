@@ -7031,7 +7031,7 @@ with data:     data_sha256     fingerprint of the rows in the locked periods
 - Any other exception propagates.
 - Fail-closed pre-flight: a candidate that cannot produce a finite, scalar fit on any of the first five placebo replicates is refused with its first error before the run starts.
 - Several candidates with the latest adoption in the final period: the default held-out count is zero periods, which is refused with a message naming `n_holdout=0`.
-- `lock` refuses: a missing `data` when periods were held out; a panel whose periods or fingerprint differ from the diagnosed one; a stored candidate whose parameters were changed after the diagnosis; a parameter or `fit()` keyword that is not JSON data or is a non-finite number (`diagnose_design` warns about these before the run).
+- `lock` refuses: a missing `data` when periods were held out; a panel whose periods or fingerprint differ from the diagnosed one; a stored candidate whose parameters, or stored `fit()` keywords, were changed after the diagnosis (the keywords are copied when the diagnosis starts, so later edits to the caller's own objects have no effect); a panel whose column labels are equal as strings; a parameter or `fit()` keyword that is not JSON data or is a non-finite number (`diagnose_design` warns about these before the run).
 - `reconcile` does not raise because of what the analysis looks like: a missing column, an adoption column that varies within a unit, a `post` column that varies within a period, or a realized parameter that is not JSON data is reported as a deviation. Items whose inputs were not passed are reported as `not checked`.
 - A lock whose content no longer matches its `sha256` is refused by `from_dict`, `from_json`, `reconcile` and `to_estimator`.
 
