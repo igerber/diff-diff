@@ -289,7 +289,8 @@ LONG_WINDOW = ("S3_window", "S5_default_replicates")
 def evidence():
     # Skip, not fail, when the file is absent: the CI matrix runs the tests from an
     # isolated copy of tests/ that has no benchmarks/ directory (the repo convention
-    # for every test reading benchmarks/data). Runs from a checkout enforce it.
+    # for every test reading benchmarks/data). The file is tracked, so runs from a
+    # checkout read it.
     if not EVIDENCE.exists():
         pytest.skip(
             "benchmarks/data/design_lock_rerun.json is absent; regenerate it with "
