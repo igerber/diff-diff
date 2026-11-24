@@ -1462,7 +1462,7 @@ sources:
         note: "Several estimators on the same placebo events"
       - path: docs/methodology/papers/blair-2019-review.md
         type: methodology
-        note: "Diagnosand vocabulary (bias, RMSE, power, coverage)"
+        note: "Diagnosand vocabulary (bias, RMSE, power, coverage); reconciling the planned and the realized design (DesignLock.reconcile)"
       - path: docs/api/design.rst
         type: api_reference
       - path: docs/index.rst

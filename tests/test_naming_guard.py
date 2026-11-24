@@ -516,6 +516,10 @@ _RULE1_TIME_SURFACES = (
     # diagnose_design takes the calendar period column, and its results
     # container echoes that column name.
     "DesignDiagnosisResults.time",
+    # The design lock echoes that column name, and reconcile takes the
+    # calendar column of the analysis.
+    "DesignLock.reconcile[time]",
+    "DesignLock.time",
     "DurationDiD.fit[time]",
     "ChangesInChanges.fit[time]",
     "ContinuousDiD.fit[time]",
@@ -582,6 +586,10 @@ SURFACE_ALLOWLIST = {
         )
         for fn in ("simulate_power", "simulate_mde", "simulate_sample_size")
     },
+    "DesignLock.reconcile[estimator]": (
+        "the estimator INSTANCE used for the analysis, as in the power API; "
+        "unrelated to CiC's results method tag (M-143)"
+    ),
     **{f"{cls}.groups": _CS_COHORT for cls in _CS_GROUPS_CLASSES},
     "GroupTimeEffect.group": _CS_COHORT,
     "HADPretestReport.aggregate": (

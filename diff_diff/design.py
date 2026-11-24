@@ -13,6 +13,16 @@ The run is outcome-blind: no real treatment effect is ever estimated. When a
 real treatment column is supplied, every period from the earliest real
 adoption onward is dropped before anything else happens.
 
+Placebo treatment is assigned at random, so the diagnosis tests inference
+(size, power) on the panel's own error structure. It does not test parallel
+trends.
+
+:meth:`DesignDiagnosisResults.lock` records one estimator and its
+configuration as a :class:`DesignLock`. When several estimators were compared
+it first reruns the chosen one alone with new placebo draws and reports that
+run. :meth:`DesignLock.reconcile` checks the analysis that was finally run
+against the lock.
+
 References
 ----------
 Bertrand, M., Duflo, E., & Mullainathan, S. (2004). "How Much Should We Trust
@@ -31,12 +41,14 @@ Mizushima, Y., & Powell, D. (2025). "Inference with Modern
     Difference-in-Differences Methods." SSRN working paper 5221387.
 """
 
+import copy
 import dataclasses
 import hashlib
 import inspect
 import json
+import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -51,7 +63,15 @@ from diff_diff.power import (
 )
 from diff_diff.results_base import Diagnostic
 
-__all__ = ["diagnose_design", "DesignDiagnosisResults"]
+__all__ = [
+    "diagnose_design",
+    "DesignDiagnosisResults",
+    "DesignLock",
+    "DesignReconciliationResults",
+    "DESIGN_LOCK_SCHEMA_VERSION",
+]
+
+DESIGN_LOCK_SCHEMA_VERSION = "1.0"
 
 # Estimators that need one common post indicator (common timing only).
 _COMMON_TIMING_ESTIMATORS = ("DifferenceInDifferences", "TwoWayFixedEffects")
@@ -101,6 +121,12 @@ _PREFLIGHT_ATTEMPTS = 5
 _MAX_LOST_SHARE = 0.10
 _MIN_PRE_PERIODS = 2
 _MAX_ERROR_MESSAGES = 5
+
+# Printed by both summaries: what a placebo diagnosis does and does not test.
+_SCOPE_LINES = (
+    "Placebo treatment is assigned at random, so these runs test inference",
+    "(size, power) on this panel's error structure, not parallel trends.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +188,8 @@ class DesignDiagnosisResults(Diagnostic):
         Fingerprint of the panel actually used.
     data_columns : list of str
         Columns the fingerprint covers.
+    time_periods : list
+        Period values of the panel actually used.
     """
 
     results: Dict[str, List[SimulationPowerResults]]
@@ -189,6 +217,13 @@ class DesignDiagnosisResults(Diagnostic):
     n_dropped: int
     data_sha256: str
     data_columns: List[str]
+    time_periods: List[Any]
+    # The configuration as diagnosed (lock() refuses one that was changed
+    # afterwards) and the labels lock() has rerun.
+    _classes: Dict[str, type] = field(default_factory=dict, repr=False, compare=False)
+    _params: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
+    _fit_keywords: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
+    _rerun_labels: List[str] = field(default_factory=list, repr=False, compare=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -211,13 +246,15 @@ class DesignDiagnosisResults(Diagnostic):
         """
         rows: List[Dict[str, Any]] = []
         for label, cells in self.results.items():
-            for i, cell in enumerate(cells):
-                row: Dict[str, Any] = {"label": label}
-                row.update(cell.to_dict())
-                row["size_controlled"] = self.size_controlled[label]
-                row["n_nan_inference"] = self.n_nan_inference[label][i]
-                row["mde"] = self.mde[label]
-                rows.append(row)
+            rows.extend(
+                _records(
+                    label,
+                    cells,
+                    self.size_controlled[label],
+                    self.n_nan_inference[label],
+                    self.mde[label],
+                )
+            )
         return pd.DataFrame(rows)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -257,6 +294,7 @@ class DesignDiagnosisResults(Diagnostic):
             "n_dropped": self.n_dropped,
             "data_sha256": self.data_sha256,
             "data_columns": list(self.data_columns),
+            "time_periods": list(self.time_periods),
             "size_controlled": dict(self.size_controlled),
             "mde": dict(self.mde),
             "results": self.to_dataframe().to_dict("records"),
@@ -327,6 +365,7 @@ class DesignDiagnosisResults(Diagnostic):
                 "Estimators are listed in input order and are not ranked. 'Size OK' is",
                 "a check on the no-effect runs only; power for an estimator that fails",
                 "it is not meaningful.",
+                *_SCOPE_LINES,
                 "=" * width,
             ]
         )
@@ -335,6 +374,78 @@ class DesignDiagnosisResults(Diagnostic):
     def print_summary(self) -> None:
         """Print the summary to stdout."""
         print(self.summary())
+
+    def lock(
+        self,
+        label: Optional[str] = None,
+        data: Optional[pd.DataFrame] = None,
+        progress: bool = True,
+    ) -> "DesignLock":
+        """
+        Record one estimator and its configuration as a :class:`DesignLock`.
+
+        When several estimators were diagnosed, the chosen one alone is rerun
+        on the same panel with new placebo draws, and the lock reports that
+        run. The rerun's draws were not used to choose, which removes the
+        part of the overstatement of the chosen estimator's power that comes
+        from the draws. The part that comes from the panel itself remains
+        (about one percentage point in the library's simulations; see the
+        methodology registry). When one estimator was diagnosed nothing was
+        chosen, so there is no rerun and the lock reports the diagnosis.
+
+        Parameters
+        ----------
+        label : str, optional
+            Key of the chosen entry of ``estimators``. May be omitted only
+            when one estimator was diagnosed.
+        data : pd.DataFrame, optional
+            The panel that was passed to :func:`diagnose_design`. Required
+            when several estimators were diagnosed (the results do not keep
+            the panel). Its periods and fingerprint must match the diagnosed
+            panel (``time_periods``, ``data_sha256``).
+        progress : bool, default=True
+            Print one line per effect of the rerun.
+
+        Returns
+        -------
+        DesignLock
+            The recorded design. Write ``lock.to_json()`` to a file to keep
+            it; :meth:`DesignLock.reconcile` checks an analysis against it.
+            The lock does not record when it was made.
+
+        Notes
+        -----
+        The rerun uses a seed derived from the recorded one, so it cannot be
+        re-rolled. A rerun for a second label emits a warning: the two runs
+        would amount to a second comparison.
+
+        The lock's ``size_controlled`` is the rerun's verdict. If it differs
+        from the comparison's verdict a warning states both.
+
+        A search made of separate :func:`diagnose_design` calls with one
+        estimator each is not visible here: each of those locks reports its
+        own diagnosis, with no rerun.
+        """
+        return _lock(self, label, data, progress)
+
+
+def _records(
+    label: str,
+    cells: Sequence[Any],
+    size_controlled: bool,
+    n_nan_inference: Sequence[int],
+    mde: float,
+) -> List[Dict[str, Any]]:
+    """One row per effect size for one estimator (the ``to_dataframe`` rows)."""
+    rows: List[Dict[str, Any]] = []
+    for i, cell in enumerate(cells):
+        row: Dict[str, Any] = {"label": label}
+        row.update(cell.to_dict())
+        row["size_controlled"] = size_controlled
+        row["n_nan_inference"] = n_nan_inference[i]
+        row["mde"] = mde
+        rows.append(row)
+    return rows
 
 
 def _fmt_rate(value: float) -> str:
@@ -370,7 +481,7 @@ class _WarningCapture:
         self._ctx.__exit__(*exc_info)
 
 
-def _reemit(label: str, records: Sequence[warnings.WarningMessage]) -> None:
+def _reemit(label: str, records: Sequence[warnings.WarningMessage], stacklevel: int = 3) -> None:
     """Re-emit captured warnings once per (category, source), labelled.
 
     Estimator warnings embed per-replicate values, so they are aggregated by
@@ -384,7 +495,7 @@ def _reemit(label: str, records: Sequence[warnings.WarningMessage]) -> None:
         grouped[key] = (first, count + 1)
     for (category, _filename, _lineno), (message, count) in grouped.items():
         suffix = f" (raised {count} times; first message shown)" if count > 1 else ""
-        warnings.warn(f"[{label}] {message}{suffix}", category, stacklevel=3)
+        warnings.warn(f"[{label}] {message}{suffix}", category, stacklevel=stacklevel)
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +603,13 @@ def _is_missing(value: Any) -> bool:
 
 
 def _encode_cell(value: Any) -> List[str]:
-    """Type-tagged text for one cell, so distinct values never encode alike."""
+    """Tagged text for one cell, so distinct values never encode alike.
+
+    Numbers are encoded by value, not by storage type: ``1`` and ``1.0`` are
+    the same cell. pandas stores an integer column as float as soon as any
+    row is missing, so a type tag would make the digest of some rows depend
+    on rows outside them.
+    """
     if _is_missing(value):
         return ["n", ""]
     if isinstance(value, (bool, np.bool_)):
@@ -500,7 +617,10 @@ def _encode_cell(value: Any) -> List[str]:
     if isinstance(value, (int, np.integer)):
         return ["i", str(int(value))]
     if isinstance(value, (float, np.floating)):
-        return ["f", format(float(value), ".17g")]
+        number = float(value)
+        if number.is_integer():
+            return ["i", str(int(number))]
+        return ["f", format(number, ".17g")]
     if isinstance(value, np.datetime64):
         return ["t", pd.Timestamp(value).isoformat()]
     if isinstance(value, (datetime, date)):
@@ -536,6 +656,85 @@ def _data_fingerprint(panel: pd.DataFrame, unit: str, time: str) -> Tuple[str, L
         digest.update(b"\n")
         digest.update(line.encode("utf-8"))
     return digest.hexdigest(), columns
+
+
+# ---------------------------------------------------------------------------
+# JSON values of a design lock
+# ---------------------------------------------------------------------------
+
+
+def _json_value(value: Any, path: str, nonfinite: str = "raise") -> Any:
+    """``value`` as plain JSON data, or ``ValueError`` naming ``path``.
+
+    Strict on purpose: a lock must rebuild the estimator exactly, so anything
+    that is not a JSON scalar, list or string-keyed mapping is refused instead
+    of being passed through. ``nonfinite="none"`` maps NaN and infinities to
+    ``None`` (result records); ``"raise"`` refuses them (configuration).
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        if math.isfinite(number):
+            return number
+        if nonfinite == "none":
+            return None
+        raise ValueError(f"{path} is a non-finite number ({number!r})")
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item, f"{path}[{i}]", nonfinite) for i, item in enumerate(value)]
+    if isinstance(value, Mapping):
+        converted: Dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} has a key that is not a string ({key!r})")
+            converted[key] = _json_value(item, f"{path}.{key}", nonfinite)
+        return converted
+    raise ValueError(f"{path} holds a {type(value).__name__}, which cannot be written as JSON")
+
+
+def _snapshot(values: Mapping[str, Any]) -> Dict[str, Any]:
+    """Each value as JSON data, or a marker when it has no JSON form.
+
+    Taken at diagnosis time and compared again in ``lock()``: the stored
+    estimators and ``fit()`` keywords are live objects, and a lock must record
+    the configuration that produced the numbers it reports.
+    """
+    snapshot: Dict[str, Any] = {}
+    for name, value in values.items():
+        try:
+            snapshot[str(name)] = _json_value(value, str(name))
+        except ValueError:
+            snapshot[str(name)] = ["<not lockable>", repr(value)]
+    return snapshot
+
+
+def _unlockable(estimator: Any, estimator_kwargs: Dict[str, Any]) -> List[str]:
+    """Why ``lock()`` would refuse this configuration (empty when it would not)."""
+    problems: List[str] = []
+    for group, values in (
+        ("params", estimator.get_params()),
+        ("estimator_kwargs", estimator_kwargs),
+    ):
+        for name, value in values.items():
+            try:
+                _json_value(value, f"{group}.{name}")
+            except ValueError as exc:
+                problems.append(str(exc))
+    return problems
+
+
+def _lock_digest(payload: Mapping[str, Any]) -> str:
+    """SHA-256 of the canonical JSON of a lock's fields (without ``sha256``)."""
+    text = json.dumps(
+        payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -648,14 +847,17 @@ def _validate_estimator_kwargs(resolved: Dict[str, Any], estimator_kwargs: Dict[
             )
 
 
-def _prepare_panel(
+def _untreated_rows(
     data: pd.DataFrame,
     outcome: str,
     unit: str,
     time: str,
     first_treat: Optional[str],
 ) -> Tuple[pd.DataFrame, int]:
-    """Validate the panel and drop every row from the earliest real adoption on."""
+    """Drop every row from the earliest real adoption on.
+
+    Reads only the ``unit``, ``time`` and ``first_treat`` columns.
+    """
     if not isinstance(data, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame.")
     needed = [outcome, unit, time] + ([first_treat] if first_treat is not None else [])
@@ -707,6 +909,11 @@ def _prepare_panel(
 
     if len(panel) == 0:
         raise ValueError("No untreated rows remain after truncation.")
+    return panel, n_dropped
+
+
+def _check_panel(panel: pd.DataFrame, outcome: str, unit: str, time: str) -> pd.DataFrame:
+    """Validate outcomes and balance; return the panel sorted by (unit, time)."""
     if not pd.api.types.is_numeric_dtype(panel[outcome]) or pd.api.types.is_bool_dtype(
         panel[outcome]
     ):
@@ -723,8 +930,22 @@ def _prepare_panel(
             f"every period); found {len(panel)} rows for {n_units} units x "
             f"{n_periods} periods."
         )
-    panel = panel.sort_values([unit, time], kind="mergesort").reset_index(drop=True)
-    return panel, n_dropped
+    return panel.sort_values([unit, time], kind="mergesort").reset_index(drop=True)
+
+
+def _select_columns(frame: pd.DataFrame, data_columns: Sequence[str]) -> pd.DataFrame:
+    """The columns a fingerprint covers, found by their names as strings."""
+    by_name = {str(c): c for c in frame.columns}
+    if len(by_name) != len(frame.columns):
+        # Otherwise a diagnosed column could be swapped for a same-named one.
+        raise ValueError(
+            "data has column labels that are equal as strings (for example 1 and "
+            "'1'), so the diagnosed columns cannot be identified. Rename them."
+        )
+    missing = [name for name in data_columns if name not in by_name]
+    if missing:
+        raise ValueError(f"Column(s) {missing} of the diagnosed panel are not in data.")
+    return frame[[by_name[name] for name in data_columns]]
 
 
 def _validate_cohort_periods(cohort_periods: Any, periods: np.ndarray) -> List[Any]:
@@ -1071,6 +1292,86 @@ def _run_mde(
     return found, float(found.mde)
 
 
+def _run_estimator(
+    caller: str,
+    label: str,
+    estimator: Any,
+    effects: Sequence[float],
+    data_generator: Callable[..., pd.DataFrame],
+    fit_kwargs: Dict[str, Any],
+    n_units: int,
+    n_periods: int,
+    n_simulations: int,
+    alpha: float,
+    power: Optional[float],
+    seed: int,
+    progress: bool,
+    stacklevel: int = 4,
+) -> Tuple[List[Any], List[int], bool, Optional[Any], float]:
+    """Every effect size, the size check and the MDE search for one estimator.
+
+    Returns the cells, the non-finite-inference counts, whether the size
+    check passed, the MDE search result (``None`` when it did not run) and
+    the reported MDE (NaN when not reported). Warnings are re-emitted with
+    the label.
+    """
+    cells: List[Any] = []
+    nan_counts: List[int] = []
+    null_adapter: Optional[_PlaceboFit] = None
+    for effect in effects:
+        with _WarningCapture() as capture:
+            cell, adapter = _run_cell(
+                estimator,
+                effect,
+                data_generator,
+                fit_kwargs,
+                n_units,
+                n_periods,
+                n_simulations,
+                alpha,
+                seed,
+            )
+        _reemit(label, capture.records, stacklevel)
+        cells.append(cell)
+        nan_counts.append(adapter.n_nan)
+        if null_adapter is None:
+            null_adapter = adapter
+        if progress:
+            print(
+                f"  {caller}: {label}, effect={effect:g}: "
+                f"rejection rate {_fmt_rate(cell.power)} "
+                f"({cell.n_simulations} scored, {adapter.n_lost} lost)"
+            )
+    assert null_adapter is not None
+    null_cell = cells[0]
+    size_ok = _size_controlled(
+        float(null_cell.rejection_rate),
+        int(null_cell.n_simulations),
+        null_adapter.n_lost,
+        alpha,
+    )
+    found: Optional[Any] = None
+    value = float("nan")
+    if power is not None and size_ok:
+        with _WarningCapture() as capture:
+            found, value = _run_mde(
+                estimator,
+                null_cell,
+                data_generator,
+                fit_kwargs,
+                n_units,
+                n_periods,
+                n_simulations,
+                alpha,
+                power,
+                seed,
+            )
+        _reemit(label, capture.records, stacklevel)
+        if progress:
+            print(f"  {caller}: {label}, MDE search: {_fmt_num(value)}")
+    return cells, nan_counts, size_ok, found, value
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -1201,19 +1502,22 @@ def diagnose_design(
         raise ValueError(f"power must satisfy alpha < power < 1, got {power}.")
 
     resolved = _resolve_estimators(estimators)
-    fit_extras = dict(estimator_kwargs or {})
+    # A private copy: the caller's dict and the lists in it stay theirs.
+    fit_extras = copy.deepcopy(dict(estimator_kwargs or {}))
     effects = _resolve_effect_sizes(effect_sizes)
 
-    panel, n_dropped = _prepare_panel(data, outcome, unit, time, first_treat)
-    periods = np.unique(_period_values(panel[time]))
-    n_periods = len(periods)
-    n_units = panel[unit].nunique()
-    if n_periods < _MIN_PRE_PERIODS + 1:
+    untreated, n_dropped = _untreated_rows(data, outcome, unit, time, first_treat)
+    all_periods = np.unique(_period_values(untreated[time]))
+    if len(all_periods) < _MIN_PRE_PERIODS + 1:
         raise ValueError(
-            f"Too few periods: the untreated panel has {n_periods} period(s); at "
+            f"Too few periods: the untreated panel has {len(all_periods)} period(s); at "
             f"least {_MIN_PRE_PERIODS + 1} are needed."
         )
-    declared = _validate_cohort_periods(cohort_periods, periods)
+    declared = _validate_cohort_periods(cohort_periods, all_periods)
+    periods = all_periods
+    panel = _check_panel(untreated, outcome, unit, time)
+    n_periods = len(periods)
+    n_units = panel[unit].nunique()
     count = _resolve_n_treated(treatment_fraction, n_treated, n_units)
     _validate_estimators(
         resolved,
@@ -1238,6 +1542,14 @@ def diagnose_design(
                 UserWarning,
                 stacklevel=2,
             )
+        problems = _unlockable(est, fit_extras)
+        if problems:
+            warnings.warn(
+                f"[{label}] cannot be recorded in a design lock: {'; '.join(problems)}. "
+                f"The diagnosis runs, but lock() will refuse this estimator.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     data_sha256, data_columns = _data_fingerprint(panel, unit, time)
     data_generator = _make_placebo_generator(
@@ -1259,64 +1571,27 @@ def diagnose_design(
     mde: Dict[str, float] = {}
 
     for label, est in resolved.items():
-        cells: List[SimulationPowerResults] = []
-        nan_counts: List[int] = []
-        null_adapter: Optional[_PlaceboFit] = None
-        for effect in effects:
-            with _WarningCapture() as capture:
-                cell, adapter = _run_cell(
-                    est,
-                    effect,
-                    data_generator,
-                    fit_kwargs[label],
-                    n_units,
-                    n_periods,
-                    int(n_simulations),
-                    alpha,
-                    resolved_seed,
-                )
-            _reemit(label, capture.records)
-            cells.append(cell)
-            nan_counts.append(adapter.n_nan)
-            if null_adapter is None:
-                null_adapter = adapter
-            if progress:
-                print(
-                    f"  diagnose_design: {label}, effect={effect:g}: "
-                    f"rejection rate {_fmt_rate(cell.power)} "
-                    f"({cell.n_simulations} scored, {adapter.n_lost} lost)"
-                )
-        assert null_adapter is not None
-        null_cell = cells[0]
+        cells, nan_counts, size_ok, found, value = _run_estimator(
+            "diagnose_design",
+            label,
+            est,
+            effects,
+            data_generator,
+            fit_kwargs[label],
+            n_units,
+            n_periods,
+            int(n_simulations),
+            alpha,
+            power,
+            resolved_seed,
+            progress,
+        )
         results[label] = cells
         n_nan_inference[label] = nan_counts
-        size_controlled[label] = _size_controlled(
-            float(null_cell.rejection_rate),
-            int(null_cell.n_simulations),
-            null_adapter.n_lost,
-            alpha,
-        )
-        mde[label] = float("nan")
-        if power is not None and size_controlled[label]:
-            with _WarningCapture() as capture:
-                found, value = _run_mde(
-                    est,
-                    null_cell,
-                    data_generator,
-                    fit_kwargs[label],
-                    n_units,
-                    n_periods,
-                    int(n_simulations),
-                    alpha,
-                    power,
-                    resolved_seed,
-                )
-            _reemit(label, capture.records)
-            if found is not None:
-                mde_results[label] = found
-            mde[label] = value
-            if progress:
-                print(f"  diagnose_design: {label}, MDE search: {_fmt_num(value)}")
+        size_controlled[label] = size_ok
+        if found is not None:
+            mde_results[label] = found
+        mde[label] = value
 
     return DesignDiagnosisResults(
         results=results,
@@ -1344,4 +1619,952 @@ def diagnose_design(
         n_dropped=n_dropped,
         data_sha256=data_sha256,
         data_columns=data_columns,
+        time_periods=periods.tolist(),
+        _classes={label: type(est) for label, est in resolved.items()},
+        _params={label: _snapshot(est.get_params()) for label, est in resolved.items()},
+        _fit_keywords=_snapshot(fit_extras),
     )
+
+
+# ---------------------------------------------------------------------------
+# Design lock
+# ---------------------------------------------------------------------------
+
+_ABSENT = "<absent>"
+_MATCH = "match"
+_DEVIATES = "deviates"
+_NOT_CHECKED = "not checked"
+# Lock fields whose NaN entries (a cell that could not be scored, an MDE that
+# was not reported) are stored as None.
+_RECORD_FIELDS = ("comparison_results", "rerun_results", "mde")
+
+
+def _size_facts(run: str, null: Any, verdict: bool) -> str:
+    """One run's no-effect facts, for the warning about differing verdicts."""
+    return (
+        f"{run}: no-effect rejection rate {_fmt_rate(null.rejection_rate)}, "
+        f"{int(null.n_simulations)} scored, {int(null.n_simulation_failures)} lost, "
+        f"{'passed' if verdict else 'failed'}"
+    )
+
+
+def _lock(
+    diagnosis: DesignDiagnosisResults,
+    label: Optional[str],
+    data: Optional[pd.DataFrame],
+    progress: bool,
+) -> "DesignLock":
+    """Implementation of :meth:`DesignDiagnosisResults.lock`."""
+    labels = list(diagnosis.estimators)
+    if label is None:
+        if len(labels) != 1:
+            raise ValueError(
+                f"Several estimators were diagnosed; pass the label of the one to "
+                f"lock. Labels: {labels}."
+            )
+        label = labels[0]
+    if label not in diagnosis.estimators:
+        raise ValueError(f"Unknown label {label!r}. Labels: {labels}.")
+    chosen = diagnosis.estimators[label]
+
+    diagnosed_class = diagnosis._classes.get(label)
+    if diagnosed_class is not None and type(chosen) is not diagnosed_class:
+        raise ValueError(
+            f"The estimator stored under '{label}' was changed after the diagnosis "
+            f"(it is a {type(chosen).__name__}; a {diagnosed_class.__name__} was "
+            f"diagnosed). Run diagnose_design again with the estimator you want to "
+            f"lock."
+        )
+    snapshot = diagnosis._params.get(label)
+    if snapshot is not None and _snapshot(chosen.get_params()) != snapshot:
+        raise ValueError(
+            f"The estimator stored under '{label}' was changed after the diagnosis "
+            f"(its parameters no longer match the ones that were diagnosed). Run "
+            f"diagnose_design again with the configuration you want to lock."
+        )
+    if (
+        diagnosis._fit_keywords is not None
+        and _snapshot(diagnosis.estimator_kwargs) != diagnosis._fit_keywords
+    ):
+        raise ValueError(
+            "estimator_kwargs was changed after the diagnosis (it no longer matches "
+            "the fit() keywords that were diagnosed). Run diagnose_design again with "
+            "the configuration you want to lock."
+        )
+    problems = _unlockable(chosen, diagnosis.estimator_kwargs)
+    if problems:
+        raise ValueError(
+            f"Estimator '{label}' cannot be locked: {'; '.join(problems)}. A lock "
+            f"must be able to rebuild the estimator exactly."
+        )
+
+    outcome, unit, time = diagnosis.outcome, diagnosis.unit, diagnosis.time
+    # Several estimators were compared, so one was chosen: rerun it alone on
+    # draws the choice did not see. With one estimator nothing was chosen.
+    rerun = len(labels) > 1
+    if rerun and data is None:
+        raise ValueError(
+            f"{len(labels)} estimators were diagnosed, so lock() reruns '{label}' "
+            f"alone with new placebo draws and needs the panel: pass data= (the "
+            f"frame given to diagnose_design)."
+        )
+
+    time_periods = list(diagnosis.time_periods)
+    compared_ok = diagnosis.size_controlled[label]
+    size_ok = compared_ok
+    mde = diagnosis.mde[label]
+    rerun_records: List[Dict[str, Any]] = []
+    rerun_null: Any = None
+
+    if data is not None:
+        untreated, _ = _untreated_rows(data, outcome, unit, time, diagnosis.first_treat)
+        untreated = _select_columns(untreated, diagnosis.data_columns)
+        found_periods = np.unique(_period_values(untreated[time])).tolist()
+        if found_periods != time_periods:
+            missing = [period for period in time_periods if period not in found_periods]
+            other = [period for period in found_periods if period not in time_periods]
+            raise ValueError(
+                f"data does not have the periods of the diagnosed panel. Diagnosed "
+                f"periods missing: {missing}; other periods found: {other}."
+            )
+        digest, _ = _data_fingerprint(untreated, unit, time)
+        if digest != diagnosis.data_sha256:
+            raise ValueError(
+                "data is not the panel that was diagnosed: its fingerprint differs "
+                "from data_sha256."
+            )
+
+        if rerun:
+            if diagnosis._rerun_labels and label not in diagnosis._rerun_labels:
+                warnings.warn(
+                    f"A rerun was already made for {diagnosis._rerun_labels}. A rerun "
+                    f"for '{label}' as well makes the two runs a second comparison: "
+                    f"do not use them to choose between estimators.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            panel = _check_panel(untreated, outcome, unit, time)
+            generator = _make_placebo_generator(
+                panel,
+                outcome,
+                unit,
+                time,
+                diagnosis.n_treated,
+                list(diagnosis.cohort_periods),
+                diagnosis.resample_units,
+            )
+            fit_kwargs = _fit_kwargs(chosen, outcome, unit, time, dict(diagnosis.estimator_kwargs))
+            # Derived, not an argument: the rerun cannot be re-rolled.
+            lock_seed = int(np.random.SeedSequence([int(diagnosis.seed), 1]).generate_state(1)[0])
+            null = diagnosis.results[label][0]
+            n_simulations = int(null.n_simulations) + int(null.n_simulation_failures)
+            with _WarningCapture() as capture:
+                _preflight(label, chosen, generator, fit_kwargs, lock_seed)
+            _reemit(label, capture.records, stacklevel=4)
+            cells, nan_counts, size_ok, _found, mde = _run_estimator(
+                "lock",
+                label,
+                chosen,
+                diagnosis.effect_sizes,
+                generator,
+                fit_kwargs,
+                diagnosis.n_units,
+                diagnosis.n_periods,
+                n_simulations,
+                diagnosis.alpha,
+                diagnosis.target_power,
+                lock_seed,
+                progress,
+                stacklevel=5,
+            )
+            rerun_records = _records(label, cells, size_ok, nan_counts, mde)
+            rerun_null = cells[0]
+            if label not in diagnosis._rerun_labels:
+                diagnosis._rerun_labels.append(label)
+
+    if rerun_null is not None and size_ok != compared_ok:
+        # Both runs' facts and no conclusion about the cause: the size check
+        # can fail on lost replicates as well as on the rejection rate.
+        meaning = "" if size_ok else " Its power is not meaningful."
+        warnings.warn(
+            f"The size check gives different verdicts for '{label}'. "
+            f"{_size_facts('Comparison', diagnosis.results[label][0], compared_ok)}; "
+            f"{_size_facts('rerun', rerun_null, size_ok)}. The lock records the "
+            f"rerun's verdict, size_controlled={size_ok}.{meaning}",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif not size_ok:
+        warnings.warn(
+            f"'{label}' did not pass the size check on the no-effect runs the lock "
+            f"reports, so its power is not meaningful. The lock records "
+            f"size_controlled=False.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    from diff_diff import __version__
+
+    payload: Dict[str, Any] = {
+        "schema_version": DESIGN_LOCK_SCHEMA_VERSION,
+        "diff_diff_version": __version__,
+        "label": label,
+        "estimator_name": type(chosen).__name__,
+        "params": chosen.get_params(),
+        "estimator_kwargs": diagnosis.estimator_kwargs,
+        "outcome": outcome,
+        "unit": unit,
+        "time": time,
+        "first_treat": diagnosis.first_treat,
+        "alpha": diagnosis.alpha,
+        "target_power": diagnosis.target_power,
+        "effect_sizes": diagnosis.effect_sizes,
+        "n_treated": diagnosis.n_treated,
+        "treatment_fraction": diagnosis.treatment_fraction,
+        "cohort_periods": diagnosis.cohort_periods,
+        "resample_units": diagnosis.resample_units,
+        "seed": diagnosis.seed,
+        "n_units": diagnosis.n_units,
+        "n_periods": diagnosis.n_periods,
+        "n_obs": diagnosis.n_obs,
+        "time_periods": time_periods,
+        "data_sha256": diagnosis.data_sha256,
+        "data_columns": diagnosis.data_columns,
+        "comparison_results": diagnosis.to_dataframe().to_dict("records"),
+        "rerun_results": rerun_records,
+        "size_controlled": size_ok,
+        "mde": mde,
+    }
+    converted = {
+        key: _json_value(value, key, "none" if key in _RECORD_FIELDS else "raise")
+        for key, value in payload.items()
+    }
+    return DesignLock(**converted, sha256=_lock_digest(converted))
+
+
+@dataclass(frozen=True)
+class DesignLock(Diagnostic):
+    """
+    A recorded design: one estimator, its configuration and its diagnosis.
+
+    Made by :meth:`DesignDiagnosisResults.lock`. It records the chosen
+    estimator and its configuration, the declared design, a fingerprint of
+    the panel, every estimator that was compared, and the chosen estimator's
+    size, power, bias, RMSE, coverage and minimum detectable effect. All
+    values are plain JSON data, so ``DesignLock.from_json(lock.to_json())``
+    equals ``lock``.
+
+    The lock does not record when it was made. Whether a design was fixed
+    before the outcomes were seen depends on when the lock file was saved or
+    registered, which the library cannot check.
+
+    Attributes
+    ----------
+    schema_version : str
+        ``DESIGN_LOCK_SCHEMA_VERSION`` at the time the lock was made.
+    diff_diff_version : str
+        Library version that made the lock.
+    label : str
+        The chosen estimator's label in the comparison.
+    estimator_name : str
+        Its class name.
+    params : dict
+        Its constructor parameters.
+    estimator_kwargs : dict
+        Extra ``fit()`` keywords that were applied.
+    outcome, unit, time : str
+        Column names of the diagnosed panel.
+    first_treat : str or None
+        Real first-treatment column used to truncate the diagnosed panel.
+    alpha : float
+        Significance level.
+    target_power : float or None
+        Target power of the minimum-detectable-effect search.
+    effect_sizes : list of float
+        Injected effects, 0 first.
+    n_treated : int
+        Placebo-treated units per replicate.
+    treatment_fraction : float or None
+        Declared share of treated units, when given.
+    cohort_periods : list
+        Declared adoption periods.
+    resample_units : bool
+        Whether units were resampled in each replicate.
+    seed : int
+        Seed of the comparison. The rerun uses a seed derived from it.
+    n_units, n_periods, n_obs : int
+        Shape of the diagnosed panel.
+    time_periods : list
+        Its period values.
+    data_sha256 : str
+        Its fingerprint.
+    data_columns : list of str
+        Columns the fingerprint covers.
+    comparison_results : list of dict
+        One record per estimator and effect from the comparison, for every
+        estimator that was compared.
+    rerun_results : list of dict
+        The chosen estimator's records from the rerun (the chosen estimator
+        alone, new placebo draws, same panel). Empty when one estimator was
+        diagnosed: nothing was chosen, so there was no rerun.
+    size_controlled : bool
+        Whether the chosen estimator passed the size check in the run the
+        lock reports (the rerun when there was one). The comparison's
+        verdict is in ``comparison_results``.
+    mde : float or None
+        Its minimum detectable effect; ``None`` when not reported.
+    sha256 : str
+        SHA-256 of the canonical JSON of every other field. It detects
+        accidental edits; it is not a signature.
+    """
+
+    schema_version: str
+    diff_diff_version: str
+    label: str
+    estimator_name: str
+    params: Dict[str, Any]
+    estimator_kwargs: Dict[str, Any]
+    outcome: str
+    unit: str
+    time: str
+    first_treat: Optional[str]
+    alpha: float
+    target_power: Optional[float]
+    effect_sizes: List[float]
+    n_treated: int
+    treatment_fraction: Optional[float]
+    cohort_periods: List[Any]
+    resample_units: bool
+    seed: int
+    n_units: int
+    n_periods: int
+    n_obs: int
+    time_periods: List[Any]
+    data_sha256: str
+    data_columns: List[str]
+    comparison_results: List[Dict[str, Any]]
+    rerun_results: List[Dict[str, Any]]
+    size_controlled: bool
+    mde: Optional[float]
+    sha256: str
+
+    def __repr__(self) -> str:
+        """Concise string representation."""
+        return (
+            f"DesignLock(label={self.label!r}, estimator_name={self.estimator_name!r}, "
+            f"rerun={bool(self.rerun_results)}, sha256={self.sha256[:12]!r}...)"
+        )
+
+    def __hash__(self) -> int:
+        # The generated hash would fail on the dict and list fields.
+        return hash(self.sha256)
+
+    def _payload(self) -> Dict[str, Any]:
+        return {
+            f.name: getattr(self, f.name) for f in dataclasses.fields(self) if f.name != "sha256"
+        }
+
+    def _verify(self) -> None:
+        """Raise if the fields no longer match ``sha256``."""
+        try:
+            digest = _lock_digest(self._payload())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"The design lock holds a value that is not JSON data: {exc}.")
+        if digest != self.sha256:
+            raise ValueError(
+                "The design lock does not match its sha256: it was edited after it "
+                "was made. Reload it from the original file."
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the lock to a dictionary of plain JSON data.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Every field, as a deep copy.
+        """
+        result = copy.deepcopy(self._payload())
+        result["sha256"] = self.sha256
+        return result
+
+    def to_json(self, *, indent: int = 2) -> str:
+        """Return ``to_dict()`` serialized as JSON."""
+        return json.dumps(self.to_dict(), indent=indent, allow_nan=False)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DesignLock":
+        """
+        Rebuild a lock from ``to_dict()`` output.
+
+        Raises
+        ------
+        ValueError
+            If a key is unknown or missing, the schema version has a
+            different major number, or the content does not match ``sha256``.
+        """
+        if not isinstance(data, Mapping):
+            raise TypeError("A design lock is read from a dictionary.")
+        names = [f.name for f in dataclasses.fields(cls)]
+        unknown = sorted(str(key) for key in set(data) - set(names))
+        missing = sorted(set(names) - set(data))
+        if unknown or missing:
+            raise ValueError(
+                f"Not a design lock: unknown key(s) {unknown}, missing key(s) {missing}."
+            )
+        version = str(data["schema_version"])
+        if version.split(".")[0] != DESIGN_LOCK_SCHEMA_VERSION.split(".")[0]:
+            raise ValueError(
+                f"Design lock schema version {version!r} is not supported by this "
+                f"library version (which reads {DESIGN_LOCK_SCHEMA_VERSION!r})."
+            )
+        lock = cls(**copy.deepcopy(dict(data)))
+        lock._verify()
+        return lock
+
+    @classmethod
+    def from_json(cls, text: str) -> "DesignLock":
+        """Rebuild a lock from ``to_json()`` output."""
+        return cls.from_dict(json.loads(text))
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        The chosen estimator's reported rows, one per effect size.
+
+        Returns
+        -------
+        pd.DataFrame
+            ``rerun_results`` when a rerun was made, otherwise the chosen
+            estimator's rows of ``comparison_results``.
+        """
+        if self.rerun_results:
+            return pd.DataFrame(copy.deepcopy(self.rerun_results))
+        return pd.DataFrame(copy.deepcopy(self._compared_rows()))
+
+    def _compared_rows(self) -> List[Dict[str, Any]]:
+        """The chosen estimator's rows of the comparison."""
+        return [row for row in self.comparison_results if row.get("label") == self.label]
+
+    def summary(self) -> str:
+        """
+        Generate a formatted summary of the lock.
+
+        Returns
+        -------
+        str
+            Formatted summary.
+        """
+        width = 78
+        timing = "common" if len(self.cohort_periods) == 1 else "staggered"
+        source = (
+            "rerun of the chosen estimator (new placebo draws, same panel)"
+            if self.rerun_results
+            else "comparison run (one estimator, nothing was chosen)"
+        )
+        size_text = "yes" if self.size_controlled else "NO"
+        compared_rows = self._compared_rows()
+        if self.rerun_results and compared_rows:
+            compared_ok = bool(compared_rows[0].get("size_controlled"))
+            if compared_ok != self.size_controlled:
+                size_text += f" (rerun); comparison: {'yes' if compared_ok else 'NO'}"
+        compared = list(dict.fromkeys(str(row.get("label")) for row in self.comparison_results))
+        mde_text = f"{self.mde:.4g}" if self.mde is not None else "-"
+        lines = [
+            "=" * width,
+            "Design Lock".center(width),
+            "=" * width,
+            "",
+            f"{'Chosen:':<32} {self.label} ({self.estimator_name})",
+            f"{'Compared:':<32} {', '.join(compared)}",
+            f"{'Units x periods:':<32} {self.n_units} x {self.n_periods}",
+            f"{'Placebo-treated units:':<32} {self.n_treated}",
+            f"{'Adoption periods (' + timing + '):':<32} {list(self.cohort_periods)}",
+            f"{'Significance level (alpha):':<32} {self.alpha:.3f}",
+            f"{'Reported numbers from:':<32} {source}",
+            f"{'Size OK:':<32} {size_text}",
+            f"{'MDE:':<32} {mde_text}",
+            "",
+            "-" * width,
+            f"{'Effect':>10}{'Rejects':>10}{'Bias':>12}{'RMSE':>12}{'Coverage':>10}"
+            f"{'Scored':>8}{'Lost':>7}",
+            "-" * width,
+        ]
+        for row in self.to_dataframe().to_dict("records"):
+            lines.append(
+                f"{row['true_effect']:>10.4g}{_fmt_cell(row['rejection_rate'], rate=True):>10}"
+                f"{_fmt_cell(row['bias']):>12}{_fmt_cell(row['rmse']):>12}"
+                f"{_fmt_cell(row['coverage'], rate=True):>10}"
+                f"{row['n_simulations']:>8}{row['n_simulation_failures']:>7}"
+            )
+        lines.extend(
+            [
+                "",
+                *_SCOPE_LINES,
+                "",
+                f"diff-diff {self.diff_diff_version}, lock schema {self.schema_version}",
+                f"sha256 {self.sha256}",
+                "=" * width,
+            ]
+        )
+        return "\n".join(lines)
+
+    def print_summary(self) -> None:
+        """Print the summary to stdout."""
+        print(self.summary())
+
+    def to_estimator(self) -> Any:
+        """
+        Build the locked estimator.
+
+        Returns
+        -------
+        estimator
+            A fresh, unfitted instance of ``estimator_name`` configured with
+            ``params``. Fitting it, with ``estimator_kwargs``, is the locked
+            analysis.
+        """
+        self._verify()
+        if self.estimator_name not in _SUPPORTED_ESTIMATORS:
+            raise ValueError(
+                f"The lock names {self.estimator_name!r}, which is not one of "
+                f"{', '.join(_SUPPORTED_ESTIMATORS)}."
+            )
+        import diff_diff
+
+        return getattr(diff_diff, self.estimator_name)(**copy.deepcopy(self.params))
+
+    def reconcile(
+        self,
+        estimator: Any,
+        *,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: Optional[str] = None,
+        treatment: Optional[str] = None,
+        post: Optional[str] = None,
+        estimator_kwargs: Optional[Dict[str, Any]] = None,
+        data: Optional[pd.DataFrame] = None,
+        results: Optional[Any] = None,
+    ) -> "DesignReconciliationResults":
+        """
+        Check the analysis that was run against this lock.
+
+        Parameters
+        ----------
+        estimator : estimator
+            The estimator used for the analysis.
+        outcome, unit, time : str
+            Outcome, unit and calendar-period column names of the analysis.
+        first_treat : str, optional
+            Column with each unit's real first treatment period (0, inf or
+            NaN for never-treated), for the estimators that take one.
+        treatment : str, optional
+            0/1 group column, for ``DifferenceInDifferences`` and
+            ``TwoWayFixedEffects``. Pass ``first_treat`` or ``treatment``,
+            not both.
+        post : str, optional
+            0/1 post-period column that goes with ``treatment``.
+        estimator_kwargs : dict, optional
+            Extra ``fit()`` keywords the analysis used.
+        data : pd.DataFrame, optional
+            The analysis data. When given, the data and the realized design
+            are checked too.
+        results : results object, optional
+            The fitted results. It must be ``estimator.results_``.
+
+        Returns
+        -------
+        DesignReconciliationResults
+            One check per item and an overall ``status``: ``"match"`` when
+            every check that was run matches, otherwise ``"deviates"``.
+
+        Notes
+        -----
+        This compares what the analyst declares with the lock. Fitted results
+        do not record the constructor parameters or column names that
+        produced them, so a parameter changed with ``set_params()`` after
+        fitting cannot be detected. ``"match"`` covers the listed checks
+        that were run, and says nothing about when the design was fixed.
+
+        The data fingerprint covers every column the diagnosed panel had, on
+        the locked periods. A column whose values changed there deviates;
+        that includes an adoption column that was all never-treated when the
+        design was diagnosed and holds the real dates now.
+
+        Adoption dates are not compared: placebo dates lie inside the
+        diagnosed panel and real ones after it. The number of cohorts, the
+        number of treated units, the length of each cohort's post window and
+        whether the panel is balanced are.
+        """
+        self._verify()
+        if not hasattr(estimator, "get_params"):
+            raise TypeError("reconcile needs the estimator instance used for the analysis.")
+        if first_treat is not None and treatment is not None:
+            raise ValueError(
+                "Pass first_treat (a first-treatment-period column) or treatment (a "
+                "0/1 group column), not both."
+            )
+        if results is not None and getattr(estimator, "results_", None) is not results:
+            raise ValueError(
+                "results is not this estimator's results_: it was not produced by "
+                "the estimator being reconciled."
+            )
+        if data is not None and not isinstance(data, pd.DataFrame):
+            raise TypeError("data must be a pandas DataFrame.")
+
+        checks = [_compare("estimator_name", self.estimator_name, type(estimator).__name__)]
+        checks.extend(_compare_mapping("params", self.params, estimator.get_params()))
+        checks.extend(
+            _compare_mapping(
+                "estimator_kwargs", self.estimator_kwargs, dict(estimator_kwargs or {})
+            )
+        )
+        checks.append(_compare("outcome", self.outcome, outcome))
+        checks.append(_compare("unit", self.unit, unit))
+        checks.append(_compare("time", self.time, time))
+        if results is None:
+            checks.append(_check_row("alpha", self.alpha, None, _NOT_CHECKED))
+        else:
+            checks.append(_compare("alpha", self.alpha, getattr(results, "alpha", _ABSENT)))
+        checks.extend(_design_checks(self, data, unit, time, first_treat, treatment, post))
+
+        deviates = any(check["status"] == _DEVIATES for check in checks)
+        return DesignReconciliationResults(
+            status=_DEVIATES if deviates else _MATCH,
+            checks=checks,
+            label=self.label,
+            lock_sha256=self.sha256,
+        )
+
+
+def _fmt_cell(value: Optional[float], rate: bool = False) -> str:
+    if value is None:
+        return "-"
+    return _fmt_rate(value) if rate else _fmt_num(value)
+
+
+def _check_row(item: str, locked: Any, realized: Any, status: str) -> Dict[str, Any]:
+    return {"item": item, "locked": locked, "realized": realized, "status": status}
+
+
+def _same(locked: Any, realized: Any) -> bool:
+    """Equality of two JSON values; a boolean never equals a number."""
+    if isinstance(locked, bool) != isinstance(realized, bool):
+        return False
+    if isinstance(locked, list) and isinstance(realized, list):
+        return len(locked) == len(realized) and all(_same(a, b) for a, b in zip(locked, realized))
+    if isinstance(locked, dict) and isinstance(realized, dict):
+        return set(locked) == set(realized) and all(
+            _same(locked[key], realized[key]) for key in locked
+        )
+    return bool(locked == realized)
+
+
+def _compare(item: str, locked: Any, realized: Any) -> Dict[str, Any]:
+    """One check. A realized value that is not JSON data cannot match a lock."""
+    try:
+        value = _json_value(realized, item)
+    except ValueError:
+        return _check_row(item, locked, repr(realized), _DEVIATES)
+    return _check_row(item, locked, value, _MATCH if _same(locked, value) else _DEVIATES)
+
+
+def _compare_mapping(
+    group: str, locked: Mapping[str, Any], realized: Mapping[str, Any]
+) -> List[Dict[str, Any]]:
+    names = list(locked) + [name for name in realized if name not in locked]
+    rows = []
+    for name in names:
+        item = f"{group}.{name}"
+        if name not in realized:
+            rows.append(_check_row(item, locked[name], _ABSENT, _DEVIATES))
+        elif name not in locked:
+            rows.append(_check_row(item, _ABSENT, repr(realized[name]), _DEVIATES))
+        else:
+            rows.append(_compare(item, locked[name], realized[name]))
+    return rows
+
+
+def _design_checks(
+    lock: DesignLock,
+    data: Optional[pd.DataFrame],
+    unit: str,
+    time: str,
+    first_treat: Optional[str],
+    treatment: Optional[str],
+    post: Optional[str],
+) -> List[Dict[str, Any]]:
+    """The checks that need the analysis data."""
+    cohorts = sorted(lock.cohort_periods)
+    locked: Dict[str, Any] = {
+        "data_sha256": lock.data_sha256,
+        "n_units": lock.n_units,
+        "is_balanced": True,
+        "n_treated": lock.n_treated,
+        "n_cohorts": len(cohorts),
+        "n_post_by_cohort": [
+            sum(1 for period in lock.time_periods if period >= cohort) for cohort in cohorts
+        ],
+    }
+    realized: Dict[str, Any] = {}
+    problems: Dict[str, str] = {}
+    timing = ("n_treated", "n_cohorts", "n_post_by_cohort")
+
+    if data is not None:
+        # The fingerprint is taken with the lock's own column names: it asks
+        # whether the diagnosed panel is still in the data.
+        try:
+            selected = _select_columns(data, lock.data_columns)
+            by_name = {str(column): column for column in selected.columns}
+            lock_unit, lock_time = by_name[str(lock.unit)], by_name[str(lock.time)]
+            rows = selected.loc[selected[lock_time].isin(lock.time_periods)]
+            realized["data_sha256"], _ = _data_fingerprint(rows, lock_unit, lock_time)
+        except (KeyError, ValueError) as exc:
+            problems["data_sha256"] = f"unavailable: {exc}"
+
+        requested = timing if (first_treat is not None or treatment is not None) else ()
+        try:
+            _realized_design(
+                data, unit, time, first_treat, treatment, post, requested, realized, problems
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            # reconcile() does not raise because of what the analysis frame
+            # looks like: a check that could not be read is a deviation.
+            for item in ("n_units", "is_balanced") + requested:
+                if item not in realized:
+                    problems.setdefault(item, f"could not be read: {exc}")
+
+    rows_out = []
+    for item, value in locked.items():
+        if item in problems:
+            rows_out.append(_check_row(item, value, problems[item], _DEVIATES))
+        elif item in realized:
+            rows_out.append(_compare(item, value, realized[item]))
+        else:
+            rows_out.append(_check_row(item, value, None, _NOT_CHECKED))
+    return rows_out
+
+
+def _column_problem(data: pd.DataFrame, column: Any) -> Optional[str]:
+    """Why ``column`` cannot be read from ``data``, or None when it can."""
+    count = sum(1 for label in data.columns if label is column or label == column)
+    if count == 0:
+        return f"column {column!r} not in data"
+    if count > 1:
+        return f"column label {column!r} appears {count} times in data"
+    return None
+
+
+def _realized_design(
+    data: pd.DataFrame,
+    unit: str,
+    time: str,
+    first_treat: Optional[str],
+    treatment: Optional[str],
+    post: Optional[str],
+    requested: Tuple[str, ...],
+    realized: Dict[str, Any],
+    problems: Dict[str, str],
+) -> None:
+    """Read the realized design from the analysis frame into ``realized``.
+
+    Every column that is read must be present exactly once and, for the unit
+    and period identifiers, complete: a row whose unit or period is missing
+    cannot be placed, so the unit count, the balance and the timing are then
+    reported as deviations and never as matches.
+    """
+    panel_items = ("n_units", "is_balanced") + requested
+    unreadable = [text for text in (_column_problem(data, c) for c in (unit, time)) if text]
+    if unreadable:
+        for item in panel_items:
+            problems[item] = "; ".join(unreadable)
+        return
+    incomplete = [column for column in (unit, time) if data[column].isna().any()]
+    if incomplete:
+        for item in panel_items:
+            problems[item] = f"missing values in column(s) {incomplete}"
+        return
+
+    n_units = int(data[unit].nunique())
+    periods = pd.unique(data[time])
+    realized["n_units"] = n_units
+    realized["is_balanced"] = bool(
+        not data.duplicated([unit, time]).any() and len(data) == n_units * len(periods)
+    )
+    if first_treat is not None:
+        problem, values = _realized_first_treat(data, unit, first_treat)
+        if problem is not None:
+            for item in requested:
+                problems[item] = problem
+            return
+        realized_cohorts = sorted(set(values))
+        realized["n_treated"] = len(values)
+        realized["n_cohorts"] = len(realized_cohorts)
+        try:
+            realized["n_post_by_cohort"] = [
+                int(np.sum(periods >= cohort)) for cohort in realized_cohorts
+            ]
+        except TypeError:
+            problems["n_post_by_cohort"] = f"'{time}' cannot be compared with '{first_treat}'"
+    elif treatment is not None:
+        problem = _column_problem(data, treatment)
+        if problem is not None:
+            problems["n_treated"] = problems["n_cohorts"] = problem
+        elif (data.groupby(unit)[treatment].nunique(dropna=False) > 1).any():
+            problems["n_treated"] = problems["n_cohorts"] = "varies within unit"
+        else:
+            n_treated = int((data.groupby(unit)[treatment].first() == 1).sum())
+            realized["n_treated"] = n_treated
+            realized["n_cohorts"] = 1 if n_treated else 0
+        if post is not None:
+            problem = _column_problem(data, post)
+            if problem is not None:
+                problems["n_post_by_cohort"] = problem
+            elif (data.groupby(time)[post].nunique(dropna=False) > 1).any():
+                problems["n_post_by_cohort"] = "varies within period"
+            else:
+                realized["n_post_by_cohort"] = [int((data.groupby(time)[post].first() == 1).sum())]
+
+
+def _realized_first_treat(
+    data: pd.DataFrame, unit: str, first_treat: str
+) -> Tuple[Optional[str], List[float]]:
+    """Each treated unit's adoption period, or why it cannot be read."""
+    problem = _column_problem(data, first_treat)
+    if problem is not None:
+        return problem, []
+    if not pd.api.types.is_numeric_dtype(data[first_treat]):
+        return f"'{first_treat}' is not numeric", []
+    if (data.groupby(unit)[first_treat].nunique(dropna=False) > 1).any():
+        return "varies within unit", []
+    values = data[first_treat].to_numpy(dtype=float, na_value=np.nan)
+    first_rows = ~data[unit].duplicated().to_numpy()
+    per_unit = values[first_rows]
+    adopted = per_unit[np.isfinite(per_unit) & (per_unit > 0)]
+    return None, [float(value) for value in adopted]
+
+
+@dataclass
+class DesignReconciliationResults(Diagnostic):
+    """
+    Results of :meth:`DesignLock.reconcile`.
+
+    Attributes
+    ----------
+    status : str
+        ``"match"`` when every check that was run matches the lock,
+        otherwise ``"deviates"``. The size of a deviation is not graded, and
+        checks whose inputs were not passed are ``"not checked"``.
+    checks : list of dict
+        One entry per reconciled item, with keys ``item``, ``locked``,
+        ``realized`` and ``status`` (``"match"``, ``"deviates"`` or
+        ``"not checked"``).
+    label : str
+        Label of the locked estimator.
+    lock_sha256 : str
+        ``sha256`` of the lock that was reconciled against.
+    """
+
+    status: str
+    checks: List[Dict[str, Any]]
+    label: str
+    lock_sha256: str
+
+    def __repr__(self) -> str:
+        """Concise string representation."""
+        n_deviating = sum(1 for check in self.checks if check["status"] == _DEVIATES)
+        n_skipped = sum(1 for check in self.checks if check["status"] == _NOT_CHECKED)
+        return (
+            f"DesignReconciliationResults(status={self.status!r}, "
+            f"checks={len(self.checks)}, deviating={n_deviating}, "
+            f"not_checked={n_skipped})"
+        )
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        One row per reconciled item.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns ``item``, ``locked``, ``realized``, ``status``.
+        """
+        return pd.DataFrame(
+            copy.deepcopy(self.checks), columns=["item", "locked", "realized", "status"]
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            The overall status, the lock reconciled against and every check.
+        """
+        return {
+            "status": self.status,
+            "label": self.label,
+            "lock_sha256": self.lock_sha256,
+            "checks": copy.deepcopy(self.checks),
+        }
+
+    def summary(self) -> str:
+        """
+        Generate a formatted summary of the reconciliation.
+
+        Returns
+        -------
+        str
+            Formatted summary: the overall status and every item that
+            deviates or was not checked.
+        """
+        width = 78
+        counts = {status: 0 for status in (_MATCH, _DEVIATES, _NOT_CHECKED)}
+        for check in self.checks:
+            counts[check["status"]] = counts.get(check["status"], 0) + 1
+        # The status is never shown without the checks that were not run.
+        skipped = f" - {counts[_NOT_CHECKED]} not checked" if counts[_NOT_CHECKED] else ""
+        lines = [
+            "=" * width,
+            "Design Reconciliation (analysis vs. design lock)".center(width),
+            "=" * width,
+            "",
+            f"{'Locked estimator:':<24} {self.label}",
+            f"{'Status:':<24} {self.status}{skipped}",
+            f"{'Checks:':<24} {counts[_MATCH]} match, {counts[_DEVIATES]} deviate, "
+            f"{counts[_NOT_CHECKED]} not checked",
+            f"{'Lock sha256:':<24} {self.lock_sha256}",
+        ]
+        shown = [check for check in self.checks if check["status"] != _MATCH]
+        if shown:
+            lines.extend(
+                [
+                    "",
+                    "-" * width,
+                    f"{'Item':<30}{'Locked':<17}{'Realized':<17}{'Status':<14}",
+                    "-" * width,
+                ]
+            )
+            for check in shown:
+                realized = "" if check["realized"] is None else str(check["realized"])
+                lines.append(
+                    f"{str(check['item'])[:29]:<30}{str(check['locked'])[:16]:<17}"
+                    f"{realized[:16]:<17}{check['status']:<14}"
+                )
+        lines.extend(
+            [
+                "",
+                "'match' means every check that was run agrees with the lock. It covers",
+                "what was declared to reconcile() and the listed items only; it does not",
+                "say when the design was fixed, and deviations are not graded.",
+                "=" * width,
+            ]
+        )
+        return "\n".join(lines)
+
+    def print_summary(self) -> None:
+        """Print the summary to stdout."""
+        print(self.summary())

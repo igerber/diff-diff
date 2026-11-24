@@ -27,6 +27,57 @@ import diff_diff
 from diff_diff.diagnostic_report import DiagnosticReportResults
 
 
+def _design_lock() -> Any:
+    """A directly constructed DesignLock whose sha256 matches its fields."""
+    from diff_diff.design import _lock_digest
+
+    row = {
+        "label": "DifferenceInDifferences",
+        "power": 0.05,
+        "rejection_rate": 0.05,
+        "bias": 0.0,
+        "rmse": 0.11,
+        "coverage": 0.95,
+        "n_simulations": 100,
+        "n_simulation_failures": 0,
+        "true_effect": 0.0,
+        "size_controlled": True,
+        "n_nan_inference": 0,
+        "mde": 0.31,
+    }
+    fields: Dict[str, Any] = {
+        "schema_version": diff_diff.DESIGN_LOCK_SCHEMA_VERSION,
+        "diff_diff_version": diff_diff.__version__,
+        "label": "DifferenceInDifferences",
+        "estimator_name": "DifferenceInDifferences",
+        "params": {"alpha": 0.05, "cluster": None},
+        "estimator_kwargs": {},
+        "outcome": "y",
+        "unit": "unit",
+        "time": "period",
+        "first_treat": None,
+        "alpha": 0.05,
+        "target_power": 0.8,
+        "effect_sizes": [0.0],
+        "n_treated": 10,
+        "treatment_fraction": 0.5,
+        "cohort_periods": [5],
+        "resample_units": True,
+        "seed": 1,
+        "n_units": 20,
+        "n_periods": 8,
+        "n_obs": 160,
+        "time_periods": [1, 2, 3, 4, 5, 6, 7, 8],
+        "data_sha256": "0" * 64,
+        "data_columns": ["period", "unit", "y"],
+        "comparison_results": [row],
+        "rerun_results": [],
+        "size_controlled": True,
+        "mde": 0.31,
+    }
+    return diff_diff.DesignLock(**fields, sha256=_lock_digest(fields))
+
+
 def make_constructed_diagnostics() -> Dict[str, Any]:
     """Return {class_name: instance} for the direct-construction roster."""
     rng_bins = pd.DataFrame(
@@ -337,6 +388,28 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             n_dropped=0,
             data_sha256="0" * 64,
             data_columns=["period", "unit", "y"],
+            time_periods=[1, 2, 3, 4, 5, 6, 7, 8],
+        ),
+        "DesignLock": _design_lock(),
+        "DesignReconciliationResults": diff_diff.DesignReconciliationResults(
+            status="deviates",
+            checks=[
+                {
+                    "item": "estimator_name",
+                    "locked": "DifferenceInDifferences",
+                    "realized": "DifferenceInDifferences",
+                    "status": "match",
+                },
+                {
+                    "item": "params.cluster",
+                    "locked": None,
+                    "realized": "unit",
+                    "status": "deviates",
+                },
+                {"item": "n_units", "locked": 20, "realized": None, "status": "not checked"},
+            ],
+            label="DifferenceInDifferences",
+            lock_sha256="0" * 64,
         ),
         "PlaceboTestResults": diff_diff.PlaceboTestResults(
             test_type="placebo_treatment",

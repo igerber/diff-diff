@@ -42,6 +42,8 @@ DIAGNOSTIC_ROSTER = [
     "SimulationMDEResults",
     "SimulationSampleSizeResults",
     "DesignDiagnosisResults",
+    "DesignLock",
+    "DesignReconciliationResults",
     "PlaceboTestResults",
     "QUGTestResults",
     "StuteTestResults",
@@ -166,8 +168,8 @@ def test_twfe_weights_result_is_neither():
 
 
 def test_frozen_diagnostic_constructs(constructed):
-    # DiagnosticReportResults is the only frozen roster member; pin that
-    # frozen-dataclass + non-dataclass marker inheritance is safe.
+    # DiagnosticReportResults and DesignLock are the frozen roster members;
+    # pin that frozen-dataclass + non-dataclass marker inheritance is safe.
     drr = constructed["DiagnosticReportResults"]
     assert isinstance(drr, DiagnosticReportResults)
     assert isinstance(drr, Diagnostic)

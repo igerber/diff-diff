@@ -29,6 +29,41 @@ Carlo allowance for the ``R`` replicates scored - or when it loses more than 10%
 of its replicates. Its power is then not meaningful and no minimum detectable
 effect is reported for it.
 
+**What it does not test.** Placebo treatment is assigned at random, so these runs
+test inference - size and power - on your panel's own error structure. They do
+not test parallel trends: a design that passes the size check can still be
+biased if treatment goes to units on a different trend.
+
+**Design lock.** :meth:`~diff_diff.DesignDiagnosisResults.lock` records one
+estimator and its configuration as a :class:`~diff_diff.DesignLock`. Comparing
+several estimators and then quoting the chosen one's power from the same runs
+overstates it, so when more than one estimator was diagnosed, ``lock`` first
+reruns the chosen one alone on the same panel with new placebo draws (pass the
+panel again as ``data=``) and the lock reports that run. The rerun removes the
+part of the overstatement that comes from the draws; the part that comes from
+the panel itself remains - about one percentage point of power in the library's
+simulations (Methodology Registry, ``Note (lock rerun)``). With one estimator
+nothing was chosen and there is no rerun, so a search made of separate
+one-estimator calls is not corrected. The lock is plain JSON data: write
+``lock.to_json()`` to a file and read it back with
+:meth:`~diff_diff.DesignLock.from_json`.
+
+**Reconcile.** After the analysis, :meth:`~diff_diff.DesignLock.reconcile` checks
+it against the lock item by item - estimator class, every constructor parameter,
+``fit()`` keywords, column names, and, when the analysis data is passed, the
+fingerprint of the diagnosed periods and the realized design - and returns the
+status ``match`` or ``deviates``. Two limits on what ``match`` means:
+
+- It compares what you declare with the lock. Fitted results do not record the
+  parameters that produced them, so :meth:`~diff_diff.DesignLock.to_estimator`
+  is provided to build the estimator straight from the lock.
+- The lock does not record when it was made. ``match`` says the analysis agrees
+  with the lock on the checks that were run; whether the design was fixed before
+  the outcomes were seen depends on when you saved or registered the lock file.
+
+A deviation is not graded, and checks whose inputs were not passed are reported
+as ``not checked`` next to the status.
+
 The methodology, its sources and the choices that have no paper source are in
 the Methodology Registry under ``DesignDiagnosis``.
 
@@ -41,6 +76,24 @@ DesignDiagnosisResults
 ----------------------
 
 .. autoclass:: diff_diff.DesignDiagnosisResults
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+DesignLock
+----------
+
+.. autoclass:: diff_diff.DesignLock
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+DesignReconciliationResults
+---------------------------
+
+.. autoclass:: diff_diff.DesignReconciliationResults
    :no-index:
    :members:
    :undoc-members:
@@ -83,6 +136,40 @@ Example
    # The no-effect run of one estimator: its rejection_rate is the size.
    null_run = result.results["cs"][0]
    print(null_run.rejection_rate, result.size_controlled["cs"], result.mde["cs"])
+
+Three estimators were compared, so locking the choice reruns it alone, with new
+placebo draws:
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   from diff_diff import DesignLock
+
+   lock = result.lock("cs", data=panel)     # reruns "cs" only, on the same panel
+   lock.print_summary()
+   Path("design_lock.json").write_text(lock.to_json())
+
+Later, once the study has run:
+
+.. code-block:: python
+
+   lock = DesignLock.from_json(Path("design_lock.json").read_text())
+   estimator = lock.to_estimator()          # the estimator exactly as locked
+   fit = estimator.fit(
+       analysis, outcome="sales", unit="store", time="year", first_treat="adopted"
+   )
+   check = lock.reconcile(
+       estimator,
+       outcome="sales",
+       unit="store",
+       time="year",
+       first_treat="adopted",
+       data=analysis,
+       results=fit,
+   )
+   print(check.status)                      # "match" or "deviates"
+   check.to_dataframe()                     # one row per checked item
 
 A staggered design declares several adoption periods; each placebo-treated unit
 draws its period from the list:

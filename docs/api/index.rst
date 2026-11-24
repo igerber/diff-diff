@@ -261,6 +261,8 @@ Size and power of candidate estimators on your own untreated panel:
 
    diff_diff.diagnose_design
    diff_diff.DesignDiagnosisResults
+   diff_diff.DesignLock
+   diff_diff.DesignReconciliationResults
 
 Pre-Trends Power Analysis
 -------------------------
