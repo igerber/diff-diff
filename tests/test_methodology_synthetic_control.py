@@ -4709,17 +4709,26 @@ def test_conformal_test_warns_when_post_not_short_relative_to_pre():
 
 def test_conformal_average_effect_basic_iid():
     res = _fit_for_conformal(n_donors=5, T=24, T0=20, effect=5.0, seed=3)  # T0=20, T*=4 -> 6 blocks
-    s = res.conformal_average_effect(alpha=0.1, scheme="iid", n_iid=2000, seed=0)
+    # One post block among 6: the p-value floor is 1/6 under EITHER scheme, so alpha
+    # must be >= 1/6 for a bounded interval (alpha=0.1 is the unbounded case, pinned
+    # in tests/test_conformal_grid.py).
+    s = res.conformal_average_effect(alpha=0.2, scheme="iid", n_iid=2000, seed=0)
     assert set(s.index) >= {"lower", "upper", "point_estimate", "status", "n_blocks"}
     assert int(s["n_blocks"]) == 6
     assert np.isfinite(s["point_estimate"])
-    assert s["status"] in {"ran", "grid_limited", "empty"}
-    if s["status"] != "empty":
-        assert s["lower"] <= s["upper"]
+    assert s["status"] == "ran"
+    assert np.isfinite(s["lower"]) and np.isfinite(s["upper"])
+    assert s["lower"] <= s["point_estimate"] <= s["upper"]
     # separate permutation object — analytical inference stays NaN
     assert np.isnan(res.conf_int[0]) and np.isnan(res.p_value)
     assert res.conformal_inference["kind"] == "average"
-    assert res.get_conformal_grid_df().shape[0] == 200
+    # one row per candidate evaluated: the 200 scan rows plus the point estimate and
+    # the endpoint-refinement candidates; the endpoints are rows of the table
+    grid = res.get_conformal_grid_df()
+    assert len(grid) > 200
+    assert grid["param"].is_monotonic_increasing and grid["param"].is_unique
+    members = grid.loc[grid["in_set"], "param"]
+    assert members.min() == s["lower"] and members.max() == s["upper"]
 
 
 def test_conformal_average_effect_drops_leftover_pre_periods_with_warning():
@@ -4761,11 +4770,16 @@ def test_conformal_average_effect_requires_T0_at_least_Tstar():
 
 def test_conformal_average_effect_explicit_bounds_grid_stays_within():
     res = _fit_for_conformal(n_donors=5, T=24, T0=20, effect=5.0, seed=3)
-    res.conformal_average_effect(scheme="iid", n_iid=500, seed=0, bounds=(-2.0, 12.0), n_grid=50)
+    # alpha=0.2 clears the single-slot floor (6 blocks; sampled i.i.d. floor 0.14)
+    res.conformal_average_effect(
+        alpha=0.2, scheme="iid", n_iid=500, seed=0, bounds=(-2.0, 12.0), n_grid=50
+    )
     grid = res.get_conformal_grid_df()
+    # no candidate (scan row, point estimate, refinement) leaves the bounds
     assert grid["param"].min() >= -2.0 - 1e-9
     assert grid["param"].max() <= 12.0 + 1e-9
-    assert len(grid) == 50
+    # every row of the fixed scan is in the table
+    assert set(np.linspace(-2.0, 12.0, 50)) <= set(grid["param"])
 
 
 def test_conformal_average_effect_get_grid_before_run_raises():
@@ -4822,13 +4836,18 @@ def test_conformal_confidence_intervals_shape_and_columns():
     assert res.conformal_inference["kind"] == "pointwise"
     grid = res.get_conformal_grid_df()
     assert "period" in grid.columns
-    assert len(grid) == len(res.post_periods) * 100
+    # per period: the 100 scan rows plus the point estimate and refinement candidates,
+    # and the per-period counts are counts of these rows
+    sizes = grid.groupby("period").size()
+    assert (sizes > 100).all()
+    in_set = grid.groupby("period")["in_set"].sum()
+    assert in_set.loc[list(ci["period"])].tolist() == ci["n_grid_in_set"].tolist()
 
 
 def test_conformal_confidence_intervals_recover_true_constant_effect():
     # The pointwise CIs should bracket the known true effect for (almost) every period.
-    # A fine grid: the default one puts 100 points on +-0.5*|estimate| here, a step of
-    # ~0.06, coarse next to intervals ~0.2 wide.
+    # Explicit bounds= path with a fine scan (the default-range path is covered in
+    # tests/test_conformal_grid.py).
     c_true = 6.0
     res = _fit_for_conformal(n_donors=6, T=22, T0=16, effect=c_true, seed=4)
     ci = res.conformal_confidence_intervals(
@@ -4874,8 +4893,11 @@ def test_conformal_confidence_intervals_explicit_bounds_applied_per_period():
     grid = res.get_conformal_grid_df()
     assert grid["param"].min() >= -1e-9
     assert grid["param"].max() <= 12.0 + 1e-9
-    # every period scanned the same fixed grid -> equal point counts
-    assert (grid.groupby("period").size() == 40).all()
+    # every period scanned the same fixed grid: all 40 scan rows are in each period's
+    # table (which also holds that period's point estimate + refinement candidates)
+    scan = set(np.linspace(0.0, 12.0, 40))
+    for _, g in grid.groupby("period"):
+        assert scan <= set(g["param"])
 
 
 # ---- CWZ conformal: fail-closed edge cases (non-converged, unbounded, accessor) ----
@@ -4899,11 +4921,15 @@ def test_conformal_ci_nonconverged_points_are_indeterminate_not_rejected(monkeyp
         ci = res.conformal_confidence_intervals(
             alpha=0.1, scheme="iid", n_iid=400, seed=0, n_grid=40
         )
-    # every grid point indeterminate -> none rejected -> hull spans the grid, never "empty"
-    assert (ci["status"] != "empty").all()
-    assert (ci["n_grid_nonconverged"] == 40).all()
-    assert (ci["n_grid_in_set"] == 40).all()
+    # every candidate indeterminate -> none rejected -> the hull spans the scanned
+    # range (grid_limited: its edges are kept only through non-convergence), never
+    # "empty". The candidates are the 40 scan rows plus the point estimate (41); with
+    # no rejected candidate there is nothing to bisect against.
+    assert (ci["status"] == "grid_limited").all()
+    assert (ci["n_grid_nonconverged"] == 41).all()
+    assert (ci["n_grid_in_set"] == 41).all()
     grid = res.get_conformal_grid_df()
+    assert (grid.groupby("period").size() == 41).all()
     assert (~grid["converged"]).all()
     assert grid["in_set"].all()
 
@@ -5319,15 +5345,19 @@ class TestConformalOneSided:
         """'greater' inverts to [lower, +inf) and 'less' to (-inf, upper];
         the finite endpoints bracket the two-sided interval."""
         res = _fit_for_conformal(effect=4.0)
-        kw = dict(alpha=0.2, scheme="iid", n_iid=400, seed=3)
+        # 4 collapsed blocks: the single-post-slot floor is 1/4, so alpha must be
+        # >= 0.25 for anything to be rejected (alpha=0.2 would be the whole line).
+        kw = dict(alpha=0.3, scheme="iid", n_iid=400, seed=3)
         two = res.conformal_average_effect(**kw)
         hi = res.conformal_average_effect(alternative="greater", **kw)
         lo = res.conformal_average_effect(alternative="less", **kw)
+        assert np.isfinite(two["lower"]) and np.isfinite(two["upper"])
         assert np.isinf(hi["upper"]) and hi["upper"] > 0
         assert np.isinf(lo["lower"]) and lo["lower"] < 0
+        assert np.isfinite(hi["lower"]) and np.isfinite(lo["upper"])
         assert hi["lower"] >= two["lower"] - 1e-9
         assert lo["upper"] <= two["upper"] + 1e-9
-        assert hi["status"] in ("ran", "grid_limited")
+        assert hi["status"] == "ran" and lo["status"] == "ran"
 
     def test_one_sided_missed_ray_is_not_empty(self):
         """Round-1 P1: an all-rejected one-sided grid (narrow bounds= that
@@ -5539,10 +5569,13 @@ class TestConformalCovariates:
         res = self._fit_with_covariate(effect=4.0)
         pg = float(res.conformal_test(0.0, alternative="greater", covariates=["z"])["p_value"])
         assert 0.0 < pg <= 1.0
+        # 4 collapsed blocks -> floor 1/4: alpha=0.3 keeps the half-line's finite
+        # endpoint finite (alpha=0.2 would be the whole line).
         avg = res.conformal_average_effect(
-            alpha=0.2, scheme="iid", n_iid=300, seed=3, alternative="greater", covariates=["z"]
+            alpha=0.3, scheme="iid", n_iid=300, seed=3, alternative="greater", covariates=["z"]
         )
         assert np.isinf(avg["upper"])
+        assert np.isfinite(avg["lower"]) and avg["status"] == "ran"
         cis = res.conformal_confidence_intervals(
             alpha=0.2, scheme="iid", n_iid=300, seed=3, covariates=["z"]
         )

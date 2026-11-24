@@ -102,16 +102,17 @@ def _warn_conformal_ci_status(res: Dict[str, Any], method_name: str) -> None:
     status = res["status"]
     if status == "empty":
         warnings.warn(
-            f"{method_name}: confidence interval is empty (every value on the grid is "
+            f"{method_name}: confidence interval is empty (every candidate evaluated is "
             "rejected at this alpha); endpoints are NaN.",
             UserWarning,
             stacklevel=3,
         )
     elif status == "grid_limited":
         warnings.warn(
-            f"{method_name}: the accepted set touches a grid edge, so the interval may "
-            "extend beyond the scanned grid (grid-limited). Pass explicit bounds= / a wider "
-            "grid to widen it.",
+            f"{method_name}: the accepted set reaches the edge of the scanned range, so the "
+            "interval may extend beyond it (grid-limited). With explicit bounds=, pass a "
+            "(lo, hi) wide enough to contain the set; on the automatic range this means an "
+            "edge candidate's proxy fit did not converge (see n_grid_nonconverged).",
             UserWarning,
             stacklevel=3,
         )
@@ -2951,10 +2952,15 @@ class SyntheticControlResults(BaseResults):
         ``T0 mod T*`` pre-periods are dropped so the pre-block count is integral (the
         paper assumes ``T/T*`` integer).
 
-        Because the effective sample is only ``T/T*`` blocks, the moving-block
-        permutation set has just ``T/T*`` elements (p-value granularity ``T*/T``);
-        pass ``scheme="iid"`` for a finer set (``(T/T*)!`` block permutations) when the
-        block count is small. Analytical ``se`` / ``conf_int`` stay NaN.
+        Because the effective sample is only ``T/T*`` blocks and the collapsed series
+        has ONE post block, the p-value cannot fall below the share of block
+        permutations that leave that block in place: ``T*/T`` for the moving-block set
+        and for an exact i.i.d. enumeration alike (the statistic depends only on which
+        block residual lands in the post slot, so a larger i.i.d. permutation set does
+        NOT lower this floor). When ``alpha`` is below it no value can be rejected and
+        the interval is the whole line (``status="unbounded"``); the remedy is a
+        larger ``alpha`` or more pre-period blocks. Analytical ``se`` / ``conf_int``
+        stay NaN.
 
         Parameters
         ----------
@@ -2974,11 +2980,17 @@ class SyntheticControlResults(BaseResults):
             Random block-permutation draws for ``scheme="iid"`` (exact ``(T/T*)!``
             enumeration when it fits).
         bounds : (float, float), optional
-            Fixed ``(lo, hi)`` grid for ``θ̄0``. Default None auto-centres the grid on
-            the average-effect point estimate (membership outside the grid is not
-            certified — flagged via ``status="grid_limited"``).
+            Fixed ``(lo, hi)`` range for ``θ̄0``, scanned at ``n_grid`` points
+            (membership outside it is not certified — an accepted edge is flagged
+            ``status="grid_limited"``). Default None scans a range derived from the
+            data that contains the finite boundary of the set (the proxy weights lie
+            on the simplex, which bounds every residual), then refines it.
         n_grid : int, default 200
-            Number of grid points (>= 2).
+            Points per scan (>= 2). The interval's endpoints do not sit on this
+            grid: each is located by bisection between the outermost accepted
+            candidate and the rejected candidate beyond it, to ``1e-6`` of the
+            interval width. ``n_grid`` sets the resolution at which a rejected
+            pocket inside the interval (``contiguous=False``) can be detected.
         seed : int, optional
             RNG seed for ``scheme="iid"``. Default uses the fit's seed.
 
@@ -2987,7 +2999,10 @@ class SyntheticControlResults(BaseResults):
         pandas.Series
             ``lower``, ``upper``, ``point_estimate`` (the average-effect estimate),
             ``status`` (``"ran"``/``"grid_limited"``/``"empty"``/``"unbounded"``), ``contiguous``,
-            ``n_perms``, ``n_blocks``, ``n_dropped_pre``, ``n_grid_nonconverged``.
+            ``n_perms``, ``n_blocks``, ``n_dropped_pre``, ``n_grid_nonconverged`` (the
+            number of candidates evaluated whose proxy fit did not converge; such a
+            candidate is kept in the set). Every candidate evaluated is on
+            :meth:`get_conformal_grid_df`.
 
         Raises
         ------
@@ -3000,6 +3015,7 @@ class SyntheticControlResults(BaseResults):
             _block_collapse,
             _invert_single_post,
             _make_perms,
+            _single_slot_p_floor,
         )
 
         if scheme not in ("moving_block", "iid"):
@@ -3064,12 +3080,15 @@ class SyntheticControlResults(BaseResults):
         rng = np.random.default_rng(snap.seed if seed is None else seed)
         perms = _make_perms(n_blocks, scheme, int(n_iid), rng)
         n_perms = int(perms.shape[0])
-        if float(alpha) < 1.0 / n_perms:
+        p_floor = _single_slot_p_floor(perms, n_blocks - 1)
+        if float(alpha) < p_floor:
             warnings.warn(
-                f"alpha={alpha:.3g} is below the permutation granularity 1/|Pi|=1/{n_perms} "
-                f"(the average effect collapses to {n_blocks} blocks), so no value is ever "
-                "rejected and the interval is the whole grid (unbounded). Use scheme='iid' "
-                "for a finer block-permutation set or a larger alpha.",
+                f"alpha={alpha:.3g} is below the permutation granularity of this test: the "
+                f"average effect collapses to {n_blocks} blocks with one post block, so the "
+                f"p-value cannot fall below {p_floor:.3g} (the share of block permutations "
+                "that leave the post block in place; scheme='iid' does not lower it). No "
+                "value is ever rejected and the interval is the whole line (unbounded). Use "
+                "a larger alpha, or a longer pre-period (more blocks).",
                 UserWarning,
                 stacklevel=2,
             )
@@ -3123,14 +3142,22 @@ class SyntheticControlResults(BaseResults):
     def get_conformal_grid_df(self) -> pd.DataFrame:
         """Get the conformal test-inversion grid table (see :meth:`conformal_average_effect` / :meth:`conformal_confidence_intervals`).
 
-        Columns: ``param`` (the grid value), ``p_value`` (``p^param``), ``in_set``
-        (``= not (converged and p_value <= alpha)`` — a non-converged grid point is
+        One row per DISTINCT candidate value the test was evaluated at, sorted: the
+        ``n_grid`` scan rows of each scan made, the point estimate (two-sided
+        inversions), and the endpoint-refinement candidates. So the reported
+        ``lower`` / ``upper`` are rows of this table, and ``contiguous``,
+        ``n_grid_in_set`` and ``n_grid_nonconverged`` are computed from exactly these
+        rows. The row count is therefore not ``n_grid`` (it is usually larger).
+
+        Columns: ``param`` (the candidate value), ``p_value`` (``p^param``), ``in_set``
+        (``= not (converged and p_value <= alpha)`` — a non-converged candidate is
         indeterminate and stays in the set, so ``in_set`` can be ``True`` even when the
         displayed ``p_value`` is not ``> alpha``), and ``converged`` (the proxy
-        solve's convergence flag for that grid point). For pointwise CIs the table is
-        the concatenation across post periods (with a ``period`` column). A
-        granularity-``unbounded`` interval (``alpha < 1/|Π|``) short-circuits and returns
-        an EMPTY grid. Survives pickling. Raises if no conformal inversion has been run.
+        solve's convergence flag for that candidate). For pointwise CIs the table is
+        the concatenation across post periods (with a ``period`` column). An
+        ``unbounded`` interval (``alpha`` below the single-slot p-value floor — see
+        :meth:`conformal_average_effect`) short-circuits and returns an EMPTY table.
+        Survives pickling. Raises if no conformal inversion has been run.
 
         Returns
         -------
@@ -3168,6 +3195,12 @@ class SyntheticControlResults(BaseResults):
         The analytical ``conf_int`` stays ``(NaN, NaN)`` — this is a separate
         permutation object.
 
+        With a single tested period the p-value cannot fall below the share of
+        permutations that leave that period in place: ``1/(T0+1)`` for the
+        moving-block set and for an exact i.i.d. enumeration alike (a larger i.i.d.
+        permutation set does NOT lower this floor). When ``alpha`` is below it every
+        per-period interval is the whole line (``status="unbounded"``).
+
         Parameters
         ----------
         alpha : float, default 0.1
@@ -3185,11 +3218,18 @@ class SyntheticControlResults(BaseResults):
         n_iid : int, default 10000
             Random permutation draws for ``scheme="iid"``.
         bounds : (float, float), optional
-            A single fixed ``(lo, hi)`` grid applied to EVERY period. Default None
-            auto-centres a per-period grid on that period's point estimate (membership
-            outside the grid is not certified — flagged ``status="grid_limited"``).
+            A single fixed ``(lo, hi)`` range applied to EVERY period, scanned at
+            ``n_grid`` points (membership outside it is not certified — an accepted
+            edge is flagged ``status="grid_limited"``). Default None scans, per
+            period, a range derived from the data that contains the finite boundary
+            of the set (the proxy weights lie on the simplex, which bounds every
+            residual), then refines it.
         n_grid : int, default 100
-            Grid points per period (>= 2).
+            Points per scan, per period (>= 2). The endpoints do not sit on this
+            grid: each is located by bisection between the outermost accepted
+            candidate and the rejected candidate beyond it, to ``1e-6`` of the
+            interval width. ``n_grid`` sets the resolution at which a rejected
+            pocket inside an interval (``contiguous=False``) can be detected.
         seed : int, optional
             RNG seed for ``scheme="iid"``. Default uses the fit's seed.
 
@@ -3198,8 +3238,11 @@ class SyntheticControlResults(BaseResults):
         pandas.DataFrame
             One row per post period: ``period``, ``lower``, ``upper``,
             ``point_estimate``, ``status`` (``"ran"``/``"grid_limited"``/``"empty"``/``"unbounded"``),
-            ``contiguous``, ``n_grid_in_set``, ``n_grid_nonconverged``. The full
-            per-period inversion grid is on :meth:`get_conformal_grid_df`.
+            ``contiguous``, ``n_grid_in_set``, ``n_grid_nonconverged`` (the numbers of
+            candidates evaluated for that period that are in the set / whose proxy
+            fit did not converge — scan rows, the point estimate and
+            endpoint-refinement candidates all count). Every candidate evaluated is
+            on :meth:`get_conformal_grid_df`.
 
         Raises
         ------
@@ -3211,6 +3254,7 @@ class SyntheticControlResults(BaseResults):
             _apply_one_sided_endpoints,
             _invert_single_post,
             _make_perms,
+            _single_slot_p_floor,
         )
 
         if scheme not in ("moving_block", "iid"):
@@ -3239,11 +3283,15 @@ class SyntheticControlResults(BaseResults):
         rng = np.random.default_rng(snap.seed if seed is None else seed)
         perms = _make_perms(m, scheme, int(n_iid), rng)
         n_perms = int(perms.shape[0])
-        if float(alpha) < 1.0 / n_perms:
+        p_floor = _single_slot_p_floor(perms, m - 1)
+        if float(alpha) < p_floor:
             warnings.warn(
-                f"alpha={alpha:.3g} is below the permutation granularity 1/|Pi|=1/{n_perms}, "
-                "so no value is ever rejected and every per-period interval is the whole grid "
-                "(unbounded). Use scheme='iid' for a finer set or a larger alpha.",
+                f"alpha={alpha:.3g} is below the permutation granularity of this test: each "
+                f"per-period test has one tested period among {m}, so its p-value cannot "
+                f"fall below {p_floor:.3g} (the share of permutations that leave the tested "
+                "period in place; scheme='iid' does not lower it). No value is ever rejected "
+                "and every per-period interval is the whole line (unbounded). Use a larger "
+                "alpha, or a longer pre-period.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -3304,7 +3352,7 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 "conformal_confidence_intervals: "
                 f"{n_empty} period(s) empty, {n_gl} grid-limited (CI may extend beyond the "
-                f"scanned grid — pass bounds= / widen n_grid), {n_unbounded} unbounded"
+                f"scanned range — with bounds=, pass a wider (lo, hi)), {n_unbounded} unbounded"
                 + (", some non-contiguous (hull reported)" if any_noncontig else "")
                 + ". Inspect get_conformal_grid_df().",
                 UserWarning,
