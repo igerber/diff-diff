@@ -220,6 +220,7 @@ class DesignDiagnosisResults(Diagnostic):
     time_periods: List[Any]
     # The configuration as diagnosed (lock() refuses one that was changed
     # afterwards) and the labels lock() has rerun.
+    _classes: Dict[str, type] = field(default_factory=dict, repr=False, compare=False)
     _params: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
     _fit_keywords: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
     _rerun_labels: List[str] = field(default_factory=list, repr=False, compare=False)
@@ -1619,6 +1620,7 @@ def diagnose_design(
         data_sha256=data_sha256,
         data_columns=data_columns,
         time_periods=periods.tolist(),
+        _classes={label: type(est) for label, est in resolved.items()},
         _params={label: _snapshot(est.get_params()) for label, est in resolved.items()},
         _fit_keywords=_snapshot(fit_extras),
     )
@@ -1665,6 +1667,14 @@ def _lock(
         raise ValueError(f"Unknown label {label!r}. Labels: {labels}.")
     chosen = diagnosis.estimators[label]
 
+    diagnosed_class = diagnosis._classes.get(label)
+    if diagnosed_class is not None and type(chosen) is not diagnosed_class:
+        raise ValueError(
+            f"The estimator stored under '{label}' was changed after the diagnosis "
+            f"(it is a {type(chosen).__name__}; a {diagnosed_class.__name__} was "
+            f"diagnosed). Run diagnose_design again with the estimator you want to "
+            f"lock."
+        )
     snapshot = diagnosis._params.get(label)
     if snapshot is not None and _snapshot(chosen.get_params()) != snapshot:
         raise ValueError(

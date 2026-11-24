@@ -1244,6 +1244,26 @@ class TestLock:
             result.lock("did", data=panel, progress=False)
 
     @pytest.mark.parametrize("single", [True, False])
+    def test_estimator_replaced_by_another_class_is_refused(self, single, monkeypatch):
+        """Default DiD and TWFE have equal parameters; the class is checked too."""
+        import diff_diff.design as design_module
+
+        panel, result = diagnosed(single=single)
+        assert TwoWayFixedEffects().get_params() == result.estimators["did"].get_params()
+        result.estimators["did"] = TwoWayFixedEffects()
+
+        def no_run(*args, **kwargs):
+            raise AssertionError("lock() went on to the panel after a class change")
+
+        monkeypatch.setattr(design_module, "_preflight", no_run)
+        monkeypatch.setattr(design_module, "_untreated_rows", no_run)
+        with pytest.raises(ValueError, match="a DifferenceInDifferences was diagnosed"):
+            result.lock("did", data=panel, progress=False)
+        if single:
+            with pytest.raises(ValueError, match="changed after the diagnosis"):
+                result.lock("did")
+
+    @pytest.mark.parametrize("single", [True, False])
     def test_fit_keywords_changed_after_the_diagnosis(self, single):
         panel = make_panel(n_periods=10, seed=85)
         panel["x"] = np.random.default_rng(2).normal(size=len(panel))
