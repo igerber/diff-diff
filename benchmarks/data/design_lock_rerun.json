@@ -1,0 +1,487 @@
+{
+ "meta": {
+  "choice_rule": "highest power among candidates passing the size check",
+  "comparison_seed": "500_000 + m",
+  "diff_diff_version": "4.0.0",
+  "n_panels": 400,
+  "panel_seed": "10_000 + m",
+  "rerun_seed": "SeedSequence([comparison_seed, 1])",
+  "script": "benchmarks/python/design_lock_rerun.py"
+ },
+ "scenarios": {
+  "S1_typical": {
+   "cohort_periods": [
+    9
+   ],
+   "effect_size": 0.4,
+   "held_out": {
+    "comparison_minus_reference": -0.013977215189873427,
+    "comparison_minus_reference_se": 0.003824115090986678,
+    "n_chosen": 395,
+    "picks": {
+     "cs": 130,
+     "did_cl": 28,
+     "imp": 232,
+     "twfe": 5
+    },
+    "reference_power_of_chosen": 0.33354683544303804,
+    "reference_size_of_chosen": 0.06271920886075952,
+    "rerun_minus_reference": 0.011199999999999995,
+    "rerun_minus_reference_se": 0.003757677270528533,
+    "rerun_size_fail": 0.11645569620253164,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.12307692307692308,
+     "did_cl": 0.0,
+     "imp": 0.12931034482758622,
+     "twfe": 0.0
+    }
+   },
+   "lock_matches_rerun": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "n_holdout": 2,
+   "n_panels": 400,
+   "n_periods": 12,
+   "n_simulations": 200,
+   "n_treated": 20,
+   "n_units": 40,
+   "paired_difference": 0.0036579283887468,
+   "paired_difference_se": 0.0022089187380015733,
+   "reference_power": {
+    "cs": 0.2725,
+    "did_cl": 0.33525000000000005,
+    "imp": 0.3675,
+    "twfe": 0.3358
+   },
+   "reference_size": {
+    "cs": 0.0637125,
+    "did_cl": 0.05231250000000001,
+    "imp": 0.0636375,
+    "twfe": 0.052562500000000005
+   },
+   "rho": 0.5,
+   "same_choice_share": 0.5856777493606138,
+   "same_panel": {
+    "comparison_minus_reference": 0.012546835443037974,
+    "comparison_minus_reference_se": 0.003706518206981762,
+    "n_chosen": 395,
+    "picks": {
+     "cs": 50,
+     "did_cl": 40,
+     "imp": 300,
+     "twfe": 5
+    },
+    "reference_power_of_chosen": 0.3518075949367089,
+    "reference_size_of_chosen": 0.06235996835443038,
+    "rerun_minus_reference": 0.007799999999999996,
+    "rerun_minus_reference_se": 0.003940079528577046,
+    "rerun_size_fail": 0.1189873417721519,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.16,
+     "did_cl": 0.025,
+     "imp": 0.12333333333333334,
+     "twfe": 0.2
+    }
+   }
+  },
+  "S2_staggered": {
+   "cohort_periods": [
+    7,
+    9
+   ],
+   "effect_size": 0.4,
+   "held_out": {
+    "comparison_minus_reference": 0.0007750408764930045,
+    "comparison_minus_reference_se": 0.003342134399422886,
+    "n_chosen": 398,
+    "picks": {
+     "cs": 56,
+     "eff": 0,
+     "imp": 225,
+     "sa": 7,
+     "stk": 90,
+     "ts": 20
+    },
+    "reference_power_of_chosen": 0.37095862746521546,
+    "reference_size_of_chosen": 0.06302292224312517,
+    "rerun_minus_reference": 0.011415744394080942,
+    "rerun_minus_reference_se": 0.0035481834324763662,
+    "rerun_size_fail": 0.12562814070351758,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.03571428571428571,
+     "imp": 0.19111111111111112,
+     "sa": 0.0,
+     "stk": 0.011111111111111112,
+     "ts": 0.2
+    }
+   },
+   "lock_matches_rerun": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "n_holdout": 2,
+   "n_panels": 400,
+   "n_periods": 12,
+   "n_simulations": 200,
+   "n_treated": 20,
+   "n_units": 40,
+   "paired_difference": -0.0005627081702482248,
+   "paired_difference_se": 0.0019984694112614894,
+   "reference_power": {
+    "cs": 0.30865000000000004,
+    "eff": 0.5897625,
+    "imp": 0.4093375,
+    "sa": 0.271385175879397,
+    "stk": 0.315225,
+    "ts": 0.39931250000000007
+   },
+   "reference_size": {
+    "cs": 0.0643,
+    "eff": 0.2526625,
+    "imp": 0.067575,
+    "sa": 0.051064007537688444,
+    "stk": 0.05170000000000001,
+    "ts": 0.063375
+   },
+   "rho": 0.5,
+   "same_choice_share": 0.635678391959799,
+   "same_panel": {
+    "comparison_minus_reference": 0.01887925361180903,
+    "comparison_minus_reference_se": 0.003314129234893334,
+    "n_chosen": 400,
+    "picks": {
+     "cs": 45,
+     "eff": 0,
+     "imp": 253,
+     "sa": 6,
+     "stk": 76,
+     "ts": 20
+    },
+    "reference_power_of_chosen": 0.3775582463881909,
+    "reference_size_of_chosen": 0.06373264761306531,
+    "rerun_minus_reference": 0.012066753611809028,
+    "rerun_minus_reference_se": 0.003615037703339912,
+    "rerun_size_fail": 0.16,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.15555555555555556,
+     "imp": 0.20948616600790515,
+     "sa": 0.0,
+     "stk": 0.02631578947368421,
+     "ts": 0.1
+    }
+   }
+  },
+  "S3_window": {
+   "cohort_periods": [
+    13
+   ],
+   "effect_size": 0.3,
+   "held_out": {
+    "comparison_minus_reference": -0.13344420654911834,
+    "comparison_minus_reference_se": 0.003204616254847057,
+    "n_chosen": 397,
+    "picks": {
+     "cs": 10,
+     "did_cl": 2,
+     "imp": 233,
+     "twfe": 40,
+     "twfe_classical": 112
+    },
+    "reference_power_of_chosen": 0.46299080604534,
+    "reference_size_of_chosen": 0.07536577455919395,
+    "rerun_minus_reference": -0.005610453400503736,
+    "rerun_minus_reference_se": 0.00373908250042414,
+    "rerun_size_fail": 0.2695214105793451,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.1,
+     "did_cl": 0.0,
+     "imp": 0.12875536480686695,
+     "twfe": 0.025,
+     "twfe_classical": 0.6696428571428571
+    }
+   },
+   "lock_matches_rerun": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "n_holdout": 4,
+   "n_panels": 400,
+   "n_periods": 20,
+   "n_simulations": 200,
+   "n_treated": 20,
+   "n_units": 40,
+   "paired_difference": 0.0070217884130982415,
+   "paired_difference_se": 0.002161176642844651,
+   "reference_power": {
+    "cs": 0.17822500000000002,
+    "did_cl": 0.4114125,
+    "imp": 0.44487499999999996,
+    "twfe": 0.41174999999999995,
+    "twfe_classical": 0.545325
+   },
+   "reference_size": {
+    "cs": 0.06450000000000002,
+    "did_cl": 0.054075000000000005,
+    "imp": 0.06456250000000001,
+    "twfe": 0.0542,
+    "twfe_classical": 0.10675000000000001
+   },
+   "rho": 0.25,
+   "same_choice_share": 0.5163727959697733,
+   "same_panel": {
+    "comparison_minus_reference": -0.015195937499999963,
+    "comparison_minus_reference_se": 0.003550676177505172,
+    "n_chosen": 400,
+    "picks": {
+     "cs": 20,
+     "did_cl": 0,
+     "imp": 237,
+     "twfe": 33,
+     "twfe_classical": 110
+    },
+    "reference_power_of_chosen": 0.4564334375,
+    "reference_size_of_chosen": 0.07530603125,
+    "rerun_minus_reference": -0.013133437499999961,
+    "rerun_minus_reference_se": 0.003548874450613642,
+    "rerun_size_fail": 0.225,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.2,
+     "imp": 0.14345991561181434,
+     "twfe": 0.09090909090909091,
+     "twfe_classical": 0.44545454545454544
+    }
+   }
+  },
+  "S4_specification_search": {
+   "cohort_periods": [
+    9
+   ],
+   "effect_size": 0.6,
+   "held_out": {
+    "comparison_minus_reference": -0.04151933290155441,
+    "comparison_minus_reference_se": 0.005023204129641062,
+    "n_chosen": 386,
+    "picks": {
+     "x0": 37,
+     "x1": 41,
+     "x2": 45,
+     "x3": 44,
+     "x4": 34,
+     "x5": 44,
+     "x6": 33,
+     "x7": 39,
+     "x8": 37,
+     "x9": 32
+    },
+    "reference_power_of_chosen": 0.41886389248704664,
+    "reference_size_of_chosen": 0.0645175841968912,
+    "rerun_minus_reference": 0.005514345854922276,
+    "rerun_minus_reference_se": 0.005564825082553973,
+    "rerun_size_fail": 0.16321243523316062,
+    "rerun_size_fail_by_candidate": {
+     "x0": 0.10810810810810811,
+     "x1": 0.14634146341463414,
+     "x2": 0.3111111111111111,
+     "x3": 0.1590909090909091,
+     "x4": 0.11764705882352941,
+     "x5": 0.06818181818181818,
+     "x6": 0.18181818181818182,
+     "x7": 0.1794871794871795,
+     "x8": 0.16216216216216217,
+     "x9": 0.1875
+    }
+   },
+   "lock_matches_rerun": [],
+   "n_holdout": 2,
+   "n_panels": 400,
+   "n_periods": 12,
+   "n_simulations": 200,
+   "n_treated": 8,
+   "n_units": 24,
+   "paired_difference": -0.005542804054054054,
+   "paired_difference_se": 0.0012365651815835364,
+   "reference_power": {
+    "x0": 0.41973749999999993,
+    "x1": 0.418925,
+    "x2": 0.41912499999999997,
+    "x3": 0.4178875,
+    "x4": 0.41755000000000003,
+    "x5": 0.41863750000000005,
+    "x6": 0.41872499999999996,
+    "x7": 0.41987500000000005,
+    "x8": 0.41947500000000004,
+    "x9": 0.4186625
+   },
+   "reference_size": {
+    "x0": 0.0644625,
+    "x1": 0.06509999999999999,
+    "x2": 0.06457500000000001,
+    "x3": 0.06477500000000001,
+    "x4": 0.06463750000000001,
+    "x5": 0.0642625,
+    "x6": 0.064475,
+    "x7": 0.06442500000000001,
+    "x8": 0.06442500000000001,
+    "x9": 0.0638875
+   },
+   "rho": 0.5,
+   "same_choice_share": 0.23783783783783785,
+   "same_panel": {
+    "comparison_minus_reference": 0.024477302631578945,
+    "comparison_minus_reference_se": 0.005820669301390386,
+    "n_chosen": 380,
+    "picks": {
+     "x0": 41,
+     "x1": 35,
+     "x2": 45,
+     "x3": 37,
+     "x4": 39,
+     "x5": 43,
+     "x6": 25,
+     "x7": 40,
+     "x8": 38,
+     "x9": 37
+    },
+    "reference_power_of_chosen": 0.4188779605263158,
+    "reference_size_of_chosen": 0.06449743421052632,
+    "rerun_minus_reference": 0.013543092105263155,
+    "rerun_minus_reference_se": 0.0060234614206137295,
+    "rerun_size_fail": 0.16578947368421051,
+    "rerun_size_fail_by_candidate": {
+     "x0": 0.12195121951219512,
+     "x1": 0.11428571428571428,
+     "x2": 0.13333333333333333,
+     "x3": 0.2972972972972973,
+     "x4": 0.20512820512820512,
+     "x5": 0.13953488372093023,
+     "x6": 0.16,
+     "x7": 0.175,
+     "x8": 0.10526315789473684,
+     "x9": 0.21621621621621623
+    }
+   }
+  },
+  "S5_default_replicates": {
+   "cohort_periods": [
+    13
+   ],
+   "effect_size": 0.3,
+   "held_out": {
+    "comparison_minus_reference": -0.1496956905370844,
+    "comparison_minus_reference_se": 0.0035452289192839975,
+    "n_chosen": 391,
+    "picks": {
+     "cs": 2,
+     "did_cl": 1,
+     "imp": 220,
+     "twfe": 96,
+     "twfe_classical": 72
+    },
+    "reference_power_of_chosen": 0.5206777877237851,
+    "reference_size_of_chosen": 0.0616002685421995,
+    "rerun_minus_reference": 0.0002685038363171277,
+    "rerun_minus_reference_se": 0.004247654096860655,
+    "rerun_size_fail": 0.27877237851662406,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.5,
+     "did_cl": 0.0,
+     "imp": 0.31363636363636366,
+     "twfe": 0.08333333333333333,
+     "twfe_classical": 0.4305555555555556
+    }
+   },
+   "lock_matches_rerun": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "n_holdout": 4,
+   "n_panels": 400,
+   "n_periods": 20,
+   "n_simulations": 500,
+   "n_treated": 20,
+   "n_units": 40,
+   "paired_difference": -0.00018870466321243578,
+   "paired_difference_se": 0.0017455653203130273,
+   "reference_power": {
+    "cs": 0.17674,
+    "did_cl": 0.494035,
+    "imp": 0.528485,
+    "twfe": 0.49462000000000006,
+    "twfe_classical": 0.54149
+   },
+   "reference_size": {
+    "cs": 0.063695,
+    "did_cl": 0.052575000000000004,
+    "imp": 0.06367500000000001,
+    "twfe": 0.052730000000000006,
+    "twfe_classical": 0.067155
+   },
+   "rho": 0.11,
+   "same_choice_share": 0.47668393782383417,
+   "same_panel": {
+    "comparison_minus_reference": -0.0011387244897959213,
+    "comparison_minus_reference_se": 0.004412635645495113,
+    "n_chosen": 392,
+    "picks": {
+     "cs": 6,
+     "did_cl": 1,
+     "imp": 229,
+     "twfe": 80,
+     "twfe_classical": 76
+    },
+    "reference_power_of_chosen": 0.5186234183673469,
+    "reference_size_of_chosen": 0.06208801020408165,
+    "rerun_minus_reference": 0.000927602040816321,
+    "rerun_minus_reference_se": 0.004441220942705212,
+    "rerun_size_fail": 0.26785714285714285,
+    "rerun_size_fail_by_candidate": {
+     "cs": 0.3333333333333333,
+     "did_cl": 0.0,
+     "imp": 0.30131004366812225,
+     "twfe": 0.0875,
+     "twfe_classical": 0.35526315789473684
+    }
+   }
+  }
+ }
+}
