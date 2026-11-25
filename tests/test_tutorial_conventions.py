@@ -300,8 +300,45 @@ def _narrows(node) -> bool:
     return not (_is_str(node) and node.value in _BLANKET_PATTERNS)
 
 
-def _unqualified_ignore_calls(code: str) -> List[str]:
+_FILTER_FUNCTIONS = ("filterwarnings", "simplefilter")
+
+
+def _filter_aliases(nb: dict) -> Dict[str, str]:
+    """Local names bound to ``warnings.filterwarnings`` / ``simplefilter``
+    anywhere in the notebook: ``from warnings import simplefilter as sf`` or
+    ``sf = warnings.simplefilter`` (possibly in an earlier cell than the call).
+    Maps the local name to the canonical function name.
+    """
+    aliases: Dict[str, str] = {}
+    for cell in nb["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        try:
+            tree = ast.parse(_strip_magics(_source(cell)))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "warnings":
+                for alias in node.names:
+                    if alias.name in _FILTER_FUNCTIONS:
+                        aliases[alias.asname or alias.name] = alias.name
+            elif isinstance(node, ast.Assign):
+                value = node.value
+                target = value.attr if isinstance(value, ast.Attribute) else None
+                target = aliases.get(value.id) if isinstance(value, ast.Name) else target
+                if target in _FILTER_FUNCTIONS:
+                    for tgt in node.targets:
+                        if isinstance(tgt, ast.Name):
+                            aliases[tgt.id] = target
+    return aliases
+
+
+def _unqualified_ignore_calls(code: str, aliases: Dict[str, str]) -> List[str]:
     """``filterwarnings`` / ``simplefilter`` calls that ignore EVERY warning.
+
+    ``aliases`` (from ``_filter_aliases``) resolves renamed imports and
+    assignments, so ``from warnings import simplefilter as sf; sf("ignore")``
+    is recognized.
 
     A call is qualified - and allowed - only if it narrows what it ignores:
     a ``message`` / ``module`` pattern that does not match everything
@@ -320,8 +357,12 @@ def _unqualified_ignore_calls(code: str) -> List[str]:
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-        if name not in ("filterwarnings", "simplefilter"):
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+        else:
+            bare = getattr(func, "id", None)
+            name = aliases.get(bare, bare)
+        if name not in _FILTER_FUNCTIONS:
             continue
         # signatures: filterwarnings(action, message, category, module, lineno, append)
         #             simplefilter(action, category, lineno, append)
@@ -352,10 +393,11 @@ def _unqualified_ignore_calls(code: str) -> List[str]:
 
 def check_blanket_warning_filter(nb: dict) -> List[str]:
     findings = []
+    aliases = _filter_aliases(nb)
     for idx, cell in enumerate(nb["cells"]):
         if cell["cell_type"] != "code":
             continue
-        for call in _unqualified_ignore_calls(_source(cell)):
+        for call in _unqualified_ignore_calls(_source(cell), aliases):
             findings.append(f"cell {idx}: unqualified warning suppression ({call})")
     return findings
 
@@ -610,6 +652,36 @@ class TestRules:
     )
     def test_blanket_warning_filter_quiet(self, call):
         assert check_blanket_warning_filter(_nb(_code(call, 1))) == []
+
+    def test_blanket_warning_filter_resolves_aliases(self):
+        """A renamed import or assignment cannot hide a blanket filter - also
+        when the alias is created in an earlier cell than the call."""
+        blanket = [
+            _nb(_code("from warnings import simplefilter as sf\nsf('ignore')", 1)),
+            _nb(_code("from warnings import filterwarnings as fw\nfw('ignore')", 1)),
+            _nb(
+                _code("from warnings import filterwarnings as fw", 1),
+                _code("fw('ignore', append=True)", 2),
+            ),
+            _nb(
+                _code("import warnings\nquiet = warnings.simplefilter", 1),
+                _code("quiet('ignore')", 2),
+            ),
+            _nb(_code("from warnings import simplefilter\nmute = simplefilter\nmute('ignore')", 1)),
+        ]
+        for nb in blanket:
+            assert check_blanket_warning_filter(nb), nb
+        qualified = [
+            _nb(_code("from warnings import simplefilter as sf\nsf('ignore', FutureWarning)", 1)),
+            _nb(
+                _code("from warnings import filterwarnings as fw", 1),
+                _code("fw('ignore', message='.*matmul', category=RuntimeWarning)", 2),
+            ),
+            # an unrelated function that happens to share the alias name pattern
+            _nb(_code("def sf(mode):\n    return mode\nsf('ignore')", 1)),
+        ]
+        for nb in qualified:
+            assert check_blanket_warning_filter(nb) == [], nb
 
     def test_blanket_warning_filter_ignores_prose(self):
         prose = _nb(_md("never call `warnings.filterwarnings('ignore')` globally"))
