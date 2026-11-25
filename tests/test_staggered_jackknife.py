@@ -295,6 +295,35 @@ class TestEstimationSample:
         assert got.n_clusters == clean.n_clusters == 10
         assert "ghost" not in set(got.get_loo_effects_df()["cluster"])
 
+    def test_missing_unit_id_cluster_that_moves_a_base_period_is_deleted(self):
+        # Rows with a missing unit ID are not estimated on, yet this one adds
+        # period 2 to the calendar grid: it becomes cohort 3's base period,
+        # has no usable unit, and cohort 3's cells stop being estimable.
+        # Deleting the "ghost" cluster therefore moves the overall ATT.
+        rows = []
+        late = {3: 2.9, 4: 3.0, 5: 3.1}
+        for c in range(9):
+            g = 3 if c < 3 else 5 if c < 6 else 0
+            for j in range(2):
+                for t in (1, 3, 4, 5, 6):
+                    y = 1.0 if (g == 3 and t >= 3) else late[c] if (g == 5 and t >= 5) else 0.0
+                    rows.append((float(c * 2 + j), f"s{c}", t, g, y))
+        clean = pd.DataFrame(rows, columns=["unit", "state", "t", "g", "y"])
+        ghost = pd.DataFrame([(np.nan, "ghost", 2, 0, 0.0)], columns=clean.columns)
+        data = pd.concat([clean, ghost], ignore_index=True)
+        with_ghost = quiet_fit(CallawaySantAnna(cluster="state"), data)
+        without_ghost = quiet_fit(CallawaySantAnna(cluster="state"), clean)
+        np.testing.assert_allclose(with_ghost.att, 3.0, rtol=1e-12)
+        np.testing.assert_allclose(without_ghost.att, 5 / 3, rtol=1e-12)
+
+        jk = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), data)
+        labels = ["s3", "s4", "s5", "s6", "s7", "s8", "ghost"]
+        assert set(jk.get_loo_effects_df()["cluster"]) == set(labels)
+        assert jk.df_inference == 6 and jk.n_clusters == 7
+        full, reps = by_hand(data, "state", labels, cluster="state")
+        np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
+        np.testing.assert_allclose(jk.se, 1.23616, rtol=1e-4)
+
     def test_always_treated_cluster_is_not_a_deletion_unit(self):
         data = make_panel({**TWO_COHORTS, 9: 1}, seed=13)
         jk = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), data)

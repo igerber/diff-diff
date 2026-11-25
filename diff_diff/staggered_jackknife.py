@@ -146,9 +146,11 @@ def resolve_deletion_units(
       whose weight is the cohort mass. Such a unit can have no usable
       outcome at all and still shift the weights when it is deleted.
 
-    Rows the fit never uses in either way - a missing unit ID, an
-    always-treated unit - form no deletion unit, so ``H`` counts exactly the
-    clusters whose omission can move an estimate.
+    Every other cluster label of the caller's frame - an always-treated
+    cluster, a cluster made only of rows with a missing unit ID - is returned
+    as a spare: ``run_replicates`` refits without it and keeps it out only if
+    that changes nothing. So ``H`` counts exactly the clusters whose omission
+    moves an estimate, and no label of the frame escapes the check.
 
     ``data`` is the caller's frame, row-aligned with the fit's working copy.
     Cluster labels are read from it and never from the working copy: the fit
@@ -222,6 +224,13 @@ def resolve_deletion_units(
     position_of_code = np.full(n_clusters, -1, dtype=np.intp)
     position_of_code[order] = np.arange(len(order))
     spare = [c for c in range(n_clusters) if position_of_code[c] < 0]
+    # Labels of the caller's frame that hold no unit of the estimation index
+    # (clusters made only of rows with a missing unit ID). The fit does not
+    # estimate on those rows, but they are not always inert - a row can add a
+    # period to the calendar grid and so move a base period - so they are
+    # audited like every other excluded cluster, never assumed away.
+    indexed = set(uniques.tolist()) if hasattr(uniques, "tolist") else set(uniques)
+    outside = [label for label in pd.unique(data[cluster]).tolist() if label not in indexed]
 
     def labels_of(cluster_codes: Sequence[int]) -> Tuple[Any, ...]:
         if one_to_one:
@@ -239,9 +248,12 @@ def resolve_deletion_units(
         labels_are_codes=one_to_one,
         roles=roles_of(order),
         cell_treated=treated_by_cell(position_of_code[codes]),
-        spare_values=tuple(uniques[c] for c in spare),
-        spare_labels=labels_of(spare),
-        spare_roles=roles_of(spare),
+        spare_values=tuple(uniques[c] for c in spare) + tuple(outside),
+        # In code mode a cluster outside the index has no unit position; it
+        # gets a code past the index (n_index, n_index + 1, ...).
+        spare_labels=labels_of(spare)
+        + (tuple(n_index + k for k in range(len(outside))) if one_to_one else tuple(outside)),
+        spare_roles=roles_of(spare) + ("control",) * len(outside),
     )
 
 

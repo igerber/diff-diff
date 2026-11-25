@@ -808,7 +808,9 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
               sorted unique unit IDs of the estimation sample (the row
               position, for ``panel=False``). Results objects do not retain
               raw unit identifiers, so unit labels are not stored; map the
-              codes back with your own data.
+              codes back with your own data. (A code at or past the number
+              of units marks a cluster that holds no unit of the estimation
+              sample, e.g. rows with a missing unit ID.)
             - ``role``: ``"treated"`` if the cluster holds an ever-treated
               unit, else ``"control"``.
             - ``att_loo``: the overall ATT with that cluster omitted (NaN
