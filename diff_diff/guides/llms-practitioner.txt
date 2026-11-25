@@ -732,7 +732,7 @@ print(bacon_result.summary())
 
 # Step 5: Estimate (cluster at county level — treatment assignment unit)
 n_clusters = data['countyreal'].nunique()
-print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'few clusters — CS below uses cluster-robust SEs; vcov_type="jackknife" (cluster jackknife) is the CS few-cluster option, the multiplier bootstrap does not correct few-cluster over-rejection'}")
+print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'few clusters — CS below uses cluster-robust SEs; the cluster jackknife (vcov_type jackknife) is the CS few-cluster option, the multiplier bootstrap does not correct few-cluster over-rejection'}")
 cs = CallawaySantAnna(
     control_group='never_treated', estimation_method='dr',
     cluster='countyreal',

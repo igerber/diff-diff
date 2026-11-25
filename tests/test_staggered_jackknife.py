@@ -294,7 +294,79 @@ class TestEstimationSample:
         np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
 
 
+class TestDeletionLabels:
+    """Deletion labels come from the caller's frame, not the fit's recoded copy."""
+
+    @pytest.mark.parametrize("never_treated", [np.inf, "0"])
+    def test_cluster_column_that_the_fit_recodes(self, never_treated):
+        # Clustering on the first-treatment column itself: the fit recodes
+        # ``inf`` to 0 and coerces strings in its working copy, so a label
+        # read from there would match no row of the caller's frame and the
+        # comparison cluster would never be deleted.
+        data = make_panel(TWO_COHORTS, seed=37)
+        if isinstance(never_treated, str):
+            data["g"] = data["g"].astype(str)
+        else:
+            data["g"] = data["g"].astype(float).replace(0.0, never_treated)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            jk = CallawaySantAnna(cluster="g", vcov_type="jackknife").fit(data, **FIT_KW)
+        loo = jk.get_loo_effects_df()
+        assert len(loo) == 3 and jk.df_inference == 2
+        # Deleting the comparison cluster leaves no estimate: undefined, loudly.
+        assert loo["att_loo"].isna().sum() == 1
+        assert loo.loc[loo["att_loo"].isna(), "role"].tolist() == ["control"]
+        assert any("leaves no estimate" in str(w.message) for w in caught)
+        assert_nan_inference(
+            {"se": jk.se, "t_stat": jk.t_stat, "p_value": jk.p_value, "conf_int": jk.conf_int}
+        )
+
+    def test_a_deletion_that_removes_nothing_is_an_error(self, panel, monkeypatch):
+        import diff_diff.staggered_jackknife as module
+
+        real = module.resolve_deletion_units
+
+        def stale_labels(*args, **kwargs):
+            units = real(*args, **kwargs)
+            return module.DeletionUnits(
+                column=units.column,
+                values=("not-a-state",) + units.values[1:],
+                labels=units.labels,
+                unit_name=units.unit_name,
+                labels_are_codes=units.labels_are_codes,
+                roles=units.roles,
+                cell_treated=units.cell_treated,
+            )
+
+        monkeypatch.setattr(module, "resolve_deletion_units", stale_labels)
+        with pytest.raises(RuntimeError, match="removed no rows"):
+            quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), panel)
+
+
 class TestReferenceCells:
+    def test_horizon_that_turns_reference_only_keeps_its_value(self):
+        """Universal base on a gapped grid: one horizon mixes an estimate and a reference."""
+        data = make_panel({0: 3, 1: 5, 2: 5}, n_clusters=8, n_periods=7, seed=41)
+        data = data[data["t"] != 4].reset_index(drop=True)
+        params = dict(cluster="state", base_period="universal")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            jk = CallawaySantAnna(vcov_type="jackknife", **params).fit(data, **FIT_KW)
+            got = jk.aggregate("event_study").to_dataframe().set_index("event_time")
+        full, reps = by_hand(data, "state", list(data["state"].unique()), **params)
+        # Cohort 5's base is period 3 (event time -2), where cohort 3 has an estimate.
+        cells = full.group_time_effects
+        assert cells[(5, 3)].get("is_reference") and not cells[(3, 1)].get("is_reference")
+        assert not got.loc[-2, "is_reference"]
+        # Without cohort 3's cluster the horizon is reference-only: its value is 0.
+        without_s0 = es_frame(reps[0])
+        assert without_s0.loc[-2, "att"] == 0.0 and without_s0.loc[-2, "is_reference"]
+        rep_att = [es_frame(r).loc[-2, "att"] for r in reps]
+        np.testing.assert_allclose(
+            got.loc[-2, "se"], eq20(es_frame(full).loc[-2, "att"], rep_att), rtol=1e-12
+        )
+        assert np.isfinite(got.loc[-2, "se"]) and got.loc[-2, "se"] > 0
+
     def test_universal_base_reference_cells_keep_nan_se(self, panel):
         jk = quiet_fit(
             CallawaySantAnna(cluster="state", vcov_type="jackknife", base_period="universal"),

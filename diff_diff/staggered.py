@@ -2979,7 +2979,7 @@ class CallawaySantAnna(
             )
 
             _deletion_units = resolve_deletion_units(
-                df, unit, user_cluster, precomputed, influence_func_info
+                _jackknife_data, unit, user_cluster, precomputed, influence_func_info
             )
             if len(_deletion_units.values) < 2:
                 raise ValueError(

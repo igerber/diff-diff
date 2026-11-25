@@ -117,7 +117,7 @@ def jackknife_vcov(full: np.ndarray, replicates: np.ndarray) -> np.ndarray:
 
 
 def resolve_deletion_units(
-    df: pd.DataFrame,
+    data: pd.DataFrame,
     unit: str,
     cluster: Optional[str],
     precomputed: Dict[str, Any],
@@ -130,6 +130,12 @@ def resolve_deletion_units(
     as treated or as comparison. Rows the fit never uses - a missing unit
     ID, an always-treated unit - form no deletion unit, so ``H`` counts
     exactly the clusters whose omission can move an estimate.
+
+    ``data`` is the caller's frame, row-aligned with the fit's working copy.
+    Cluster labels are read from it and never from the working copy: the fit
+    recodes the first-treatment and time columns there (``inf`` to 0, numeric
+    coercion), and a cluster column may be one of them, so a label taken from
+    the working copy could match no row of the frame the deletion is made on.
     """
     index_units = np.asarray(precomputed["all_units"])
     n_index = len(index_units)
@@ -166,10 +172,10 @@ def resolve_deletion_units(
         )
 
     if bool(precomputed.get("is_panel", True)):
-        per_index = df.groupby(unit, sort=True)[cluster].first().reindex(index_units).to_numpy()
+        per_index = data.groupby(unit, sort=True)[cluster].first().reindex(index_units).to_numpy()
     else:
         # Repeated cross-sections: the index space is the observation row.
-        per_index = df[cluster].to_numpy()
+        per_index = data[cluster].to_numpy()
     codes, uniques = pd.factorize(per_index, sort=False)
     n_clusters = len(uniques)
     treated_count = np.bincount(codes, weights=ever_treated.astype(float), minlength=n_clusters)
@@ -243,6 +249,14 @@ def run_replicates(
 
     for value in units.values:
         subset = data.loc[~column.isin([value])]
+        if len(subset) == len(data):
+            # Every deletion unit was resolved from rows of this frame, so a
+            # deletion that removes none means the two went out of step.
+            # Failing here is the only alternative to a silent no-op replicate.
+            raise RuntimeError(
+                f"Cluster jackknife: deleting {units.unit_name} {value!r} removed no "
+                "rows. This is a bug in diff-diff; please report it."
+            )
         refit = type(estimator)(**params)
         reason: Optional[str] = None
         rep_results = None
@@ -629,8 +643,13 @@ def apply_to_event_study(
                     _replicate_precomputed(payload.cohort_masses[h]),
                 ).effects
             for j, e in enumerate(keys):
+                # ``keys`` are horizons estimated in the full sample. A
+                # delete-one sample can leave such a horizon with reference
+                # cells only (a universal base on a gapped grid); its
+                # aggregate is then the finite reference value 0, which is
+                # that sample's estimate and enters like any other.
                 row = rep.get(e)
-                if row is not None and not row.get("is_reference"):
+                if row is not None:
                     values[h, j] = float(row["effect"])
     ses = _override_rows(effects, keys, values, alpha, df)
     ok = np.isfinite(ses)
