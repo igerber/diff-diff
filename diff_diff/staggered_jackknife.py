@@ -50,6 +50,13 @@ _VARIANCE_ONLY_WARNINGS: Tuple[str, ...] = ("PSU(s) found", "analytical SE paths
 #: Deletion-unit count above which ``fit()`` warns about the refit cost.
 _MANY_REPLICATES = 500
 
+#: A reported quantity resting on fewer treated clusters than this draws a
+#: warning. Library choice, not from the paper: in the size simulation
+#: (benchmarks/python/cs_jackknife_size.py) a quantity identified by two
+#: treated clusters rejects 6% to 18% at a nominal 5%, against 3% to 10%
+#: with four.
+_MIN_TREATED_CLUSTERS = 3
+
 _NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
 
@@ -71,6 +78,9 @@ class DeletionUnits:
         Whether ``labels`` are position codes.
     roles : tuple of str
         ``"treated"`` / ``"control"`` per deletion unit.
+    cell_treated : dict
+        ``{(g, t): positions}``: the deletion units (by position) holding
+        treated units of that cell.
     """
 
     column: str
@@ -79,6 +89,7 @@ class DeletionUnits:
     unit_name: str
     labels_are_codes: bool
     roles: Tuple[str, ...]
+    cell_treated: Dict[Any, Tuple[int, ...]]
 
 
 def jackknife_se(full: float, replicates: Any) -> float:
@@ -132,8 +143,18 @@ def resolve_deletion_units(
                 contributing[idx] = True
     ever_treated = np.asarray(precomputed["unit_cohorts"]) > 0
 
+    def treated_by_cell(position_of_index: np.ndarray) -> Dict[Any, Tuple[int, ...]]:
+        """Deletion-unit positions of each cell's treated units."""
+        out: Dict[Any, Tuple[int, ...]] = {}
+        for gt, info in influence_func_info.items():
+            idx = np.asarray((info or {}).get("treated_idx", ()), dtype=np.intp)
+            out[gt] = tuple(int(p) for p in np.unique(position_of_index[idx]))
+        return out
+
     if cluster is None:
         positions = np.flatnonzero(contributing)
+        position_of_index = np.full(n_index, -1, dtype=np.intp)
+        position_of_index[positions] = np.arange(positions.size)
         return DeletionUnits(
             column=unit,
             values=tuple(index_units[positions].tolist()),
@@ -141,6 +162,7 @@ def resolve_deletion_units(
             unit_name="unit",
             labels_are_codes=True,
             roles=tuple("treated" if ever_treated[p] else "control" for p in positions),
+            cell_treated=treated_by_cell(position_of_index),
         )
 
     if bool(precomputed.get("is_panel", True)):
@@ -159,6 +181,8 @@ def resolve_deletion_units(
     first_member = np.full(n_clusters, -1, dtype=np.intp)
     if one_to_one:
         first_member[codes] = np.arange(n_index)
+    position_of_code = np.full(n_clusters, -1, dtype=np.intp)
+    position_of_code[order] = np.arange(len(order))
     return DeletionUnits(
         column=cluster,
         values=tuple(uniques[c] for c in order),
@@ -170,6 +194,7 @@ def resolve_deletion_units(
         unit_name="unit" if one_to_one else cluster,
         labels_are_codes=one_to_one,
         roles=tuple("treated" if treated_count[c] > 0 else "control" for c in order),
+        cell_treated=treated_by_cell(position_of_code[codes]),
     )
 
 
@@ -269,6 +294,7 @@ def run_replicates(
         n_cells=tuple(n_cells),
         changed=tuple(changed),
         undefined=tuple(undefined),
+        cell_treated=dict(units.cell_treated),
     )
     extra_messages = [
         f"{message} ({count} refit{'s' if count != 1 else ''})" for message, count in extra.values()
@@ -281,7 +307,9 @@ def _any_undefined(payload: JackknifeReplicates) -> bool:
 
 
 def _describe(labels: Sequence[Any], limit: int = 5) -> str:
-    shown = ", ".join(repr(label) for label in labels[:limit])
+    shown = ", ".join(
+        repr(label.item() if isinstance(label, np.generic) else label) for label in labels[:limit]
+    )
     if len(labels) > limit:
         shown += f" and {len(labels) - limit} more"
     return shown
@@ -309,7 +337,56 @@ def changed_cells_message(payload: JackknifeReplicates, what: str) -> Optional[s
     )
 
 
-def fit_messages(payload: JackknifeReplicates, extra: Sequence[str]) -> List[str]:
+def n_treated_clusters(payload: JackknifeReplicates, cells: Sequence[Any]) -> int:
+    """Number of deletion units holding treated units of any of ``cells``."""
+    behind: set = set()
+    for gt in cells:
+        behind.update(payload.cell_treated.get(gt, ()))
+    return len(behind)
+
+
+def few_treated_message(what: str) -> str:
+    """The warning for quantities resting on too few treated clusters."""
+    return (
+        f"Cluster jackknife: {what} on fewer than {_MIN_TREATED_CLUSTERS} treated "
+        "clusters. The jackknife cannot fully correct for so few: in the library's "
+        "size simulation a quantity identified by two treated clusters rejected a "
+        "true null 6% to 18% of the time at a nominal 5% (3% to 10% with four). "
+        "Treat this inference as indicative; see docs/methodology/REGISTRY.md, "
+        "CallawaySantAnna, 'Cluster jackknife'."
+    )
+
+
+def _few_treated_fit_message(
+    payload: JackknifeReplicates,
+    group_time_effects: Dict[Any, Dict[str, Any]],
+    anticipation: int,
+) -> Optional[str]:
+    """Fit-time form: the overall ATT and the ATT(g,t) cells."""
+    live = [
+        gt
+        for gt, cell in group_time_effects.items()
+        if not cell.get("is_reference") and np.isfinite(cell["effect"])
+    ]
+    post = [gt for gt in live if gt[1] >= gt[0] - anticipation]
+    parts: List[str] = []
+    n_overall = n_treated_clusters(payload, post)
+    if post and n_overall < _MIN_TREATED_CLUSTERS:
+        parts.append(f"the overall ATT rests on {n_overall}")
+    few = [gt for gt in live if n_treated_clusters(payload, [gt]) < _MIN_TREATED_CLUSTERS]
+    if few:
+        parts.append(f"{len(few)} of {len(live)} ATT(g,t) cells rest")
+    if not parts:
+        return None
+    return few_treated_message(" and ".join(parts))
+
+
+def fit_messages(
+    payload: JackknifeReplicates,
+    extra: Sequence[str],
+    group_time_effects: Dict[Any, Dict[str, Any]],
+    anticipation: int,
+) -> List[str]:
     """The consolidated warnings a jackknife fit emits."""
     messages: List[str] = []
     bad = [
@@ -337,6 +414,9 @@ def fit_messages(payload: JackknifeReplicates, extra: Sequence[str]) -> List[str
             + "; ".join(extra[:3])
             + (f"; and {len(extra) - 3} more" if len(extra) > 3 else "")
         )
+    few_treated = _few_treated_fit_message(payload, group_time_effects, anticipation)
+    if few_treated is not None:
+        messages.append(few_treated)
     if payload.n_replicates > _MANY_REPLICATES:
         messages.append(
             f"Cluster jackknife: {payload.n_replicates} deletion units, so fit() ran "
@@ -445,6 +525,67 @@ def _override_rows(
         row["conf_int"] = (float(ci_lo[j]), float(ci_hi[j]))
         row.pop("cband_conf_int", None)
     return ses
+
+
+def few_treated_event_study_message(
+    payload: JackknifeReplicates,
+    full_cells: Dict[Any, Dict[str, Any]],
+    effects: Dict[Any, Dict[str, Any]],
+    balance_e: Optional[int],
+) -> Optional[str]:
+    """Event-study horizons resting on too few treated clusters, if any."""
+    retained = None
+    if balance_e is not None:
+        # The cohorts a balanced aggregation keeps (same rule as the aggregator).
+        retained = {
+            g
+            for (g, t), cell in full_cells.items()
+            if t - g == balance_e and np.isfinite(cell["effect"])
+        }
+    few = []
+    for e, row in effects.items():
+        if row.get("is_reference") or not np.isfinite(row["effect"]):
+            continue
+        cells = [
+            gt
+            for gt, cell in full_cells.items()
+            if gt[1] - gt[0] == e
+            and not cell.get("is_reference")
+            and np.isfinite(cell["effect"])
+            and (retained is None or gt[0] in retained)
+        ]
+        if n_treated_clusters(payload, cells) < _MIN_TREATED_CLUSTERS:
+            few.append(e)
+    if not few:
+        return None
+    return few_treated_message(
+        f"the event-study estimates at event time(s) {_describe(sorted(few), limit=12)} rest"
+    )
+
+
+def few_treated_group_message(
+    payload: JackknifeReplicates,
+    full_cells: Dict[Any, Dict[str, Any]],
+    effects: Dict[Any, Dict[str, Any]],
+    anticipation: int,
+) -> Optional[str]:
+    """Cohorts whose group estimate rests on too few treated clusters, if any."""
+    few = []
+    for g, row in effects.items():
+        if not np.isfinite(row["effect"]):
+            continue
+        cells = [
+            gt
+            for gt, cell in full_cells.items()
+            if gt[0] == g and gt[1] >= g - anticipation and np.isfinite(cell["effect"])
+        ]
+        if n_treated_clusters(payload, cells) < _MIN_TREATED_CLUSTERS:
+            few.append(g)
+    if not few:
+        return None
+    return few_treated_message(
+        f"the group estimates of cohort(s) {_describe(sorted(few), limit=12)} rest"
+    )
 
 
 def apply_to_event_study(

@@ -3003,7 +3003,9 @@ class CallawaySantAnna(
             overall_se, overall_t, overall_p, overall_ci = apply_to_fit(
                 jackknife_payload, overall_att, group_time_effects, self.alpha
             )
-            for _message in fit_messages(jackknife_payload, _refit_warnings):
+            for _message in fit_messages(
+                jackknife_payload, _refit_warnings, group_time_effects, self.anticipation
+            ):
                 warnings.warn(_message, UserWarning, stacklevel=2)
 
         # No fit-time event-study surface -> the bootstrap never builds

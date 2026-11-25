@@ -374,6 +374,59 @@ class TestLostCells:
         assert loo["cluster"].iloc[-1] == "s5"
 
 
+class TestFewTreatedClusters:
+    """A number resting on fewer than three treated clusters draws a warning."""
+
+    @staticmethod
+    def messages(caught):
+        return [str(w.message) for w in caught if "treated clusters" in str(w.message)]
+
+    def fit_and_aggregate(self, cohorts, n_clusters):
+        data = make_panel(cohorts, n_clusters=n_clusters, seed=31)
+        with warnings.catch_warnings(record=True) as at_fit:
+            warnings.simplefilter("always")
+            jk = CallawaySantAnna(cluster="state", vcov_type="jackknife").fit(data, **FIT_KW)
+        with warnings.catch_warnings(record=True) as at_es:
+            warnings.simplefilter("always")
+            jk.aggregate("event_study")
+        with warnings.catch_warnings(record=True) as at_group:
+            warnings.simplefilter("always")
+            jk.aggregate("group")
+        return self.messages(at_fit), self.messages(at_es), self.messages(at_group)
+
+    def test_two_treated_clusters_per_cohort(self):
+        # Four treated clusters overall, two behind each cohort's own cells.
+        fit, es, group = self.fit_and_aggregate(TWO_COHORTS, 10)
+        assert len(fit) == 1 and "14 of 14 ATT(g,t) cells rest on fewer than 3" in fit[0]
+        assert "overall ATT" not in fit[0]
+        # Event times 0 to 2 pool both cohorts (four clusters); the rest do not.
+        assert len(es) == 1 and "event time(s) -4, -3, 3, 4 rest" in es[0]
+        assert len(group) == 1 and "cohort(s) 4, 6 rest" in group[0]
+
+    def test_one_treated_cluster_per_cohort_also_names_the_overall_att(self):
+        fit, _, _ = self.fit_and_aggregate({0: 4, 1: 6}, 8)
+        assert len(fit) == 1 and "the overall ATT rests on 2 and" in fit[0]
+
+    def test_three_treated_clusters_per_cohort_is_silent(self):
+        fit, es, group = self.fit_and_aggregate({0: 4, 1: 4, 2: 4, 3: 6, 4: 6, 5: 6}, 12)
+        assert fit == [] and es == [] and group == []
+
+    def test_the_default_variance_never_warns(self):
+        data = make_panel(TWO_COHORTS, seed=31)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            hc1 = CallawaySantAnna(cluster="state").fit(data, **FIT_KW)
+            hc1.aggregate("event_study")
+        assert self.messages(caught) == []
+
+    def test_many_deletion_units_warn_about_the_cost(self, panel, monkeypatch):
+        import diff_diff.staggered_jackknife as module
+
+        monkeypatch.setattr(module, "_MANY_REPLICATES", 15)
+        with pytest.warns(UserWarning, match=r"20 deletion units, so fit\(\) ran 21 extra"):
+            CallawaySantAnna(vcov_type="jackknife").fit(panel, **FIT_KW)
+
+
 class TestRefusals:
     def test_bootstrap_at_construction(self):
         with pytest.raises(ValueError, match="two inference methods"):

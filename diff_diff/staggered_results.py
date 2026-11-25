@@ -52,6 +52,8 @@ from diff_diff.staggered_jackknife import (
 )
 from diff_diff.staggered_jackknife import (
     changed_cells_message,
+    few_treated_event_study_message,
+    few_treated_group_message,
     loo_effects_frame,
 )
 
@@ -195,11 +197,13 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     pscore_trim : float
         Propensity score trimming bound used during estimation.
     vcov_type : str
-        Variance type used during estimation. CallawaySantAnna is
-        permanently narrow to ``"hc1"`` — see REGISTRY.md
-        "IF-based variance estimators vs analytical-sandwich estimators"
-        for why analytical-sandwich families don't compose with the
-        per-(g,t) doubly-robust / IPW / outcome-regression structure.
+        Variance estimator used during estimation: ``"hc1"`` (the
+        influence-function variance, cluster-robust when clustered) or
+        ``"jackknife"`` (the delete-one-cluster re-estimation variance of
+        Karim et al. 2026). See REGISTRY.md "IF-based variance estimators
+        vs analytical-sandwich estimators" for why analytical-sandwich
+        families don't compose with the per-(g,t) doubly-robust / IPW /
+        outcome-regression structure.
     cluster_name : str, optional
         Canonical cluster column. Set to ``survey_design.psu`` when an
         explicit survey PSU was provided (regardless of bare ``cluster=``),
@@ -207,13 +211,17 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         injects a PSU. ``None`` when no clustering is active.
     n_clusters : int, optional
         Number of unique clusters (PSUs) used for variance estimation.
-        ``None`` when no clustering is active.
+        ``None`` when no clustering is active. On a ``"jackknife"`` fit
+        with a cluster column it is ``H``, the number of clusters that
+        enter the estimation (the count ``df_inference`` is built on).
     df_inference : int, optional
         Cluster-level degrees of freedom for downstream inference (e.g.,
-        ``HonestDiD`` t-critical-value selection) on the bare-``cluster=``
-        synthesize path ONLY (the case where ``survey_metadata`` is
-        intentionally ``None`` to preserve the survey/non-survey contract
-        for ``DiagnosticReport`` / ``summary()``). When the user provides
+        ``HonestDiD`` t-critical-value selection). Populated on two paths,
+        both without a user survey design: the bare-``cluster=`` synthesize
+        path (``G - 1``; ``survey_metadata`` is intentionally ``None`` there
+        to preserve the survey/non-survey contract for ``DiagnosticReport``
+        / ``summary()``), and every ``vcov_type="jackknife"`` fit
+        (``H - 1``, with or without a cluster column). When the user provides
         an explicit ``survey_design=`` (inject or conflict branches),
         ``df_inference`` stays ``None`` and the canonical df carrier is
         ``survey_metadata.df_survey`` — which holds the actual CS-internal
@@ -284,16 +292,16 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     )
     epv_threshold: float = 10
     pscore_fallback: str = "error"
-    # Variance / clustering metadata (PR #XXX — narrow vcov_type contract
-    # + cluster= wiring fix). vcov_type is permanently narrow to "hc1" for
-    # CS per IF-based variance structure (REGISTRY.md). cluster_name +
-    # n_clusters surface the effective clustering level for downstream
-    # introspection and label rendering.
+    # Variance / clustering metadata. vcov_type is "hc1" (IF-based
+    # variance) or "jackknife" (delete-one-cluster re-estimation) for CS
+    # (REGISTRY.md). cluster_name + n_clusters surface the effective
+    # clustering level for downstream introspection and label rendering.
     vcov_type: str = "hc1"
     cluster_name: Optional[str] = None
     n_clusters: Optional[int] = None
     # df_inference: cluster-level degrees of freedom for downstream
-    # inference, populated on the bare-cluster-synthesize path ONLY.
+    # inference, populated on the bare-cluster-synthesize path (G - 1) and
+    # on every cluster-jackknife fit (H - 1), never on a survey-design fit.
     # When the user provides an explicit survey_design= (inject or
     # conflict branches), df_inference stays None and the canonical df
     # carrier is survey_metadata.df_survey (which holds the actual
@@ -484,7 +492,12 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 # used the analytical df).
                 apply_bootstrap_group_overrides(effects, boot_replay, kit.alpha)
             if jackknife is not None:
-                self._warn_jackknife_changed_cells(jackknife, "the group aggregates")
+                self._warn_jackknife(
+                    changed_cells_message(jackknife, "the group aggregates"),
+                    few_treated_group_message(
+                        jackknife, self.group_time_effects, effects, kit.anticipation
+                    ),
+                )
                 apply_jackknife_to_group(
                     jackknife,
                     effects,
@@ -522,7 +535,12 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             # non-reference horizon, its outer-product form for the
             # covariance (indexed by the horizons finite in every
             # delete-one sample), and the t(H - 1) df.
-            self._warn_jackknife_changed_cells(jackknife, "the event-study estimates")
+            self._warn_jackknife(
+                changed_cells_message(jackknife, "the event-study estimates"),
+                few_treated_event_study_message(
+                    jackknife, self.group_time_effects, es.effects, balance_e
+                ),
+            )
             es_vcov, es_vcov_index = apply_jackknife_to_event_study(
                 jackknife,
                 es.effects,
@@ -760,11 +778,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         )
 
     @staticmethod
-    def _warn_jackknife_changed_cells(jackknife: Any, what: str) -> None:
-        """Repeat the paper's second caveat for a post-fit aggregate."""
-        message = changed_cells_message(jackknife, what)
-        if message is not None:
-            warnings.warn(message, UserWarning, stacklevel=4)
+    def _warn_jackknife(*messages: Optional[str]) -> None:
+        """Emit the cluster-jackknife caveats that apply to a post-fit aggregate."""
+        for message in messages:
+            if message is not None:
+                warnings.warn(message, UserWarning, stacklevel=4)
 
     def get_loo_effects_df(self) -> pd.DataFrame:
         """

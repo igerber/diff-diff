@@ -632,6 +632,10 @@ class JackknifeReplicates:
     undefined : tuple
         ``None`` for a usable replicate, otherwise the reason its refit
         produced no overall ATT.
+    cell_treated : dict
+        ``{(g, t): positions}``: the deletion units (by position in
+        ``labels``) that hold treated units of that cell. Used to warn when
+        a reported quantity rests on very few treated clusters.
     """
 
     labels: Tuple[Any, ...]
@@ -644,6 +648,7 @@ class JackknifeReplicates:
     n_cells: Tuple[int, ...]
     changed: Tuple[bool, ...]
     undefined: Tuple[Optional[str], ...]
+    cell_treated: Dict[Any, Tuple[int, ...]] = field(default_factory=dict)
 
     @property
     def n_replicates(self) -> int:
