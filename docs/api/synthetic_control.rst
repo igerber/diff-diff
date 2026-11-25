@@ -74,8 +74,8 @@ methods test a single post slot of an ``m``-slot series, whose p-value cannot fa
 below the share of permutations that leave that slot in place: ``1/m`` for the
 moving-block set and for an exact i.i.d. enumeration, the empirical share for
 sampled i.i.d. draws). The intervals are found by scanning a
-data-derived range that contains the set and bisecting each endpoint. The most
-recent run is summarized on ``conformal_inference`` and every candidate
+data-derived range that contains the set's finite boundary and bisecting each
+finite endpoint. The most recent run is summarized on ``conformal_inference`` and every candidate
 evaluated is on
 :meth:`~diff_diff.SyntheticControlResults.get_conformal_grid_df`; the analytical
 ``conf_int`` stays NaN.

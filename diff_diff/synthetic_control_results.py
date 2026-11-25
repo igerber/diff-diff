@@ -79,6 +79,16 @@ class _SyntheticControlFitSnapshot:
     fit_v: Optional[np.ndarray] = None
 
 
+def _require_finite_bounds_width(bounds: Any) -> None:
+    """Reject a ``(lo, hi)`` whose width overflows float64 (``linspace`` would yield NaN)."""
+    with np.errstate(over="ignore"):
+        width = np.float64(bounds[1]) - np.float64(bounds[0])
+    if not np.isfinite(width):
+        raise ValueError(
+            f"bounds must have a finite width (hi - lo overflows float64), got {bounds!r}"
+        )
+
+
 def _validate_conformal_bounds(
     bounds: Optional[Tuple[float, float]], n_grid: int
 ) -> Optional[np.ndarray]:
@@ -94,6 +104,7 @@ def _validate_conformal_bounds(
         raise ValueError(f"bounds must be a finite (lo, hi) pair, got {bounds!r}")
     if float(bounds[1]) <= float(bounds[0]):
         raise ValueError(f"bounds must satisfy hi > lo, got {bounds!r}")
+    _require_finite_bounds_width(bounds)
     return np.linspace(float(bounds[0]), float(bounds[1]), int(n_grid))
 
 
@@ -2520,6 +2531,7 @@ class SyntheticControlResults(BaseResults):
                 raise ValueError(f"bounds must be a finite (lo, hi) pair, got {bounds!r}")
             if float(bounds[1]) <= float(bounds[0]):
                 raise ValueError(f"bounds must satisfy hi > lo, got {bounds!r}")
+            _require_finite_bounds_width(bounds)
         self._require_placebo_reference(n_starts)
         assert (
             self._placebo_gaps is not None

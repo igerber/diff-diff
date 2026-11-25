@@ -4384,6 +4384,7 @@ def test_confidence_set_unpickled_raises():
         {"bounds": 5.0},  # scalar -> ValueError, not a bare TypeError from len()
         {"bounds": (1.0,)},  # wrong length
         {"bounds": (np.inf, 1.0)},  # non-finite
+        {"bounds": (-1.7e308, 1.7e308)},  # width overflows: linspace would be NaN
     ],
 )
 def test_confidence_set_input_validation(kwargs):

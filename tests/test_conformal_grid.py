@@ -482,6 +482,53 @@ def test_bisection_near_the_float64_limit(sign, n_grid, explicit):
     assert inside == 1.0 and res["lower"] < sign * 9.5e307 < res["upper"]
 
 
+_MAX = float(np.finfo(float).max)
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [np.array([-2.0, _MAX]), np.array([-_MAX, 2.0]), np.array([-_MAX, _MAX])],
+    ids=["upper_at_max", "lower_at_max", "both_at_max"],
+)
+def test_bisection_from_a_maximum_float_bound(grid):
+    # ``np.spacing`` of the largest float is +inf: a tolerance built on it accepts the
+    # whole bracket as resolved, so the side next to that bound stayed at the point
+    # estimate (``[-1, 0]`` for the first case) and was still reported as "ran".
+    y1, Y0, perms = _unit_set_panel()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = _invert(y1, Y0, 0.2, perms, grid=grid)
+    assert res["status"] == "ran" and res["contiguous"]
+    np.testing.assert_allclose([res["lower"], res["upper"]], [-1.0, 1.0], atol=1e-5)
+    assert _oracle_p(y1, Y0, 0.5, perms) > 0.2 and res["lower"] < 0.5 < res["upper"]
+    assert _oracle_p(y1, Y0, -0.5, perms) > 0.2 and res["lower"] < -0.5 < res["upper"]
+
+
+def test_public_bounds_reaching_the_maximum_float():
+    # Same defect through the public API: a two-point bounds= grid ending at the
+    # largest float must still locate both endpoints, and a bounds pair whose width
+    # overflows (``linspace`` would return NaN) is refused up front.
+    res = _fit(5.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = res.conformal_confidence_intervals(alpha=0.1)
+        hi = res.conformal_confidence_intervals(alpha=0.1, bounds=(-1e3, _MAX), n_grid=2)
+        lo = res.conformal_confidence_intervals(alpha=0.1, bounds=(-_MAX, 1e3), n_grid=2)
+        avg_ref = res.conformal_average_effect(alpha=0.25)
+        avg_hi = res.conformal_average_effect(alpha=0.25, bounds=(-1e3, _MAX), n_grid=2)
+    for got in (hi, lo):
+        assert (got["status"] == "ran").all()
+        np.testing.assert_allclose(got["lower"], ref["lower"], atol=1e-4)
+        np.testing.assert_allclose(got["upper"], ref["upper"], atol=1e-4)
+    assert avg_ref["status"] == "ran" and avg_hi["status"] == "ran"
+    np.testing.assert_allclose(
+        [avg_hi["lower"], avg_hi["upper"]], [avg_ref["lower"], avg_ref["upper"]], atol=1e-4
+    )
+    for call in (res.conformal_confidence_intervals, res.conformal_average_effect):
+        with pytest.raises(ValueError, match="finite width"):
+            call(bounds=(-_MAX, _MAX))
+
+
 # ---------------------------------------------------------------------------
 # 11. the unbounded floor
 # ---------------------------------------------------------------------------

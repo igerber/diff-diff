@@ -48,3 +48,9 @@
   are rows of it, and `n_grid_in_set` / `n_grid_nonconverged` count its rows.
   Outcomes too large for a finite candidate range raise `ValueError`
   (previously a scan over non-finite values).
+- **`bounds=(lo, hi)` whose width `hi - lo` overflows float64 now raises
+  `ValueError`** in `conformal_confidence_intervals()`,
+  `conformal_average_effect()` and `confidence_set()` (for example
+  `(-1.7e308, 1.7e308)`). The grid built from such a pair contained NaN
+  values. A pair with a finite width is still accepted, including one that
+  ends at the largest float.

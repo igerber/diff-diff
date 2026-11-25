@@ -436,7 +436,8 @@ def _invert_single_post(
        and the ulp taken at the magnitude of the imputed post outcome, below which a
        change in ``θ`` cannot change ``y1[post_idx] − θ``. There is no iteration cap:
        each step strictly shrinks the bracket among floats (the midpoint is formed
-       without overflow, so the search also works near the float64 limit).
+       without overflow and the ulp is finite at the largest float, so the search
+       also works at the float64 limit).
 
     So a reported finite endpoint is a candidate that was evaluated and not rejected,
     with a rejected candidate within that tolerance outside it. What is NOT
@@ -563,7 +564,9 @@ def _invert_single_post(
             inner = ends[side]
             while True:
                 scale = (ends[1] - ends[0]) if two_sided else abs(inner - point_est)
-                resolution = 4.0 * float(np.spacing(max(y_post_abs, abs(inner), abs(outer))))
+                # ``math.ulp``, not ``np.spacing``: the latter is +inf at the largest
+                # finite float, which would accept any bracket as already resolved.
+                resolution = 4.0 * math.ulp(max(y_post_abs, abs(inner), abs(outer)))
                 if abs(outer - inner) <= max(_ENDPOINT_RTOL * scale, resolution):
                     break
                 # Halve each term before adding: ``0.5 * (inner + outer)`` overflows
