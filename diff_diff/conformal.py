@@ -257,16 +257,72 @@ def _single_null_pvalue(
     return {"p_value": p, "s_observed": s_obs, "n_perms": n, "converged": conv, "weights": w}
 
 
-def _auto_grid(center: float, spread: float, n_grid: int) -> np.ndarray:
-    """Symmetric inversion grid centred on the point estimate.
+# Auto-range padding (fraction of the bracket width), zoom cap, and the relative
+# endpoint tolerance. Module-level so tests can monkeypatch them.
+_AUTO_BRACKET_PAD = 0.01
+_AUTO_GRID_MAX_ZOOMS = 8
+_ENDPOINT_RTOL = 1e-6
 
-    Half-width is a generous multiple of the pre-period residual scale (so a valid
-    CI lies inside the grid for well-behaved fits); membership outside the grid is
-    NOT certified (grid-limited — flagged via ``status`` when the accepted set
-    touches an edge).
+
+def _single_slot_p_floor(perms: np.ndarray, post_idx: int) -> float:
+    """Smallest p-value a single-post-slot test can attain.
+
+    With one post slot the statistic of a permuted residual vector depends only on
+    WHICH residual lands in that slot, so every permutation that leaves the slot in
+    place reproduces the observed statistic and is counted under ``>=``. Hence
+    ``p >= mean(perms[:, post_idx] == post_idx)`` for the two-sided and the signed
+    one-sided statistic alike. That share is exactly ``1/m`` for the moving-block set
+    and for an exact i.i.d. enumeration (``m`` = series length), and the empirical
+    share for sampled i.i.d. draws; it is ``>= 1/|Π|`` because the identity is in
+    ``Π``. ``alpha`` below it means no candidate can ever be rejected.
     """
-    half = max(8.0 * spread, 0.5 * abs(center) + 1e-6)
-    return np.linspace(center - half, center + half, n_grid)
+    return float(np.mean(perms[:, post_idx] == post_idx))
+
+
+def _auto_bracket(y1_obs: np.ndarray, Y0: np.ndarray, post_idx: int) -> Tuple[float, float]:
+    """Candidate range that contains the finite boundary of the confidence set.
+
+    The proxy weights lie on the unit simplex, so for ANY candidate ``θ`` and any
+    fitted weights every pre-slot residual satisfies
+    ``|û_t| <= R := max_{t pre, j} |y1_t − Y0_tj|`` and the post-slot residual is
+    ``y1_post − θ − Y0_post·w`` with ``Y0_post·w`` inside
+    ``[min_j Y0_post,j, max_j Y0_post,j]``. With
+    ``θ_min = y1_post − max_j Y0_post,j`` and ``θ_max = y1_post − min_j Y0_post,j``,
+    any ``θ`` outside ``[θ_min − R, θ_max + R]`` makes the post residual strictly the
+    largest in absolute value: the two-sided p-value then equals the single-slot
+    floor (rejected whenever ``alpha >= floor``). For the signed one-sided statistic
+    one side of the bracket is rejected the same way and the other has ``p = 1``
+    (the accepted ray). So the scan need not guess a scale from the point estimate
+    or the pre-period fit.
+
+    The range is padded by a fraction of its width, a small absolute term (so a
+    zero-width range still has distinct edges) and a multiple of the floating-point
+    resolution of the outcomes (so the strict inequality survives rounding at large
+    outcome magnitudes). Raises ``ValueError`` if the range is not representable.
+    """
+    y1_obs = np.asarray(y1_obs, dtype=float)
+    Y0 = np.asarray(Y0, dtype=float)
+    pre = np.ones(y1_obs.shape[0], dtype=bool)
+    pre[post_idx] = False
+    with np.errstate(over="ignore", invalid="ignore"):
+        resid_bound = float(np.max(np.abs(y1_obs[pre][:, None] - Y0[pre]))) if pre.any() else 0.0
+        y_post = float(y1_obs[post_idx])
+        lo = y_post - float(np.max(Y0[post_idx])) - resid_bound
+        hi = y_post - float(np.min(Y0[post_idx])) + resid_bound
+        data_scale = max(float(np.max(np.abs(y1_obs))), float(np.max(np.abs(Y0))))
+        pad = (
+            _AUTO_BRACKET_PAD * (hi - lo)
+            + 1e-6 * max(1.0, abs(lo), abs(hi))
+            + 64.0 * float(np.finfo(float).eps) * data_scale
+        )
+        lo, hi = lo - pad, hi + pad
+        width = hi - lo
+    if not (np.isfinite(lo) and np.isfinite(hi) and np.isfinite(width) and width > 0):
+        raise ValueError(
+            "conformal inversion: the outcome magnitudes are too large to form a finite "
+            "candidate range. Rescale the outcome, or pass explicit bounds=(lo, hi)."
+        )
+    return float(lo), float(hi)
 
 
 def _assemble_single_ci(
@@ -276,9 +332,12 @@ def _assemble_single_ci(
     alpha: float,
     point_estimate: float,
 ) -> Dict[str, Any]:
-    """Assemble a confidence interval from a single-post-slot inversion grid.
+    """Assemble a confidence interval from single-post-slot inversion candidates.
 
-    A grid point is **rejected** ONLY when it converged AND ``p ≤ alpha``; a
+    ``thetas`` is the sorted array of EVERY candidate evaluated (scan rows, the
+    point estimate, endpoint-refinement candidates — see
+    :func:`_invert_single_post`). A candidate is **rejected** ONLY when it converged
+    AND ``p ≤ alpha``; a
     non-converged point is **indeterminate** (its p is unreliable) and is therefore
     NOT rejected — keeping it in the set is the conservative choice for an interval
     (excluding tail non-convergence would understate the width, the opposite of
@@ -287,7 +346,8 @@ def _assemble_single_ci(
     in-set ``θ`` with a ``contiguous`` flag (a *rejected* point strictly inside the
     hull ⇒ non-contiguous). ``n_nonconverged`` is surfaced so an interval widened by
     indeterminacy is detectable. ``status`` is one of ``{"ran", "grid_limited",
-    "empty"}`` (the granularity-``unbounded`` case is handled by the caller).
+    "empty"}`` (the ``unbounded`` case is handled by the caller): ``"grid_limited"``
+    when the outermost candidate on either side is in the set.
     """
     rejected = converged & (pvals <= alpha)
     in_set = ~rejected
@@ -334,25 +394,71 @@ def _invert_single_post(
     x1_rows: Optional[np.ndarray] = None,
     X0_rows: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
-    """Invert a single-post-slot conformal test over a grid (CWZ Algorithm 1).
+    """Invert a single-post-slot conformal test over candidate effects (CWZ Algorithm 1).
 
     The series ``y1_obs`` ``(m,)`` / ``Y0`` ``(m, J)`` has exactly one post slot at
     ``post_idx`` (a per-period CI sub-series ``(pre ∪ {t})`` or a block-collapsed
     average series). For each candidate effect ``θ`` the post outcome is imputed
-    (``y1[post_idx] − θ``), the proxy refit exactly (one NNLS per grid point; no
-    warm start is needed or used), and the permutation p-value recomputed. With one post slot ``S_q`` reduces to
-    ``|û_post|`` for every ``q``, so ``q`` is inert here (fixed to 1); under
-    ``alternative="greater"``/``"less"`` the single-slot statistic is the SIGNED
-    ``û_post`` (resp. ``−û_post``), and the inversion yields a ONE-SIDED
-    confidence set — a half-line whose finite endpoint is the reported bound
-    (the infinite side is genuinely accepted, not grid-limited; the caller
-    overrides the edge-touch status accordingly). Returns the CI summary plus
-    the ``grid`` table of ``(θ, p, in_set, converged)`` rows.
+    (``y1[post_idx] − θ``), the proxy refit exactly (one NNLS per candidate; no
+    warm start is needed or used), and the permutation p-value recomputed. With one
+    post slot ``S_q`` reduces to ``|û_post|`` for every ``q``, so ``q`` is inert here
+    (fixed to 1); under ``alternative="greater"``/``"less"`` the single-slot statistic
+    is the SIGNED ``û_post`` (resp. ``−û_post``), and the inversion yields a ONE-SIDED
+    confidence set — a half-line whose finite endpoint is the reported bound (the
+    infinite side is genuinely accepted, not grid-limited; the caller overrides the
+    edge-touch status accordingly).
 
-    When ``alpha < 1/|Π|`` every candidate has ``p ≥ 1/|Π| > alpha`` (the identity is
-    in ``Π``), so NO value is ever rejected and the confidence set is the whole line:
-    this short-circuits to ``status="unbounded"`` with ``(-inf, +inf)`` endpoints and
-    an empty grid (the per-point table is uninformative when nothing can be rejected).
+    **Candidates.** Algorithm 1 inverts the test over candidate values without
+    prescribing them. Every candidate evaluated is kept in ONE store, and the
+    interval, ``contiguous``, the counts, and the returned ``grid`` table are all
+    computed from that store — nothing evaluated is discarded:
+
+    1. *Scan.* With ``grid`` supplied (the public ``bounds=`` path) its rows are the
+       scan. Otherwise ``n_grid`` points are laid on :func:`_auto_bracket`, a range
+       that contains the finite boundary of the set whatever the effect size or the
+       quality of the pre-period fit.
+    2. *Centre (two-sided).* The point estimate is evaluated as an extra candidate
+       when it lies strictly inside the scanned range. It is a member of the
+       two-sided set: at ``θ = point estimate`` the pre-only minimiser is also the
+       full-series minimiser with a zero post residual, so ``p = 1``. (It is
+       evaluated, not assumed.) So a scan whose rows all miss a narrow set does not
+       report it empty.
+    3. *Zoom (automatic range, two-sided).* While fewer than a quarter of the rows of
+       the scan just made are in the set, ``n_grid`` more points are laid on the hull
+       of ALL accepted candidates padded by one step of that scan, provided this
+       halves the range; at most ``_AUTO_GRID_MAX_ZOOMS`` times. This only adds
+       resolution inside the hull.
+    4. *Endpoints.* Each finite hull endpoint with a (necessarily rejected) outward
+       neighbour in the store is bisected against it, keeping an accepted inner and a
+       rejected outer candidate, until the bracket is no wider than
+       ``max(_ENDPOINT_RTOL · scale, 4 ulp)`` — ``scale`` the reported width
+       (two-sided) or the endpoint's distance from the point estimate (one-sided),
+       and the ulp taken at the magnitude of the imputed post outcome, below which a
+       change in ``θ`` cannot change ``y1[post_idx] − θ``. There is no iteration cap:
+       each step strictly shrinks the bracket among floats (the midpoint is formed
+       without overflow and the ulp is finite at the largest float, so the search
+       also works at the float64 limit).
+
+    So a reported finite endpoint is a candidate that was evaluated and not rejected,
+    with a rejected candidate within that tolerance outside it. What is NOT
+    guaranteed: Algorithm 1 has no monotonicity guarantee after per-candidate refits,
+    so a rejected pocket inside the hull, or an accepted component away from the
+    hull, that is narrower than the scan spacing can go unseen; ``contiguous`` and
+    the hull reflect the candidates evaluated.
+
+    Returns the CI summary plus the ``grid`` table of ``(θ, p, in_set, converged)``
+    rows, one per distinct candidate evaluated, sorted by ``θ``; ``n_in_set`` and
+    ``n_nonconverged`` count those rows. ``status`` is ``"grid_limited"`` when the
+    outermost candidate on a side is in the set (a ``bounds=`` range that does not
+    contain the set, or an automatic-range edge kept through non-convergence),
+    ``"empty"`` when no candidate is, and otherwise ``"ran"``.
+
+    When ``alpha`` is below :func:`_single_slot_p_floor` every candidate has
+    ``p > alpha``, so NO value is ever rejected and the confidence set is the whole
+    line: this short-circuits to ``status="unbounded"`` with ``(-inf, +inf)``
+    endpoints and an empty table. (The floor is ``1/m`` for the moving-block set and
+    for an exact i.i.d. enumeration — NOT ``1/|Π|``: a larger i.i.d. permutation set
+    does not lower it for a single-slot test.)
     """
     y1_obs = np.asarray(y1_obs, dtype=float)
     Y0 = np.asarray(Y0, dtype=float)
@@ -360,24 +466,23 @@ def _invert_single_post(
     post_mask = np.zeros(m, dtype=bool)
     post_mask[post_idx] = True
     n_perms = int(perms.shape[0])
+    two_sided = alternative == "two-sided"
 
-    # Un-absorbed point estimate + grid center from a PRE-ONLY proxy fit: predict the
-    # post slot from a proxy fit on the other (pre) slots only. The θ=0 full-series fit
-    # would let the proxy soak the effect into the weights, biasing the naive residual
-    # toward 0 and mis-centring the auto-grid (CWZ inverts the test precisely to avoid
-    # relying on that naive residual). ``spread`` is the pre-fit residual noise scale.
+    # Un-absorbed point estimate from a PRE-ONLY proxy fit: predict the post slot
+    # from a proxy fit on the other (pre) slots only. The θ=0 full-series fit would
+    # let the proxy soak the effect into the weights, biasing the naive residual
+    # toward 0 (CWZ inverts the test precisely to avoid relying on it).
     pre_sel = ~post_mask
-    w_pre, resid_pre, _ = _cwz_proxy_fit(
+    w_pre, _, _ = _cwz_proxy_fit(
         y1_obs[pre_sel],
         Y0[pre_sel],
         x1_rows=x1_rows,
         X0_rows=X0_rows,
     )
     point_est = float(y1_obs[post_idx] - Y0[post_idx] @ w_pre)
-    spread = float(np.std(resid_pre)) if resid_pre.size else 1.0
 
-    if alpha < 1.0 / n_perms:
-        # Granularity-unbounded: every null is accepted (p >= 1/|Π| > alpha).
+    if alpha < _single_slot_p_floor(perms, post_idx):
+        # Unbounded: every null is accepted (p >= floor > alpha).
         return {
             "lower": -float("inf"),
             "upper": float("inf"),
@@ -388,32 +493,109 @@ def _invert_single_post(
             "n_nonconverged": 0,
             "grid": [],
             "n_perms": n_perms,
+            "n_zooms": 0,
         }
 
-    if grid is None:
-        grid = _auto_grid(point_est, spread, n_grid)
+    # The candidate store: θ -> (p, converged). Every evaluation lands here once.
+    store: Dict[float, Tuple[float, bool]] = {}
+
+    def _evaluate(theta: float) -> Tuple[float, bool]:
+        theta = float(theta)
+        hit = store.get(theta)
+        if hit is None:
+            y1n = y1_obs.copy()
+            y1n[post_idx] = y1n[post_idx] - theta
+            _, resid, conv = _cwz_proxy_fit(
+                y1n,
+                Y0,
+                x1_rows=x1_rows,
+                X0_rows=X0_rows,
+            )
+            p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1, alternative=alternative)
+            hit = (float(p), bool(conv))
+            store[theta] = hit
+        return hit
+
+    def _accepted(theta: float) -> bool:
+        # Same rule as _assemble_single_ci: only a CONVERGED p <= alpha rejects.
+        p, conv = _evaluate(theta)
+        return not (conv and p <= alpha)
+
+    n_zooms = 0
+    if grid is not None:
+        scan = np.asarray(grid, dtype=float)
+        for theta in scan:
+            _evaluate(theta)
+        if two_sided and float(np.min(scan)) < point_est < float(np.max(scan)):
+            _evaluate(point_est)
     else:
-        grid = np.asarray(grid, dtype=float)
+        lo, hi = _auto_bracket(y1_obs, Y0, post_idx)
+        if two_sided and lo < point_est < hi:
+            _evaluate(point_est)
+        while True:
+            scan = np.linspace(lo, hi, n_grid)
+            n_in = sum(_accepted(theta) for theta in scan)
+            if not two_sided or 4 * n_in >= n_grid or n_zooms >= _AUTO_GRID_MAX_ZOOMS:
+                break
+            members = [theta for theta in store if _accepted(theta)]
+            if not members:
+                break  # nothing accepted anywhere: reported as "empty" below
+            step = (hi - lo) / (n_grid - 1)
+            new_lo, new_hi = min(members) - step, max(members) + step
+            if not (new_hi - new_lo) <= 0.5 * (hi - lo):
+                break
+            lo, hi = new_lo, new_hi
+            n_zooms += 1
 
-    pvals = np.empty(grid.shape[0], dtype=float)
-    converged = np.empty(grid.shape[0], dtype=bool)
-    for i, theta in enumerate(grid):
-        y1n = y1_obs.copy()
-        y1n[post_idx] = y1n[post_idx] - float(theta)
-        w, resid, conv = _cwz_proxy_fit(
-            y1n,
-            Y0,
-            x1_rows=x1_rows,
-            X0_rows=X0_rows,
-        )
-        p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1, alternative=alternative)
-        pvals[i] = p
-        converged[i] = conv
+    def _assemble() -> Tuple[np.ndarray, Dict[str, Any]]:
+        thetas = np.array(sorted(store), dtype=float)
+        pvals = np.array([store[t][0] for t in thetas], dtype=float)
+        conv = np.array([store[t][1] for t in thetas], dtype=bool)
+        return thetas, _assemble_single_ci(thetas, pvals, conv, alpha, point_est)
 
-    out = _assemble_single_ci(grid, pvals, converged, alpha, point_est)
+    thetas, out = _assemble()
+    if out["status"] != "empty":
+        members_idx = np.flatnonzero(out["_in_set"])
+        i_lo, i_hi = int(members_idx[0]), int(members_idx[-1])
+        ends = [float(thetas[i_lo]), float(thetas[i_hi])]
+        y_post_abs = abs(float(y1_obs[post_idx]))
+
+        def _bisect(side: int, outer: float) -> None:
+            inner = ends[side]
+            while True:
+                scale = (ends[1] - ends[0]) if two_sided else abs(inner - point_est)
+                # ``math.ulp``, not ``np.spacing``: the latter is +inf at the largest
+                # finite float, which would accept any bracket as already resolved.
+                resolution = 4.0 * math.ulp(max(y_post_abs, abs(inner), abs(outer)))
+                if abs(outer - inner) <= max(_ENDPOINT_RTOL * scale, resolution):
+                    break
+                # Halve each term before adding: ``0.5 * (inner + outer)`` overflows
+                # for same-signed endpoints near the float64 limit, and the resulting
+                # inf would be mistaken for "nothing left between them".
+                mid = 0.5 * inner + 0.5 * outer
+                if not (min(inner, outer) < mid < max(inner, outer)):
+                    break  # adjacent floats: nothing left between them
+                if _accepted(mid):
+                    inner = mid
+                    ends[side] = inner
+                else:
+                    outer = mid
+
+        # Lower first, so the upper side's tolerance sees the refined width. A
+        # one-sided set has one finite side: lower for "greater", upper for "less".
+        if alternative != "less" and i_lo > 0:
+            _bisect(0, float(thetas[i_lo - 1]))
+        if alternative != "greater" and i_hi < thetas.shape[0] - 1:
+            _bisect(1, float(thetas[i_hi + 1]))
+        thetas, out = _assemble()
+
     in_set = out.pop("_in_set")
-    out["grid"] = list(zip(grid.tolist(), pvals.tolist(), in_set.tolist(), converged.tolist()))
+    out["grid"] = [
+        (float(t), store[float(t)][0], bool(member), store[float(t)][1])
+        for t, member in zip(thetas, in_set)
+    ]
     out["n_perms"] = n_perms
+    out["n_zooms"] = n_zooms
     return out
 
 

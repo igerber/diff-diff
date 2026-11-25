@@ -69,8 +69,14 @@ pointwise per-period confidence intervals by test inversion (Algorithm 1 — eac
 :meth:`~diff_diff.SyntheticControlResults.conformal_average_effect` gives a confidence
 interval for the average post-period effect by collapsing into non-overlapping
 ``T*``-blocks (Appendix A.1). ``scheme="moving_block"`` (default; valid under serial
-dependence) or ``"iid"`` (finer p-values). The most recent run is summarized on
-``conformal_inference`` and the inversion grid is on
+dependence) or ``"iid"`` (finer p-values for the joint test; the two confidence-interval
+methods test a single post slot of an ``m``-slot series, whose p-value cannot fall
+below the share of permutations that leave that slot in place: ``1/m`` for the
+moving-block set and for an exact i.i.d. enumeration, the empirical share for
+sampled i.i.d. draws). The intervals are found by scanning a
+data-derived range that contains the set's finite boundary and bisecting each
+finite endpoint. The most recent run is summarized on ``conformal_inference`` and every candidate
+evaluated is on
 :meth:`~diff_diff.SyntheticControlResults.get_conformal_grid_df`; the analytical
 ``conf_int`` stays NaN.
 
