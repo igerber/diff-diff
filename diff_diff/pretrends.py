@@ -1270,6 +1270,26 @@ class PreTrendsPower(BaseEstimator):
             from diff_diff.sun_abraham import SunAbrahamResults
 
             if isinstance(results, SunAbrahamResults):
+                # Common-reference guard (mirrors the container route). A
+                # SunAbraham fit records more than one base when some cohort
+                # was not observed at e = -1 - anticipation and is normalized
+                # at its latest observed pre-treatment period instead.
+                _sa_ref_e = getattr(results, "reference_event_times", None)
+                if _sa_ref_e is not None and len(set(_sa_ref_e)) > 1:
+                    raise ValueError(
+                        "PreTrendsPower requires pre-period coefficients "
+                        "normalized against one common reference period, but "
+                        "this SunAbraham fit records DISTINCT normalization "
+                        f"bases at event times {sorted(set(_sa_ref_e))}. The "
+                        "hypothesized violation delta is defined relative to "
+                        "one reference, so power/MDV over mixed-base "
+                        "coefficients target an ill-defined alternative. This "
+                        "arises when a cohort is not observed at the reference "
+                        "relative period (see the fit-time warning naming the "
+                        "cohort) - re-estimate on a panel in which every "
+                        "cohort is observed at one common pre-treatment "
+                        "relative period."
+                    )
                 # Same anticipation-aware pre-period cutoff as
                 # CallawaySantAnna above.
                 _ant = getattr(results, "anticipation", 0) or 0
@@ -1324,11 +1344,17 @@ class PreTrendsPower(BaseEstimator):
                     results, pre_periods, ses
                 )
 
-                # SunAbraham omits e = -1 - anticipation as its COMMON
-                # reference (saturated-regression omitted category):
-                # anchor Roth's linear violation there (see the CS
-                # branch for the normalization rationale).
-                _sa_ref = getattr(results, "reference_period", None)
+                # SunAbraham omits its COMMON reference (e = -1 - anticipation,
+                # or the one fallback period every cohort shares when no
+                # cohort is observed there): anchor Roth's linear violation
+                # at that base (see the CS branch for the normalization
+                # rationale). The recorded singleton wins; results without the
+                # provenance field keep the `reference_period` anchor.
+                _sa_ref = (
+                    next(iter(set(_sa_ref_e)))
+                    if _sa_ref_e is not None and len(set(_sa_ref_e)) == 1
+                    else getattr(results, "reference_period", None)
+                )
                 if _sa_ref is None:
                     _sa_ref = -1 - int(getattr(results, "anticipation", 0) or 0)
                 relative_times = np.asarray(

@@ -104,6 +104,19 @@ aggregate cohort-specific effects into event study estimates.
 **Reference:** Sun, L., & Abraham, S. (2021). Estimating dynamic treatment effects
 in event studies with heterogeneous treatment effects. *Journal of Econometrics*, 225(2), 175-199.
 
+**Unbalanced panels:** every cohort observed at ``e = -1 - anticipation``, with
+a never-treated unit observed at that calendar period, is normalized there. A
+cohort for which that fails is normalized at its latest usable pre-treatment
+period instead, with a warning, and
+``results.reference_event_times`` lists the distinct bases (pre-trends power
+refuses a fit with more than one). A cohort with no pre-treatment observation has
+no identified effect and is excluded with a warning (``NotImplementedError``
+under ``survey_design=``). A cohort-by-period coefficient that the observed rows
+do not identify - no never-treated observation at that calendar period, or a
+cohort whose units are observed at disjoint sets of periods - is reported as NaN
+with a warning naming the cells, as is every pooled event-study row that
+contains one; ``rank_deficient_action="error"`` raises instead.
+
 .. autoclass:: diff_diff.SunAbraham
    :no-index:
    :members:

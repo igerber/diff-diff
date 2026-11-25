@@ -398,6 +398,8 @@ results = sa.fit(data, outcome='outcome', unit='unit',
 results.print_summary()
 ```
 
+**Unbalanced panels:** the omitted reference is `e = -1 - anticipation` for every cohort observed there with a never-treated unit observed at that calendar period. A cohort for which that fails is normalized at its latest usable pre-treatment period (warned; `results.reference_event_times` lists the bases). A cohort with no pre-treatment observation has no identified effect: it is excluded with a warning (`NotImplementedError` under `survey_design=`). Any cohort-by-period coefficient the observed rows do not identify (no never-treated observation at that calendar period; a cohort whose units are observed at disjoint periods) is reported as NaN with a warning naming the cells, as is every pooled row that contains one; `rank_deficient_action="error"` raises instead.
+
 ### ImputationDiD
 
 Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Efficient estimator producing shorter CIs than CS/SA under homogeneous effects.
@@ -1610,6 +1612,8 @@ Returned by `SunAbraham.fit()`.
 | `cluster_name` | `str | None` | Cluster ids the analytical regression received (`"unit"` on the default, the explicit column; 4.0); None on unclustered, survey and pairs-bootstrap fits |
 | `n_clusters` | `int | None` | Effective count of those clusters (4.0, appended field); None when `cluster_name` is None |
 | `event_study_df` | `dict[int, float] | None` | Per-event-time df provenance (G-1 on plain clustered analytic fits under the 4.0 default; the finite residual df under `df_convention="residual"`; None under bootstrap) |
+| `reference_period` | `float | None` | The reference relative period: `-1 - anticipation`, or the one fallback period every cohort shares when no cohort is observed there |
+| `reference_event_times` | `tuple | None` | The distinct relative periods the cohorts are normalized against; more than one entry means some cohort could not be normalized at `-1 - anticipation` and is normalized at its latest usable pre-treatment period (pre-trends power refuses such a fit) |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")` (the event-study level is the unified `EVENT_STUDY_SCHEMA` frame with the omitted reference period as a synthesized `is_reference` row - 4.0 M-093)
 

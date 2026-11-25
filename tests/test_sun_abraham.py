@@ -2228,3 +2228,772 @@ class TestSummaryAlphaContract:
 
     def test_summary_accepts_fit_alpha(self, alpha_fitted):
         assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()
+
+
+# ---------------------------------------------------------------------------
+# Per-cohort reference, cohorts without a pre-period, identification guard
+# ---------------------------------------------------------------------------
+
+_ID_KW = dict(outcome="y", unit="unit", time="time", first_treat="g")
+
+
+def _tau(e):
+    """True effect at relative period ``e`` (zero before treatment)."""
+    return 2.0 + 0.5 * e if e >= 0 else 0.0
+
+
+def _ident_panel(noise=0.0, seed=0, n_units=90, cohorts=(0, 3, 5), n_periods=8):
+    """Unit effect + linear time trend + effect ``2 + 0.5 e``; noise sd ``noise``."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n_units):
+        g = cohorts[i % len(cohorts)]
+        alpha = rng.normal()
+        for t in range(1, n_periods + 1):
+            y = alpha + 0.3 * t + rng.normal(scale=noise) if noise else alpha + 0.3 * t
+            rows.append((i, t, g, y + (_tau(t - g) if g and t >= g else 0.0)))
+    return pd.DataFrame(rows, columns=["unit", "time", "g", "y"])
+
+
+def _fit_id(data, est=None, **fit_kwargs):
+    """Fit and return (results, list of UserWarning texts)."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = SunAbraham(**(est or {})).fit(data, **_ID_KW, **fit_kwargs)
+    texts = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    return res, texts
+
+
+def _oracle_refs(data, anticipation=0):
+    """Independent re-derivation of the per-cohort reference rule."""
+    comparison = set(data.loc[data["g"] == 0, "time"])
+    e_ref = -1 - anticipation
+    refs = {}
+    for g in sorted(x for x in data["g"].unique() if x > 0):
+        rel = set((data.loc[data["g"] == g, "time"] - g).tolist())
+        pre = sorted((e for e in rel if e < -anticipation), reverse=True)
+        candidates = ([e_ref] if e_ref in rel else []) + [e for e in pre if e != e_ref]
+        usable = [e for e in candidates if g + e in comparison]
+        refs[g] = (usable or candidates or [None])[0]
+    return refs
+
+
+def _oracle_unidentified(data, refs):
+    """Cells with a nonzero entry in the null space of the explicit-dummy design."""
+    d = data.reset_index(drop=True)
+    rel = d["time"] - d["g"]
+    # A cell is a (cohort, relative period) other than the cohort's reference
+    # and other than e = -1, which is never an estimated period.
+    cells = sorted(
+        {(int(g), int(e)) for g, e in zip(d["g"], rel) if g > 0 and e != refs[g] and e != -1}
+    )
+    cell_cols = [((d["g"] == g) & (rel == e)).astype(float).values for g, e in cells]
+    X = np.column_stack(
+        cell_cols
+        + [pd.get_dummies(d["unit"], dtype=float).values]
+        + [pd.get_dummies(d["time"], dtype=float).values]
+    )
+    # full_matrices=True: a sparse panel has fewer rows than columns, and the
+    # economy SVD would silently omit null directions.
+    _, s, vt = np.linalg.svd(X, full_matrices=True)
+    rank = int((s > 1e-9 * s.max()).sum())
+    null = vt[rank:].T
+    return {c for c, row in zip(cells, null[: len(cells)]) if np.abs(row).max() > 1e-7}, cells
+
+
+def _nan_cells(res):
+    return {
+        (int(g), int(e)) for (g, e), v in res.cohort_effects.items() if not np.isfinite(v["effect"])
+    }
+
+
+def _true_att(data, res):
+    """Truth for the overall ATT: post rows weighted by treated observations."""
+    rel = (data["time"] - data["g"])[data["g"] > 0]
+    post = [e for e in res.event_study_effects if e >= 0]
+    n = np.array([(rel == e).sum() for e in post], dtype=float)
+    return float(np.sum(n * np.array([_tau(e) for e in post])) / n.sum())
+
+
+def _gap_panel(noise=0.0, seed=0):
+    d = _ident_panel(noise=noise, seed=seed)
+    return d[~((d["g"] == 5) & (d["time"] == 4))]  # cohort 5 unobserved at e = -1
+
+
+def _nt_absent_panel(noise=0.0, seed=0, period=6):
+    d = _ident_panel(noise=noise, seed=seed)
+    return d[~((d["g"] == 0) & (d["time"] == period))]
+
+
+def _split_cohort_panel(noise=0.0):
+    """Cohort 5's units are observed at two disjoint sets of periods."""
+    d = _ident_panel(noise=noise)
+    even = d["unit"] % 2 == 0
+    drop = (d["g"] == 5) & ((even & ~d["time"].isin([1, 3])) | (~even & d["time"].isin([1, 3, 4])))
+    return d[~drop]
+
+
+class TestSunAbrahamCohortReference:
+    """A cohort not observed at e = -1 - anticipation; cohorts with no pre-period."""
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "gap",
+            "treated_at_first_period",
+            "first_observed_at_zero",
+            "anticipation",
+            "no_comparison_at_reference",
+        ],
+    )
+    def test_exact_recovery_noiseless(self, case):
+        d = _ident_panel()
+        est = {}
+        if case == "gap":
+            data, fitted = _gap_panel(), _gap_panel()
+        elif case == "treated_at_first_period":
+            data = pd.concat([d[d["g"] != 3], d[d["g"] == 3].assign(g=1)])
+            # recompute outcomes for the relabelled cohort so the truth holds
+            data = data.assign(
+                y=lambda x: x["y"]
+                - np.where((x["g"] == 1) & (x["time"] >= 3), [_tau(t - 3) for t in x["time"]], 0.0)
+                + np.where(x["g"] == 1, [_tau(t - 1) for t in x["time"]], 0.0)
+            )
+            fitted = data[data["g"] != 1]
+        elif case == "first_observed_at_zero":
+            data = d[~((d["g"] == 3) & (d["time"] < 3))]
+            fitted = data[data["g"] != 3]
+        elif case == "no_comparison_at_reference":
+            # Never-treated units are absent at t = 4, cohort 5's e = -1: the
+            # cohort is normalized at e = -2 (t = 3) instead, and everything
+            # stays identified.
+            data = fitted = _nt_absent_panel(period=4)
+        else:
+            est = {"anticipation": 1}
+            data = d[~((d["g"] == 3) & (d["time"] == 1))]  # no row at e <= -2
+            fitted = data[data["g"] != 3]
+        res, texts = _fit_id(data, est=est)
+        assert not any("rank" in t.lower() or "not identified by" in t for t in texts)
+        if case == "no_comparison_at_reference":
+            assert any("cohort 5: -2" in t for t in texts)
+            assert res.reference_event_times == (-2, -1)
+        assert np.isfinite(res.att)
+        for (g, e), v in res.cohort_effects.items():
+            assert abs(v["effect"] - _tau(e)) < 1e-9, (g, e, v["effect"])
+        for e, v in res.event_study_effects.items():
+            assert abs(v["effect"] - _tau(e)) < 1e-9, (e, v["effect"])
+        assert abs(res.att - _true_att(fitted, res)) < 1e-9
+
+    @pytest.mark.parametrize("n_bootstrap", [0, 40])
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    def test_exclusion_equals_the_reduced_fit(self, n_bootstrap, control_group):
+        d = _ident_panel(noise=0.5)
+        full = d[~((d["g"] == 3) & (d["time"] < 3))]  # cohort 3 has no pre-period
+        est = {"n_bootstrap": n_bootstrap, "seed": 11, "control_group": control_group}
+        res, texts = _fit_id(full, est=est)
+        ref, ref_texts = _fit_id(full[full["g"] != 3], est=est)
+        assert any("EXCLUDED" in t and "Cohort(s) 3" in t for t in texts)
+        assert not any("EXCLUDED" in t for t in ref_texts)
+        assert res.groups == ref.groups == [5]
+        assert res.n_obs == ref.n_obs and res.n_treated_units == ref.n_treated_units
+        np.testing.assert_allclose([res.att, res.se], [ref.att, ref.se], rtol=1e-12)
+        assert set(res.event_study_effects) == set(ref.event_study_effects)
+        for e, v in res.event_study_effects.items():
+            w = ref.event_study_effects[e]
+            np.testing.assert_allclose([v["effect"], v["se"]], [w["effect"], w["se"]], rtol=1e-12)
+        assert set(res.cohort_effects) == set(ref.cohort_effects)
+        for k, v in res.cohort_effects.items():
+            np.testing.assert_allclose(v["effect"], ref.cohort_effects[k]["effect"], rtol=1e-12)
+
+    def test_fallback_reference_matches_an_independent_regression(self):
+        data = _gap_panel(noise=0.5)
+        res, texts = _fit_id(data)
+        assert any("cohort 5: -2" in t and "mix normalization bases" in t for t in texts)
+        refs = {3: -1, 5: -2}
+        d = data.reset_index(drop=True)
+        rel = d["time"] - d["g"]
+        cells = sorted({(int(g), int(e)) for g, e in zip(d["g"], rel) if g > 0 and e != refs[g]})
+        X = np.column_stack(
+            [((d["g"] == g) & (rel == e)).astype(float).values for g, e in cells]
+            + [pd.get_dummies(d["unit"], dtype=float).values]
+            + [pd.get_dummies(d["time"], dtype=float).values[:, 1:]]
+        )
+        beta = np.linalg.lstsq(X, d["y"].values, rcond=None)[0][: len(cells)]
+        assert {(int(g), int(e)) for g, e in res.cohort_effects} == set(cells)
+        for (g, e), b in zip(cells, beta):
+            np.testing.assert_allclose(
+                res.cohort_effects[(g, e)]["effect"], b, rtol=1e-8, atol=1e-10
+            )
+        # the pooled e = -2 row holds cohort 3 only: cohort 5's cell is its reference
+        assert set(res.cohort_weights[-2]) == {3}
+
+    def test_fractional_pre_period_is_a_pre_period(self):
+        # Cohort treated at 3, observed at 2.5 but not at 2: e = -0.5 is before
+        # treatment, so the cohort is kept and normalized there.
+        d = _ident_panel(n_units=60, cohorts=(0, 3))
+        half = d[d["time"] == 2].assign(time=2.5)
+        half = half.assign(y=half["y"] + 0.3 * 0.5)
+        data = pd.concat([d[~((d["g"] == 3) & (d["time"] == 2))], half[half["g"] == 3]])
+        # never-treated units need the half period too, or its cells are unidentified
+        data = pd.concat([data, half[half["g"] == 0]]).sort_values(["unit", "time"])
+        res, texts = _fit_id(data)
+        assert any("cohort 3: -0.5" in t for t in texts)
+        assert res.reference_event_times == (-0.5,)
+        assert res.reference_period == -0.5 and res.reference_observed
+        for (g, e), v in res.cohort_effects.items():
+            assert abs(v["effect"] - _tau(e)) < 1e-9
+
+    def test_every_cohort_without_a_pre_period_raises(self):
+        d = _ident_panel()
+        data = d[~((d["g"] > 0) & (d["time"] < d["g"]))]
+        with pytest.raises(ValueError, match="only\\s+treated cohorts"):
+            SunAbraham().fit(data, **_ID_KW)
+
+    def test_no_never_treated_error_keeps_precedence(self):
+        d = _ident_panel()
+        data = d[(d["g"] > 0) & (d["time"] >= d["g"])]  # no controls AND no pre-period
+        with pytest.raises(ValueError, match="No never-treated units"):
+            SunAbraham().fit(data, **_ID_KW)
+
+    @pytest.mark.parametrize("vcov_type", ["hc1", "hc2_bm", "classical"])
+    def test_variance_families_agree_on_point_estimates(self, vcov_type):
+        base, _ = _fit_id(_gap_panel(noise=0.5))
+        res, _ = _fit_id(_gap_panel(noise=0.5), est={"vcov_type": vcov_type})
+        np.testing.assert_allclose(res.att, base.att, rtol=1e-9)
+        assert np.isfinite(res.se) and res.se > 0
+        for e, v in res.event_study_effects.items():
+            np.testing.assert_allclose(
+                v["effect"], base.event_study_effects[e]["effect"], atol=1e-8
+            )
+            assert np.isfinite(v["se"]) and v["se"] > 0
+
+    def test_conley_reads_coordinates_from_the_reduced_frame(self):
+        d = _ident_panel(noise=0.5)
+        rng = np.random.default_rng(4)
+        loc = {u: (rng.uniform(30, 45), rng.uniform(-100, -80)) for u in d["unit"].unique()}
+        d = d.assign(lat=d["unit"].map(lambda u: loc[u][0]), lon=d["unit"].map(lambda u: loc[u][1]))
+        full = d[~((d["g"] == 3) & (d["time"] < 3))]
+        est = dict(
+            vcov_type="conley",
+            conley_coords=("lat", "lon"),
+            conley_cutoff_km=500.0,
+            conley_lag_cutoff=1,
+        )
+        res, texts = _fit_id(full, est=est)
+        ref, _ = _fit_id(full[full["g"] != 3], est=est)
+        assert any("EXCLUDED" in t for t in texts)
+        np.testing.assert_allclose([res.att, res.se], [ref.att, ref.se], rtol=1e-12)
+
+
+class TestSunAbrahamReferenceFields:
+    """reference_event_times / reference_period and the pre-trends consumer."""
+
+    def test_balanced_fit_records_the_single_reference(self):
+        res, texts = _fit_id(_ident_panel(noise=0.5))
+        assert res.reference_event_times == (-1,)
+        assert res.reference_period == -1 and res.reference_observed
+        assert not any("normalized at their latest" in t for t in texts)
+        frame = res.to_dataframe()
+        ref_rows = frame[frame["is_reference"]]
+        assert ref_rows["event_time"].tolist() == [-1] and ref_rows["att"].tolist() == [0.0]
+
+    def test_mixed_references_are_recorded_and_refused_by_pretrends(self):
+        from diff_diff import DiagnosticReport, compute_pretrends_power
+
+        res, _ = _fit_id(_gap_panel(noise=0.5))
+        assert res.reference_event_times == (-2, -1)
+        assert res.reference_period == -1 and res.reference_observed
+        # e = -2 is an ESTIMATED row here (cohort 3), not a reference row
+        frame = res.to_dataframe()
+        assert frame.loc[frame["is_reference"], "event_time"].tolist() == [-1]
+        with pytest.raises(ValueError, match="DISTINCT normalization\\s+bases"):
+            compute_pretrends_power(res)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            section = DiagnosticReport(res).to_dict()["pretrends_power"]
+        assert section["status"] == "error"
+        assert "DISTINCT normalization" in section["reason"]
+
+    def test_balanced_pretrends_is_unchanged_by_the_new_field(self):
+        import dataclasses
+
+        from diff_diff import compute_pretrends_power
+
+        res, _ = _fit_id(_ident_panel(noise=0.5))
+        legacy = dataclasses.replace(res, reference_event_times=None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            new, old = compute_pretrends_power(res), compute_pretrends_power(legacy)
+        # The deterministic inputs are identical; the MDV itself comes from a
+        # simulated box probability and is compared to its Monte Carlo noise.
+        np.testing.assert_array_equal(new.violation_weights, old.violation_weights)
+        np.testing.assert_array_equal(new.vcov, old.vcov)
+        np.testing.assert_array_equal(new.pre_period_effects, old.pre_period_effects)
+        assert new.covariance_source == old.covariance_source == "full_pre_period_vcov"
+        assert new.mdv == pytest.approx(old.mdv, rel=1e-3)
+
+    @pytest.mark.parametrize("layout", ["single_cohort_gap", "biennial"])
+    def test_shared_fallback_reference_becomes_the_anchor(self, layout):
+        from diff_diff import compute_pretrends_power
+
+        if layout == "single_cohort_gap":
+            d = _ident_panel(noise=0.5, n_units=60, cohorts=(0, 5))
+            data = d[~((d["g"] == 5) & (d["time"] == 4))]
+        else:  # odd periods only: no cohort is observed at e = -1
+            d = _ident_panel(noise=0.5, n_units=90, cohorts=(0, 5, 7), n_periods=11)
+            data = d[d["time"] % 2 == 1]
+        res, texts = _fit_id(data)
+        assert res.reference_event_times == (-2,)
+        assert res.reference_period == -2 and res.reference_observed
+        assert any("normalized at their latest" in t for t in texts)
+        assert not any("mix normalization bases" in t for t in texts)
+        assert -2 not in res.event_study_effects and -1 not in res.event_study_effects
+        frame = res.to_dataframe()
+        assert frame.loc[frame["is_reference"], "event_time"].tolist() == [-2]
+        # Roth's linear violation is anchored at the true base, -2
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pp = compute_pretrends_power(res)
+        pre = sorted(e for e in res.event_study_effects if e < 0)
+        np.testing.assert_allclose(np.abs(pp.violation_weights), [abs(e + 2) for e in pre])
+
+
+class TestSunAbrahamIdentificationGuard:
+    """Coefficients the observed rows do not identify are NaN, never a wrong number."""
+
+    @pytest.mark.parametrize("builder", [_nt_absent_panel, _split_cohort_panel])
+    def test_structured_unidentified_cells_are_nan(self, builder):
+        data = builder()
+        res, texts = _fit_id(data)
+        expected, cells = _oracle_unidentified(data, _oracle_refs(data))
+        assert expected  # the panel does exercise the guard
+        assert _nan_cells(res) == expected
+        assert {(int(g), int(e)) for g, e in res.cohort_effects} == set(cells)
+        warning = [t for t in texts if "not identified by the observed rows" in t]
+        assert len(warning) == 1
+        g, e = sorted(expected)[0]
+        assert f"({g}, {e})" in warning[0]
+        for (g, e), v in res.cohort_effects.items():
+            if (int(g), int(e)) in expected:
+                assert np.isnan(v["effect"]) and np.isnan(v["se"])
+            else:
+                assert abs(v["effect"] - _tau(e)) < 1e-9
+        pooled_nan = {e for (_, e) in expected}
+        for e, v in res.event_study_effects.items():
+            if e in pooled_nan:
+                assert np.isnan(v["effect"]) and np.isnan(v["se"])
+                assert np.isnan(v["p_value"]) and np.all(np.isnan(v["conf_int"]))
+            else:
+                assert abs(v["effect"] - _tau(e)) < 1e-9
+        if any(e >= 0 for e in pooled_nan):
+            assert np.isnan(res.att) and np.isnan(res.se)
+
+    @staticmethod
+    def _random_panels():
+        base = _ident_panel()
+        for seed in range(40):
+            rng = np.random.default_rng(seed)
+            yield base[rng.random(len(base)) > rng.choice([0.3, 0.6, 0.85])]
+        for seed in range(10):  # every unit observed at two adjacent periods
+            rng = np.random.default_rng(100 + seed)
+            start = rng.integers(1, 8, size=42)
+            rows = []
+            for i in range(42):
+                g = (0, 3, 4)[i % 3]
+                alpha = rng.normal()
+                for t in (start[i], start[i] + 1):
+                    rows.append((i, t, g, alpha + 0.3 * t + (_tau(t - g) if g and t >= g else 0.0)))
+            yield pd.DataFrame(rows, columns=["unit", "time", "g", "y"])
+
+    def test_no_wrong_finite_number_on_random_missingness(self):
+        n_checked = n_flagged = 0
+        for data in self._random_panels():
+            refs = _oracle_refs(data)
+            data = data[~data["g"].isin([g for g, r in refs.items() if r is None])]
+            refs = {g: r for g, r in refs.items() if r is not None}
+            if not refs or not (data["g"] == 0).any():
+                continue
+            res, _ = _fit_id(data)
+            expected, cells = _oracle_unidentified(data, refs)
+            assert _nan_cells(res) == expected
+            for (g, e), v in res.cohort_effects.items():
+                if (int(g), int(e)) not in expected:
+                    assert abs(v["effect"] - _tau(e)) < 1e-6, (g, e, v["effect"])
+            for e, v in res.event_study_effects.items():
+                if np.isfinite(v["effect"]):
+                    assert abs(v["effect"] - _tau(e)) < 1e-6
+            n_checked += 1
+            n_flagged += bool(expected)
+        assert n_checked >= 40 and n_flagged >= 10
+
+    def test_full_dummy_path_flags_the_same_cells(self):
+        for period in (1, 6):
+            data = _nt_absent_panel(period=period)
+            within, _ = _fit_id(data)
+            for vcov_type in ("hc2_bm", "classical"):
+                res, _ = _fit_id(data, est={"vcov_type": vcov_type})
+                assert _nan_cells(res) == _nan_cells(within) != set()
+                for k, v in res.cohort_effects.items():
+                    if np.isfinite(v["effect"]):
+                        assert abs(v["effect"] - _tau(k[1])) < 1e-9
+
+    def test_rank_deficient_action(self):
+        data = _nt_absent_panel()
+        with pytest.raises(ValueError, match="rank-deficient.*\\(3, 3\\)"):
+            SunAbraham(rank_deficient_action="error").fit(data, **_ID_KW)
+        silent, texts = _fit_id(data, est={"rank_deficient_action": "silent"})
+        assert not any("not identified" in t or "ank-deficient" in t for t in texts)
+        warned, texts = _fit_id(data)
+        assert sum("not identified by the observed rows" in t for t in texts) == 1
+        assert _nan_cells(silent) == _nan_cells(warned) != set()
+
+    def test_resampling_drops_draws_that_lose_the_reference(self):
+        # Cohort 5's reference cell is held by ONE unit: a draw without that
+        # unit cannot normalize the cohort. Such draws must be dropped, not
+        # entered into the distribution under an arbitrary baseline (which
+        # gives SEs of 0.5-0.8 on this nearly noiseless panel).
+        d = _ident_panel(noise=1e-6)
+        keeper = d.loc[d["g"] == 5, "unit"].min()
+        data = d[~((d["g"] == 5) & (d["time"] < 5) & (d["unit"] != keeper))]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = SunAbraham(n_bootstrap=199, seed=7).fit(data, **_ID_KW)
+        assert any("non-finite bootstrap samples" in str(w.message) for w in caught)
+        assert np.isfinite(res.se)
+        for e, v in res.event_study_effects.items():
+            assert np.isfinite(v["se"]) and v["se"] < 1e-4, (e, v["se"])
+
+    def test_resampling_never_substitutes_the_original_estimate(self):
+        # `rank_deficient_action` governs the FULL-SAMPLE fit. A draw that
+        # cannot identify a cell must come back NaN and be dropped under every
+        # setting; raising inside the draw would hand it to the bootstrap's
+        # exception fallback, which substitutes the original estimate and
+        # shrinks the SE (0.0751 instead of 0.0959 on this panel).
+        d = _ident_panel(noise=0.5)
+        keeper = d.loc[d["g"] == 5, "unit"].min()
+        data = d[~((d["g"] == 5) & (d["time"] < 5) & (d["unit"] != keeper))]
+        ses = {}
+        for action in ("warn", "silent", "error"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                res = SunAbraham(n_bootstrap=199, seed=7, rank_deficient_action=action).fit(
+                    data, **_ID_KW
+                )
+            texts = [str(w.message) for w in caught]
+            assert not any("Using original estimate" in t for t in texts), action
+            assert any("non-finite bootstrap samples" in t for t in texts), action
+            ses[action] = (res.se, tuple(v["se"] for v in res.event_study_effects.values()))
+        assert ses["warn"] == ses["silent"] == ses["error"]
+        assert np.isfinite(ses["warn"][0]) and ses["warn"][0] > 0
+
+    @pytest.mark.parametrize("vcov_type", ["hc1", "hc2_bm"])
+    def test_every_cell_unidentified_reports_nan(self, vcov_type):
+        # One treated cohort (g = 2) and never-treated units observed only at
+        # t = 1: the single cell (2, 0) has no comparison row, so no design
+        # column is left. That is reported, not raised as "no interactions".
+        data = pd.DataFrame(
+            {
+                "unit": [0, 1, 1, 2, 2],
+                "time": [1, 1, 2, 1, 2],
+                "g": [0, 2, 2, 2, 2],
+                "y": [0.0, 0.5, 3.0, 0.2, 2.9],
+            }
+        )
+        res, texts = _fit_id(data, est={"vcov_type": vcov_type})
+        assert sum("not identified by the observed rows" in t and "(2, 0)" in t for t in texts) == 1
+        assert _nan_cells(res) == {(2, 0)}
+        assert np.isnan(res.cohort_effects[(2, 0)]["se"])
+        row = res.event_study_effects[0]
+        assert np.isnan(row["effect"]) and np.isnan(row["se"]) and np.isnan(row["p_value"])
+        assert np.isnan(res.att) and np.isnan(res.se) and np.isnan(res.p_value)
+        assert np.all(np.isnan(res.event_study_vcov))
+        silent, texts = _fit_id(
+            data, est={"vcov_type": vcov_type, "rank_deficient_action": "silent"}
+        )
+        assert not any("not identified" in t for t in texts) and np.isnan(silent.att)
+        # every inference field is undefined together, under both settings
+        from tests.conftest import assert_nan_inference
+
+        for fitted in (res, silent):
+            assert_nan_inference(fitted.event_study_effects[0])
+            assert_nan_inference(
+                {
+                    "se": fitted.se,
+                    "t_stat": fitted.t_stat,
+                    "p_value": fitted.p_value,
+                    "conf_int": fitted.conf_int,
+                }
+            )
+        with pytest.raises(ValueError, match="rank-deficient.*\\(2, 0\\)"):
+            SunAbraham(vcov_type=vcov_type, rank_deficient_action="error").fit(data, **_ID_KW)
+
+    def test_event_study_covariance_keeps_the_identified_block(self):
+        from diff_diff import compute_pretrends_power
+
+        data = _nt_absent_panel(noise=0.5, period=1)  # flags (3, -2) and (5, -4)
+        res, _ = _fit_id(data)
+        nan_rows = {e for e, v in res.event_study_effects.items() if np.isnan(v["effect"])}
+        assert nan_rows == {-4, -2}
+        index = list(res.event_study_vcov_index)
+        bad = [index.index(e) for e in sorted(nan_rows)]
+        good = [i for i in range(len(index)) if i not in bad]
+        vcov = res.event_study_vcov
+        assert np.all(np.isnan(vcov[bad, :])) and np.all(np.isnan(vcov[:, bad]))
+        block = vcov[np.ix_(good, good)]
+        assert np.all(np.isfinite(block))
+        ses = np.array([res.event_study_effects[index[i]]["se"] for i in good])
+        np.testing.assert_allclose(np.sqrt(np.diag(block)), ses, rtol=1e-10)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pp = compute_pretrends_power(res, pre_periods=[-3])
+        assert pp.covariance_source == "full_pre_period_vcov"
+        assert np.isfinite(pp.mdv)
+
+    def test_undefined_variance_is_not_reported_as_zero(self):
+        # Full rank, zero residual df: the covariance is undefined (NaN) with
+        # no unidentified cell, and must stay NaN in the event-study block.
+        data = pd.DataFrame(
+            {
+                "unit": [0, 0, 1, 1],
+                "time": [1, 2, 1, 2],
+                "g": [0, 0, 2, 2],
+                "y": [0.0, 1.0, 0.5, 3.0],
+            }
+        )
+        res, _ = _fit_id(data, est={"cluster": False})
+        assert res.att == pytest.approx(1.5)
+        assert np.all(np.isnan(res.event_study_vcov))
+
+
+class TestStructuralIdentificationHelper:
+    """`_structural_identification` against the null space of the design."""
+
+    @staticmethod
+    def _call(data, refs, weights=None):
+        from diff_diff.sun_abraham import _structural_identification
+
+        rel = sorted({e for g, e in zip(data["g"], data["time"] - data["g"]) if g > 0} - {-1})
+        return _structural_identification(
+            data["unit"].values, data["time"].values, data["g"].values, rel, refs, -1, weights
+        )
+
+    def test_identified_design(self):
+        assert self._call(_ident_panel(), {3: -1, 5: -1}) == ([], [])
+        assert self._call(_gap_panel(), {3: -1, 5: -2}) == ([], [])
+
+    @pytest.mark.parametrize("builder", [_nt_absent_panel, _split_cohort_panel])
+    def test_unidentified_cells_and_minimal_omission(self, builder):
+        data = builder()
+        refs = _oracle_refs(data)
+        omit, unidentified = self._call(data, refs)
+        expected, cells = _oracle_unidentified(data, refs)
+        assert {(int(g), int(e)) for g, e in unidentified} == expected
+        assert len(omit) == 1 and set(omit) <= set(unidentified)
+        # leaving `omit` out makes the cell block full rank given the fixed effects
+        d = data.reset_index(drop=True)
+        rel = d["time"] - d["g"]
+        kept = [c for c in cells if c not in {(int(g), int(e)) for g, e in omit}]
+        fe = np.column_stack(
+            [
+                pd.get_dummies(d["unit"], dtype=float).values,
+                pd.get_dummies(d["time"], dtype=float).values,
+            ]
+        )
+        X = np.column_stack(
+            [((d["g"] == g) & (rel == e)).astype(float).values for g, e in kept] + [fe]
+        )
+        assert np.linalg.matrix_rank(X) == np.linalg.matrix_rank(fe) + len(kept)
+
+    def test_zero_weight_rows_are_not_observed(self):
+        data = _ident_panel()
+        weights = np.where(data["g"] == 0, np.where(data["time"] == 4, 0.0, 1.0), 1.0)
+        dropped = data[weights > 0]
+        refs = {3: -1, 5: -1}
+        assert self._call(data, refs, weights) == self._call(dropped, refs)
+        assert self._call(data, refs, weights)[1] != []
+
+    def test_matches_the_null_space_on_random_panels(self):
+        n_flagged = 0
+        for seed in range(200):
+            rng = np.random.default_rng(seed)
+            cohorts = [(0, 3, 5), (0, 2, 4, 6), (0, 5)][seed % 3]
+            base = _ident_panel(n_units=60, cohorts=cohorts)
+            data = base[rng.random(len(base)) > rng.choice([0.2, 0.5, 0.8, 0.9, 0.95])]
+            refs = _oracle_refs(data)
+            data = data[~data["g"].isin([g for g, r in refs.items() if r is None])]
+            refs = {g: r for g, r in refs.items() if r is not None}
+            if not refs or not (data["g"] == 0).any():
+                continue
+            _, unidentified = self._call(data, refs)
+            expected, _ = _oracle_unidentified(data, refs)
+            assert {(int(g), int(e)) for g, e in unidentified} == expected, seed
+            n_flagged += bool(expected)
+        assert n_flagged >= 40
+
+
+class TestSunAbrahamIdentificationSurvey:
+    """Survey designs: refusal, zero weights, replicate weights."""
+
+    @staticmethod
+    def _with_design(data):
+        data = data.copy()
+        data["w"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        return data
+
+    @staticmethod
+    def _add_replicates(data, n_rep=12, seed=3):
+        rng = np.random.default_rng(seed)
+        data = data.copy()
+        cols = []
+        for j in range(n_rep):
+            jitter = {u: rng.uniform(0.5, 1.5) for u in data["unit"].unique()}
+            data[f"rw{j}"] = data["unit"].map(jitter) * data["w"]
+            cols.append(f"rw{j}")
+        return data, cols
+
+    def test_cohort_without_a_pre_period_is_refused(self):
+        from diff_diff.survey import SurveyDesign
+
+        d = self._with_design(_ident_panel(noise=0.5))
+        data = d[~((d["g"] == 3) & (d["time"] < 3))]
+        with pytest.raises(NotImplementedError, match="Cohort\\(s\\) 3 .*domain estimation"):
+            SunAbraham().fit(data, survey_design=SurveyDesign(weights="w"), **_ID_KW)
+
+    def test_zero_weight_pre_periods_count_as_unobserved(self):
+        from diff_diff.survey import SurveyDesign
+
+        # Cohort 3's units observed before treatment all have weight 0; the
+        # positive-weight units of the cohort are observed from e = 0 only.
+        d = self._with_design(_ident_panel(noise=0.5))
+        late = (d["g"] == 3) & (d["unit"] % 2 == 0)
+        data = d[~(late & (d["time"] < 3))].copy()
+        data.loc[(data["g"] == 3) & (data["unit"] % 2 == 1), "w"] = 0.0
+        with pytest.raises(NotImplementedError, match="Cohort\\(s\\) 3 "):
+            SunAbraham().fit(data, survey_design=SurveyDesign(weights="w"), **_ID_KW)
+
+    def test_fallback_reference_under_tsl_and_replicate_designs(self):
+        from diff_diff.survey import SurveyDesign
+
+        data = self._with_design(_gap_panel(noise=0.5))
+        tsl, texts = _fit_id(
+            data, survey_design=SurveyDesign(weights="w", strata="stratum", psu="unit")
+        )
+        assert any("cohort 5: -2" in t for t in texts)
+        assert np.isfinite(tsl.se) and tsl.se > 0
+        data, cols = self._add_replicates(data)
+        rep, _ = _fit_id(
+            data,
+            survey_design=SurveyDesign(weights="w", replicate_weights=cols, replicate_method="JK1"),
+        )
+        np.testing.assert_allclose(rep.att, tsl.att, rtol=1e-10)
+        assert np.isfinite(rep.se) and rep.se > 0
+        assert all(np.isfinite(v["se"]) and v["se"] > 0 for v in rep.event_study_effects.values())
+
+    def test_single_cohort_fallback_under_replicate_weights(self):
+        from diff_diff.survey import SurveyDesign
+
+        # The reference period (-2) holds no estimated cell: it must not sit in
+        # the replicate vector as a structural NaN.
+        d = self._with_design(_ident_panel(noise=0.5, n_units=60, cohorts=(0, 5)))
+        data, cols = self._add_replicates(d[~((d["g"] == 5) & (d["time"] == 4))])
+        res, _ = _fit_id(
+            data,
+            survey_design=SurveyDesign(weights="w", replicate_weights=cols, replicate_method="JK1"),
+        )
+        assert -2 not in res.event_study_effects
+        assert np.isfinite(res.se) and res.se > 0
+        assert all(np.isfinite(v["se"]) and v["se"] > 0 for v in res.event_study_effects.values())
+
+    def test_zero_weight_cohort_does_not_poison_pooled_rows(self):
+        from diff_diff.survey import SurveyDesign
+
+        d = self._with_design(_ident_panel(noise=0.5))
+        zeroed = d.copy()
+        zeroed.loc[zeroed["g"] == 5, "w"] = 0.0
+        res, _ = _fit_id(zeroed, survey_design=SurveyDesign(weights="w"))
+        ref, _ = _fit_id(d[d["g"] != 5], survey_design=SurveyDesign(weights="w"))
+        np.testing.assert_allclose(res.att, ref.att, rtol=1e-10)
+        assert set(res.event_study_effects) == set(ref.event_study_effects)
+        for e, v in res.event_study_effects.items():
+            np.testing.assert_allclose(v["effect"], ref.event_study_effects[e]["effect"], rtol=1e-9)
+            # SEs are not compared: the zero-weight units stay in the design.
+            assert np.isfinite(v["se"]) and v["se"] > 0
+        assert all(g == 3 for g, _ in res.cohort_effects)
+
+    def test_zero_weight_cell_beside_an_observed_cohort(self):
+        from diff_diff.survey import SurveyDesign
+
+        # The only cohort-5 units observed at t = 8 (e = 3) are zero-weight
+        # units; cohort 3 is observed there (e = 5 for cohort 3, so e = 3 is
+        # pooled from cohort 3's t = 6 cell alone).
+        d = self._with_design(_ident_panel(noise=0.5))
+        odd5 = (d["g"] == 5) & (d["unit"] % 2 == 1)
+        data = d[~((d["g"] == 5) & ~odd5 & (d["time"] == 8))].copy()
+        data.loc[(data["g"] == 5) & (data["unit"] % 2 == 1), "w"] = 0.0
+        res, _ = _fit_id(data, survey_design=SurveyDesign(weights="w"))
+        assert (5, 3) not in res.cohort_effects
+        row = res.event_study_effects[3]
+        assert np.isfinite(row["effect"]) and np.isfinite(row["se"])
+        np.testing.assert_allclose(row["effect"], res.cohort_effects[(3, 3)]["effect"], rtol=1e-12)
+        assert np.isfinite(res.att)
+
+    def test_guard_under_replicate_weights_keeps_identified_inference(self):
+        from diff_diff.survey import SurveyDesign
+
+        d = self._with_design(_nt_absent_panel(noise=0.5, period=1))
+        data, cols = self._add_replicates(d)
+        res, _ = _fit_id(
+            data,
+            survey_design=SurveyDesign(weights="w", replicate_weights=cols, replicate_method="JK1"),
+        )
+        assert _nan_cells(res) == {(3, -2), (5, -4)}
+        for e, v in res.event_study_effects.items():
+            if e in (-4, -2):
+                assert np.isnan(v["effect"]) and np.isnan(v["se"])
+            else:
+                assert np.isfinite(v["se"]) and v["se"] > 0, e
+        assert np.isfinite(res.att) and np.isfinite(res.se) and res.se > 0
+        for k, v in res.cohort_effects.items():
+            assert np.isfinite(v["se"]) == np.isfinite(v["effect"])
+
+
+class TestSunAbrahamBootstrapRowPositions:
+    """Both bootstrap paths index rows by POSITION, whatever the frame's index."""
+
+    def _relabelled(self, data):
+        shifted = data.copy()
+        shifted.index = shifted.index + 1000
+        reversed_ = data.copy()
+        reversed_.index = np.arange(len(data))[::-1].copy()
+        return shifted, reversed_
+
+    def test_pairs_bootstrap_ignores_index_labels(self):
+        data = _ident_panel(noise=0.5)
+        base, _ = _fit_id(data, est={"n_bootstrap": 40, "seed": 3})
+        for other in self._relabelled(data):
+            res, _ = _fit_id(other, est={"n_bootstrap": 40, "seed": 3})
+            assert res.se == base.se
+            for e, v in res.event_study_effects.items():
+                assert v["se"] == base.event_study_effects[e]["se"]
+
+    def test_rao_wu_bootstrap_ignores_index_labels(self):
+        from diff_diff.survey import SurveyDesign
+
+        data = _ident_panel(noise=0.5)
+        data["w"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        sd = SurveyDesign(weights="w", strata="stratum", psu="unit")
+        base, _ = _fit_id(data, est={"n_bootstrap": 40, "seed": 3}, survey_design=sd)
+        for other in self._relabelled(data):
+            res, _ = _fit_id(other, est={"n_bootstrap": 40, "seed": 3}, survey_design=sd)
+            assert res.se == base.se
+
+    def test_bootstrap_with_a_filtered_out_unit(self):
+        # A unit with a negative first_treat is neither treated nor a control;
+        # under the default control group its rows are filtered out, leaving a
+        # frame whose index is no longer 0..n-1.
+        data = _ident_panel(noise=0.5)
+        data.loc[data["unit"] == 4, "g"] = -1
+        res, _ = _fit_id(data, est={"n_bootstrap": 40, "seed": 3})
+        assert np.isfinite(res.se) and res.se > 0

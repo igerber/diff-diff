@@ -77,6 +77,232 @@ class _SaturatedFitStats(NamedTuple):
     n_clusters: Optional[int]
 
 
+def _observed_relative_times(
+    df: pd.DataFrame,
+    first_treat: str,
+    time: str,
+    weights: Optional[np.ndarray] = None,
+) -> Dict[Any, Dict[Any, Any]]:
+    """Relative periods at which each treated cohort is OBSERVED.
+
+    Returns ``{cohort: {relative period: calendar period}}``, relative periods
+    in increasing order. A cohort is observed at a period when it has at least
+    one row there with positive weight (every row counts when the fit is
+    unweighted). A cohort with no positive-weight row at all is absent from
+    the mapping: it is outside the weighted sample.
+    """
+    keep = np.asarray(df[first_treat].values, dtype=float) > 0
+    if weights is not None:
+        keep = keep & (np.asarray(weights) > 0)
+    pairs = df.loc[keep, [first_treat, time]].drop_duplicates()
+    out: Dict[Any, Dict[Any, Any]] = {}
+    for g, g_times in pairs.groupby(first_treat)[time]:
+        out[g] = {t - g: t for t in sorted(g_times.unique())}
+    return out
+
+
+def _cohort_reference_periods(
+    rel_times_by_cohort: Dict[Any, Dict[Any, Any]],
+    anticipation: int,
+    comparison_periods: Optional[set] = None,
+) -> Dict[Any, Any]:
+    """Per-cohort omitted (reference) relative period, or ``None``.
+
+    Candidates are the cohort's observed PRE-TREATMENT relative periods
+    (``e < -anticipation``, i.e. ``t < g - anticipation``), tried in this
+    order: ``e = -1 - anticipation`` (the Sun-Abraham normalization), then the
+    others from the latest back. The reference is the first candidate whose
+    calendar period holds a never-treated observation (``comparison_periods``):
+    a reference at a period with no comparison rows does not tie the cohort to
+    the controls, and would leave its whole cell block unidentified. If no
+    candidate has one, the first candidate is used and the identification
+    guard reports what that leaves unidentified. ``None`` marks a cohort with
+    no pre-treatment observation: none of its effects are identified.
+
+    On a panel in which every cohort is observed at ``-1 - anticipation`` and
+    never-treated units are observed at those calendar periods, every
+    reference is ``-1 - anticipation``.
+    """
+    e_ref = -1 - anticipation
+    references: Dict[Any, Any] = {}
+    for g, rel_times in rel_times_by_cohort.items():
+        pre = sorted((e for e in rel_times if e < -anticipation), reverse=True)
+        candidates = ([e_ref] if e_ref in rel_times else []) + [e for e in pre if e != e_ref]
+        if not candidates:
+            references[g] = None
+            continue
+        supported = [
+            e
+            for e in candidates
+            if comparison_periods is None or rel_times[e] in comparison_periods
+        ]
+        references[g] = supported[0] if supported else candidates[0]
+    return references
+
+
+def _structural_identification(
+    unit_vals: np.ndarray,
+    time_vals: np.ndarray,
+    cohort_vals: np.ndarray,
+    rel_periods: List[Any],
+    references: Dict[Any, Any],
+    default_reference: Any,
+    weights: Optional[np.ndarray] = None,
+) -> Tuple[List[Tuple[Any, Any]], List[Tuple[Any, Any]]]:
+    """Which cohort-by-period coefficients the saturated regression identifies.
+
+    Identification of a cell coefficient depends only on which (unit, period)
+    rows are observed, so it is decided exactly here, before the solve, with
+    no numerical tolerance:
+
+    1. every row that carries no cell dummy (a never-treated row, a treated row
+       at its cohort's reference) ties its unit to its period: on those rows
+       the outcome is ``unit effect + period effect``;
+    2. the units that share a cell are tied to one another (their rows differ
+       only by unit effects);
+    3. a cell ``(g, e)`` is identified iff its units end up in the same
+       connected set as its calendar period ``g + e``. Otherwise its
+       coefficient is a free offset between two sets.
+
+    This is the null space of ``[cell dummies, unit dummies, period dummies]``
+    read off a graph: a null vector assigns one constant to each connected set
+    and gives every cell the difference between its period's and its units'
+    constants.
+
+    Returns
+    -------
+    omit : list of (cohort, relative period)
+        A minimal set of cells whose columns must be left out for the cell
+        block to be full rank given the fixed effects (a spanning forest of
+        the graph whose edges are the unidentified cells, taken in sorted
+        order). Empty on an identified design.
+    unidentified : list of (cohort, relative period)
+        Every cell whose coefficient is not identified (``omit`` included).
+        The caller reports them as NaN.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    unit_vals = np.asarray(unit_vals)
+    time_vals = np.asarray(time_vals)
+    cohort_vals = np.asarray(cohort_vals, dtype=float)
+    observed = np.ones(len(unit_vals), dtype=bool)
+    if weights is not None:
+        observed &= np.asarray(weights) > 0
+    if not observed.any():
+        return [], []
+    unit_vals = unit_vals[observed]
+    time_vals = time_vals[observed]
+    cohort_vals = cohort_vals[observed]
+
+    treated = np.isfinite(cohort_vals) & (cohort_vals > 0)
+    rel_vals = np.where(treated, time_vals.astype(float) - cohort_vals, np.nan)
+    # A row carries a cell dummy iff its cohort is treated, its relative period
+    # is one the builder loops over, and that period is not the cohort's own
+    # reference -- the same rule the dummy builder applies.
+    rel_set = np.array(sorted(float(e) for e in rel_periods), dtype=float)
+    dummied = treated & np.isin(rel_vals, rel_set)
+    if dummied.any():
+        ref_vals = np.full(len(cohort_vals), float(default_reference))
+        for g, ref in references.items():
+            if ref is not None:
+                ref_vals[cohort_vals == float(g)] = float(ref)
+        dummied &= rel_vals != ref_vals
+    if not dummied.any():
+        return [], []
+
+    _, unit_idx = np.unique(unit_vals, return_inverse=True)
+    uniq_times, time_idx = np.unique(time_vals.astype(float), return_inverse=True)
+    n_units, n_times = int(unit_idx.max()) + 1, len(uniq_times)
+
+    cell_pairs = np.column_stack([cohort_vals[dummied], rel_vals[dummied]])
+    uniq_cells, cell_idx = np.unique(cell_pairs, axis=0, return_inverse=True)
+    cell_idx = np.asarray(cell_idx).ravel()
+    n_cells = len(uniq_cells)
+    # Period node of each cell: every row of a cell shares one calendar period
+    # (g + e), read off the rows rather than recomputed in floating point.
+    cell_period = np.zeros(n_cells, dtype=int)
+    cell_period[cell_idx] = time_idx[dummied]
+
+    # Nodes: units, then periods, then one node per cell. Undummied rows join
+    # unit and period; dummied rows join the unit to its cell's node.
+    rows = np.concatenate([unit_idx[~dummied], unit_idx[dummied]])
+    cols = np.concatenate(
+        [n_units + time_idx[~dummied], n_units + n_times + cell_idx],
+    )
+    n_nodes = n_units + n_times + n_cells
+    graph = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(n_nodes, n_nodes))
+    _, labels = connected_components(graph, directed=False)
+    cell_side = labels[n_units + n_times + np.arange(n_cells)]
+    period_side = labels[n_units + cell_period]
+    bad = np.flatnonzero(cell_side != period_side)
+    if len(bad) == 0:
+        return [], []
+
+    # Spanning forest over the connected sets: one omitted cell per independent
+    # free offset. ``np.unique(axis=0)`` already sorted the cells by (g, e).
+    parent: Dict[int, int] = {}
+
+    def _find(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    omit: List[Tuple[Any, Any]] = []
+    unidentified: List[Tuple[Any, Any]] = []
+    for k in bad:
+        key = (float(uniq_cells[k, 0]), float(uniq_cells[k, 1]))
+        unidentified.append(key)
+        ra, rb = _find(int(cell_side[k])), _find(int(period_side[k]))
+        if ra != rb:
+            parent[rb] = ra
+            omit.append(key)
+    return omit, unidentified
+
+
+def _replicate_variance_over_finite(
+    refit_fn: Any, full_estimate: np.ndarray, resolved_survey: Any
+) -> Tuple[np.ndarray, int]:
+    """Replicate-refit variance over the entries the full sample identifies.
+
+    ``compute_replicate_refit_variance`` rejects a replicate when ANY entry of
+    its estimate vector is non-finite. An entry that is non-finite in the
+    full-sample estimate (an unidentified cell, or a pooled row that contains
+    one) is non-finite in every replicate too, so leaving it in the vector
+    would reject them all and erase the variance of every identified entry.
+    The vectors are therefore restricted to the finite full-sample entries;
+    the excluded ones get NaN variance. A replicate that loses an entry the
+    full sample identifies is still rejected (and counted) by the callee.
+    """
+    from diff_diff.survey import compute_replicate_refit_variance
+
+    finite = np.isfinite(full_estimate)
+    k = len(full_estimate)
+    if finite.all():
+        return compute_replicate_refit_variance(refit_fn, full_estimate, resolved_survey)
+    vcov = np.full((k, k), np.nan)
+    if not finite.any():
+        # Nothing to price; no replicate was dropped.
+        return vcov, int(resolved_survey.n_replicates)
+    sub_vcov, n_valid = compute_replicate_refit_variance(
+        lambda w_r: np.asarray(refit_fn(w_r))[finite], full_estimate[finite], resolved_survey
+    )
+    vcov[np.ix_(finite, finite)] = sub_vcov
+    return vcov, n_valid
+
+
+def _format_cells(cells: List[Tuple[Any, Any]], limit: int = 12) -> str:
+    """``(cohort, relative period)`` pairs as text, truncated past ``limit``."""
+
+    def _num(x: Any) -> str:
+        return str(int(x)) if float(x).is_integer() else str(x)
+
+    shown = ", ".join(f"({_num(g)}, {_num(e)})" for g, e in cells[:limit])
+    return shown if len(cells) <= limit else f"{shown}, ... and {len(cells) - limit} more"
+
+
 @dataclass
 class SunAbrahamResults(BaseResults):
     """
@@ -184,16 +410,18 @@ class SunAbrahamResults(BaseResults):
     # survey and pairs-bootstrap fits. ``n_clusters`` (appended below) is its count.
     conley_lag_cutoff: Optional[int] = None
     cluster_name: Optional[str] = None
-    # The normalization reference relative time (e = -1 - anticipation, the
-    # omitted category of the saturated regression) and whether it was
-    # GENUINELY OBSERVED in the panel. The reference is excluded from
-    # event_study_effects either because it is the omitted baseline (observed)
-    # OR because no cohort has an observation there (unobserved, on a gapped
-    # grid) - the two are indistinguishable from the estimated keys alone, so
-    # the unified event-study surface synthesizes the anchor row only when
-    # reference_observed is True. Defaults are conservative (no synthesis) for
-    # externally / legacy-constructed results.
-    reference_period: Optional[int] = None
+    # The normalization reference relative time and whether some cohort is
+    # ACTUALLY normalized there. It is e = -1 - anticipation (the omitted
+    # category of the saturated regression) unless no cohort is observed at
+    # that period and every cohort shares one fallback reference, in which
+    # case it is that shared period (e.g. -2 on a biennial grid); the full set
+    # of bases is `reference_event_times`. The reference is absent from
+    # event_study_effects either because it is the omitted baseline OR because
+    # no cohort is normalized there - indistinguishable from the estimated
+    # keys alone, so the unified event-study surface synthesizes the anchor
+    # row only when reference_observed is True. Defaults are conservative (no
+    # synthesis) for externally / legacy-constructed results.
+    reference_period: Optional[float] = None
     reference_observed: bool = False
 
     # event_study_df (spec section 5, row M-092): per-event-time df
@@ -234,6 +462,17 @@ class SunAbrahamResults(BaseResults):
     ``cluster=`` (incl. the Conley product-kernel column); None on
     unclustered (``cluster=False`` / one-way) fits, under a survey design
     (the survey block owns PSU reporting) and on pairs-bootstrap fits."""
+
+    reference_event_times: Optional[Tuple[Any, ...]] = None
+    """The distinct relative periods the estimated cohorts are normalized
+    against, sorted. One entry (``(-1 - anticipation,)`` on ordinary panels)
+    means a common reference. More than one means some cohort could not be
+    normalized at ``e = -1 - anticipation`` (not observed there, or no
+    never-treated observation at that calendar period) and is normalized at
+    its latest usable pre-treatment period instead, so the pooled event-study
+    rows mix bases -
+    analyses that need one common reference (pre-trends power) refuse such a
+    fit. None on results built before this field existed."""
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Migrate 3.x pickles written under the ``overall_*`` storage names.
@@ -578,6 +817,11 @@ class SunAbraham(BaseEstimator):
         - "warn": Issue warning and drop linearly dependent columns (default)
         - "error": Raise ValueError
         - "silent": Drop columns silently without warning
+
+        The same setting governs cohort-by-period coefficients that the
+        observed rows do not identify (see Notes): they are reported as NaN
+        with one warning naming them ("warn"), silently ("silent"), or
+        ``fit`` raises ("error").
     vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "conley"}, default "hc1"
         Variance-covariance family for analytical inference. Defaults to
         ``"hc1"`` (preserves prior behavior bit-equally; SA historically
@@ -705,6 +949,21 @@ class SunAbraham(BaseEstimator):
     where w_{g,e} is the share of cohort g in the treated population at
     relative time e (interaction weights).
 
+    Reference period and unbalanced panels. The omitted category is
+    ``e = -1 - anticipation`` for every cohort that is observed there with a
+    never-treated unit observed at that calendar period. A cohort for which
+    that fails (a gap, a grid on which that period does not occur, or no
+    comparison observation at that period) is normalized at its latest usable
+    pre-treatment period instead; ``fit`` warns and
+    ``results.reference_event_times`` lists the distinct bases. A cohort with no pre-treatment observation has no identified
+    effect: its observations are excluded with a warning
+    (``NotImplementedError`` under ``survey_design=``, where dropping rows
+    would not be domain estimation). Beyond that, a coefficient
+    ``δ_{g,e}`` is reported only if the observed rows identify it; one that
+    they do not (no never-treated observation at that calendar period, or a
+    cohort whose units are observed at disjoint sets of periods) is NaN, as
+    is every pooled row that contains it.
+
     Compared to Callaway-Sant'Anna:
     - SA uses saturated regression; CS uses 2x2 DiD comparisons
     - SA can be more efficient when model is correctly specified
@@ -782,6 +1041,9 @@ class SunAbraham(BaseEstimator):
         self.is_fitted_ = False
         self.results_: Optional[SunAbrahamResults] = None
         self._reference_period = -1  # Will be set during fit
+        # Per-cohort omitted relative period (set during fit); a cohort absent
+        # from the mapping uses `_reference_period`.
+        self._cohort_references: Dict[Any, Any] = {}
 
     def fit(
         self,
@@ -987,6 +1249,85 @@ class SunAbraham(BaseEstimator):
         # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
         df.loc[df[first_treat] == np.inf, first_treat] = 0
 
+        # Checked here, ahead of the reference selection below, so that a panel
+        # with no comparison group reports THAT rather than a cohort diagnosis.
+        if not bool(df["_never_treated"].any()):
+            raise ValueError("No never-treated units found. Check 'first_treat' column.")
+
+        # Per-cohort reference period. A cohort that can be normalized at
+        # e = -1 - anticipation (observed there, with a never-treated unit
+        # observed at that calendar period) keeps it; one that cannot falls
+        # back to its latest usable pre-treatment period; one with no
+        # pre-treatment observation has no identified effect and is excluded
+        # (REGISTRY SunAbraham, per-cohort reference / unidentified cohorts
+        # Notes). "Observed" means a row with positive weight.
+        _e_ref = -1 - self.anticipation
+        rel_times_by_cohort = _observed_relative_times(df, first_treat, time, survey_weights)
+        # Calendar periods with a never-treated observation: a cohort's
+        # reference is preferred at a period that has one.
+        _nt_rows = df["_never_treated"].values.astype(bool)
+        if survey_weights is not None:
+            _nt_rows = _nt_rows & (np.asarray(survey_weights) > 0)
+        _comparison_periods = set(df.loc[_nt_rows, time].unique())
+        cohort_references = _cohort_reference_periods(
+            rel_times_by_cohort, self.anticipation, _comparison_periods
+        )
+        _no_pre = sorted(g for g, ref in cohort_references.items() if ref is None)
+        if _no_pre:
+            _labels = ", ".join(str(g) for g in _no_pre)
+            if survey_design is not None:
+                raise NotImplementedError(
+                    f"Cohort(s) {_labels} have no observation (with positive "
+                    "weight) before treatment begins, accounting for "
+                    "anticipation, so none of their effects are identified. "
+                    "Without a survey design SunAbraham excludes such cohorts; "
+                    "under survey_design= that would be naive subsetting rather "
+                    "than domain estimation (the design's strata, PSU counts and "
+                    "degrees of freedom would change), which is not implemented. "
+                    "Remove the cohort(s) in a way that is valid for your "
+                    "design, or fit without survey_design=."
+                )
+            df = df[~df[first_treat].isin(_no_pre)].copy()
+            for g in _no_pre:
+                del cohort_references[g]
+                del rel_times_by_cohort[g]
+            if not cohort_references:
+                raise ValueError(
+                    f"Cohort(s) {_labels} have no observation before treatment "
+                    "begins (accounting for anticipation), and they are the only "
+                    "treated cohorts, so no effect is identified. Provide a panel "
+                    "with pre-treatment observations, or reduce `anticipation`."
+                )
+            warnings.warn(
+                f"Cohort(s) {_labels} have no observation before treatment begins "
+                "(accounting for anticipation), so none of their effects are "
+                "identified: there is no untreated period to measure them "
+                "against. Their observations are EXCLUDED from the estimation "
+                "sample, and every reported quantity is that of a fit on the "
+                "data without them.",
+                UserWarning,
+                stacklevel=2,
+            )
+        _fallback = {g: ref for g, ref in cohort_references.items() if ref != _e_ref}
+        if _fallback:
+            _desc = "; ".join(f"cohort {g}: {ref}" for g, ref in sorted(_fallback.items()))
+            warnings.warn(
+                f"Not every cohort can be normalized at the reference relative "
+                f"period {_e_ref}: the cohort is not observed there, or no "
+                "never-treated unit is observed at that calendar period. The "
+                "cohorts below are normalized at their latest usable "
+                f"pre-treatment period instead ({_desc}), so their effects are "
+                "measured relative to that period"
+                + (
+                    ", and the pooled event-study rows mix normalization bases."
+                    if len(set(cohort_references.values())) > 1
+                    else "."
+                ),
+                UserWarning,
+                stacklevel=2,
+            )
+        self._cohort_references = cohort_references
+
         # Identify groups and time periods
         time_periods = sorted(df[time].unique())
         treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
@@ -1008,36 +1349,39 @@ class SunAbraham(BaseEstimator):
         # Compute relative time for each observation (vectorized)
         df["_rel_time"] = np.where(df[first_treat] > 0, df[time] - df[first_treat], np.nan)
 
-        # Identify the range of relative time periods to estimate
-        rel_times_by_cohort = {}
-        for g in treatment_groups:
-            g_times = df[df[first_treat] == g][time].unique()
-            rel_times_by_cohort[g] = sorted([t - g for t in g_times])
+        # Reference period: last pre-treatment period (typically -1). This is
+        # the builder's default and is never an estimated relative period (a
+        # cohort observed there has it as its own reference).
+        self._reference_period = _e_ref
 
-        # Find all relative time values
-        all_rel_times: set = set()
-        for g, rel_times in rel_times_by_cohort.items():
-            all_rel_times.update(rel_times)
+        # Relative periods to estimate: every period at which some cohort is
+        # observed other than at its own reference. Full range, no artificial
+        # truncation (matches R's fixest::sunab()). A period that holds only
+        # reference cells is not in the list.
+        rel_periods_to_estimate = sorted(
+            {
+                e
+                for g, rel_times in rel_times_by_cohort.items()
+                for e in rel_times
+                if e != _e_ref and e != cohort_references[g]
+            }
+        )
 
-        all_rel_times_sorted = sorted(all_rel_times)
-
-        # Use full range of relative times (no artificial truncation, matches R's fixest::sunab())
-        min_rel = min(all_rel_times_sorted)
-        max_rel = max(all_rel_times_sorted)
-
-        # Reference period: last pre-treatment period (typically -1)
-        self._reference_period = -1 - self.anticipation
-        # Whether that anchor was GENUINELY OBSERVED (vs a gap on an
-        # unbalanced grid). The unified event-study surface synthesizes the
-        # reference row only when it was observed.
-        self._reference_observed = self._reference_period in all_rel_times
-
-        # Get relative periods to estimate (excluding reference)
-        rel_periods_to_estimate = [
-            e
-            for e in all_rel_times_sorted
-            if min_rel <= e <= max_rel and e != self._reference_period
-        ]
+        # What the results report as THE reference. With one normalization
+        # base it is that base (e_ref, or the shared fallback, so the
+        # event-study surface anchors at the true base); with several it stays
+        # e_ref. `reference_observed` says whether some cohort is actually
+        # normalized there - the surface synthesizes the anchor row only then.
+        _distinct_refs = sorted(set(cohort_references.values()))
+        _results_reference: Any = _e_ref
+        if len(_distinct_refs) == 1:
+            _results_reference = _distinct_refs[0]
+        if hasattr(_results_reference, "item"):
+            _results_reference = _results_reference.item()
+        _reference_event_times = tuple(
+            r.item() if hasattr(r, "item") else r for r in _distinct_refs
+        )
+        self._reference_observed = _results_reference in _reference_event_times
 
         # Determine cluster variable
         # One-way HC2 and classical are single-way only — the linalg
@@ -1111,6 +1455,7 @@ class SunAbraham(BaseEstimator):
             coef_index_map,
             bm_artifacts,
             _sa_fit_stats,
+            _unidentified_cells,
         ) = self._fit_saturated_regression(
             df_reg,
             outcome,
@@ -1128,15 +1473,27 @@ class SunAbraham(BaseEstimator):
             # override vcov_cohort below with the correct estimator-level refit.
             resolved_survey=None if _uses_replicate_sa else resolved_survey,
             vcov_type=self.vcov_type,
+            enforce_rank_action=True,
         )
+
+        if _unidentified_cells and self.rank_deficient_action != "silent":
+            warnings.warn(
+                "The cohort-by-period coefficient(s) "
+                f"{_format_cells(_unidentified_cells)} (cohort, relative period) "
+                "are not identified by the observed rows and are reported as "
+                "NaN, as is every pooled event-study row that contains one (and "
+                "the overall ATT when a post-treatment row does). The usual "
+                "causes: no never-treated observation at that calendar period, "
+                "or the cohort's units are observed at disjoint sets of periods.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Replicate variance override: fully refit the IW estimator per
         # replicate, including recomputing cohort-share aggregation weights
         # from w_r, so replicate SEs reflect the complete estimator.
         _n_valid_rep_sa = None
         if _uses_replicate_sa:
-            from diff_diff.survey import compute_replicate_refit_variance
-
             # The refit returns [overall_att, es_e0, es_e1, ...] after
             # full re-aggregation with replicate-weighted cohort shares.
             _sa_rel_periods = list(rel_periods_to_estimate)
@@ -1146,7 +1503,7 @@ class SunAbraham(BaseEstimator):
                 nz = w_r > 0
                 df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
                 w_nz = w_r[nz] if not np.all(nz) else w_r
-                ce_r, _, vcov_r, cim_r, _, _ = self._fit_saturated_regression(
+                ce_r, _, vcov_r, cim_r, _, _, _ = self._fit_saturated_regression(
                     df_reg_nz,
                     outcome,
                     unit,
@@ -1292,7 +1649,23 @@ class SunAbraham(BaseEstimator):
                     if (g, e) in coef_index_map:
                         j = coef_index_map[(g, e)]
                         W_mat[i, j] = w
-            es_vcov = W_mat @ vcov_cohort @ W_mat.T
+            # Aggregate over the cells with a finite effect only: a dropped or
+            # unidentified cell has NaN covariance, and `0 * NaN` would turn
+            # the WHOLE matrix NaN. The rows of the pooled periods that contain
+            # such a cell are NaN; the other rows keep their covariance block.
+            # Nothing is zeroed, so a vcov that is NaN for another reason
+            # (undefined variance) still propagates.
+            _finite_cols = np.zeros(n_interactions, dtype=bool)
+            for _key, _j in coef_index_map.items():
+                _finite_cols[_j] = bool(np.isfinite(cohort_effects.get(_key, np.nan)))
+            _W_fin = W_mat[:, _finite_cols]
+            es_vcov = _W_fin @ vcov_cohort[np.ix_(_finite_cols, _finite_cols)] @ _W_fin.T
+            for i, e in enumerate(es_vcov_index):
+                if e not in event_study_effects or not np.isfinite(
+                    event_study_effects[e]["effect"]
+                ):
+                    es_vcov[i, :] = np.nan
+                    es_vcov[:, i] = np.nan
 
         # Compute overall ATT (average of post-treatment effects).
         # Capture overall_weights_by_coef for the hc2_bm contrast-DOF path.
@@ -1428,7 +1801,7 @@ class SunAbraham(BaseEstimator):
                     event_study_effects[e]["effect"] if e in event_study_effects else np.nan
                 )
 
-            _vcov_sa, _n_valid_rep_sa = compute_replicate_refit_variance(
+            _vcov_sa, _n_valid_rep_sa = _replicate_variance_over_finite(
                 _refit_sa, np.array(_full_est_sa), resolved_survey
             )
 
@@ -1483,7 +1856,7 @@ class SunAbraham(BaseEstimator):
                 nz = w_r > 0
                 df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
                 w_nz = w_r[nz] if not np.all(nz) else w_r
-                ce_r, _, _, _, _, _ = self._fit_saturated_regression(
+                ce_r, _, _, _, _, _, _ = self._fit_saturated_regression(
                     df_reg_nz,
                     outcome,
                     unit,
@@ -1502,7 +1875,7 @@ class SunAbraham(BaseEstimator):
 
             # n_valid is not consumed here: cohort effects store effect / se /
             # weight only (no t-stat, p-value or CI), so no df prices them.
-            _vcov_cohort_rep, _ = compute_replicate_refit_variance(
+            _vcov_cohort_rep, _ = _replicate_variance_over_finite(
                 _refit_sa_cohort, _full_cohort_vec, resolved_survey
             )
             for key in _keys_ordered:
@@ -1627,8 +2000,9 @@ class SunAbraham(BaseEstimator):
             event_study_df=es_df_final,
             conley_lag_cutoff=(self.conley_lag_cutoff if self.vcov_type == "conley" else None),
             cluster_name=_sa_cluster_name,
-            reference_period=self._reference_period,
+            reference_period=_results_reference,
             reference_observed=self._reference_observed,
+            reference_event_times=_reference_event_times or None,
             df_convention=self.df_convention,
             inference_df=_overall_df_final,
             n_clusters=_sa_n_clusters,
@@ -1652,6 +2026,7 @@ class SunAbraham(BaseEstimator):
         survey_weight_type: str = "pweight",
         resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         vcov_type: str = "hc1",
+        enforce_rank_action: bool = False,
     ) -> Tuple[
         Dict[Tuple[Any, int], float],
         Dict[Tuple[Any, int], float],
@@ -1659,6 +2034,7 @@ class SunAbraham(BaseEstimator):
         Dict[Tuple[Any, int], int],
         Optional[Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]],
         _SaturatedFitStats,
+        List[Tuple[Any, Any]],
     ]:
         """
         Fit saturated TWFE regression with cohort × relative-time interactions.
@@ -1691,6 +2067,18 @@ class SunAbraham(BaseEstimator):
             Mapping (cohort, rel_period) -> index in the cohort_effects
             block (0-based, NOT the index in the full coefficient vector
             of the underlying regression).
+        unidentified : list
+            The (cohort, rel_period) cells whose coefficient is not identified
+            in THIS frame (``_structural_identification``). They are present
+            in ``cohort_effects`` / ``cohort_ses`` as NaN; the ones that had a
+            design column also have NaN rows and columns in ``vcov``.
+
+        ``enforce_rank_action`` is True for the full-sample fit only: there
+        ``rank_deficient_action="error"`` raises on an unidentified cell. A
+        refit (bootstrap draw, replicate) never raises for that reason - a
+        draw that cannot identify a cell must come back NaN and be dropped by
+        the caller's non-finite handling, not be replaced by the caller's
+        exception fallback.
         """
         df = df.copy()
 
@@ -1707,14 +2095,60 @@ class SunAbraham(BaseEstimator):
         coef_index_map: Dict[Tuple[Any, int], int] = {}
         idx = 0
 
+        # Which cells this frame identifies, decided from the observation
+        # pattern before the solve (REGISTRY SunAbraham identification-guard
+        # Note). `omit` cells get no column, which leaves the cell block full
+        # rank given the fixed effects; every `unidentified` cell is reported
+        # as NaN below.
+        cohort_references = getattr(self, "_cohort_references", {})
+        omit_cells, unidentified = _structural_identification(
+            df[unit].values,
+            df[time].values,
+            df[first_treat].values,
+            rel_periods,
+            cohort_references,
+            self._reference_period,
+            weights=survey_weights,
+        )
+        if unidentified:
+            # The helper works in floats; hand the cells back under the same
+            # key objects the builder uses, so the results never mix key types.
+            _canonical = {
+                (float(g), float(e)): (g, e) for g in treatment_groups for e in rel_periods
+            }
+            omit_cells = [_canonical.get(k, k) for k in omit_cells]
+            unidentified = [_canonical.get(k, k) for k in unidentified]
+        if unidentified and enforce_rank_action and self.rank_deficient_action == "error":
+            raise ValueError(
+                "SunAbraham design is rank-deficient: the cohort-by-period "
+                f"coefficient(s) {_format_cells(unidentified)} are not identified "
+                "by the observed rows (no never-treated observation at that "
+                "calendar period, or the cohort's units are observed at "
+                "disjoint sets of periods)."
+            )
+        omit_set = set(omit_cells)
+        obs_weights = None if survey_weights is None else np.asarray(survey_weights, dtype=float)
+
         for g in treatment_groups:
+            ref_g = cohort_references.get(g, self._reference_period)
             for e in rel_periods:
+                # The cohort's own reference is its omitted category.
+                if e == ref_g or (g, e) in omit_set:
+                    continue
                 col_name = f"_D_{g}_{e}"
                 # Indicator: unit is in cohort g AND at relative time e
                 indicator = ((df[first_treat] == g) & (df["_rel_time"] == e)).astype(float)
 
-                # Only include if there are observations
-                if indicator.sum() > 0:
+                # Only include a cell that is OBSERVED in this frame: at least
+                # one row, with positive weight when the fit is weighted. A
+                # zero-weight cell would be an all-zero weighted column whose
+                # NaN coefficient would then be pooled at weight zero.
+                mass = (
+                    indicator.sum()
+                    if obs_weights is None
+                    else float(indicator.values @ (obs_weights > 0))
+                )
+                if mass > 0:
                     interaction_data[col_name] = indicator.values
                     coef_index_map[(g, e)] = idx
                     idx += 1
@@ -1726,6 +2160,19 @@ class SunAbraham(BaseEstimator):
             df = pd.concat([df, interaction_df], axis=1)
 
         if len(interaction_cols) == 0:
+            if unidentified:
+                # Every candidate cell is unidentified: there is nothing to
+                # solve, and each cell is reported as NaN (the caller pools
+                # them into NaN rows and a NaN overall ATT).
+                return (
+                    {key: np.nan for key in unidentified},
+                    {key: np.nan for key in unidentified},
+                    np.empty((0, 0)),
+                    {},
+                    None,
+                    _SaturatedFitStats(df_residual=None, n_clusters=None),
+                    unidentified,
+                )
             raise ValueError(
                 "No valid cohort × relative-time interactions found. " "Check your data structure."
             )
@@ -1924,6 +2371,20 @@ class SunAbraham(BaseEstimator):
             coef_offset : coef_offset + n_interactions,
         ]
 
+        # Unidentified cells are reported as NaN. One that kept a design column
+        # has a finite estimate that depends on which columns were omitted, so
+        # it is overwritten (with its covariance row and column); one that was
+        # omitted has no column and is added here so that pooling sees it.
+        if unidentified:
+            vcov_cohort = vcov_cohort.copy()
+            for key in unidentified:
+                cohort_effects[key] = np.nan
+                cohort_ses[key] = np.nan
+                j = coef_index_map.get(key)
+                if j is not None:
+                    vcov_cohort[j, :] = np.nan
+                    vcov_cohort[:, j] = np.nan
+
         # Stash BM contrast-DOF artifacts when hc2_bm — needed by the
         # aggregated inference layer to compute per-event-time and
         # overall-ATT Satterthwaite DOF on user-facing outputs. Under
@@ -1945,7 +2406,15 @@ class SunAbraham(BaseEstimator):
             n_clusters=reg.n_clusters_,
         )
 
-        return cohort_effects, cohort_ses, vcov_cohort, coef_index_map, bm_artifacts, fit_stats
+        return (
+            cohort_effects,
+            cohort_ses,
+            vcov_cohort,
+            coef_index_map,
+            bm_artifacts,
+            fit_stats,
+            unidentified,
+        )
 
     def _compute_iw_effects(
         self,
@@ -2022,6 +2491,21 @@ class SunAbraham(BaseEstimator):
                 weights[g] = weights[g] / total_size
 
             cohort_weights[e] = weights
+
+            # A row that contains an unidentified (NaN) cohort coefficient is
+            # not identified either: report it as NaN rather than pooling the
+            # remaining cohorts under a silently different estimand.
+            if any(not np.isfinite(cohort_effects[(g, e)]) for g in cohorts_at_e):
+                nan_t, nan_p, nan_ci = safe_inference(np.nan, np.nan, alpha=self.alpha)
+                event_study_effects[e] = {
+                    "effect": np.nan,
+                    "se": np.nan,
+                    "t_stat": nan_t,
+                    "p_value": nan_p,
+                    "conf_int": nan_ci,
+                    "n_groups": len(cohorts_at_e),
+                }
+                continue
 
             # Compute weighted average effect
             agg_effect = 0.0
@@ -2134,6 +2618,12 @@ class SunAbraham(BaseEstimator):
         post_weights_arr = post_weights_arr / post_weights_arr.sum()
 
         overall_att = float(np.sum(post_weights_arr * np.array(post_estimates)))
+        if not np.isfinite(overall_att):
+            # A post-treatment row is unidentified (NaN): the overall ATT and
+            # its SE are undefined together.
+            if return_overall_weights:
+                return np.nan, np.nan, None
+            return np.nan, np.nan
 
         # Compute SE using delta method
         # Need to trace back through the full weighting scheme
@@ -2241,7 +2731,11 @@ class SunAbraham(BaseEstimator):
         n_units = len(all_units)
 
         # Pre-compute unit -> row indices mapping (avoids repeated boolean scans)
-        unit_row_indices = {u: df.index[df[unit] == u].values for u in all_units}
+        # Row POSITIONS, not index labels: `df` may carry any index (a filtered
+        # user frame, or one with an excluded cohort), and `.iloc` below is
+        # positional.
+        _unit_arr = df[unit].values
+        unit_row_indices = {u: np.flatnonzero(_unit_arr == u) for u in all_units}
         unit_row_counts = {u: len(idx) for u, idx in unit_row_indices.items()}
 
         # Store bootstrap samples
@@ -2280,6 +2774,7 @@ class SunAbraham(BaseEstimator):
                     cohort_ses_b,
                     vcov_b,
                     coef_map_b,
+                    _,
                     _,
                     _,
                 ) = self._fit_saturated_regression(
@@ -2471,7 +2966,9 @@ class SunAbraham(BaseEstimator):
         )
 
         # Build unit -> row indices mapping for expanding unit-level weights
-        unit_to_rows = {u: df.index[df[unit] == u].values for u in all_units}
+        # Row POSITIONS (see the pairs path): `boot_weights[idx]` is positional.
+        _unit_arr = df[unit].values
+        unit_to_rows = {u: np.flatnonzero(_unit_arr == u) for u in all_units}
         unit_order = {u: i for i, u in enumerate(all_units)}
 
         # Store bootstrap samples
@@ -2514,6 +3011,7 @@ class SunAbraham(BaseEstimator):
                     cohort_ses_b,
                     vcov_b,
                     coef_map_b,
+                    _,
                     _,
                     _,
                 ) = self._fit_saturated_regression(
