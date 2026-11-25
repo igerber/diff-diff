@@ -9,6 +9,9 @@ on:
       - 'tests/test_doc_snippets.py'
       - 'tests/test_doc_deps_integrity.py'
       - 'tests/test_docs_ia.py'
+      # Tutorial conventions guard: notebook diffs already trigger via
+      # docs/**; this entry covers a diff that touches only the guard.
+      - 'tests/test_tutorial_conventions.py'
       - 'tests/test_v4_matrix.py'
       - 'tests/test_naming_guard.py'
       # Diagnostic-family roster guard (M-090): README-only diffs otherwise
@@ -51,6 +54,9 @@ on:
       - 'tests/test_doc_snippets.py'
       - 'tests/test_doc_deps_integrity.py'
       - 'tests/test_docs_ia.py'
+      # Tutorial conventions guard: notebook diffs already trigger via
+      # docs/**; this entry covers a diff that touches only the guard.
+      - 'tests/test_tutorial_conventions.py'
       - 'tests/test_v4_matrix.py'
       - 'tests/test_naming_guard.py'
       # Diagnostic-family roster guard (M-090): README-only diffs otherwise
@@ -131,6 +137,14 @@ jobs:
         # catalog, and no :no-index:-only classes (dead cross-references).
         # All four are valid-Sphinx states the -W build cannot catch.
         run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_docs_ia.py -v
+
+      - name: Run tutorial conventions guard
+        # Static checks over every docs/tutorials/*.ipynb (CONTRIBUTING.md,
+        # "Tutorial conventions"): committed outputs, no removed 4.0 names or
+        # internal jargon, no blanket warning filters, a drift test per
+        # notebook. Parses the notebook JSON - nothing is executed. Runs here
+        # because the main test matrix does not trigger on docs-only diffs.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_tutorial_conventions.py -v
 
       - name: Run v4 deprecation-matrix enforcement
         # Asserts every docs/v4-deprecations.yaml row's status against reality
