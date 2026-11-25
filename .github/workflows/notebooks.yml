@@ -10,9 +10,12 @@ on:
       - '.github/workflows/notebooks.yml'
       # the interop drift guard runs only in this workflow (balance installed)
       - 'tests/test_t26_composition_drift_calibration_drift.py'
-      # the MMM tutorial drift guards run as a step in execute-notebooks
-      - 'tests/test_t29_mmm_calibration_pymc_drift.py'
-      - 'tests/test_t30_mmm_calibration_meridian_drift.py'
+      # every tutorial drift guard runs as a step in execute-notebooks, so a
+      # notebook-only diff (docs/tutorials/**) cannot leave its pinned numbers
+      # unchecked - rust-test.yml, the lane that runs tests/, does not fire on
+      # docs/**
+      - 'tests/test_t*_drift.py'
+      - 'tests/_tutorial_drift.py'
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -23,9 +26,12 @@ on:
       - '.github/workflows/notebooks.yml'
       # the interop drift guard runs only in this workflow (balance installed)
       - 'tests/test_t26_composition_drift_calibration_drift.py'
-      # the MMM tutorial drift guards run as a step in execute-notebooks
-      - 'tests/test_t29_mmm_calibration_pymc_drift.py'
-      - 'tests/test_t30_mmm_calibration_meridian_drift.py'
+      # every tutorial drift guard runs as a step in execute-notebooks, so a
+      # notebook-only diff (docs/tutorials/**) cannot leave its pinned numbers
+      # unchecked - rust-test.yml, the lane that runs tests/, does not fire on
+      # docs/**
+      - 'tests/test_t*_drift.py'
+      - 'tests/_tutorial_drift.py'
   schedule:
     # Weekly Sunday 6am UTC — smoke test that notebooks still execute cleanly
     - cron: '0 6 * * 0'
@@ -86,15 +92,20 @@ jobs:
           #   drift guards run in the next step, and the mmm-interop.yml workflow
           #   smoke-tests the exporters against the real frameworks (no sampling).
 
-      - name: Run MMM tutorial drift guards
-        # The MMM notebooks are excluded from execution above, so their committed
-        # surface is protected here: DGP/sampler/integration needles + diff-diff
-        # recomputation of the DiD-side numbers (no MMM frameworks needed).
+      - name: Run tutorial drift guards
+        # Every notebook's drift test: re-derives the numbers its prose quotes
+        # and checks them against the committed notebook. nbmake above only
+        # proves cells execute; RTD renders the COMMITTED outputs. This is the
+        # only lane that runs these tests on a notebook-only diff. It also
+        # protects the MMM notebooks (excluded from execution above) through
+        # their DGP/sampler/integration needles and the diff-diff recomputation
+        # of the DiD-side numbers (no MMM frameworks needed). Slow-marked
+        # re-derivations stay out via the default addopts; the balance-interop
+        # test (t26) importorskips here and runs in interop-notebooks below.
         env:
           DIFF_DIFF_BACKEND: python
         run: |
-          pytest tests/test_t29_mmm_calibration_pymc_drift.py \
-            tests/test_t30_mmm_calibration_meridian_drift.py -v --tb=short
+          pytest tests/test_t*_drift.py -v --tb=short
 
       - name: Upload failed notebook outputs
         if: failure()

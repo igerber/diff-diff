@@ -67,6 +67,8 @@ If you find yourself adding a usage example, a parameter table, or a multi-parag
 3. **`docs/tutorials/*.ipynb`** - Update relevant tutorial or create new one:
    - Working code examples
    - Explanation of when/why to use the feature
+   - Follow the "Tutorial conventions" section below (CI-enforced by
+     `tests/test_tutorial_conventions.py`), including a drift test for a new notebook
    - New notebooks are registered in `docs/tutorials/index.rst` (NOT `docs/index.rst`):
      add a toctree entry with a short display label to the matching group
      (Business Applications / Fundamentals / Advanced Methods / Study Design)
@@ -151,6 +153,146 @@ Example format (RST):
 ```
 - **Sun, L., & Abraham, S. (2021).** "Estimating Dynamic Treatment Effects in Event Studies with Heterogeneous Treatment Effects." *Journal of Econometrics*, 225(2), 175-199. https://doi.org/10.1016/j.jeconom.2020.09.006
 ```
+
+## Tutorial conventions
+
+The notebooks in `docs/tutorials/` are teaching material: a reader should meet
+the same idea the same way wherever it comes up. These conventions apply to
+every new notebook and to any notebook you edit. The mechanical ones are
+CI-enforced by `tests/test_tutorial_conventions.py`; that guard carries a
+shrinking allowlist of pre-existing violations (`KNOWN_VIOLATIONS`) - when you
+repair a notebook, delete its entries; never add one.
+
+### Teaching
+
+1. **Opening.** An H1 that matches the notebook's card label in
+   `docs/tutorials/index.rst`; one paragraph stating the question the notebook
+   answers; a short "What you'll learn" list; a prerequisites line linking the
+   tutorials it builds on.
+2. **Estimand and assumptions before the first fit.** Name the target
+   parameter, state the identifying assumptions in plain words, and say what
+   would violate them.
+3. **Check against the truth on synthetic data.** State the true effect as a
+   named constant where the data is built, and pass every generator argument
+   that determines the truth explicitly, even at its default value
+   (`generate_staggered_data` defaults to `dynamic_effects=True`, so the true
+   average effect is not `treatment_effect`). Compare the estimate and its
+   interval to the truth in the output; if the interval misses, say why. Real
+   data comes from a `load_*` loader where one exists. No data files are added
+   under `docs/tutorials/`.
+4. **Inference.** Cluster panel fits at the unit. `DifferenceInDifferences`
+   does not auto-cluster, so pass `cluster=`; the estimators that cluster at
+   the unit by default need nothing extra. Tutorial 01 explains why; elsewhere
+   one line is enough, and any other choice is justified in prose. Bootstraps
+   use `n_bootstrap=999` and a fixed seed (fewer only for runtime, and say so).
+   When prose discusses a p-value, name the inference that produced it and
+   check it against the estimator's REGISTRY section, because the count-based
+   p-values differ. With `B` valid draws of which `c` are at least as extreme
+   as the estimate: the permutation test reports `(c + 1) / (B + 1)` (steps of
+   `1/(B+1)`, smallest value `1/(B+1)`); the SyntheticDiD placebo reports
+   `max(c / B, 1/(B+1))` (steps of `1/B`, same floor). A p-value computed
+   analytically from a resampled standard error (SyntheticDiD bootstrap and
+   jackknife, ChangesInChanges) is not count-based and has no floor.
+5. **Pre-trend tests are not pass/fail.** A non-rejection is not evidence that
+   parallel trends holds. Say so, and link the sensitivity tutorial
+   (`05_honest_did`) and the pre-test power tutorial (`07_pretrends_power`).
+6. **Control groups.** Never-treated and not-yet-treated comparisons rest on
+   different identifying assumptions. Say what each restricts, as Callaway and
+   Sant'Anna (2021, Assumptions 4 and 5) do: the not-yet-treated version also
+   restricts pre-treatment trends across cohorts (later cohorts' untreated
+   trends must match too), in exchange for a larger comparison group; the
+   never-treated version does not. They suggest never-treated when that group
+   is sizeable and not-yet-treated when it is missing or too small. Do not
+   rank the two as "weaker" and "stronger": the paper does not.
+7. **Event studies: one idiom.**
+
+   ```python
+   es = results.aggregate("event_study")   # if the results class has aggregate()
+   es = results                            # otherwise (SunAbraham, a TWFE event_study=True fit)
+   plot_event_study(es)
+   ```
+
+   Read the table with `es.to_dataframe()` when `es` is an `EventStudyResults`
+   container, and with `results.to_dataframe(level="event_study")` otherwise
+   (SunAbraham, WooldridgeDiD). Do not read raw `event_study_effects` dicts,
+   rename the unified columns, or hand-draw a single estimator's event study in
+   matplotlib; build multi-estimator overlays from the unified frames. Event
+   time 0 is the first treated period - an estimator with a different native
+   index states the mapping. The idiom is pinned on every event-study producer
+   by `tests/test_visualization.py::TestEventStudyIdiomContract`.
+8. **Warnings.** No unqualified `warnings.filterwarnings("ignore")` or
+   `simplefilter("ignore")`. A warning that appears in committed output is
+   either removed by fixing the call or explained in the next markdown cell.
+   Two narrow exceptions: a scoped `warnings.catch_warnings()` with `category=`
+   and `message=` for documented platform noise, and a category-qualified
+   filter with a comment for a third-party framework's deprecation noise.
+9. **Closing.** "Summary" (three to five bullets), "When to use it and when not
+   to", "Next steps" linking other tutorials, and references. Business-track
+   notebooks also keep their stakeholder-summary section.
+
+### Mechanics
+
+10. **Code style.** Import from top-level `diff_diff` (a submodule import only
+    for a symbol that is not exported there). Use full class names, not the
+    short aliases. Import matplotlib plainly - no `HAS_MATPLOTLIB` guard. Print
+    results with `print(results.summary())` and read them as `results.att`,
+    `.se`, `.conf_int`, `.p_value`.
+11. **Reader voice.** No version or migration narration, deprecation-ledger
+    ids, PR numbers, internal phase or wave names, internal paths, or
+    `file:line` references - the migration guide and the changelog own that
+    history. Hyphens, not em dashes, in cell sources. Sentence-case,
+    unnumbered section headings.
+12. **Committed outputs.** Every notebook is committed executed: all code
+    cells run top to bottom in one pass (execution counts `1..n`), no error
+    outputs, no stray empty figures. `nbsphinx_execute = "never"`, so the
+    committed outputs are what Read the Docs shows.
+13. **Drift test.** Every notebook has a `tests/test_t<NN>_<slug>_drift.py`
+    that re-derives the numbers its prose quotes and asserts they appear in the
+    rendered notebook (helpers in `tests/_tutorial_drift.py`). Prose that would
+    need an unpinned number should point at the output instead.
+14. **Numbering.** The number in a filename is a stable id, not a reading
+    order (two notebooks are numbered 16). Reading order is the group order in
+    `docs/tutorials/index.rst`.
+
+Three notebooks keep documented exceptions: `16_survey_did` reads NHANES from
+the tracked benchmark CSV (there is no loader for it), with a CDC download
+only as the fallback; `29_mmm_calibration_pymc` and
+`30_mmm_calibration_meridian` have frozen code cells, because their committed
+outputs come from long MCMC runs in framework-specific environments.
+
+### Re-executing a notebook
+
+Committed outputs come from the Rust backend. Kernels are bound to a virtual
+environment, so register one for the checkout you are working in:
+
+```bash
+python -m ipykernel install --user --name my-diffdiff-kernel
+```
+
+Execute into a scratch directory, compare with what is committed, then copy
+the executed file back (never execute in place, and never pipe the run through
+`tail`):
+
+```bash
+DIFF_DIFF_BACKEND=rust python - <<'PY'
+from pathlib import Path
+
+import nbformat
+from nbclient import NotebookClient
+
+out = Path("/tmp/executed")
+out.mkdir(parents=True, exist_ok=True)   # before the (possibly long) run
+nb = nbformat.read("docs/tutorials/01_basic_did.ipynb", as_version=4)
+NotebookClient(nb, timeout=3000, kernel_name="my-diffdiff-kernel",
+               resources={"metadata": {"path": "docs/tutorials"}}).execute()
+nbformat.write(nb, out / "01_basic_did.ipynb")
+PY
+```
+
+Read every changed output against the prose around it, then update the
+notebook's drift test (and, for `31`-`33`, its code-cell hash pins). Before
+opening the PR, mirror CI with
+`DIFF_DIFF_BACKEND=python pytest --nbmake docs/tutorials/<notebook>.ipynb`.
 
 ## Test Writing Guidelines
 
