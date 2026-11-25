@@ -977,6 +977,77 @@ class TestPlotEventStudyWooldridge:
         assert _plotted_intervals(ax) == {}
         plt.close()
 
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cohort_share_stays_undefined_under_explicit_reference(self, use_cband):
+        """Explicit reference_period= discards the stored intervals and recomputes
+        from the SE; that recomputation must not revive the inference the
+        cohort-share aggregation disabled (finite SE, NaN t/p/CI)."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        res = self._fit()
+        with pytest.warns(UserWarning, match="conditional-on-shares"):
+            res.aggregate("event_study", weights="cohort_share")
+        frame = res.to_dataframe(level="event_study")
+
+        ax = plot_event_study(res, reference_period=0, use_cband=use_cband, show=False)
+        points = _plotted_points(ax)
+        # the normalized point estimates still plot ...
+        np.testing.assert_allclose(
+            [p[1] for p in points], (frame["att"] - frame["att"].iloc[0]).to_numpy(), atol=1e-12
+        )
+        # ... with no interval on any row
+        assert _plotted_intervals(ax) == {}
+        plt.close()
+
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cohort_share_explicit_reference_plotly_draws_no_band(self, use_cband):
+        pytest.importorskip("plotly")
+
+        res = self._fit()
+        with pytest.warns(UserWarning, match="conditional-on-shares"):
+            res.aggregate("event_study", weights="cohort_share")
+        for kwargs in ({}, {"reference_period": 0}):
+            fig = plot_event_study(res, backend="plotly", use_cband=use_cband, show=False, **kwargs)
+            assert not [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+        # positive control: the same call on defined (cell-weighted) inference bands
+        res.aggregate("event_study")
+        fig = plot_event_study(
+            res, backend="plotly", reference_period=0, use_cband=use_cband, show=False
+        )
+        assert [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cell_weighted_explicit_reference_keeps_intervals(self, use_cband):
+        """The undefined-inference mask is row-level: a cell-weighted surface
+        (defined inference) still gets recomputed intervals on every
+        non-reference row after explicit normalization."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from scipy import stats
+
+        res = self._fit()
+        res.aggregate("event_study")
+        frame = res.to_dataframe(level="event_study")
+        ref = frame["event_time"].tolist().index(0)
+
+        ax = plot_event_study(res, reference_period=0, use_cband=use_cband, show=False)
+        intervals = _plotted_intervals(ax)
+        assert sorted(intervals) == [float(i) for i in range(len(frame)) if i != ref]
+        z = stats.norm.ppf(0.975)
+        shifted = frame["att"] - frame["att"].iloc[ref]
+        for x, (lo, hi) in intervals.items():
+            i = int(x)
+            np.testing.assert_allclose(
+                [lo, hi],
+                [
+                    shifted.iloc[i] - z * frame["se"].iloc[i],
+                    shifted.iloc[i] + z * frame["se"].iloc[i],
+                ],
+                rtol=1e-10,
+            )
+        plt.close()
+
 
 def _idiom_fit(name):
     """A small analytical fit for each event-study producer the tutorials plot."""

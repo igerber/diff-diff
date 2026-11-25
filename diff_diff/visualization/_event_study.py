@@ -217,6 +217,7 @@ def plot_event_study(
     ci_lower_override = None
     ci_upper_override = None
     reference_marks: Optional[Set[Any]] = None
+    undefined_inference: Set[Any] = set()
     if results is not None:
         (
             effects,
@@ -232,6 +233,18 @@ def plot_event_study(
             pw_upper_override,
             reference_marks,
         ) = _extract_plot_data(results, periods, pre_periods, post_periods, reference_period)
+        # Rows whose STORED inference is undefined (a NaN stored pointwise
+        # interval on a route that carries one - the container route). Their
+        # inference was disabled by the producer (e.g. WooldridgeDiD
+        # ``weights="cohort_share"``, whose conditional-on-shares SE stays
+        # finite while t/p/CI fail closed to NaN), so no interval may be
+        # reconstructed for them from the SE on any later path.
+        if pw_lower_override is not None and pw_upper_override is not None:
+            undefined_inference = {
+                p
+                for p, lo in pw_lower_override.items()
+                if not (np.isfinite(lo) and np.isfinite(pw_upper_override.get(p, np.nan)))
+            }
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
@@ -270,7 +283,14 @@ def plot_event_study(
             effects = {p: e - ref_effect for p, e in effects.items()}
             # Set reference SE to NaN (it's now a constraint, not an estimate)
             # This follows fixest convention where the omitted category has no SE/CI
-            se = {p: (np.nan if p == reference_period else s) for p, s in se.items()}
+            # Rows with undefined STORED inference get a NaN SE too: the
+            # overrides are discarded just below and the intervals recomputed
+            # from the SE, which must not revive inference the producer
+            # disabled (their normalized point estimates still plot).
+            se = {
+                p: (np.nan if (p == reference_period or p in undefined_inference) else s)
+                for p, s in se.items()
+            }
             # REGISTRY (Event Study Plotting): after explicit normalization,
             # CIs are RECOMPUTED from the normalized effects and original
             # SEs, and the reference CI becomes (NaN, NaN). Any simultaneous

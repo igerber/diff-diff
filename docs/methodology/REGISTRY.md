@@ -7155,7 +7155,12 @@ should be a deliberate user choice.
   intervals are drawn as-is (the stored-alpha mismatch warning applies), and the NaN
   intervals of a `weights="cohort_share"` aggregation draw no error bars - nothing is
   recomputed from the conditional-on-shares SE. A Wooldridge event-study surface has no
-  reference row, so no marker is hollowed. A fit on which `aggregate('event_study')` has
+  reference row, so no marker is hollowed. The no-recomputation guarantee also holds under
+  an explicit `reference_period=` (which discards the stored-interval overrides and
+  recomputes pointwise from the SE): on every container-route input, a row whose STORED
+  pointwise interval is NaN gets a NaN SE before that recomputation, so its normalized point
+  estimate plots with no interval. Inference a producer disabled (cohort-share weights, an
+  undefined design df) is never revived by normalizing. A fit on which `aggregate('event_study')` has
   not been called raises the surface builder's `ValueError` (previously the raw result
   raised `KeyError: 'effect'`, because its native dict is keyed `att`).
 - **Note (zero-SE pointwise gate, `plot_group_effects` twin):** the pointwise
