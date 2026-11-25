@@ -239,16 +239,21 @@ def run_design_point(args):
     }
     for (method, name), (n_fit, n_defined, n_reject, n_cover) in sorted(tallies.items()):
         rate = n_reject / n_defined if n_defined else float("nan")
+        # Derived ratios are rounded to 6 decimals to keep the committed file
+        # small; the counts they come from are stored exactly.
         record["results"].setdefault(method, {})[name] = {
             "n_fit": n_fit,
             "n_defined": n_defined,
-            "share_undefined": 1.0 - n_defined / n_fit if n_fit else float("nan"),
-            "rejection_rate": rate,
+            "n_reject": n_reject,
+            "share_undefined": round(1.0 - n_defined / n_fit, 6) if n_fit else float("nan"),
+            "rejection_rate": round(rate, 6),
             "rejection_mc_se": (
-                float(np.sqrt(rate * (1.0 - rate) / n_defined)) if n_defined else float("nan")
+                round(float(np.sqrt(rate * (1.0 - rate) / n_defined)), 6)
+                if n_defined
+                else float("nan")
             ),
             "coverage": (
-                n_cover / n_defined
+                round(n_cover / n_defined, 6)
                 if n_defined and not name.startswith("pretrend")
                 else float("nan")
             ),
@@ -334,7 +339,16 @@ def main():
         "design_points": sorted(records, key=lambda r: r["index"]),
     }
     if args.output:
-        Path(args.output).write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+        # One line per design point: readable diffs without ten thousand lines.
+        lines = [
+            "{",
+            f' "meta": {json.dumps(payload["meta"], sort_keys=True)},',
+            ' "design_points": [',
+        ]
+        rows = [json.dumps(record, sort_keys=True) for record in payload["design_points"]]
+        lines.append(",\n".join(f"  {row}" for row in rows))
+        lines.extend([" ]", "}"])
+        Path(args.output).write_text("\n".join(lines) + "\n")
         print(f"wrote {args.output}")
 
 
