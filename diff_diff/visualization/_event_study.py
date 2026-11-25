@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from diff_diff.staggered import CallawaySantAnnaResults
     from diff_diff.sun_abraham import SunAbrahamResults
     from diff_diff.two_stage import TwoStageDiDResults
+    from diff_diff.wooldridge_results import WooldridgeDiDResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
@@ -26,6 +27,7 @@ PlottableResults = Union[
     "TwoStageDiDResults",
     "StackedDiDResults",
     "ChaisemartinDHaultfoeuilleResults",
+    "WooldridgeDiDResults",
     "EventStudyResults",
     pd.DataFrame,
 ]
@@ -72,8 +74,12 @@ def plot_event_study(
         Results object from CallawaySantAnna, a unified
         :class:`~diff_diff.results_base.EventStudyResults` container (from
         any producer's ``aggregate('event_study')`` or
-        ``build_event_study_surface``), or a DataFrame with columns
-        'period', 'effect', 'se' (and optionally 'conf_int_lower',
+        ``build_event_study_surface``), a
+        :class:`~diff_diff.WooldridgeDiDResults` on which
+        ``aggregate('event_study')`` has been called (it is converted to
+        the unified container, so its stored intervals are drawn as-is;
+        an un-aggregated fit raises ``ValueError``), or a DataFrame with
+        columns 'period', 'effect', 'se' (and optionally 'conf_int_lower',
         'conf_int_upper'). If None, must provide effects and se directly.
     effects : dict, optional
         Dictionary mapping periods to effect estimates. Used if results is None.
@@ -191,10 +197,27 @@ def plot_event_study(
     # Track if reference_period was explicitly provided by user
     reference_period_explicit = reference_period is not None
 
+    # WooldridgeDiDResults stores its event-study dict keyed ``att`` (not
+    # ``effect``) and returns ITSELF from ``aggregate("event_study")``, so
+    # convert it to the unified container here - BEFORE extraction and the
+    # stored-alpha guard - and let it take the EventStudyResults route end
+    # to end (stored intervals preserved, including the NaN intervals of a
+    # ``weights="cohort_share"`` aggregation, so no misleading error bars
+    # are recomputed from its conditional-on-shares SE). An un-aggregated
+    # fit raises the surface builder's ValueError naming the call to make.
+    if results is not None:
+        from diff_diff.wooldridge_results import WooldridgeDiDResults as _WooldridgeResults
+
+        if isinstance(results, _WooldridgeResults):
+            from diff_diff.results_base import build_event_study_surface
+
+            results = build_event_study_surface(results)
+
     # Extract data from results if provided
     ci_lower_override = None
     ci_upper_override = None
     reference_marks: Optional[Set[Any]] = None
+    undefined_inference: Set[Any] = set()
     if results is not None:
         (
             effects,
@@ -210,6 +233,18 @@ def plot_event_study(
             pw_upper_override,
             reference_marks,
         ) = _extract_plot_data(results, periods, pre_periods, post_periods, reference_period)
+        # Rows whose STORED inference is undefined (a NaN stored pointwise
+        # interval on a route that carries one - the container route). Their
+        # inference was disabled by the producer (e.g. WooldridgeDiD
+        # ``weights="cohort_share"``, whose conditional-on-shares SE stays
+        # finite while t/p/CI fail closed to NaN), so no interval may be
+        # reconstructed for them from the SE on any later path.
+        if pw_lower_override is not None and pw_upper_override is not None:
+            undefined_inference = {
+                p
+                for p, lo in pw_lower_override.items()
+                if not (np.isfinite(lo) and np.isfinite(pw_upper_override.get(p, np.nan)))
+            }
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
@@ -248,7 +283,14 @@ def plot_event_study(
             effects = {p: e - ref_effect for p, e in effects.items()}
             # Set reference SE to NaN (it's now a constraint, not an estimate)
             # This follows fixest convention where the omitted category has no SE/CI
-            se = {p: (np.nan if p == reference_period else s) for p, s in se.items()}
+            # Rows with undefined STORED inference get a NaN SE too: the
+            # overrides are discarded just below and the intervals recomputed
+            # from the SE, which must not revive inference the producer
+            # disabled (their normalized point estimates still plot).
+            se = {
+                p: (np.nan if (p == reference_period or p in undefined_inference) else s)
+                for p, s in se.items()
+            }
             # REGISTRY (Event Study Plotting): after explicit normalization,
             # CIs are RECOMPUTED from the normalized effects and original
             # SEs, and the reference CI becomes (NaN, NaN). Any simultaneous
@@ -1018,7 +1060,8 @@ def _extract_plot_data(
         f"Cannot extract plot data from {type(results).__name__}. "
         "Expected CallawaySantAnnaResults, "
         "SunAbrahamResults, ImputationDiDResults, "
-        "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
+        "ChaisemartinDHaultfoeuilleResults, WooldridgeDiDResults, "
+        "EventStudyResults, or DataFrame. "
         "For a result that stores no event-study surface (DMLDiD, "
         "EfficientDiD, every CallawaySantAnna fit since 4.0, and ANALYTICAL "
         "ImputationDiD / TwoStageDiD / ContinuousDiD fits), plot the "

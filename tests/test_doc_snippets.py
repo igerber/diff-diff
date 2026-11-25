@@ -418,9 +418,9 @@ def _restore_datasets_module():
 _CONTEXT_DEPENDENT_SNIPPETS = {
     "api_bacon:block1",
     "api_bacon:block2",
-    "api_visualization:block2",
     "api_visualization:block3",
-    "api_visualization:block9",
+    "api_visualization:block4",
+    "api_visualization:block10",
     "python_comparison:block5",
     "quickstart:block3",
     "quickstart:block9",

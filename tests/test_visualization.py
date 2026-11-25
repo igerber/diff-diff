@@ -854,3 +854,350 @@ class TestEfficientDiDPlotReference:
         extracted = _extract_plot_data(es, None, None, None, None)
         assert extracted[5] == -2  # reference_period slot
         assert extracted[6] is True  # inferred, not caller-supplied
+
+
+def _plotted_points(ax):
+    """Point estimates drawn by plot_event_study: [(x, y, is_hollow)] in x order."""
+    pts = []
+    for line in ax.lines:
+        ydata = np.asarray(line.get_ydata(), dtype=float)
+        if ydata.size != 1 or line.get_marker() in (None, "None", ""):
+            continue
+        hollow = line.get_markerfacecolor() in ("white", "w")
+        pts.append((float(np.asarray(line.get_xdata())[0]), float(ydata[0]), hollow))
+    return sorted(pts)
+
+
+def _plotted_intervals(ax):
+    """Vertical error-bar segments drawn by plot_event_study: {x: (lower, upper)}."""
+    out = {}
+    for coll in ax.collections:
+        if not hasattr(coll, "get_segments"):
+            continue
+        for seg in coll.get_segments():
+            seg = np.asarray(seg, dtype=float)
+            if seg.shape == (2, 2) and seg[0, 0] == seg[1, 0]:
+                out[float(seg[0, 0])] = (float(seg[:, 1].min()), float(seg[:, 1].max()))
+    return out
+
+
+class TestPlotEventStudyWooldridge:
+    """plot_event_study accepts a WooldridgeDiDResults by converting it to the
+    unified container, so it takes the EventStudyResults route end to end."""
+
+    @staticmethod
+    def _fit(**kwargs):
+        from diff_diff import WooldridgeDiD
+        from diff_diff.prep_dgp import generate_staggered_data as _gen
+
+        data = _gen(n_units=120, n_periods=8, seed=1)
+        return WooldridgeDiD(**kwargs).fit(
+            data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+
+    def test_plots_the_stored_surface(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        res = self._fit()
+        res.aggregate("event_study")
+        frame = res.to_dataframe(level="event_study")
+        # A Wooldridge event-study surface carries no reference row.
+        assert not frame["is_reference"].any()
+
+        ax = plot_event_study(res, show=False)
+
+        points = _plotted_points(ax)
+        assert len(points) == len(frame)
+        np.testing.assert_allclose([p[1] for p in points], frame["att"].to_numpy(), rtol=1e-12)
+        assert not any(p[2] for p in points)  # nothing drawn as a reference marker
+        intervals = _plotted_intervals(ax)
+        assert len(intervals) == len(frame)
+        for x, (_, row) in enumerate(frame.iterrows()):
+            lo, hi = intervals[float(x)]
+            np.testing.assert_allclose(
+                [lo, hi], [row["conf_int_lower"], row["conf_int_upper"]], rtol=1e-10
+            )
+        assert [t.get_text() for t in ax.get_xticklabels()] == [
+            str(e) for e in frame["event_time"].tolist()
+        ]
+        plt.close()
+
+    def test_matches_the_container_route(self):
+        """The raw result and build_event_study_surface(result) plot identically."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        from diff_diff.results_base import build_event_study_surface
+
+        res = self._fit()
+        res.aggregate("event_study")
+        ax_raw = plot_event_study(res, show=False)
+        pts_raw, ci_raw = _plotted_points(ax_raw), _plotted_intervals(ax_raw)
+        plt.close()
+        ax_cont = plot_event_study(build_event_study_surface(res), show=False)
+        assert _plotted_points(ax_cont) == pts_raw
+        assert _plotted_intervals(ax_cont) == ci_raw
+        plt.close()
+
+    def test_unaggregated_fit_raises(self):
+        pytest.importorskip("matplotlib")
+
+        res = self._fit()
+        assert res.event_study_effects is None
+        with pytest.raises(ValueError, match=r"aggregate\('event_study'\)"):
+            plot_event_study(res, show=False)
+
+    def test_stored_alpha_mismatch_warns(self):
+        """Stored intervals are at the fit's level; a different plot alpha warns."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        res = self._fit(alpha=0.10)
+        res.aggregate("event_study")
+        with pytest.warns(UserWarning, match="does not apply to an EventStudyResults container"):
+            plot_event_study(res, show=False)  # default alpha=0.05
+        plt.close()
+
+    def test_cohort_share_draws_no_error_bars(self):
+        """The fail-closed cohort-share inference (NaN intervals) is preserved:
+        no interval is recomputed from the conditional-on-shares SE."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        res = self._fit()
+        with pytest.warns(UserWarning, match="conditional-on-shares"):
+            res.aggregate("event_study", weights="cohort_share")
+        frame = res.to_dataframe(level="event_study")
+        assert np.isfinite(frame["se"]).all()
+        assert frame["conf_int_lower"].isna().all()
+
+        ax = plot_event_study(res, show=False)
+        assert len(_plotted_points(ax)) == len(frame)
+        assert _plotted_intervals(ax) == {}
+        plt.close()
+
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cohort_share_stays_undefined_under_explicit_reference(self, use_cband):
+        """Explicit reference_period= discards the stored intervals and recomputes
+        from the SE; that recomputation must not revive the inference the
+        cohort-share aggregation disabled (finite SE, NaN t/p/CI)."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        res = self._fit()
+        with pytest.warns(UserWarning, match="conditional-on-shares"):
+            res.aggregate("event_study", weights="cohort_share")
+        frame = res.to_dataframe(level="event_study")
+
+        ax = plot_event_study(res, reference_period=0, use_cband=use_cband, show=False)
+        points = _plotted_points(ax)
+        # the normalized point estimates still plot ...
+        np.testing.assert_allclose(
+            [p[1] for p in points], (frame["att"] - frame["att"].iloc[0]).to_numpy(), atol=1e-12
+        )
+        # ... with no interval on any row
+        assert _plotted_intervals(ax) == {}
+        plt.close()
+
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cohort_share_explicit_reference_plotly_draws_no_band(self, use_cband):
+        pytest.importorskip("plotly")
+
+        res = self._fit()
+        with pytest.warns(UserWarning, match="conditional-on-shares"):
+            res.aggregate("event_study", weights="cohort_share")
+        for kwargs in ({}, {"reference_period": 0}):
+            fig = plot_event_study(res, backend="plotly", use_cband=use_cband, show=False, **kwargs)
+            assert not [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+        # positive control: the same call on defined (cell-weighted) inference bands
+        res.aggregate("event_study")
+        fig = plot_event_study(
+            res, backend="plotly", reference_period=0, use_cband=use_cband, show=False
+        )
+        assert [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+
+    @pytest.mark.parametrize("use_cband", [True, False])
+    def test_cell_weighted_explicit_reference_keeps_intervals(self, use_cband):
+        """The undefined-inference mask is row-level: a cell-weighted surface
+        (defined inference) still gets recomputed intervals on every
+        non-reference row after explicit normalization."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from scipy import stats
+
+        res = self._fit()
+        res.aggregate("event_study")
+        frame = res.to_dataframe(level="event_study")
+        ref = frame["event_time"].tolist().index(0)
+
+        ax = plot_event_study(res, reference_period=0, use_cband=use_cband, show=False)
+        intervals = _plotted_intervals(ax)
+        assert sorted(intervals) == [float(i) for i in range(len(frame)) if i != ref]
+        z = stats.norm.ppf(0.975)
+        shifted = frame["att"] - frame["att"].iloc[ref]
+        for x, (lo, hi) in intervals.items():
+            i = int(x)
+            np.testing.assert_allclose(
+                [lo, hi],
+                [
+                    shifted.iloc[i] - z * frame["se"].iloc[i],
+                    shifted.iloc[i] + z * frame["se"].iloc[i],
+                ],
+                rtol=1e-10,
+            )
+        plt.close()
+
+
+def _idiom_fit(name):
+    """A small analytical fit for each event-study producer the tutorials plot."""
+    import warnings
+
+    import diff_diff as dd
+    from diff_diff import prep_dgp
+
+    stag = prep_dgp.generate_staggered_data(n_units=120, n_periods=8, seed=1)
+    kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if name == "CallawaySantAnna":
+            return dd.CallawaySantAnna().fit(stag, **kw)
+        if name == "SunAbraham":
+            return dd.SunAbraham().fit(stag, **kw)
+        if name == "ImputationDiD":
+            return dd.ImputationDiD().fit(stag, **kw)
+        if name == "TwoStageDiD":
+            return dd.TwoStageDiD().fit(stag, **kw)
+        if name == "StackedDiD":
+            return dd.StackedDiD(kappa_pre=2, kappa_post=2).fit(stag, **kw)
+        if name == "EfficientDiD":
+            return dd.EfficientDiD().fit(stag, **kw)
+        if name == "WooldridgeDiD":
+            return dd.WooldridgeDiD().fit(stag, **kw)
+        if name == "LWDiD":
+            return dd.LWDiD().fit(stag, treatment="treated", **kw)
+        if name == "DMLDiD":
+            cov = stag.copy()
+            unit_x = np.random.default_rng(0).normal(size=cov["unit"].nunique())
+            cov["x1"] = unit_x[cov["unit"].astype("category").cat.codes.to_numpy()]
+            return dd.DMLDiD(outcome_learner="linear", n_folds=2, seed=1).fit(
+                cov, covariates=["x1"], **kw
+            )
+        if name == "ChaisemartinDHaultfoeuille":
+            rev = prep_dgp.generate_reversible_did_data(
+                n_groups=40, n_periods=6, pattern="single_switch", seed=1
+            )
+            return dd.ChaisemartinDHaultfoeuille(twfe_diagnostic=False).fit(
+                rev, outcome="outcome", unit="group", time="period", treatment="treatment", L_max=2
+            )
+        if name == "ContinuousDiD":
+            cont = prep_dgp.generate_continuous_did_data(
+                n_units=150, n_periods=6, cohort_periods=[3, 5], never_treated_frac=0.3, seed=1
+            )
+            return dd.ContinuousDiD(seed=1).fit(cont, dose="dose", **kw)
+        if name == "HeterogeneousAdoptionDiD":
+            had = prep_dgp.generate_continuous_did_data(
+                n_units=60,
+                n_periods=8,
+                cohort_periods=[5],
+                never_treated_frac=0.0,
+                dose_distribution="uniform",
+                dose_params={"low": 5.0, "high": 50.0},
+                seed=1,
+            )
+            had.loc[had["period"] < had["first_treat"], "dose"] = 0.0
+            return dd.HeterogeneousAdoptionDiD(design="auto").fit(had, dose="dose", **kw)
+        if name == "TwoWayFixedEffects":
+            return dd.TwoWayFixedEffects().fit(
+                generate_multi_period_data(),
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                event_study=True,
+                spec="pooled",
+                post_periods=[2, 3],
+                reference_period=1,
+            )
+    raise AssertionError(name)
+
+
+_IDIOM_PRODUCERS = [
+    "CallawaySantAnna",
+    "SunAbraham",
+    "ImputationDiD",
+    "TwoStageDiD",
+    "StackedDiD",
+    "EfficientDiD",
+    "WooldridgeDiD",
+    "LWDiD",
+    "DMLDiD",
+    "ChaisemartinDHaultfoeuille",
+    "ContinuousDiD",
+    "HeterogeneousAdoptionDiD",
+    "TwoWayFixedEffects",
+]
+
+
+class TestEventStudyIdiomContract:
+    """The one event-study idiom the tutorials teach (CONTRIBUTING.md, "Tutorial
+    conventions") works on every producer they plot:
+
+        es = results.aggregate("event_study") if hasattr(results, "aggregate") else results
+        plot_event_study(es)
+        table = es.to_dataframe() if isinstance(es, EventStudyResults) \\
+            else results.to_dataframe(level="event_study")
+
+    A producer that stops satisfying it must be fixed in the plotter (convert to
+    the container at the top of plot_event_study), not excepted in the docs.
+    """
+
+    @pytest.mark.parametrize("name", _IDIOM_PRODUCERS)
+    def test_surface_plot_and_table(self, name):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        from diff_diff.results_base import EVENT_STUDY_SCHEMA, EventStudyResults
+
+        results = _idiom_fit(name)
+        es = results.aggregate("event_study") if hasattr(results, "aggregate") else results
+        table = (
+            es.to_dataframe()
+            if isinstance(es, EventStudyResults)
+            else results.to_dataframe(level="event_study")
+        )
+        assert list(table.columns[: len(EVENT_STUDY_SCHEMA)]) == list(EVENT_STUDY_SCHEMA)
+        assert len(table) > 0
+
+        ax = plot_event_study(es, show=False)
+        points = _plotted_points(ax)
+        # Every estimated row is drawn. A reference row is drawn (hollow) when the
+        # surface materializes it; a producer whose baseline is omitted from its
+        # native dict (SunAbraham's raw-result route) plots the estimated rows only.
+        if len(points) != len(table):
+            table = table[~table["is_reference"].astype(bool)]
+        assert len(points) == len(table)
+        estimates = table["att"].to_numpy(dtype=float)
+        plotted = np.array([p[1] for p in points])
+        finite = np.isfinite(estimates)
+        assert finite.any()
+        np.testing.assert_allclose(plotted[finite], estimates[finite], rtol=1e-12, atol=1e-12)
+        plt.close()
+
+    def test_container_route_classes(self):
+        """Pin which producers take which route, so the convention text stays true:
+        only SunAbraham and the TWFE event-study result lack aggregate(), and only
+        Wooldridge's aggregate() returns the result itself."""
+        from diff_diff.results_base import EventStudyResults
+
+        no_aggregate, self_returning = [], []
+        for name in _IDIOM_PRODUCERS:
+            results = _idiom_fit(name)
+            if not hasattr(results, "aggregate"):
+                no_aggregate.append(name)
+                continue
+            es = results.aggregate("event_study")
+            if not isinstance(es, EventStudyResults):
+                assert es is results
+                self_returning.append(name)
+        assert no_aggregate == ["SunAbraham", "TwoWayFixedEffects"]
+        assert self_returning == ["WooldridgeDiD"]

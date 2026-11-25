@@ -29,6 +29,22 @@ Example
    ax = plot_event_study(results)
    ax.figure.savefig('event_study.png', dpi=300, bbox_inches='tight')
 
+For an estimator with post-fit aggregation, plot the event-study container:
+
+.. code-block:: python
+
+   from diff_diff import CallawaySantAnna, WooldridgeDiD, plot_event_study
+
+   cs = CallawaySantAnna().fit(data, outcome='y', unit='unit_id',
+                               time='period', first_treat='first_treat')
+   plot_event_study(cs.aggregate('event_study'))
+
+   # WooldridgeDiD.aggregate() returns the results object itself, which
+   # plot_event_study accepts once the event study has been aggregated
+   etwfe = WooldridgeDiD().fit(data, outcome='y', unit='unit_id',
+                               time='period', first_treat='first_treat')
+   plot_event_study(etwfe.aggregate('event_study'))
+
 plot_group_effects
 ------------------
 
