@@ -1594,7 +1594,7 @@ Returned by `CallawaySantAnna.fit()`.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `group_time_effects` | `dict[(g,t), GroupTimeEffect]` | ATT(g,t) for each (group, time) |
+| `group_time_effects` | `dict[(g,t), dict]` | ATT(g,t) cell for each (group, time), stored as a plain dict: `{effect, se, t_stat, p_value, conf_int, n_treated, n_control, skip_reason}`. Read a value as `cell["effect"]`; `skip_reason` is `None` for an estimable cell |
 | `att` | `float` | Overall ATT |
 | `se` | `float` | SE of overall ATT |
 | `t_stat` | `float` | T-statistic |

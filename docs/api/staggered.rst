@@ -94,7 +94,10 @@ Results container for Callaway-Sant'Anna estimation.
 GroupTimeEffect
 ---------------
 
-Container for individual group-time ATT(g,t) effects.
+Typed record for one group-time ATT(g,t) effect. Estimator results do not store
+this class: ``group_time_effects`` maps each ``(group, time)`` key to a plain
+``dict`` with the keys ``effect``, ``se``, ``t_stat``, ``p_value``, ``conf_int``,
+``n_treated``, ``n_control`` and ``skip_reason``, read as ``cell["effect"]``.
 
 .. autoclass:: diff_diff.GroupTimeEffect
    :no-index:
