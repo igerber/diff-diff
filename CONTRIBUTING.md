@@ -197,8 +197,13 @@ repair a notebook, delete its entries; never add one.
    parallel trends holds. Say so, and link the sensitivity tutorial
    (`05_honest_did`) and the pre-test power tutorial (`07_pretrends_power`).
 6. **Control groups.** Never-treated and not-yet-treated comparisons rest on
-   different identifying assumptions; neither is uniformly weaker. Do not
-   describe one as "the stronger assumption".
+   different identifying assumptions. Say what each restricts, as Callaway and
+   Sant'Anna (2021, Assumptions 4 and 5) do: the not-yet-treated version also
+   restricts pre-treatment trends across cohorts (later cohorts' untreated
+   trends must match too), in exchange for a larger comparison group; the
+   never-treated version does not. They suggest never-treated when that group
+   is sizeable and not-yet-treated when it is missing or too small. Do not
+   rank the two as "weaker" and "stronger": the paper does not.
 7. **Event studies: one idiom.**
 
    ```python
