@@ -1416,6 +1416,24 @@ class TestInferenceDfProvenance:
     carried was built on a finite t-reference.
     """
 
+    def test_cluster_jackknife_df_reaches_every_level(self):
+        """A jackknife fit's reference is t(H - 1); every level must say so."""
+        from diff_diff.prep_dgp import generate_staggered_data
+
+        panel = generate_staggered_data(n_units=40, n_periods=6, seed=7)
+        panel["state"] = panel["unit"] % 8
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            fit = CallawaySantAnna(cluster="state", vcov_type="jackknife").fit(
+                panel, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+        assert fit.df_inference == 7
+        for level in ("simple", "group", "event_study"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df_col = np.asarray(fit.aggregate(level).df, dtype=float)
+            assert df_col.size and np.all(df_col == 7.0), level
+
     def test_explicit_survey_df_reaches_every_level(self, survey_fit):
         """The canonical carrier is ``survey_metadata.df_survey``; on an
         explicit survey design ``df_inference`` is intentionally None."""

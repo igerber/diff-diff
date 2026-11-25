@@ -5,6 +5,7 @@ This module provides dataclass containers for storing and presenting
 group-time average treatment effects and their aggregations.
 """
 
+import warnings
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +43,16 @@ from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
     CSBootstrapResults,
     apply_cband_conf_ints,
+)
+from diff_diff.staggered_jackknife import (
+    apply_to_event_study as apply_jackknife_to_event_study,
+)
+from diff_diff.staggered_jackknife import (
+    apply_to_group as apply_jackknife_to_group,
+)
+from diff_diff.staggered_jackknife import (
+    changed_cells_message,
+    loo_effects_frame,
 )
 
 
@@ -380,6 +391,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             return self._aggregate_simple_result(kit)
         if level == "total":
             return self._aggregate_total_result(kit)
+        # Cluster-jackknife fits carry their delete-one replicates on the
+        # kit; the recompute levels below form their inference from them.
+        # ``getattr``: a kit pickled before the field existed has none.
+        jackknife = getattr(kit, "jackknife", None)
 
         # Shallow copy: shares every array (no data is duplicated) but gives the
         # aggregators a scratch dict to memoize `_agg_cache` into, so the kit
@@ -468,6 +483,15 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 # recomputed t, df_used cleared (percentile inference never
                 # used the analytical df).
                 apply_bootstrap_group_overrides(effects, boot_replay, kit.alpha)
+            if jackknife is not None:
+                self._warn_jackknife_changed_cells(jackknife, "the group aggregates")
+                apply_jackknife_to_group(
+                    jackknife,
+                    effects,
+                    alpha=kit.alpha,
+                    anticipation=kit.anticipation,
+                    groups=self.groups,
+                )
             return self._group_effects_to_aggregation(effects, kit)
 
         # event_study -> the unified EventStudyResults container (row M-092)
@@ -488,17 +512,36 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             # false provenance otherwise).
             apply_bootstrap_event_study_overrides(es.effects, boot_replay, kit.alpha)
             apply_cband_conf_ints(es.effects, boot_replay.cband_crit_value)
+        es_vcov = boot_replay.event_study_vcov if boot_replay is not None else es.vcov
+        es_vcov_index = (
+            boot_replay.event_study_vcov_index if boot_replay is not None else es.vcov_index
+        )
+        es_df = None if boot_replay is not None else es.df_used
+        if jackknife is not None:
+            # Cluster jackknife: element-wise equation (20) on every
+            # non-reference horizon, its outer-product form for the
+            # covariance (indexed by the horizons finite in every
+            # delete-one sample), and the t(H - 1) df.
+            self._warn_jackknife_changed_cells(jackknife, "the event-study estimates")
+            es_vcov, es_vcov_index = apply_jackknife_to_event_study(
+                jackknife,
+                es.effects,
+                alpha=kit.alpha,
+                anticipation=kit.anticipation,
+                groups=self.groups,
+                time_periods=self.time_periods,
+                balance_e=balance_e,
+            )
+            es_df = float(jackknife.n_replicates - 1)
         # `build_event_study_surface` reads the surface off a RESULTS object.
         # Under the immutability contract we cannot populate `self`, so a
         # throwaway carrier holds the freshly computed values.
         carrier = replace(
             self,
             event_study_effects=es.effects,
-            event_study_vcov=boot_replay.event_study_vcov if boot_replay is not None else es.vcov,
-            event_study_vcov_index=(
-                boot_replay.event_study_vcov_index if boot_replay is not None else es.vcov_index
-            ),
-            event_study_df=None if boot_replay is not None else es.df_used,
+            event_study_vcov=es_vcov,
+            event_study_vcov_index=es_vcov_index,
+            event_study_df=es_df,
             cband_crit_value=(
                 boot_replay.cband_crit_value if boot_replay is not None else self.cband_crit_value
             ),
@@ -716,6 +759,56 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             estimator=type(self).__name__.replace("Results", ""),
         )
 
+    @staticmethod
+    def _warn_jackknife_changed_cells(jackknife: Any, what: str) -> None:
+        """Repeat the paper's second caveat for a post-fit aggregate."""
+        message = changed_cells_message(jackknife, what)
+        if message is not None:
+            warnings.warn(message, UserWarning, stacklevel=4)
+
+    def get_loo_effects_df(self) -> pd.DataFrame:
+        """
+        Delete-one-cluster overall ATTs from the cluster jackknife.
+
+        Requires a fit with ``vcov_type="jackknife"`` (``ValueError``
+        otherwise). Karim, Nielsen, MacKinnon & Webb (2026) recommend
+        inspecting these estimates to check that the result is not driven by
+        a single cluster.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per deleted cluster, most influential first (sorted by
+            ``|delta_from_full|`` descending, undefined replicates last), the
+            layout of ``SyntheticDiDResults.get_loo_effects_df()`` with
+            ``cluster`` in place of ``unit``:
+
+            - ``cluster``: the deleted cluster. Its label when ``cluster=``
+              named a column coarser than the unit. A position code when the
+              jackknife deleted units (no ``cluster=``, or a cluster column
+              that is one-to-one with units): the position of the unit in the
+              sorted unique unit IDs of the estimation sample (the row
+              position, for ``panel=False``). Results objects do not retain
+              raw unit identifiers, so unit labels are not stored; map the
+              codes back with your own data.
+            - ``role``: ``"treated"`` if the cluster holds an ever-treated
+              unit, else ``"control"``.
+            - ``att_loo``: the overall ATT with that cluster omitted (NaN
+              when it is not estimable).
+            - ``delta_from_full``: ``att_loo`` minus the full-sample ATT.
+            - ``n_cells``: the number of ATT(g,t) cells estimated in that
+              delete-one sample.
+        """
+        jackknife = getattr(getattr(self, "_aggregation_kit", None), "jackknife", None)
+        if self.vcov_type != "jackknife" or jackknife is None:
+            raise ValueError(
+                "get_loo_effects_df() requires vcov_type='jackknife'. This result "
+                f"used vcov_type={self.vcov_type!r}. Re-fit with "
+                "CallawaySantAnna(vcov_type='jackknife') to obtain the "
+                "delete-one-cluster estimates."
+            )
+        return loo_effects_frame(jackknife, float(self.att))
+
     def summary(self, alpha: Optional[float] = None) -> str:
         """
         Generate formatted summary of estimation results.
@@ -774,6 +867,17 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 f"{conf_level}% Confidence Interval: [{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
             ]
         )
+
+        # Cluster-jackknife fits name their variance estimator: the default
+        # (influence-function) summary prints no variance line, so this is
+        # the only place a reader learns the inference was jackknifed.
+        jackknife = getattr(getattr(self, "_aggregation_kit", None), "jackknife", None)
+        if jackknife is not None:
+            h = jackknife.n_replicates
+            lines.append(
+                f"Variance: cluster jackknife (CV3), delete-one {jackknife.unit_name}, "
+                f"H={h}, t({h - 1})"
+            )
 
         cv = self.coef_var
         if np.isfinite(cv):
