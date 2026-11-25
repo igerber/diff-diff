@@ -87,9 +87,11 @@ def df():
 
 @pytest.fixture(scope="module")
 def results(df):
-    """Deterministic fit: the same ATT, weights and fit diagnostics as the
-    notebook's placebo fit (none of them depends on the variance method)."""
-    return SyntheticDiD(variance_method="jackknife").fit(df, **FIT)
+    """Cheap fit with the notebook's seed. The ATT, both sets of weights and the
+    jackknife inference are deterministic and do not depend on the variance
+    method. ``pre_fit_placebo_pvalue`` is NOT deterministic - it ranks the
+    treated fit against randomly drawn placebo fits - so the seed matters for it."""
+    return SyntheticDiD(variance_method="jackknife", seed=42).fit(df, **FIT)
 
 
 @pytest.fixture(scope="module")
@@ -175,6 +177,9 @@ class TestSyntheticDiD:
         # treated minus synthetic: negative = the synthetic sits above the treated units
         assert results.pre_treatment_level_gap == pytest.approx(-1.5018, abs=5e-4)
         assert results.pre_fit_placebo_pvalue > 0.05
+        # "it ranks the treated fit among only 20 placebo fits ... steps of about 0.05"
+        assert len(results.pre_fit_placebo_rmse) == 20
+        assert results.pre_fit_placebo_pvalue == pytest.approx(4 / 21, abs=1e-9)
         assert len(results.treated_pre_trajectory) == N_PRE
         gap = np.asarray(results.treated_pre_trajectory) - np.asarray(
             results.synthetic_pre_trajectory
@@ -182,7 +187,10 @@ class TestSyntheticDiD:
         assert gap.mean() == pytest.approx(results.pre_treatment_level_gap, abs=1e-8)
         assert_quotes_in_rendered(
             NB,
-            ["Pre-treatment level gap:              -1.5018", "Placebo fit p-value:"],
+            [
+                "Pre-treatment level gap:              -1.5018",
+                "Placebo fit p-value:                  0.190",
+            ],
             surface="output",
         )
 
@@ -199,7 +207,11 @@ class TestInference:
     def test_placebo_floor_is_what_the_notebook_says(self):
         assert_quotes_in_rendered(
             NB,
-            ["at its floor of 1/(199 + 1) = 0.005", "None of the 199 placebo estimates"],
+            [
+                "is at its floor of 1/(199 + 1) = 0.005",
+                "None of the 199 placebo estimates",
+                "these replications cannot resolve anything smaller",
+            ],
             surface="markdown",
         )
         assert_quotes_in_rendered(
@@ -274,7 +286,9 @@ class TestRegularizationAndCovariates:
         data["size"] = rng_cov.normal(100, 20, len(data))
         data["age"] = rng_cov.normal(10, 3, len(data))
         # the point estimate does not depend on the variance method
-        res = SyntheticDiD(variance_method="jackknife").fit(data, covariates=["size", "age"], **FIT)
+        res = SyntheticDiD(variance_method="jackknife", seed=42).fit(
+            data, covariates=["size", "age"], **FIT
+        )
         assert res.att == pytest.approx(4.9318, abs=5e-4)
         assert abs(res.att - results.att) < 0.1
         assert_quotes_in_rendered(
@@ -290,6 +304,10 @@ class TestNotebookSurface:
             "**no anticipation**",
             "(block\ntreatment), and the panel is balanced",
             "never reported below 1/(replications + 1)",
+            # the placebo method's own assumption (Arkhangelsky et al. 2021, Section 5)
+            "same noise distribution (homoskedasticity across units)",
+            "placebo standard errors are too small",
+            "which makes its homoskedasticity assumption carry\nall the weight",
         ):
             assert needle in md, needle
 

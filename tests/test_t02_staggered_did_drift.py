@@ -300,7 +300,11 @@ class TestNotebookSurface:
         for needle in (
             "**Parallel trends.**",
             "**No anticipation.**",
-            "two different assumptions, not a stronger and a weaker version of one",
+            # the comparison-group assumptions as Callaway-Sant'Anna (2021) describe
+            # them: what each restricts, and when each is suggested - not a ranking
+            "It places no restriction on how later cohorts evolve before their",
+            "This restricts\n      pre-treatment trends across cohorts, which the never-treated version does not",
+            "suggest the never-treated version when there is a sizeable\n  never-treated group",
             "do not treat pre-treatment estimates as a pass/fail test",
             "Their agreement here is arithmetic, so it is not a robustness check.",
         ):
