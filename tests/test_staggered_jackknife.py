@@ -711,6 +711,100 @@ class TestConsumers:
         assert isinstance(rebuilt, CallawaySantAnna) and rebuilt.vcov_type == "jackknife"
 
 
+SIZE_EVIDENCE = (
+    Path(__file__).resolve().parents[1] / "benchmarks" / "data" / "cs_jackknife_size.json"
+)
+
+
+@pytest.fixture(scope="module")
+def points():
+    if not SIZE_EVIDENCE.exists():
+        pytest.skip("size simulation results not present")
+    return json.loads(SIZE_EVIDENCE.read_text())["design_points"]
+
+
+class TestSizeEvidence:
+    """The rejection rates the registry quotes are the ones the simulation produced.
+
+    ``benchmarks/python/cs_jackknife_size.py`` writes the file; the registry's
+    "Measured size" note (CallawaySantAnna, Cluster jackknife) and the
+    reporting note quote the ranges below, in whole percent.
+    """
+
+    SINGLE_COHORT = ("es_3", "es_4")
+    SHARED = ("es_0", "es_1", "es_2")
+
+    @staticmethod
+    def span(points, method, quantities, treated):
+        rates = [
+            p["results"][method][q]["rejection_rate"]
+            for p in points
+            if p["n_treated_per_cohort"] in treated
+            for q in quantities
+        ]
+        rates = [r for r in rates if np.isfinite(r)]
+        if not rates:
+            return None
+        return (int(f"{100 * min(rates):.0f}"), int(f"{100 * max(rates):.0f}"))
+
+    @pytest.mark.parametrize(
+        "treated, hc1, bootstrap, jackknife, hc1_single, jackknife_single",
+        [
+            ((1,), (15, 35), (26, 39), (8, 18), (42, 72), None),
+            ((2,), (5, 15), (14, 19), (3, 10), (14, 29), (6, 18)),
+            ((3,), (7, 11), (12, 21), (5, 8), (12, 19), (6, 12)),
+            ((4,), (6, 9), (9, 12), (4, 7), (7, 14), (4, 9)),
+            ((6, 8, 10, 12), (4, 7), (7, 10), (3, 6), (6, 10), (4, 7)),
+        ],
+    )
+    def test_registry_table(
+        self, points, treated, hc1, bootstrap, jackknife, hc1_single, jackknife_single
+    ):
+        assert self.span(points, "hc1", ["overall"], treated) == hc1
+        assert self.span(points, "bootstrap", ["overall"], treated) == bootstrap
+        assert self.span(points, "jackknife", ["overall"], treated) == jackknife
+        assert self.span(points, "hc1", self.SINGLE_COHORT, treated) == hc1_single
+        assert self.span(points, "jackknife", self.SINGLE_COHORT, treated) == jackknife_single
+
+    def test_jackknife_rejects_less_than_the_default_everywhere(self, points):
+        for p in points:
+            res = p["results"]
+            assert (
+                res["jackknife"]["overall"]["rejection_rate"]
+                < res["hc1"]["overall"]["rejection_rate"]
+            ), (p["n_clusters"], p["n_treated_per_cohort"], p["units_per_cluster"])
+            assert sum(p["fit_failures"].values()) == 0
+
+    def test_equal_treated_clusters_give_like_rejection(self, points):
+        """Two treated clusters: overall at J=1 and a single-cohort horizon at J=2."""
+        assert self.span(points, "jackknife", ["overall"], (1,)) == (8, 18)
+        assert self.span(points, "jackknife", self.SINGLE_COHORT, (2,)) == (6, 18)
+        assert self.span(points, "jackknife", ["overall"], (2,)) == (3, 10)
+        assert self.span(points, "jackknife", self.SINGLE_COHORT, (4,)) == (4, 9)
+
+    def test_pretrend_checks(self, points):
+        bonferroni = ["pretrend_bonferroni"]
+        assert self.span(points, "jackknife", bonferroni, (2,)) == (8, 29)
+        assert self.span(points, "jackknife", bonferroni, (3,)) == (6, 14)
+        assert self.span(points, "jackknife", bonferroni, (4,)) == (5, 12)
+        assert self.span(points, "jackknife", bonferroni, (6, 8, 10, 12)) == (4, 7)
+        wald = ["pretrend_wald_chi2"]
+        assert self.span(points, "jackknife", wald, (2,)) == (49, 71)
+        # The default fit's chi-square joint test (tracked in TODO.md).
+        assert self.span(points, "hc1", wald, (2,)) == (62, 78)
+        assert self.span(points, "hc1", wald, (6, 8, 10, 12)) == (13, 22)
+
+    def test_single_cohort_quantities_are_undefined_with_one_cluster_per_cohort(self, points):
+        for p in points:
+            if p["n_treated_per_cohort"] != 1:
+                continue
+            jk = p["results"]["jackknife"]
+            for name in (*self.SINGLE_COHORT, "pretrend_bonferroni"):
+                assert jk[name]["share_undefined"] == 1.0
+            for name in ("overall", *self.SHARED):
+                assert jk[name]["share_undefined"] == 0.0
+
+
 @pytest.fixture(scope="module")
 def golden():
     if not GOLDEN.exists():

@@ -479,7 +479,7 @@ class _PointOnlyAggregator(CallawaySantAnnaAggregationMixin):
         self.alpha = alpha
         self.anticipation = anticipation
 
-    def _compute_aggregated_se_with_wif(  # type: ignore[override]
+    def _compute_aggregated_se_with_wif(
         self,
         gt_pairs: Any,
         weights: Any,

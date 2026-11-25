@@ -240,6 +240,8 @@ Multi-Period and Staggered Adoption
 
 - **Callaway, B., & Sant'Anna, P. H. C. (2021).** "Difference-in-Differences with Multiple Time Periods." *Journal of Econometrics*, 225(2), 200-230. https://doi.org/10.1016/j.jeconom.2020.12.001
 
+- **Karim, S. R., Nielsen, M. Ø., MacKinnon, J. G., & Webb, M. D. (2026).** "Improved Inference for CSDID Using the Cluster Jackknife." arXiv:2602.12043. https://arxiv.org/abs/2602.12043
+
 - **Sant'Anna, P. H. C., & Zhao, J. (2020).** "Doubly Robust Difference-in-Differences Estimators." *Journal of Econometrics*, 219(1), 101-122. https://doi.org/10.1016/j.jeconom.2020.06.003
 
 - **Sun, L., & Abraham, S. (2021).** "Estimating Dynamic Treatment Effects in Event Studies with Heterogeneous Treatment Effects." *Journal of Econometrics*, 225(2), 175-199. https://doi.org/10.1016/j.jeconom.2020.09.006

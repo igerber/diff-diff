@@ -28,6 +28,7 @@ groups:
     - diff_diff/staggered.py
     - diff_diff/staggered_aggregation.py
     - diff_diff/staggered_bootstrap.py
+    - diff_diff/staggered_jackknife.py
     - diff_diff/staggered_results.py
   staggered_triple_diff:
     - diff_diff/triple_diff_results.py
@@ -221,6 +222,17 @@ sources:
         type: methodology
       - path: docs/api/staggered.rst
         type: api_reference
+      - path: docs/methodology/REPORTING.md
+        section: "Cluster-jackknife parallel-trends policy"
+        type: methodology
+        note: "DiagnosticReport treatment of vcov_type='jackknife' fits"
+      - path: docs/methodology/papers/karim-2026-review.md
+        type: methodology
+        note: "Source audit for the cluster jackknife (status line only)"
+      - path: docs/v4-design.md
+        section: "7. Inference surface"
+        type: methodology
+        note: "Why the cluster jackknife sits on vcov_type"
       - path: docs/tutorials/02_staggered_did.ipynb
         type: tutorial
       - path: docs/tutorials/16_survey_did.ipynb

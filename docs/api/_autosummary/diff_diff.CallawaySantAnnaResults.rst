@@ -14,6 +14,7 @@
       ~CallawaySantAnnaResults.__init__
       ~CallawaySantAnnaResults.aggregate
       ~CallawaySantAnnaResults.epv_summary
+      ~CallawaySantAnnaResults.get_loo_effects_df
       ~CallawaySantAnnaResults.print_summary
       ~CallawaySantAnnaResults.summary
       ~CallawaySantAnnaResults.to_dataframe

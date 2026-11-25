@@ -857,7 +857,7 @@ differences helps interpret results and choose appropriate inference.
      - Always clusters at unit level after within-transformation (static AND event-study mode). Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters (static mode only; event-study mode raises).
    * - ``CallawaySantAnna``
      - Analytical (influence function)
-     - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).
+     - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``). With few clusters use ``vcov_type="jackknife"`` (cluster jackknife, delete-one re-estimation with a ``t(H - 1)`` reference); the bootstrap does not correct few-cluster over-rejection.
    * - ``SyntheticDiD``
      - Placebo, paper-faithful refit bootstrap, or jackknife
      - Default uses placebo-based variance (``variance_method="placebo"``). Set ``variance_method="bootstrap"`` for paper-faithful Algorithm 2 bootstrap (re-estimates ω and λ via Frank-Wolfe per draw; ~5–30× slower than placebo, panel-size dependent). Both methods use ``n_bootstrap`` replications (default 200). ``variance_method="jackknife"`` is also available.

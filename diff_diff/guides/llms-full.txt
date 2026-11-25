@@ -189,7 +189,7 @@ CallawaySantAnna(
     base_period: str = "varying",                # "varying" or "universal"
     cband: bool = True,                          # Simultaneous confidence bands
     pscore_trim: float = 0.01,                   # Propensity score trimming bound
-    vcov_type: str = "hc1",                      # {"hc1"} only — IF-based variance per Callaway & Sant'Anna (2021). Analytical-sandwich {classical, hc2, hc2_bm} and conley REJECTED at __init__ (see REGISTRY.md IF-vs-sandwich subsection).
+    vcov_type: str = "hc1",                      # "hc1" (IF-based variance; CR1 on the IF with cluster=) or "jackknife" (cluster jackknife CV3, Karim et al. 2026: delete-one-cluster re-estimation, t(H-1); see below). Analytical-sandwich {classical, hc2, hc2_bm} and conley REJECTED at __init__ (see REGISTRY)
 )
 ```
 
@@ -251,6 +251,46 @@ boot_res = boot.fit(data, outcome='outcome', unit='unit', time='period',
                     first_treat='first_treat')
 plot_event_study(boot_res.aggregate('event_study'))   # replays the bootstrap
 ```
+
+**Few clusters: `vcov_type="jackknife"`.** With few clusters (above all few
+treated clusters) the default standard errors and the multiplier bootstrap
+over-reject. The cluster jackknife (CV3; Karim, Nielsen, MacKinnon & Webb
+2026) deletes each cluster in turn (the `cluster=` column, or the unit when
+none is given), re-runs the estimator, and forms the variance
+`((H-1)/H) * sum_h (theta_h - theta)^2` around the full-sample estimate, with
+a `t(H-1)` reference. It covers the overall ATT, every ATT(g,t) and the
+`event_study` / `group` aggregations (`aggregate('event_study').vcov` is the
+jackknife covariance).
+
+```python
+jk = CallawaySantAnna(cluster='state', vcov_type='jackknife')
+jk_res = jk.fit(data, outcome='outcome', unit='unit', time='period',
+                first_treat='first_treat')
+jk_res.df_inference                    # H - 1
+jk_res.get_loo_effects_df()            # delete-one overall ATTs, most influential first
+jk_res.aggregate('event_study')        # jackknife SEs, t(H-1)
+```
+
+- Costs `H + 1` extra estimations. Not combinable with `n_bootstrap > 0`,
+  `survey_design=` or `allow_unbalanced_panel=True`; `panel=False` needs
+  `cluster=`.
+- It reduces over-rejection but does not remove it with very few treated
+  clusters: the fit and `aggregate()` warn when a reported quantity rests on
+  fewer than 3 treated clusters (in the library's simulation, 6-18% rejection
+  at a nominal 5% with two).
+- A deletion that leaves no estimate (e.g. it removes the only comparison
+  cluster) makes every jackknife SE NaN; a cell, horizon or cohort that is not
+  estimable in every delete-one sample gets a NaN SE.
+- `get_loo_effects_df()` shows real labels for clusters coarser than the
+  unit and position codes when the unit itself is deleted (results objects
+  keep no raw unit identifiers).
+- `DiagnosticReport` on a jackknife fit runs a Bonferroni pre-trend check
+  (no covariance-based joint Wald) and skips the pre-trends power section.
+  When the number of event-study horizons approaches `H` the jackknife
+  covariance is near-singular and `HonestDiD` refuses it.
+- It is a valid `diagnose_design` candidate: pass
+  `CallawaySantAnna(vcov_type='jackknife')` (unit-level; a non-unit `cluster=`
+  needs `resample_units=False`).
 
 ### ChaisemartinDHaultfoeuille
 
@@ -1566,7 +1606,7 @@ Returned by `CallawaySantAnna.fit()`.
 | `event_study_effects` | `dict[int, dict] | None` | Legacy field - `None` on EVERY fit since 4.0 (fit() computes no event-study surface); use `aggregate("event_study")` |
 | `group_effects` | `dict | None` | Legacy field - `None` on EVERY fit since 4.0; use `aggregate("group")` |
 
-**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="group_time")` (`level="event_study"` returns `aggregate('event_study').to_dataframe()` - the unified `EVENT_STUDY_SCHEMA` frame, 4.0 M-093; `level="group"` raises on 4.0 fits)
+**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `get_loo_effects_df()` (cluster-jackknife fits only: delete-one overall ATTs), `summary()`, `print_summary()`, `to_dataframe(level="group_time")` (`level="event_study"` returns `aggregate('event_study').to_dataframe()` - the unified `EVENT_STUDY_SCHEMA` frame, 4.0 M-093; `level="group"` raises on 4.0 fits)
 
 `aggregate("simple"|"event_study"|"group"|"total")` re-aggregates POST-FIT
 with no
@@ -1808,7 +1848,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `vcov_type` | `str` | Variance estimator family (`"hc1"` for IF-based estimators; permanently narrow on `ImputationDiD` / `CallawaySantAnna` / `TripleDifference` / `EfficientDiD` per IF-vs-sandwich taxonomy) |
+| `vcov_type` | `str` | Variance estimator family (`"hc1"` for IF-based estimators; permanently narrow on `ImputationDiD` / `TripleDifference` / `EfficientDiD` per IF-vs-sandwich taxonomy; `CallawaySantAnna` also accepts `"jackknife"`, the delete-one-cluster re-estimation variance) |
 | `cluster_name` | `str | None` | Effective cluster column name (e.g. `"unit"` for default `cluster=None` on `ImputationDiD`; `None` for default on `EfficientDiD` since its per-unit EIF SE is HC1-style not CR1-at-unit); `None` under survey designs (the survey block already names PSU/strata) |
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
 | `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |

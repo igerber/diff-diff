@@ -33,6 +33,24 @@ covariate-unconfoundedness approach with extra covariates :math:`W`, use
 :class:`~diff_diff.DMLDiD` with ``fit(..., bad_control=,
 bad_control_covariates=)``.
 
+**Few clusters.** With few clusters, and above all few treated clusters, the
+default influence-function standard errors and the multiplier bootstrap
+reject a true null too often. ``vcov_type="jackknife"`` selects the cluster
+jackknife (CV3) of Karim, Nielsen, MacKinnon & Webb (2026): each cluster (the
+``cluster=`` column, or the unit when none is given) is deleted in turn, the
+estimator is re-run, and the variance is formed from the delete-one estimates
+around the full-sample one, with a ``t(H - 1)`` reference for ``H`` clusters.
+It applies to the overall ATT, every ATT(g,t) and the ``event_study`` and
+``group`` aggregations. ``results.get_loo_effects_df()`` lists the delete-one
+overall ATTs, most influential cluster first. The jackknife reduces
+over-rejection but does not remove it when very few treated clusters stand
+behind a number: the fit and ``aggregate()`` warn when a reported quantity
+rests on fewer than three. It cannot be combined with ``n_bootstrap > 0``,
+``survey_design=`` or ``allow_unbalanced_panel=True``, and with
+``panel=False`` it needs ``cluster=``. Measured rejection rates and the
+library's rules for deletions that remove cells are in the Methodology
+Registry (CallawaySantAnna, "Cluster jackknife").
+
 .. autoclass:: diff_diff.CallawaySantAnna
    :no-index:
    :members:
@@ -64,6 +82,7 @@ Results container for Callaway-Sant'Anna estimation.
    .. autosummary::
 
       ~CallawaySantAnnaResults.aggregate
+      ~CallawaySantAnnaResults.get_loo_effects_df
       ~CallawaySantAnnaResults.summary
       ~CallawaySantAnnaResults.to_dataframe
 
