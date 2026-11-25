@@ -7149,6 +7149,15 @@ should be a deliberate user choice.
   normalization is accepted only when the chosen period is one of the marked rows (a no-op
   shift); any other period raises `ValueError`, because each anchor is a constraint under
   its own cohort base and no single shift represents them faithfully
+- **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
+  converted to the unified `EventStudyResults` container at entry
+  (`build_event_study_surface`) and takes the container route end to end: its stored
+  intervals are drawn as-is (the stored-alpha mismatch warning applies), and the NaN
+  intervals of a `weights="cohort_share"` aggregation draw no error bars - nothing is
+  recomputed from the conditional-on-shares SE. A Wooldridge event-study surface has no
+  reference row, so no marker is hollowed. A fit on which `aggregate('event_study')` has
+  not been called raises the surface builder's `ValueError` (previously the raw result
+  raised `KeyError: 'effect'`, because its native dict is keyed `att`).
 - **Note (zero-SE pointwise gate, `plot_group_effects` twin):** the pointwise
   `effect +/- z*SE` reconstruction NaN-gates zero/negative-SE rows on every path that
   reaches it - a zero-SE row has all-NaN stored inference (`safe_inference`), and a finite

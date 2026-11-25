@@ -2544,7 +2544,8 @@ All plotting functions return a matplotlib `Figure` object.
 from diff_diff import plot_event_study
 
 plot_event_study(
-    results,                           # EventStudyResults (TWFE event-study surface), CS, SA, BJS, TwoStageDiD, StackedDiD, or DataFrame
+    results,                           # EventStudyResults (TWFE event-study surface), CS, SA, BJS, TwoStageDiD, StackedDiD,
+                                       # WooldridgeDiD (after results.aggregate('event_study')), or DataFrame
     effects=None,                      # Manual dict of effects (alternative to results)
     se=None,                           # Manual dict of SEs
     periods=None,

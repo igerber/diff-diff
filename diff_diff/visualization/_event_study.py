@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from diff_diff.staggered import CallawaySantAnnaResults
     from diff_diff.sun_abraham import SunAbrahamResults
     from diff_diff.two_stage import TwoStageDiDResults
+    from diff_diff.wooldridge_results import WooldridgeDiDResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
@@ -26,6 +27,7 @@ PlottableResults = Union[
     "TwoStageDiDResults",
     "StackedDiDResults",
     "ChaisemartinDHaultfoeuilleResults",
+    "WooldridgeDiDResults",
     "EventStudyResults",
     pd.DataFrame,
 ]
@@ -72,8 +74,12 @@ def plot_event_study(
         Results object from CallawaySantAnna, a unified
         :class:`~diff_diff.results_base.EventStudyResults` container (from
         any producer's ``aggregate('event_study')`` or
-        ``build_event_study_surface``), or a DataFrame with columns
-        'period', 'effect', 'se' (and optionally 'conf_int_lower',
+        ``build_event_study_surface``), a
+        :class:`~diff_diff.WooldridgeDiDResults` on which
+        ``aggregate('event_study')`` has been called (it is converted to
+        the unified container, so its stored intervals are drawn as-is;
+        an un-aggregated fit raises ``ValueError``), or a DataFrame with
+        columns 'period', 'effect', 'se' (and optionally 'conf_int_lower',
         'conf_int_upper'). If None, must provide effects and se directly.
     effects : dict, optional
         Dictionary mapping periods to effect estimates. Used if results is None.
@@ -190,6 +196,22 @@ def plot_event_study(
 
     # Track if reference_period was explicitly provided by user
     reference_period_explicit = reference_period is not None
+
+    # WooldridgeDiDResults stores its event-study dict keyed ``att`` (not
+    # ``effect``) and returns ITSELF from ``aggregate("event_study")``, so
+    # convert it to the unified container here - BEFORE extraction and the
+    # stored-alpha guard - and let it take the EventStudyResults route end
+    # to end (stored intervals preserved, including the NaN intervals of a
+    # ``weights="cohort_share"`` aggregation, so no misleading error bars
+    # are recomputed from its conditional-on-shares SE). An un-aggregated
+    # fit raises the surface builder's ValueError naming the call to make.
+    if results is not None:
+        from diff_diff.wooldridge_results import WooldridgeDiDResults as _WooldridgeResults
+
+        if isinstance(results, _WooldridgeResults):
+            from diff_diff.results_base import build_event_study_surface
+
+            results = build_event_study_surface(results)
 
     # Extract data from results if provided
     ci_lower_override = None
@@ -1018,7 +1040,8 @@ def _extract_plot_data(
         f"Cannot extract plot data from {type(results).__name__}. "
         "Expected CallawaySantAnnaResults, "
         "SunAbrahamResults, ImputationDiDResults, "
-        "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
+        "ChaisemartinDHaultfoeuilleResults, WooldridgeDiDResults, "
+        "EventStudyResults, or DataFrame. "
         "For a result that stores no event-study surface (DMLDiD, "
         "EfficientDiD, every CallawaySantAnna fit since 4.0, and ANALYTICAL "
         "ImputationDiD / TwoStageDiD / ContinuousDiD fits), plot the "
