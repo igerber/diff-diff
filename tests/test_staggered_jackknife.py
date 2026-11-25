@@ -500,6 +500,81 @@ class TestDeletionLabels:
             {"se": jk.se, "t_stat": jk.t_stat, "p_value": jk.p_value, "conf_int": jk.conf_int}
         )
 
+    @pytest.mark.parametrize("cluster", [None, "state"])
+    def test_categorical_unit_ids_with_an_unused_category(self, panel, cluster):
+        # Before pandas 3.0 a groupby over a categorical column lists unused
+        # categories, so the fit's unit index gains an entry with no rows.
+        # It must be neither deleted nor audited.
+        data = panel.copy()
+        data["unit"] = pd.Categorical(data["unit"], categories=list(range(20)) + [999])
+        expected = quiet_fit(CallawaySantAnna(cluster=cluster, vcov_type="jackknife"), panel)
+        got = quiet_fit(CallawaySantAnna(cluster=cluster, vcov_type="jackknife"), data)
+        assert got.att == expected.att
+        np.testing.assert_allclose(got.se, expected.se, rtol=1e-12)
+        assert got.df_inference == expected.df_inference
+        assert len(got.get_loo_effects_df()) == len(expected.get_loo_effects_df())
+
+    @pytest.mark.parametrize("cluster", [None, "state"])
+    def test_index_entry_without_rows_is_not_a_candidate(self, cluster):
+        """The same case built by hand, so it does not depend on the pandas version."""
+        from diff_diff.staggered_jackknife import resolve_deletion_units
+
+        data = pd.DataFrame(
+            {
+                "unit": [0, 0, 1, 1, 2, 2, 3, 3],
+                "state": ["a", "a", "a", "a", "b", "b", "c", "c"],
+            }
+        )
+        precomputed = {
+            # Position 4 is a unit the index lists but no row carries.
+            "all_units": np.array([0, 1, 2, 3, 999]),
+            "unit_cohorts": np.array([4.0, 4.0, 0.0, 0.0, np.nan]),
+            "is_panel": True,
+        }
+        influence = {(4, 5): {"treated_idx": np.array([0, 1]), "control_idx": np.array([2, 3])}}
+        cells = {(4, 5): {"effect": 1.0, "n_treated": 2}}
+        units = resolve_deletion_units(data, "unit", cluster, precomputed, influence, cells)
+        assert units.spare_values == ()
+        if cluster is None:
+            assert units.values == (0, 1, 2, 3) and units.labels == (0, 1, 2, 3)
+            assert units.cell_treated[(4, 5)] == (0, 1)
+        else:
+            assert units.values == ("a", "b", "c") and units.roles == (
+                "treated",
+                "control",
+                "control",
+            )
+            assert units.cell_treated[(4, 5)] == (0,)
+            assert not units.labels_are_codes
+
+    @pytest.mark.parametrize(
+        "kind", ["datetime", "period", "categorical", "tuple", "float", "string"]
+    )
+    @pytest.mark.parametrize("column", ["state", "unit"])
+    def test_typed_labels(self, panel, kind, column):
+        """Cluster and unit labels of any hashable type delete the rows they name."""
+        data = panel.copy()
+        codes = pd.factorize(data[column])[0]
+        days = pd.Timestamp("2020-01-01") + pd.to_timedelta(codes, unit="D")
+        data[column] = {
+            "datetime": lambda: days,
+            "period": lambda: pd.PeriodIndex(days, freq="D"),
+            "categorical": lambda: pd.Categorical([f"c{c:02d}" for c in codes]),
+            "tuple": lambda: pd.Series([(int(c), "x") for c in codes], index=data.index),
+            "float": lambda: codes.astype(float) + 0.5,
+            "string": lambda: [f"c{c:02d}" for c in codes],
+        }[kind]()
+        cluster = "state" if column == "state" else None
+        expected = quiet_fit(CallawaySantAnna(cluster=cluster, vcov_type="jackknife"), panel)
+        got = quiet_fit(CallawaySantAnna(cluster=cluster, vcov_type="jackknife"), data)
+        np.testing.assert_allclose(got.se, expected.se, rtol=1e-12)
+        assert got.df_inference == expected.df_inference
+        np.testing.assert_allclose(
+            np.sort(got.get_loo_effects_df()["att_loo"]),
+            np.sort(expected.get_loo_effects_df()["att_loo"]),
+            rtol=1e-12,
+        )
+
     def test_a_deletion_that_removes_nothing_is_an_error(self, panel, monkeypatch):
         import diff_diff.staggered_jackknife as module
 

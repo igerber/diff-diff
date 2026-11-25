@@ -160,6 +160,18 @@ def resolve_deletion_units(
     """
     index_units = np.asarray(precomputed["all_units"])
     n_index = len(index_units)
+    is_panel = bool(precomputed.get("is_panel", True))
+    # Only entries of the index that have rows in the caller's frame can be
+    # deleted. On the panel route the index comes from a groupby over the
+    # unit column, which for a categorical column lists unused categories
+    # too (the pandas default before 3.0): such an entry has no rows, enters
+    # nothing, and is neither a deletion unit nor a candidate for the audit.
+    if is_panel:
+        observed = pd.Index(pd.unique(data[unit].dropna()))
+        present = np.asarray(pd.Index(index_units).isin(observed), dtype=bool)
+    else:
+        present = np.ones(n_index, dtype=bool)
+
     contributing = np.zeros(n_index, dtype=bool)
     for info in influence_func_info.values():
         if not info:
@@ -169,7 +181,8 @@ def resolve_deletion_units(
             if idx.size:
                 contributing[idx] = True
     cohorts = np.asarray(precomputed["unit_cohorts"])
-    ever_treated = cohorts > 0
+    with np.errstate(invalid="ignore"):
+        ever_treated = np.asarray(cohorts > 0, dtype=bool)
     uses_cohort_masses = fixed_cohort_agg_weights(precomputed) is not None
     mass_cohorts = {
         gt[0]
@@ -178,77 +191,99 @@ def resolve_deletion_units(
     }
     if mass_cohorts:
         contributing |= np.isin(cohorts, list(mass_cohorts))
+    contributing &= present
 
     def treated_by_cell(position_of_index: np.ndarray) -> Dict[Any, Tuple[int, ...]]:
         """Deletion-unit positions of each cell's treated units."""
         out: Dict[Any, Tuple[int, ...]] = {}
         for gt, info in influence_func_info.items():
             idx = np.asarray((info or {}).get("treated_idx", ()), dtype=np.intp)
-            out[gt] = tuple(int(p) for p in np.unique(position_of_index[idx]))
+            positions = np.unique(position_of_index[idx])
+            out[gt] = tuple(int(p) for p in positions if p >= 0)
         return out
 
     if cluster is None:
         positions = np.flatnonzero(contributing)
-        spare = np.flatnonzero(~contributing)
+        spare = np.flatnonzero(~contributing & present)
         position_of_index = np.full(n_index, -1, dtype=np.intp)
         position_of_index[positions] = np.arange(positions.size)
+        # Labels are taken as pandas Index elements, never ``ndarray.tolist()``:
+        # that turns datetime64 unit IDs into integers, which match no row.
+        unit_index = pd.Index(index_units)
         return DeletionUnits(
             column=unit,
-            values=tuple(index_units[positions].tolist()),
+            values=tuple(unit_index[positions]),
             labels=tuple(int(p) for p in positions),
             unit_name="unit",
             labels_are_codes=True,
             roles=tuple("treated" if ever_treated[p] else "control" for p in positions),
             cell_treated=treated_by_cell(position_of_index),
-            spare_values=tuple(index_units[spare].tolist()),
+            spare_values=tuple(unit_index[spare]),
             spare_labels=tuple(int(p) for p in spare),
             spare_roles=tuple("treated" if ever_treated[p] else "control" for p in spare),
         )
 
-    if bool(precomputed.get("is_panel", True)):
-        per_index = data.groupby(unit, sort=True)[cluster].first().reindex(index_units).to_numpy()
+    if is_panel:
+        per_index = (
+            data.groupby(unit, sort=True, observed=True)[cluster]
+            .first()
+            .reindex(index_units)
+            .to_numpy()
+        )
     else:
         # Repeated cross-sections: the index space is the observation row.
         per_index = data[cluster].to_numpy()
-    codes, uniques = pd.factorize(per_index, sort=False)
+    present_idx = np.flatnonzero(present)
+    present_codes, uniques = pd.factorize(per_index[present_idx], sort=False)
+    # ``codes`` is -1 for an index entry with no rows; every use below goes
+    # through ``present``.
+    codes = np.full(n_index, -1, dtype=np.intp)
+    codes[present_idx] = present_codes
     n_clusters = len(uniques)
-    treated_count = np.bincount(codes, weights=ever_treated.astype(float), minlength=n_clusters)
+    treated_count = np.bincount(
+        present_codes, weights=ever_treated[present_idx].astype(float), minlength=n_clusters
+    )
     order = pd.unique(codes[contributing])
-    # A cluster column that is one-to-one with the index space IS the unit
+    # A cluster column that is one-to-one with the units present IS the unit
     # (or a relabelling of it), so it gets position codes: no raw unit
     # identifier is retained on the results object.
-    one_to_one = n_clusters == n_index
+    one_to_one = n_clusters == present_idx.size
     first_member = np.full(n_clusters, -1, dtype=np.intp)
     if one_to_one:
-        first_member[codes] = np.arange(n_index)
+        first_member[present_codes] = present_idx
     position_of_code = np.full(n_clusters, -1, dtype=np.intp)
     position_of_code[order] = np.arange(len(order))
+    position_of_index = np.full(n_index, -1, dtype=np.intp)
+    position_of_index[present_idx] = position_of_code[present_codes]
     spare = [c for c in range(n_clusters) if position_of_code[c] < 0]
     # Labels of the caller's frame that hold no unit of the estimation index
     # (clusters made only of rows with a missing unit ID). The fit does not
     # estimate on those rows, but they are not always inert - a row can add a
     # period to the calendar grid and so move a base period - so they are
     # audited like every other excluded cluster, never assumed away.
-    indexed = set(uniques.tolist()) if hasattr(uniques, "tolist") else set(uniques)
-    outside = [label for label in pd.unique(data[cluster]).tolist() if label not in indexed]
+    # Membership and labels go through pandas Index objects, so typed labels
+    # (datetime, period, categorical) compare and round-trip as themselves.
+    label_index = pd.Index(uniques)
+    raw_labels = pd.Index(pd.unique(data[cluster]))
+    outside = list(raw_labels[~raw_labels.isin(label_index)])
 
     def labels_of(cluster_codes: Sequence[int]) -> Tuple[Any, ...]:
         if one_to_one:
             return tuple(int(first_member[c]) for c in cluster_codes)
-        return tuple(uniques[c] for c in cluster_codes)
+        return tuple(label_index[c] for c in cluster_codes)
 
     def roles_of(cluster_codes: Sequence[int]) -> Tuple[str, ...]:
         return tuple("treated" if treated_count[c] > 0 else "control" for c in cluster_codes)
 
     return DeletionUnits(
         column=cluster,
-        values=tuple(uniques[c] for c in order),
+        values=tuple(label_index[c] for c in order),
         labels=labels_of(order),
         unit_name="unit" if one_to_one else cluster,
         labels_are_codes=one_to_one,
         roles=roles_of(order),
-        cell_treated=treated_by_cell(position_of_code[codes]),
-        spare_values=tuple(uniques[c] for c in spare) + tuple(outside),
+        cell_treated=treated_by_cell(position_of_index),
+        spare_values=tuple(label_index[c] for c in spare) + tuple(outside),
         # In code mode a cluster outside the index has no unit position; it
         # gets a code past the index (n_index, n_index + 1, ...).
         spare_labels=labels_of(spare)
