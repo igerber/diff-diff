@@ -236,7 +236,7 @@ column lookup.
 | ImputationDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
 | TwoStageDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
 | StackedDiD | yes (`'unit'`/`'unit_subexp'` only) | CR1 at unit (`"unit"`, G) | REJECTED (validator) | c3 |
-| CallawaySantAnna | yes | per-unit influence functions (no G/(G-1)); `cluster_name=None` | accepted explicit no-op | b |
+| CallawaySantAnna | yes | per-unit influence functions (no G/(G-1)); `cluster_name=None`. Under `vcov_type="jackknife"` the default deletes one unit at a time (`df_inference = H - 1`; `cluster_name` / `n_clusters` still `None`) | accepted explicit no-op (unit-level jackknife under `vcov_type="jackknife"`) | b |
 | EfficientDiD | yes | per-unit EIF (no G/(G-1)); `cluster_name=None` | accepted explicit no-op | b |
 | DMLDiD | yes | per-unit IF (inherits CS); `cluster_name=None` | accepted explicit no-op | b |
 | ChaisemartinDHaultfoeuille | yes (any non-None raises) | group-level IF + multiplier bootstrap; no cluster fields | accepted explicit no-op | b |

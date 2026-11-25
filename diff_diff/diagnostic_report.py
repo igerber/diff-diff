@@ -1140,6 +1140,19 @@ class DiagnosticReport:
             # bypass this gate.
             if "pretrends_power" in self._precomputed:
                 return None
+            if getattr(r, "vcov_type", None) == "jackknife":
+                # Same policy as the joint Wald in the parallel-trends
+                # check: the power calculation models a normal-reference
+                # Wald pre-test on the event-study covariance, which is not
+                # the test a cluster-jackknife fit is given (Bonferroni over
+                # per-row t(H - 1) p-values), so its MDV would overstate
+                # what that test can detect.
+                return (
+                    "Pre-trends power is not computed for a cluster-jackknife "
+                    "fit (vcov_type='jackknife'): it models a normal-reference "
+                    "Wald pre-test on the event-study covariance, which is not "
+                    "the pre-trend test applied to this fit."
+                )
             has_vcov = getattr(r, "vcov", None) is not None
             has_event_vcov = getattr(r, "event_study_vcov", None) is not None
             has_event_es = getattr(r, "event_study_effects", None) is not None
@@ -1876,7 +1889,14 @@ class DiagnosticReport:
         # implemented (tracked in DEFERRED.md). Bonferroni over the
         # BM-adjusted per-row p-values keeps the small-sample correction.
         # See REGISTRY.md StackedDiD / REPORTING.md PT notes.
-        if getattr(r, "vcov_type", None) != "hc2_bm":
+        # Cluster-jackknife fits (CallawaySantAnna vcov_type="jackknife")
+        # take the same policy for the same reason: no reference
+        # distribution is established for a Wald statistic built on a
+        # delete-one-cluster covariance, and the chi-square reference
+        # ignores the t(H - 1) small-sample reference the per-row jackknife
+        # inference uses. Bonferroni over the per-row t(H - 1) p-values
+        # keeps it.
+        if getattr(r, "vcov_type", None) not in ("hc2_bm", "jackknife"):
             es_vcov = getattr(r, "event_study_vcov", None)
             es_vcov_index = getattr(r, "event_study_vcov_index", None)
             if es_vcov is None or es_vcov_index is None:

@@ -312,9 +312,17 @@ and covariate-adjusted specifications.)
 - [x] Bootstrap SE (Rademacher/Mammen/Webb)
 - [x] Control group composition (never_treated/not_yet_treated)
 - [x] All documented edge cases from REGISTRY.md
+- [x] Cluster jackknife `vcov_type="jackknife"` (2026-11-25; Karim, Nielsen,
+  MacKinnon & Webb 2026, eq. 20): full-sample centering, `(H - 1)/H` factor,
+  full re-estimation, `t(H - 1)` reference. Overall, event-study and group
+  standard errors match R `did` 2.5.1 on delete-one-cluster samples to 1e-8
+  (`benchmarks/R/generate_cs_jackknife_golden.R`); every quantity equals a
+  by-hand delete-one loop. Element-wise extension beyond the overall ATT is a
+  documented library choice backed by `benchmarks/data/cs_jackknife_size.json`
 
 **Test Coverage:**
 - 61 methodology verification tests in `tests/test_methodology_callaway.py`
+- Cluster jackknife: `tests/test_staggered_jackknife.py`
 - Existing unit-test coverage in `tests/test_staggered.py`
 - R benchmark tests (skip if R not available)
 

@@ -16,6 +16,7 @@ from diff_diff._base import BaseEstimator
 from diff_diff.aggregation import (
     AggregationKit,
     BootstrapReplaySpec,
+    JackknifeReplicates,
 )
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
@@ -28,6 +29,7 @@ from diff_diff.linalg import (
 )
 from diff_diff.staggered_aggregation import (
     CallawaySantAnnaAggregationMixin,
+    fixed_cohort_agg_weights,
 )
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
@@ -508,16 +510,32 @@ class CallawaySantAnna(
         explicit PSU takes precedence; a ``UserWarning`` fires if the bare
         ``cluster=`` partition differs from the explicit PSU partition.
     vcov_type : str, default="hc1"
-        Variance family. CallawaySantAnna accepts ``{"hc1"}`` only —
-        ``hc1`` means per-unit IF variance when ``cluster=None`` and CR1
-        Liang-Zeger on the IF when ``cluster=X`` is set. The
-        analytical-sandwich families (``classical``, ``hc2``, ``hc2_bm``)
-        and spatial-HAC (``conley``) are rejected at ``__init__`` because
-        CS's per-(g,t) doubly-robust / IPW / outcome-regression structure
-        has no single design matrix to compute hat-matrix leverage or
-        Bell-McCaffrey Satterthwaite DOF on. See REGISTRY.md "IF-based
-        variance estimators vs analytical-sandwich estimators" for the
-        structural taxonomy.
+        Variance estimator. CallawaySantAnna accepts ``"hc1"`` and
+        ``"jackknife"``.
+
+        - ``"hc1"`` (default): per-unit IF variance when ``cluster=None``
+          and CR1 Liang-Zeger on the IF when ``cluster=X`` is set.
+        - ``"jackknife"``: the cluster jackknife (CV3) of Karim, Nielsen,
+          MacKinnon & Webb (2026). Each cluster is deleted in turn (the
+          ``cluster=`` column, or the unit when no cluster is given), the
+          whole estimator is re-run on the remaining data, and the variance
+          is ``((H - 1) / H) * sum_h (theta^(h) - theta)^2`` around the
+          full-sample estimate, with a ``t(H - 1)`` reference. It applies to
+          the overall ATT, every ATT(g,t) and the event-study and group
+          aggregations; the delete-one estimates are available from
+          ``results.get_loo_effects_df()``. Intended for few clusters, where
+          the influence-function variance over-rejects. It costs ``H + 1``
+          extra estimations and cannot be combined with ``n_bootstrap > 0``,
+          ``survey_design=`` or ``allow_unbalanced_panel=True``; with
+          ``panel=False`` it needs ``cluster=``.
+
+        The analytical-sandwich families (``classical``, ``hc2``,
+        ``hc2_bm``) and spatial-HAC (``conley``) are rejected at
+        ``__init__`` because CS's per-(g,t) doubly-robust / IPW /
+        outcome-regression structure has no single design matrix to compute
+        hat-matrix leverage or Bell-McCaffrey Satterthwaite DOF on. See
+        REGISTRY.md "IF-based variance estimators vs analytical-sandwich
+        estimators" for the structural taxonomy.
     n_bootstrap : int, default=0
         Number of bootstrap iterations for inference.
         If 0, uses analytical standard errors.
@@ -768,12 +786,14 @@ class CallawaySantAnna(
                 f"base_period must be 'varying' or 'universal', " f"got '{base_period}'"
             )
 
-        # vcov_type input contract: CallawaySantAnna is permanently narrow
-        # to {"hc1"} because the analytical-sandwich families (classical,
-        # hc2, hc2_bm) require a single regression's hat matrix that CS's
+        # vcov_type input contract: CallawaySantAnna accepts {"hc1",
+        # "jackknife"}. The analytical-sandwich families (classical, hc2,
+        # hc2_bm) require a single regression's hat matrix that CS's
         # per-(g,t) doubly-robust / IPW / outcome-regression structure
-        # doesn't have. See REGISTRY.md "IF-based variance estimators vs
-        # analytical-sandwich estimators" for the structural taxonomy.
+        # doesn't have; "jackknife" is the delete-one-cluster re-estimation
+        # variance (Karim et al. 2026), which needs no such matrix. See
+        # REGISTRY.md "IF-based variance estimators vs analytical-sandwich
+        # estimators" for the structural taxonomy.
         # Factored out so fit() can re-run it: set_params now validates
         # eagerly via the BaseEstimator probe re-init, but DIRECT attribute
         # mutation (est.vcov_type = ...) still bypasses validation until fit.
@@ -791,6 +811,7 @@ class CallawaySantAnna(
         # avoids surprises if the contract ever broadens).
         self._vcov_type_explicit = vcov_type != "hc1"
         validate_n_bootstrap(n_bootstrap)
+        self._validate_jackknife_inference(vcov_type, n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
@@ -2040,6 +2061,7 @@ class CallawaySantAnna(
         # second layer only catches DIRECT attribute mutation
         # (est.vcov_type = ...) before it propagates to Results metadata.
         self._validate_vcov_type(self.vcov_type)
+        self._validate_jackknife_inference(self.vcov_type, self.n_bootstrap)
         # Same direct-mutation defense for the anticipation window (an
         # out-of-domain value silently changes the ESTIMAND); the assignment
         # also re-normalizes a mutated numpy scalar to a Python int.
@@ -2050,6 +2072,36 @@ class CallawaySantAnna(
         # locally so it never reaches a column lookup ([M-080]).
         validate_cluster(self.cluster)
         user_cluster = None if self.cluster is False else self.cluster
+
+        # Cluster jackknife: the configurations it does not cover fail closed
+        # before any estimation. ``_jackknife_data`` pins the caller's frame,
+        # which every delete-one refit starts from.
+        _use_jackknife = self.vcov_type == "jackknife"
+        _jackknife_data = data
+        if _use_jackknife:
+            if survey_design is not None:
+                raise ValueError(
+                    "CallawaySantAnna(vcov_type='jackknife') is not supported with "
+                    "survey_design=. The cluster jackknife re-estimates on "
+                    "delete-one-cluster samples of an unweighted design; for a "
+                    "survey design use replicate weights "
+                    "(SurveyDesign(replicate_method='JK1' or 'JKn')) with the "
+                    "default vcov_type='hc1'."
+                )
+            if self.allow_unbalanced_panel:
+                raise ValueError(
+                    "CallawaySantAnna(vcov_type='jackknife') is not supported with "
+                    "allow_unbalanced_panel=True: that option chooses the estimation "
+                    "route from the balance of the data, and deleting a cluster can "
+                    "change the route, so the delete-one estimates would mix two "
+                    "estimators. Use the default allow_unbalanced_panel=False."
+                )
+            if not self.panel and user_cluster is None:
+                raise ValueError(
+                    "CallawaySantAnna(vcov_type='jackknife') with panel=False needs "
+                    "cluster=<column>: repeated cross-sections have no unit to "
+                    "delete, so the clusters must be named."
+                )
 
         # --- allow_unbalanced_panel routing (RC-on-panel = R's allow_unbalanced_panel) ---
         # Detect an unbalanced panel (some units unobserved in some periods).
@@ -2913,6 +2965,63 @@ class CallawaySantAnna(
                     group_time_effects[gt]["p_value"] = bootstrap_results.group_time_p_values[gt]
                     group_time_effects[gt]["t_stat"] = float(gt_t_stats[idx])
 
+        # Cluster jackknife (Karim, Nielsen, MacKinnon & Webb 2026, eq. 20):
+        # re-estimate on every delete-one-cluster sample and replace the
+        # analytical inference of the overall ATT and of every ATT(g,t).
+        # The replicates ride the kit so the post-fit aggregation levels can
+        # form their own jackknife standard errors.
+        jackknife_payload = None
+        if _use_jackknife and influence_func_info:
+            from diff_diff.staggered_jackknife import (
+                apply_to_fit,
+                fit_messages,
+                resolve_deletion_units,
+                run_replicates,
+            )
+
+            _deletion_units = resolve_deletion_units(
+                _jackknife_data,
+                unit,
+                user_cluster,
+                precomputed,
+                influence_func_info,
+                group_time_effects,
+            )
+            # Fewer than two candidates can never give two deletion units.
+            # The binding check is on the audited payload below: a cluster
+            # the structural rule left out can still turn out to move an
+            # estimate, and it then counts.
+            if len(_deletion_units.values) + len(_deletion_units.spare_values) < 2:
+                raise ValueError(_too_few_clusters_message(len(_deletion_units.values)))
+            jackknife_payload, _refit_warnings, _n_refits = run_replicates(
+                self,
+                _jackknife_data,
+                {
+                    "outcome": outcome,
+                    "unit": unit,
+                    "time": time,
+                    "first_treat": first_treat,
+                    "covariates": covariates,
+                },
+                _deletion_units,
+                float(overall_att),
+                group_time_effects,
+                fixed_cohort_agg_weights(precomputed),
+            )
+            if jackknife_payload.n_replicates < 2:
+                raise ValueError(_too_few_clusters_message(jackknife_payload.n_replicates))
+            overall_se, overall_t, overall_p, overall_ci = apply_to_fit(
+                jackknife_payload, overall_att, group_time_effects, self.alpha
+            )
+            for _message in fit_messages(
+                jackknife_payload,
+                _refit_warnings,
+                group_time_effects,
+                self.anticipation,
+                _n_refits,
+            ):
+                warnings.warn(_message, UserWarning, stacklevel=2)
+
         # No fit-time event-study surface -> the bootstrap never builds
         # ``event_study_info`` and no simultaneous band is computed at fit;
         # the post-fit replay (``results.aggregate('event_study')``) carries
@@ -2990,6 +3099,14 @@ class CallawaySantAnna(
             )
             else None
         )
+        if jackknife_payload is not None:
+            # The jackknife's reference distribution is t(H - 1), H being the
+            # clusters that enter the estimation. A reported cluster count
+            # must be that same H, never the raw PSU count (which also counts
+            # clusters made only of rows the fit drops).
+            df_inference_for_results = jackknife_payload.n_replicates - 1
+            if n_clusters_for_results is not None:
+                n_clusters_for_results = jackknife_payload.n_replicates
 
         self.results_ = CallawaySantAnnaResults(
             group_time_effects=group_time_effects,
@@ -3044,6 +3161,7 @@ class CallawaySantAnna(
             is_survey_fit=survey_metadata is not None,
             bootstrap_results=bootstrap_results,
             covariates=covariates,
+            jackknife=jackknife_payload,
         )
 
         self.is_fitted_ = True
@@ -5053,7 +5171,7 @@ class CallawaySantAnna(
         ``set_params(vcov_type=...)`` mutations are re-checked at use
         time rather than silently passing a bad value through to Results).
         """
-        _accepted_vcov = {"hc1"}
+        _accepted_vcov = {"hc1", "jackknife"}
         _deferred_vcov = {"conley"}
         _if_incompatible_vcov = {"classical", "hc2", "hc2_bm"}
         if vcov_type in _if_incompatible_vcov:
@@ -5085,9 +5203,28 @@ class CallawaySantAnna(
         if vcov_type not in _accepted_vcov:
             raise ValueError(
                 f"CallawaySantAnna(vcov_type={vcov_type!r}) is invalid. "
-                f"Accepted values: {sorted(_accepted_vcov)}. CS is "
-                "permanently narrow to 'hc1' per IF-based variance "
-                "structure; see REGISTRY.md."
+                f"Accepted values: {sorted(_accepted_vcov)}: 'hc1' is the "
+                "influence-function variance (cluster-robust with "
+                "cluster=<col>), 'jackknife' the delete-one-cluster "
+                "re-estimation variance; see REGISTRY.md."
+            )
+
+    @staticmethod
+    def _validate_jackknife_inference(vcov_type: str, n_bootstrap: int) -> None:
+        """Refuse the cluster jackknife together with the multiplier bootstrap.
+
+        Both replace the analytical inference, so requesting both leaves no
+        single answer. Called from ``__init__`` (hence from ``set_params``
+        through the probe re-init) and again from ``fit()``, which is the
+        only place a direct attribute mutation can be caught.
+        """
+        if vcov_type == "jackknife" and n_bootstrap > 0:
+            raise ValueError(
+                "CallawaySantAnna(vcov_type='jackknife') cannot be combined with "
+                f"n_bootstrap={n_bootstrap}: the cluster jackknife and the "
+                "multiplier bootstrap are two inference methods. Use "
+                "n_bootstrap=0 with vcov_type='jackknife', or vcov_type='hc1' "
+                "with the bootstrap."
             )
 
     # get_params/set_params come from BaseEstimator.
@@ -5131,6 +5268,14 @@ _AGGREGATION_BOOKKEEPING_KEYS = (
 )
 
 
+def _too_few_clusters_message(n_found: int) -> str:
+    """Refusal text for a cluster jackknife with fewer than two deletion units."""
+    return (
+        "CallawaySantAnna(vcov_type='jackknife') needs at least two clusters "
+        f"whose omission moves the estimate; found {n_found}."
+    )
+
+
 def _build_aggregation_kit(
     estimator: "CallawaySantAnna",
     precomputed: Optional[Dict[str, Any]],
@@ -5140,6 +5285,7 @@ def _build_aggregation_kit(
     is_survey_fit: bool = False,
     bootstrap_results: Optional["CSBootstrapResults"] = None,
     covariates: Optional[Sequence[str]] = None,
+    jackknife: Optional["JackknifeReplicates"] = None,
 ) -> Optional["AggregationKit"]:
     """Distil the fit-time state post-fit re-aggregation needs.
 
@@ -5241,4 +5387,5 @@ def _build_aggregation_kit(
         anticipation=estimator.anticipation,
         cband=bool(estimator.cband),
         bootstrap=bootstrap_spec,
+        jackknife=jackknife,
     )

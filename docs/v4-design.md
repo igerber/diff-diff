@@ -750,6 +750,15 @@ domain vocabulary, not drift.
   exist; the redundant `robust` flag dies [M-045]..[M-047] [M-115]. Estimators without
   analytical SEs (SyntheticControl, TROP, CiC) document their native variance
   methods instead of growing a dead param.
+  `CallawaySantAnna` accepts `vcov_type="jackknife"` beside `"hc1"` (added
+  after the 4.0 cut): the cluster jackknife is a deterministic variance
+  estimator - CV3, the cluster analogue of the `hc3` value this selector
+  already carries - not a random-draw inference method, so it belongs on the
+  SE-type selector and not on a resampling one. It is the same family as
+  `RDDensityTest(vcov_type="jackknife")`. `SyntheticDiD` keeps its own
+  spelling, `variance_method="jackknife"`, under the rule just above: it has
+  no analytical SEs and refuses `vcov_type`. An additive value needs no ledger
+  row (the ledger records lifecycle facts only).
 - Wild bootstrap is exposed via `inference="wild_bootstrap"` uniformly where
   supported [M-096] - "supported" meaning the estimator offers wild CLUSTER
   bootstrap as an ALTERNATIVE to analytical SEs. That roster is

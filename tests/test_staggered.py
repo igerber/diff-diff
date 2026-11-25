@@ -5558,13 +5558,21 @@ class TestCallawaySantAnnaClusterWiring:
 
 
 class TestCallawaySantAnnaVcovTypeNarrowContract:
-    """Narrow vcov_type contract: CS accepts {hc1} only; rejects
+    """Narrow vcov_type contract: CS accepts {hc1, jackknife}; rejects
     analytical-sandwich families and conley with methodology-rooted
-    messages."""
+    messages. The jackknife itself is covered in
+    tests/test_staggered_jackknife.py."""
 
     def test_default_vcov_type_is_hc1(self):
         cs = CallawaySantAnna()
         assert cs.vcov_type == "hc1"
+
+    def test_jackknife_accepted(self):
+        cs = CallawaySantAnna(vcov_type="jackknife")
+        assert cs.vcov_type == "jackknife"
+        assert cs.get_params()["vcov_type"] == "jackknife"
+        with pytest.raises(ValueError, match=r"\['hc1', 'jackknife'\]"):
+            CallawaySantAnna(vcov_type="hc4")
 
     def test_classical_rejected_at_init(self):
         with pytest.raises(ValueError, match="influence-function"):

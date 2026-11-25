@@ -605,6 +605,30 @@ what is reconciled.
   statistic; otherwise it falls back to Bonferroni over the per-row
   p-values (a documented conservative downgrade, not a defect).
 
+- **Note:** Cluster-jackknife parallel-trends policy (same deviation
+  by omission as `hc2_bm`). When the source fit's `vcov_type` is
+  `"jackknife"` (`CallawaySantAnna`), the PT check does NOT run the
+  covariance-based joint Wald: no reference distribution is
+  established for a Wald statistic built on a delete-one-cluster
+  covariance, the chi-square reference ignores the `t(H - 1)` reference
+  the per-row jackknife inference uses, and that covariance is singular
+  or near-singular when the number of pre-periods approaches the number
+  of clusters. The check runs Bonferroni over the per-row `t(H - 1)`
+  p-values (`method="bonferroni"`). Measured size of that check with no
+  violation, nominal 5% (`benchmarks/data/cs_jackknife_size.json`; `J` =
+  treated clusters per cohort): 8-29% at `J = 2`, 6-14% at `J = 3`,
+  5-12% at `J = 4`, 4-7% from `J = 6`. It flags a violation too often
+  when the earliest pre-periods rest on very few treated clusters; the
+  chi-square joint Wald on the same covariance rejected 49-71% at
+  `J = 2`. The `pretrends_power` section is skipped for a jackknife fit
+  (`status="skipped"` with the reason): the power calculation models a
+  normal-reference Wald pre-test on the event-study covariance, which
+  is not the test applied to the fit, so its MDV would overstate what
+  that test can detect. `compute_pretrends_power` called directly on
+  the container from `results.aggregate("event_study")` is not guarded:
+  the container records no variance-estimator provenance (tracked in
+  `TODO.md`).
+
 - **Note:** Unit-translation policy. BusinessReport does not
   arithmetically translate log-points to percents or level effects to
   log-points. The estimate is rendered in the scale the estimator

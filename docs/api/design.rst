@@ -29,6 +29,13 @@ Carlo allowance for the ``R`` replicates scored - or when it loses more than 10%
 of its replicates. Its power is then not meaningful and no minimum detectable
 effect is reported for it.
 
+Candidates are estimator instances, so two configurations of one estimator can
+be compared. With few units, ``CallawaySantAnna(vcov_type="jackknife")`` (the
+cluster jackknife, which deletes one unit at a time here) is a natural candidate
+next to the default ``CallawaySantAnna()``: the size check then shows on your own
+panel whether the default standard errors over-reject and whether the jackknife
+corrects it.
+
 **What it does not test.** Placebo treatment is assigned at random, so these runs
 test inference - size and power - on your panel's own error structure. They do
 not test parallel trends: a design that passes the size check can still be

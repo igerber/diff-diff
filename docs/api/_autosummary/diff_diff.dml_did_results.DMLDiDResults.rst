@@ -15,6 +15,7 @@
       ~DMLDiDResults.aggregate
       ~DMLDiDResults.bad_control_summary
       ~DMLDiDResults.epv_summary
+      ~DMLDiDResults.get_loo_effects_df
       ~DMLDiDResults.print_summary
       ~DMLDiDResults.summary
       ~DMLDiDResults.to_dataframe

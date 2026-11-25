@@ -12,7 +12,7 @@
 
 ## Methodology Registry Entry
 
-**Status: proposed text for a future addition to the `## CallawaySantAnna` section of `docs/methodology/REGISTRY.md`; this file is a non-authoritative source audit.** The existing `## CallawaySantAnna` REGISTRY section remains the **sole authoritative methodology contract**. Nothing below changes library behavior, and `CallawaySantAnna` has no inference path implementing the paper's full-re-estimation cluster jackknife today. Every statement about the paper in this file is sourced from the paper only.
+**Status: implemented as `CallawaySantAnna(vcov_type="jackknife")`; this file is a non-authoritative source audit written before the implementation.** The `## CallawaySantAnna` REGISTRY section ("Cluster jackknife") is the **sole authoritative methodology contract**, including the library choices this review lists as open. Statements below about what the library lacks ("no full-re-estimation cluster jackknife today", the open items under *Relation to Existing diff-diff Estimators*) describe the library at review time. Every statement about the paper in this file is sourced from the paper only.
 
 *Formatted to match the REGISTRY structure. The registry-candidate text ends just before `## Monte Carlo Evidence`; the sections after that boundary are evidence summaries and audit notes and are NOT part of the proposed registry text.*
 

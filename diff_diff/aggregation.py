@@ -577,6 +577,11 @@ class AggregationKit:
         ``None``
         on analytical fits and on pre-replay legacy artifacts (whose
         bootstrapped recompute levels fail closed with a refit message).
+    jackknife : JackknifeReplicates or None
+        Delete-one-cluster replicates of a
+        ``CallawaySantAnna(vcov_type="jackknife")`` fit, from which the
+        recompute levels form their jackknife standard errors. ``None`` on
+        every other fit (and on artifacts pickled before the field existed).
     """
 
     bookkeeping: Dict[str, Any]
@@ -585,6 +590,70 @@ class AggregationKit:
     anticipation: int
     cband: bool
     bootstrap: Optional["BootstrapReplaySpec"] = None
+    jackknife: Optional["JackknifeReplicates"] = None
+
+
+@dataclass(frozen=True)
+class JackknifeReplicates:
+    """Delete-one-cluster replicates of a cluster-jackknife fit.
+
+    Private kit payload of ``CallawaySantAnna(vcov_type="jackknife")``. One
+    entry per deletion unit, in deletion order. It holds point estimates
+    only - no influence functions and no data - so the retained size is
+    O(H x n_gt) small dicts.
+
+    Attributes
+    ----------
+    labels : tuple
+        Row labels of the deletion units. Real labels only when the deletion
+        unit is a cluster coarser than the estimation unit; otherwise the
+        position of the unit in the kit's canonical unit order, so that no
+        raw unit identifier is retained (``labels_are_codes``).
+    unit_name : str
+        Name shown for the deletion unit: the cluster column, or ``"unit"``.
+    labels_are_codes : bool
+        Whether ``labels`` are position codes instead of raw labels.
+    roles : tuple of str
+        ``"treated"`` when the deletion unit holds an ever-treated unit,
+        else ``"control"``.
+    att : tuple of float
+        Overall ATT of each delete-one refit (NaN when undefined).
+    cells : tuple of dict
+        Per replicate, ``{(g, t): {"effect", "n_treated"[, "agg_weight",
+        "is_reference"]}}`` - exactly the keys point aggregation reads.
+    cohort_masses : tuple
+        Per replicate, the fixed cohort aggregation masses of that refit
+        (``fixed_cohort_agg_weights``), or ``None`` when the refit weights by
+        each cell's own count.
+    n_cells : tuple of int
+        Number of cells with a finite effect in each replicate.
+    changed : tuple of bool
+        Whether the replicate's finite cells differ from the full sample's.
+    undefined : tuple
+        ``None`` for a usable replicate, otherwise the reason its refit
+        produced no overall ATT.
+    cell_treated : dict
+        ``{(g, t): positions}``: the deletion units (by position in
+        ``labels``) that hold treated units of that cell. Used to warn when
+        a reported quantity rests on very few treated clusters.
+    """
+
+    labels: Tuple[Any, ...]
+    unit_name: str
+    labels_are_codes: bool
+    roles: Tuple[str, ...]
+    att: Tuple[float, ...]
+    cells: Tuple[Dict[Any, Dict[str, Any]], ...]
+    cohort_masses: Tuple[Optional[Dict[Any, float]], ...]
+    n_cells: Tuple[int, ...]
+    changed: Tuple[bool, ...]
+    undefined: Tuple[Optional[str], ...]
+    cell_treated: Dict[Any, Tuple[int, ...]] = field(default_factory=dict)
+
+    @property
+    def n_replicates(self) -> int:
+        """Number of deletion units ``H``."""
+        return len(self.labels)
 
 
 @dataclass
