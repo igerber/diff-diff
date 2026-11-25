@@ -1360,6 +1360,12 @@ sources:
         note: "Phrasing rules, pre-trends verdict thresholds, unit-translation policy, schema stability."
       - path: docs/api/business_report.rst
         type: api_reference
+      - path: docs/api/design.rst
+        type: api_reference
+        note: "Worked example passes design_reconciliation= to BusinessReport"
+      - path: docs/tutorials/34_design_diagnosis.ipynb
+        type: tutorial
+        note: "Shows the design_reconciliation sentence, section and caveat"
       - path: README.md
         section: "For Data Scientists (one-line mention)"
         type: user_guide
@@ -1379,6 +1385,12 @@ sources:
         note: "Applicability matrix, opt-in placebo rationale, native-diagnostic routing, no-traffic-lights decision."
       - path: docs/api/diagnostic_report.rst
         type: api_reference
+      - path: docs/api/design.rst
+        type: api_reference
+        note: "Describes the design_reconciliation= keyword"
+      - path: docs/tutorials/34_design_diagnosis.ipynb
+        type: tutorial
+        note: "Shows the design_reconciliation block"
       - path: README.md
         section: "For Data Scientists (one-line mention)"
         type: user_guide
@@ -1463,8 +1475,15 @@ sources:
       - path: docs/methodology/papers/blair-2019-review.md
         type: methodology
         note: "Diagnosand vocabulary (bias, RMSE, power, coverage); reconciling the planned and the realized design (DesignLock.reconcile)"
+      - path: docs/methodology/REPORTING.md
+        section: "Design reconciliation"
+        type: methodology
+        note: "The design_reconciliation block and its wording follow DesignReconciliationResults (status, declared, checks)"
       - path: docs/api/design.rst
         type: api_reference
+      - path: docs/tutorials/34_design_diagnosis.ipynb
+        type: tutorial
+        note: "diagnose_design, lock, DesignLock.fit, reconcile and the report keyword on one worked panel; drift-locked at tests/test_t34_design_diagnosis_drift.py"
       - path: docs/index.rst
         type: user_guide
         note: "Diagnostics & Sensitivity table row"

@@ -54,6 +54,18 @@ design even when it is available. Supply
 ``precomputed={'parallel_trends': <dict>}`` with a survey-aware
 pretest result to opt in.
 
+The schema also carries a top-level ``design_reconciliation`` block, ``None``
+unless ``design_reconciliation=`` is passed: the
+:class:`~diff_diff.DesignReconciliationResults` returned by
+:meth:`DesignLock.fit() <diff_diff.DesignLock.fit>` or by
+:meth:`DesignLock.reconcile() <diff_diff.DesignLock.reconcile>` with
+``results=``. It must have been made for the results being reported. The report
+then states whether the analysis is ``match`` or ``deviates`` against the design
+lock, names the deviating items and counts the checks that were not run; it does
+not say when the design was fixed, which a lock does not record. See
+:doc:`design` for the workflow and the "Design reconciliation" section of
+:doc:`/methodology/REPORTING` for the block and its wording.
+
 Example
 -------
 

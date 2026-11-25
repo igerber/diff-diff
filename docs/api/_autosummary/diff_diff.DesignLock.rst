@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~DesignLock.__init__
+      ~DesignLock.fit
       ~DesignLock.from_dict
       ~DesignLock.from_json
       ~DesignLock.print_summary

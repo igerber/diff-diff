@@ -24,6 +24,8 @@
 
    .. autosummary::
 
+      ~DesignReconciliationResults.declared
+      ~DesignReconciliationResults.results
       ~DesignReconciliationResults.status
       ~DesignReconciliationResults.checks
       ~DesignReconciliationResults.label

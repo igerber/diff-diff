@@ -193,6 +193,14 @@ Caetano, Callaway, Payne & Sant'Anna (2026) "bad controls" - covariates that tre
 - The `DMLDiD` bad-control lane (`fit(bad_control=, bad_control_covariates=)`), the choice of `W` (Remark 5's lagged outcome), reading `bad_control_summary()` (pre rows pre-test MP-5/MP-8, post rows check that treatment moves the covariate), a ridge refit through the split-half nested stage, and the lane's restrictions
 - Companion drift-test file (`tests/test_t33_bad_controls_drift.py`)
 
+### 34. Design Diagnosis and the Design Lock (`34_design_diagnosis.ipynb`)
+The design-stage workflow on one simulated retail panel (untreated history first, the rollout afterwards):
+- `diagnose_design` on four candidate estimators with placebo treatments assigned to the history: the size check (classical standard errors over-reject under serial correlation), power and the minimum detectable effect
+- `lock()` with its rerun of the chosen estimator, the lock as a JSON file, and why the file has to be registered outside the library
+- `DesignLock.fit` after the rollout (`match` / `deviates`), `BusinessReport(design_reconciliation=...)`, and two deviations: a shorter follow-up window and a by-hand fit with another comparison group
+- What the workflow does not establish (parallel trends, when the lock was made, a verdict near the size threshold)
+- Companion drift-test file (`tests/test_t34_design_diagnosis_drift.py`)
+
 ## Running the Notebooks
 
 1. Install diff-diff with dependencies:

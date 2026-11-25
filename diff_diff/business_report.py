@@ -50,8 +50,12 @@ from typing import Any, Dict, FrozenSet, List, Optional, Union
 import numpy as np
 
 from diff_diff._reporting_helpers import (
+    check_design_reconciliation,
+    describe_design_reconciliation,
     describe_target_parameter,
+    design_reconciliation_lines,
     is_staggered_ddd,
+    render_design_reconciliation,
     results_design,
 )
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
@@ -167,6 +171,20 @@ class BusinessReport:
         (e.g., HonestDiD bounds or generic PT on SDiD / TROP).
         ``honest_did_results`` remains a shorthand for ``sensitivity``;
         an explicit ``precomputed['sensitivity']`` wins on conflict.
+    design_reconciliation : DesignReconciliationResults, optional
+        The analysis reconciled against a design lock: the object returned
+        by ``DesignLock.fit``, or by ``DesignLock.reconcile(..., results=...)``.
+        It must have been made for the ``results`` passed here (``TypeError``
+        for another type, ``ValueError`` otherwise). The report states
+        whether the analysis is ``match`` or ``deviates`` against the lock,
+        the deviating items and the number of checks that were not run. It
+        does not say when the design was fixed, which the lock does not
+        record. See ``docs/methodology/REPORTING.md`` "Design reconciliation".
+        The block is forwarded to the auto-constructed
+        ``DiagnosticReport``. It is never taken from a supplied
+        ``diagnostics=`` object; if that object carries one and this
+        keyword is passed too, the two must describe the same
+        reconciliation (``ValueError`` otherwise).
     """
 
     def __init__(
@@ -191,6 +209,7 @@ class BusinessReport:
         first_treat: Optional[str] = None,
         survey_design: Optional[Any] = None,
         precomputed: Optional[Dict[str, Any]] = None,
+        design_reconciliation: Optional[Any] = None,
     ):
         # The unified event-study container (row M-092) is rejected
         # explicitly: BusinessReport's headline schema is SCALAR
@@ -257,6 +276,26 @@ class BusinessReport:
                 "DiagnosticReportResults instance; "
                 f"got {type(diagnostics).__name__}."
             )
+
+        # A design-lock reconciliation must have been made for these very
+        # results. BusinessReport takes it from its own keyword only: a
+        # block carried by a supplied ``diagnostics=`` is never lifted,
+        # because nothing ties that object to the results reported here.
+        check_design_reconciliation(design_reconciliation, results, "BusinessReport")
+        self._design_reconciliation = describe_design_reconciliation(design_reconciliation)
+        self._design_reconciliation_arg = design_reconciliation
+        if design_reconciliation is not None and diagnostics is not None:
+            if isinstance(diagnostics, DiagnosticReportResults):
+                supplied = diagnostics.schema.get("design_reconciliation")
+            else:
+                supplied = describe_design_reconciliation(diagnostics._design_reconciliation)
+            if supplied is not None and supplied != self._design_reconciliation:
+                raise ValueError(
+                    "design_reconciliation= and the reconciliation carried by "
+                    "diagnostics= describe different reconciliations. Pass the "
+                    "same DesignReconciliationResults to both, or to "
+                    "BusinessReport only."
+                )
 
         # Estimator-aware validation for ``honest_did_results``. SDiD /
         # TROP route robustness to ``estimator_native_diagnostics``
@@ -500,6 +539,7 @@ class BusinessReport:
             time=self._dr_time,
             first_treat=self._dr_first_treat,
             survey_design=self._dr_survey_design,
+            design_reconciliation=self._design_reconciliation_arg,
         )
         return dr.run_all()
 
@@ -587,7 +627,13 @@ class BusinessReport:
             self._results,
         )
         next_steps = (dr_schema or {}).get("next_steps", [])
-        caveats = _build_caveats(self._results, headline, sample, dr_schema)
+        caveats = _build_caveats(
+            self._results,
+            headline,
+            sample,
+            dr_schema,
+            design_reconciliation=self._design_reconciliation,
+        )
         references = _references_for(estimator_name, self._results)
 
         if diagnostics_results is None:
@@ -624,6 +670,10 @@ class BusinessReport:
             },
             "headline": headline,
             "target_parameter": target_parameter,
+            # Additive key: the analysis reconciled against a DesignLock
+            # (None unless design_reconciliation= was passed). Its ``status``
+            # is the reconcile vocabulary, not a check-section status.
+            "design_reconciliation": self._design_reconciliation,
             "assumption": assumption,
             "pre_trends": pre_trends,
             "sensitivity": sensitivity,
@@ -1705,9 +1755,30 @@ def _build_caveats(
     headline: Dict[str, Any],
     sample: Dict[str, Any],
     dr_schema: Optional[Dict[str, Any]],
+    design_reconciliation: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Assemble the plain-English caveats list for the headline schema."""
     caveats: List[Dict[str, Any]] = []
+
+    # Design-lock reconciliation (from BusinessReport's own keyword, so it
+    # does not depend on the diagnostics having run).
+    if design_reconciliation is not None:
+        if design_reconciliation["status"] == "deviates":
+            caveats.append(
+                {
+                    "severity": "warning",
+                    "topic": "design_deviation",
+                    "message": render_design_reconciliation(design_reconciliation),
+                }
+            )
+        elif design_reconciliation["n_not_checked"]:
+            caveats.append(
+                {
+                    "severity": "info",
+                    "topic": "design_not_checked",
+                    "message": render_design_reconciliation(design_reconciliation),
+                }
+            )
 
     # NaN ATT is the highest-severity caveat.
     if headline.get("sign") == "undefined":
@@ -2349,6 +2420,11 @@ def _render_summary(schema: Dict[str, Any]) -> str:
                 "small changes to the sample could move it either way."
             )
 
+    # Design-lock reconciliation, when one was passed.
+    reconciliation = schema.get("design_reconciliation")
+    if reconciliation:
+        sentences.append(render_design_reconciliation(reconciliation))
+
     # Pre-trends + power-aware phrasing.
     pt = schema.get("pre_trends", {}) or {}
     if pt.get("status") == "computed":
@@ -2629,7 +2705,12 @@ def _render_summary(schema: Dict[str, Any]) -> str:
 
     # Highest-severity caveat (if any).
     caveats = schema.get("caveats", [])
-    warning_caveats = [c for c in caveats if c.get("severity") == "warning"]
+    # A design deviation already has its own sentence above.
+    warning_caveats = [
+        c
+        for c in caveats
+        if c.get("severity") == "warning" and c.get("topic") != "design_deviation"
+    ]
     if warning_caveats:
         top = warning_caveats[0]
         sentences.append(f"Caveat: {top.get('message')}")
@@ -2868,6 +2949,13 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
     # contract), but the renderer's ``if het:`` truthiness guard then
     # entered the block on every fit and printed ``Source: None``,
     # ``N effects: None``, etc. Gate on the ``status`` enum instead.
+    reconciliation = schema.get("design_reconciliation")
+    if reconciliation:
+        lines.append("## Design Reconciliation")
+        lines.append("")
+        lines.extend(design_reconciliation_lines(reconciliation))
+        lines.append("")
+
     if isinstance(het, dict) and het.get("status") == "ran":
         lines.append("## Heterogeneity")
         lines.append("")

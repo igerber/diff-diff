@@ -1333,6 +1333,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 - Simulation evidence for the rerun (`benchmarks/python/design_lock_rerun.py` -> `benchmarks/data/design_lock_rerun.json`, five scenarios of 400 panels): the chosen estimator's rerun sits within about 1.4pp of its reference power, the comparison's own number within about 2.4pp, and holding periods out of the comparison (evaluated, not adopted) moves the rerun by under 1pp - `TestLockRerunEvidence`.
 - The design lock round-trips through JSON, detects edits, and rebuilds each of the eight estimators - `TestLockSerialization`, `TestToEstimator`.
 - Reconciliation reports each deviating item (class, parameter, fit keyword, column name, `alpha`, diagnosed data, unit count, balance, treated count, cohort count, post-window length) - `TestReconcile`.
+- `DesignLock.fit` equals the fit made by hand with the locked configuration, reconciles on the fitted frame (`declared=False`) and propagates estimator errors - `TestFit`. The reports state the reconciliation and refuse one not made for the reported results - `tests/test_design_reconciliation_report.py`.
 
 **Deviations and library choices (documented in REGISTRY `## DesignDiagnosis`):**
 - The size check, the minimum detectable effect on real data, the two-pre-period minimum and the data fingerprint have no paper source.
@@ -1343,7 +1344,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED
 
 **Not validated:** no R parity; the source papers' CPS tables are not reproduced.
 
-**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract, lock, reconcile) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices).
+**Tests:** `tests/test_design.py` (behaviour, guards, failure policy, results contract, lock, reconcile, fit from the lock) + `tests/test_methodology_design.py` (paper-shaped findings and documented choices) + `tests/test_design_reconciliation_report.py` (report wiring) + `tests/test_t34_design_diagnosis_drift.py` (tutorial).
 
 ---
 

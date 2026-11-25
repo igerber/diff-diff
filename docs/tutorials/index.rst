@@ -1,5 +1,5 @@
 .. meta::
-   :description: Hands-on diff-diff tutorials — 34 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
+   :description: Hands-on diff-diff tutorials — 35 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
    :keywords: DiD tutorial, difference-in-differences examples, causal inference notebooks
 
 Tutorials
@@ -322,6 +322,13 @@ Assess identifying assumptions and size your study before committing to it.
 
       Staggered rollout or a simple 2x2? A power-analysis decision guide.
 
+   .. grid-item-card:: Design Diagnosis and the Design Lock
+      :link: 34_design_diagnosis
+      :link-type: doc
+
+      Check candidate estimators on your own untreated history, lock the
+      chosen one, and report how the analysis compares with the lock.
+
 .. toctree::
    :maxdepth: 1
    :caption: Study Design
@@ -332,3 +339,4 @@ Assess identifying assumptions and size your study before committing to it.
    Power Analysis <06_power_analysis>
    Pre-Trends Power <07_pretrends_power>
    Staggered vs Collapsed Power <24_staggered_vs_collapsed_power>
+   Design Diagnosis and Lock <34_design_diagnosis>

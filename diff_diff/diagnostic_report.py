@@ -50,8 +50,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._reporting_helpers import (  # noqa: E402 (top-level import)
+    check_design_reconciliation,
+    describe_design_reconciliation,
     describe_target_parameter,
+    design_reconciliation_lines,
     is_staggered_ddd,
+    render_design_reconciliation,
     results_design,
 )
 from diff_diff.results_base import Diagnostic, _coverage_pct
@@ -463,6 +467,15 @@ class DiagnosticReport:
         ``estimator_native_diagnostics`` (run ``results.in_space_placebo()``).
     outcome_label, treatment_label : str, optional
         Plain-English labels used in prose rendering.
+    design_reconciliation : DesignReconciliationResults, optional
+        The analysis reconciled against a design lock: the object returned
+        by ``DesignLock.fit``, or by ``DesignLock.reconcile(..., results=...)``.
+        It must have been made for the ``results`` passed here (``TypeError``
+        for another type, ``ValueError`` otherwise). The report states
+        whether the analysis is ``match`` or ``deviates`` against the lock,
+        the deviating items and the number of checks that were not run. It
+        does not say when the design was fixed, which the lock does not
+        record. See ``docs/methodology/REPORTING.md`` "Design reconciliation".
     """
 
     def __init__(
@@ -492,6 +505,7 @@ class DiagnosticReport:
         precomputed: Optional[Dict[str, Any]] = None,
         outcome_label: Optional[str] = None,
         treatment_label: Optional[str] = None,
+        design_reconciliation: Optional[Any] = None,
     ):
         # The unified event-study container (row M-092) is rejected
         # explicitly: _APPLICABILITY is keyed by scalar results-class
@@ -547,6 +561,10 @@ class DiagnosticReport:
                 "supported (e.g. precomputed={'bacon': ...}), or interpret "
                 "the diagnostic directly via its summary()/to_dataframe()."
             )
+        # A design-lock reconciliation is an input, not a check the report
+        # runs: it must have been made for these very results.
+        check_design_reconciliation(design_reconciliation, results, "DiagnosticReport")
+        self._design_reconciliation = design_reconciliation
         self._results = results
         self._data = data
         self._outcome = outcome
@@ -1514,6 +1532,10 @@ class DiagnosticReport:
             "design": results_design(self._results),
             "headline_metric": headline,
             "target_parameter": describe_target_parameter(self._results),
+            # Additive key: the analysis reconciled against a DesignLock
+            # (None unless design_reconciliation= was passed). Its ``status``
+            # is the reconcile vocabulary, not a check-section status.
+            "design_reconciliation": describe_design_reconciliation(self._design_reconciliation),
             "parallel_trends": sections["parallel_trends"],
             "pretrends_power": sections["pretrends_power"],
             "sensitivity": sections["sensitivity"],
@@ -4736,6 +4758,11 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
                 f"to simple random sampling{eff_str})."
             )
 
+    # Design-lock reconciliation, when one was passed.
+    reconciliation = schema.get("design_reconciliation")
+    if reconciliation:
+        sentences.append(render_design_reconciliation(reconciliation))
+
     # Sentence 5: next step
     next_steps = schema.get("next_steps") or []
     if next_steps:
@@ -4800,6 +4827,13 @@ def _render_dr_full_report(results: "DiagnosticReportResults") -> str:
     lines.append("")
     lines.append(schema.get("overall_interpretation", "") or "_No synthesis available._")
     lines.append("")
+
+    reconciliation = schema.get("design_reconciliation")
+    if reconciliation:
+        lines.append("## Design Reconciliation")
+        lines.append("")
+        lines.extend(design_reconciliation_lines(reconciliation))
+        lines.append("")
 
     section_order = [
         ("Parallel trends", "parallel_trends"),
