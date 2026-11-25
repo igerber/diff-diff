@@ -324,6 +324,36 @@ class TestEstimationSample:
         np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
         np.testing.assert_allclose(jk.se, 1.23616, rtol=1e-4)
 
+    def test_an_audited_cluster_counts_toward_the_two_cluster_minimum(self):
+        # One ordinary cluster plus a missing-unit-ID cluster that moves the
+        # base period: two deletion units, the second found only by the
+        # audit. Deleting "main" leaves no estimate, so inference is NaN,
+        # loudly - not a refusal for "one cluster".
+        rows = []
+        late = {3: 2.9, 4: 3.0, 5: 3.1}
+        for c in range(9):
+            g = 3 if c < 3 else 5 if c < 6 else 0
+            for j in range(2):
+                for t in (1, 3, 4, 5, 6):
+                    y = 1.0 if (g == 3 and t >= 3) else late[c] if (g == 5 and t >= 5) else 0.0
+                    rows.append((float(c * 2 + j), "main", t, g, y))
+        data = pd.DataFrame(rows, columns=["unit", "state", "t", "g", "y"])
+        ghost = pd.DataFrame([(np.nan, "ghost", 2, 0, 0.0)], columns=data.columns)
+        data = pd.concat([data, ghost], ignore_index=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            jk = CallawaySantAnna(cluster="state", vcov_type="jackknife").fit(data, **FIT_KW)
+        assert jk.df_inference == 1 and jk.n_clusters == 2
+        loo = jk.get_loo_effects_df().set_index("cluster")
+        assert set(loo.index) == {"main", "ghost"}
+        np.testing.assert_allclose(loo.loc["ghost", "att_loo"], 5 / 3, rtol=1e-12)
+        assert np.isnan(loo.loc["main", "att_loo"])
+        assert any("leaves no estimate" in str(w.message) for w in caught)
+        np.testing.assert_allclose(jk.att, 3.0, rtol=1e-12)
+        assert_nan_inference(
+            {"se": jk.se, "t_stat": jk.t_stat, "p_value": jk.p_value, "conf_int": jk.conf_int}
+        )
+
     def test_always_treated_cluster_is_not_a_deletion_unit(self):
         data = make_panel({**TWO_COHORTS, 9: 1}, seed=13)
         jk = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), data)
@@ -700,7 +730,7 @@ class TestRefusals:
 
     def test_one_cluster(self, panel):
         data = panel.assign(state="only")
-        with pytest.raises(ValueError, match="at least two clusters"):
+        with pytest.raises(ValueError, match="at least two clusters .* found 1"):
             quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), data)
 
     @pytest.mark.parametrize("bad", ["classical", "hc2", "hc2_bm", "conley", "hc3", "cr3"])

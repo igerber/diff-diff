@@ -2987,12 +2987,12 @@ class CallawaySantAnna(
                 influence_func_info,
                 group_time_effects,
             )
-            if len(_deletion_units.values) < 2:
-                raise ValueError(
-                    "CallawaySantAnna(vcov_type='jackknife') needs at least two "
-                    f"clusters that enter the estimation; found "
-                    f"{len(_deletion_units.values)}."
-                )
+            # Fewer than two candidates can never give two deletion units.
+            # The binding check is on the audited payload below: a cluster
+            # the structural rule left out can still turn out to move an
+            # estimate, and it then counts.
+            if len(_deletion_units.values) + len(_deletion_units.spare_values) < 2:
+                raise ValueError(_too_few_clusters_message(len(_deletion_units.values)))
             jackknife_payload, _refit_warnings, _n_refits = run_replicates(
                 self,
                 _jackknife_data,
@@ -3008,6 +3008,8 @@ class CallawaySantAnna(
                 group_time_effects,
                 fixed_cohort_agg_weights(precomputed),
             )
+            if jackknife_payload.n_replicates < 2:
+                raise ValueError(_too_few_clusters_message(jackknife_payload.n_replicates))
             overall_se, overall_t, overall_p, overall_ci = apply_to_fit(
                 jackknife_payload, overall_att, group_time_effects, self.alpha
             )
@@ -5264,6 +5266,14 @@ _AGGREGATION_BOOKKEEPING_KEYS = (
     "canonical_size",
     "n_units",
 )
+
+
+def _too_few_clusters_message(n_found: int) -> str:
+    """Refusal text for a cluster jackknife with fewer than two deletion units."""
+    return (
+        "CallawaySantAnna(vcov_type='jackknife') needs at least two clusters "
+        f"whose omission moves the estimate; found {n_found}."
+    )
 
 
 def _build_aggregation_kit(
