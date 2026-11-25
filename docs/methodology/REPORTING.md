@@ -244,6 +244,66 @@ disjunctive definition (`ATT^loc` under PT; `ATT^glob` under
 SPT) because the PT-vs-SPT regime is a user-level assumption, not
 a library setting.
 
+## Design reconciliation
+
+Both reports accept `design_reconciliation=`: a `DesignReconciliationResults`
+from `DesignLock.fit` (the lock fitted the analysis itself) or from
+`DesignLock.reconcile(..., results=...)` (the analyst declared the estimator,
+column names and `fit()` keywords). See `REGISTRY.md` `## DesignDiagnosis` for
+what is reconciled.
+
+- **Input contract.** The object must be a `DesignReconciliationResults`
+  (`TypeError` otherwise) whose `results` is the very results object passed to
+  the report (`ValueError` otherwise, including a reconciliation made without
+  `results=`). Without that identity the report could not tell which fit the
+  status describes.
+- **Not a check.** The reports cannot compute a reconciliation (they hold the
+  fitted results, not the estimator instance or the fit's column names), so it
+  is not in the check battery: no `run_*` flag, no `precomputed` key, no entry
+  in `skipped` or `applicable_checks`.
+- **Schema.** Top-level key `design_reconciliation` in both `to_dict()`
+  schemas, `None` unless the keyword was passed:
+
+  ```
+  {"status": "match" | "deviates", "declared": bool,
+   "label": str, "lock_sha256": str,
+   "n_checks": int, "n_match": int, "n_deviates": int, "n_not_checked": int,
+   "deviations": [{"item", "locked", "realized"}, ...],
+   "not_checked": [item, ...]}
+  ```
+- **Wording.** One sentence, shared by both reports (`summary()` and a
+  `## Design Reconciliation` section of `full_report()`):
+  - fitted, match: "The analysis was fitted from design lock '<label>' and
+    agrees with it on all <n> checks that were run."
+  - declared, match: "As declared to reconcile(), the analysis agrees with
+    design lock '<label>' on all <n> checks that were run."
+  - deviates: the same two openings with "deviates from it on <k> of <n> checks
+    that were run: <first three items> and <m> more".
+  - "<m> checks were not run." is appended when some were not, and "The lock
+    does not record when it was made." always.
+- **`BusinessReport`.** It forwards the keyword to the `DiagnosticReport` it
+  builds. Caveat topics: `design_deviation` (severity `warning`) when the status
+  is `deviates`, `design_not_checked` (severity `info`) when it is `match` and
+  some checks were not run. The summary states a deviation once, through the
+  sentence, so the summary's "Caveat:" line skips the `design_deviation` topic.
+
+- **Note:** The reports never call an analysis "pre-specified". A design lock
+  does not record when it was made, so `match` shows only that the analysis
+  agrees with the lock on the checks that were run. A deviation is named, not
+  graded, in line with the no-pass/fail rule below.
+- **Note:** `BusinessReport` takes the block from its own keyword only. A block
+  carried by a supplied `diagnostics=` object (a `DiagnosticReport` or a
+  `DiagnosticReportResults`) is never lifted into BusinessReport's top-level
+  block, caveats or prose, because nothing ties that object to the results
+  BusinessReport was given; the rule is the same for both accepted types. The
+  nested `diagnostics` block is passed through unchanged, so the supplied
+  diagnostics' own sentence can appear inside it. When the keyword is passed as
+  well, the two must describe the same reconciliation (`ValueError` otherwise).
+- **Note:** The block's `status` uses the reconcile vocabulary (`match` /
+  `deviates`). It is a new closed enum on a new key, not a check-section status,
+  and adds no value to the check-status enum covered by the schema stability
+  policy below; the key itself is additive, so neither schema version changes.
+
 ## Design deviations
 
 - **Note:** No hard pass/fail gates. `DiagnosticReport` does not produce

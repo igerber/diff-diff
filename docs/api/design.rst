@@ -48,21 +48,34 @@ one-estimator calls is not corrected. The lock is plain JSON data: write
 ``lock.to_json()`` to a file and read it back with
 :meth:`~diff_diff.DesignLock.from_json`.
 
-**Reconcile.** After the analysis, :meth:`~diff_diff.DesignLock.reconcile` checks
-it against the lock item by item - estimator class, every constructor parameter,
-``fit()`` keywords, column names, and, when the analysis data is passed, the
-fingerprint of the diagnosed periods and the realized design - and returns the
-status ``match`` or ``deviates``. Two limits on what ``match`` means:
+**Fit from the lock.** Once the study has run, :meth:`~diff_diff.DesignLock.fit`
+builds the locked estimator, fits it on the analysis data with the locked
+columns and ``fit()`` keywords, and checks the result against the lock item by
+item - estimator class, every constructor parameter, ``fit()`` keywords, column
+names, the fingerprint of the diagnosed periods and the realized design. It
+returns a :class:`~diff_diff.DesignReconciliationResults` with the status
+``match`` or ``deviates`` and the estimate in ``results``. The configuration is
+the locked one by construction; what can still deviate is the realized design
+(how many units, how many treated, how long the post window is) and the data in
+the diagnosed periods.
 
-- It compares what you declare with the lock. Fitted results do not record the
-  parameters that produced them, so :meth:`~diff_diff.DesignLock.to_estimator`
-  is provided to build the estimator straight from the lock.
-- The lock does not record when it was made. ``match`` says the analysis agrees
-  with the lock on the checks that were run; whether the design was fixed before
-  the outcomes were seen depends on when you saved or registered the lock file.
+**Reconcile.** :meth:`~diff_diff.DesignLock.reconcile` runs the same checks on an
+analysis you fitted yourself. It compares what you declare with the lock: fitted
+results do not record the parameters or columns that produced them, so a
+``fit()`` keyword that was declared but not used cannot be seen. Its result
+carries ``declared=True``; :meth:`~diff_diff.DesignLock.to_estimator` builds the
+estimator straight from the lock for that path.
 
-A deviation is not graded, and checks whose inputs were not passed are reported
-as ``not checked`` next to the status.
+Either way, the lock does not record when it was made. ``match`` says the
+analysis agrees with the lock on the checks that were run; whether the design
+was fixed before the outcomes were seen depends on when you saved or registered
+the lock file. A deviation is not graded, and checks whose inputs were not passed
+are reported as ``not checked`` next to the status.
+
+**Reports.** Pass the reconciliation to
+:class:`~diff_diff.BusinessReport` or :class:`~diff_diff.DiagnosticReport` as
+``design_reconciliation=`` and the report states the status, the deviating items
+and the checks not run. It must have been made for the results being reported.
 
 The methodology, its sources and the choices that have no paper source are in
 the Methodology Registry under ``DesignDiagnosis``.
@@ -154,7 +167,21 @@ Later, once the study has run:
 
 .. code-block:: python
 
+   from diff_diff import BusinessReport
+
    lock = DesignLock.from_json(Path("design_lock.json").read_text())
+   check = lock.fit(analysis, first_treat="adopted")   # the locked analysis
+   print(check.status)                      # "match" or "deviates"
+   check.to_dataframe()                     # one row per checked item
+   check.results.print_summary()            # the estimate
+
+   report = BusinessReport(check.results, design_reconciliation=check)
+   print(report.summary())
+
+An analysis fitted by hand is reconciled by declaring what was used:
+
+.. code-block:: python
+
    estimator = lock.to_estimator()          # the estimator exactly as locked
    fit = estimator.fit(
        analysis, outcome="sales", unit="store", time="year", first_treat="adopted"
@@ -168,8 +195,7 @@ Later, once the study has run:
        data=analysis,
        results=fit,
    )
-   print(check.status)                      # "match" or "deviates"
-   check.to_dataframe()                     # one row per checked item
+   check.declared                           # True: the configuration was declared
 
 A staggered design declares several adoption periods; each placebo-treated unit
 draws its period from the list:

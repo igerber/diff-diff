@@ -2428,13 +2428,19 @@ open("design_lock.json", "w").write(lock.to_json())
 # After the study has run:
 from diff_diff import DesignLock
 lock = DesignLock.from_json(open("design_lock.json").read())
+check = lock.fit(analysis, first_treat="adopted")   # fits the locked analysis
+check.status                                 # "match" or "deviates"
+check.results                                # the fitted results
+check.to_dataframe()                         # item, locked, realized, status
+BusinessReport(check.results, design_reconciliation=check).summary()
+
+# An analysis fitted by hand is reconciled by declaring what was used:
 estimator = lock.to_estimator()              # the estimator exactly as locked
 fit = estimator.fit(analysis, outcome="sales", unit="store", time="year",
                     first_treat="adopted")
 check = lock.reconcile(estimator, outcome="sales", unit="store", time="year",
                        first_treat="adopted", data=analysis, results=fit)
-check.status                                 # "match" or "deviates"
-check.to_dataframe()                         # item, locked, realized, status
+check.declared                               # True
 ```
 
 **Parameters:** `data`, `outcome`, `unit`, `time`, `estimators` (list, or dict
@@ -2463,11 +2469,22 @@ when they differ.
 `size_controlled`, `mde`,
 `schema_version` (`DESIGN_LOCK_SCHEMA_VERSION`), `sha256`. Methods:
 `to_json()`, `to_dict()`, `DesignLock.from_json()`, `DesignLock.from_dict()`,
-`to_estimator()`, `reconcile()`, `to_dataframe()`, `summary()`.
+`to_estimator()`, `fit()`, `reconcile()`, `to_dataframe()`, `summary()`.
+
+**`lock.fit(data, first_treat= | treatment= + post=)`** builds the locked
+estimator, fits it on `data` with the locked outcome / unit / time columns and
+`fit()` keywords, runs the checks below on the same frame, and returns
+`DesignReconciliationResults` with the fitted results in `results` and
+`declared=False`. Pass `first_treat` for the estimators fitted with a
+first-treatment-period column, `treatment` and `post` for
+`DifferenceInDifferences` / `TwoWayFixedEffects`. The configuration is the
+locked one by construction; the realized design and the data in the diagnosed
+periods can still deviate. Estimator errors propagate.
 
 **`lock.reconcile(estimator, outcome=, unit=, time=, first_treat= | treatment=
 (+ post=), estimator_kwargs=, data=, results=)`** returns
-`DesignReconciliationResults` with `status` (`"match"` or `"deviates"`)
+`DesignReconciliationResults` with `status` (`"match"` or `"deviates"`),
+`declared=True`, `results` (the `results=` it was given, or `None`)
 and `checks` (one per item: `estimator_name`, `params.<name>`,
 `estimator_kwargs.<key>`, `outcome`, `unit`, `time`, `alpha`, and with `data`:
 `data_sha256`, `n_units`, `is_balanced`, `n_treated`, `n_cohorts`,
@@ -3107,9 +3124,22 @@ Schema top-level keys (all always present; missing content uses a
 `{"status": "skipped", "reason": "..."}` shape rather than being absent):
 
 - `schema_version`, `estimator`, `context`
-- `headline`, `target_parameter`, `assumption`, `pre_trends`, `sensitivity`
+- `headline`, `target_parameter`, `design_reconciliation`, `assumption`,
+  `pre_trends`, `sensitivity`
 - `sample`, `heterogeneity`, `robustness`, `diagnostics`
 - `next_steps`, `caveats`, `references`
+
+`design_reconciliation` is `None` unless
+`BusinessReport(results, design_reconciliation=check)` is passed, where `check`
+is the `DesignReconciliationResults` from `DesignLock.fit` or
+`DesignLock.reconcile(..., results=...)` made for these very results (anything
+else raises). Fields: `status` (`"match"` | `"deviates"`, the reconcile
+vocabulary, not a check status), `declared`, `label`, `lock_sha256`, `n_checks`,
+`n_match`, `n_deviates`, `n_not_checked`, `deviations` (item / locked /
+realized), `not_checked`. The report states the status in one sentence and never
+calls an analysis pre-specified (a lock does not record when it was made).
+Caveat topics: `design_deviation`, `design_not_checked`. `DiagnosticReport`
+takes the same keyword and emits the same block.
 
 `target_parameter` (experimental) names what the headline scalar
 represents for each estimator — overall ATT, DID_M, DID_1, cost-
@@ -3176,7 +3206,7 @@ dr.skipped_checks        # dict of {check: plain-English reason}
 ```
 
 Schema top-level keys: `schema_version, estimator, design, headline_metric,
-target_parameter, parallel_trends, pretrends_power, sensitivity,
+target_parameter, design_reconciliation, parallel_trends, pretrends_power, sensitivity,
 placebo, bacon, design_effect, heterogeneity, epv,
 estimator_native_diagnostics, skipped, warnings,
 overall_interpretation, next_steps`. The `target_parameter` block

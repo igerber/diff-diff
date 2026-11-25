@@ -1226,6 +1226,17 @@ Top-level keys emitted by `BusinessReport.to_dict()`
   `"WAS"`), `definition` (plain-English description), `aggregation`
   (machine tag), `headline_attribute` (raw result attribute), and
   `reference` (REGISTRY.md citation string).
+- `design_reconciliation: dict | None` - the analysis reconciled against
+  a `DesignLock`; `None` unless `design_reconciliation=` was passed (the
+  `DesignReconciliationResults` from `DesignLock.fit` or
+  `DesignLock.reconcile(..., results=...)`, made for the reported results).
+  Fields: `status` (`"match"` | `"deviates"` - the reconcile vocabulary,
+  not a check status), `declared` (`False` when the lock fitted the
+  analysis itself), `label`, `lock_sha256`, `n_checks`, `n_match`,
+  `n_deviates`, `n_not_checked`, `deviations` (item / locked / realized),
+  `not_checked`. `match` means agreement on the checks that were run; a
+  lock does not record when it was made, so it never means the design was
+  fixed before the outcomes were seen.
 - `assumption: dict` - named assumptions relied on (parallel trends,
   no anticipation, SUTVA, ...). Note: singular `"assumption"`, not
   `"assumptions"`.
@@ -1261,6 +1272,7 @@ Top-level keys (source: `diff_diff/diagnostic_report.py`):
   `None` for every other estimator.
 - `headline_metric: dict` - the main scalar the report headlines.
 - `target_parameter: dict` - same shape as the BR field above.
+- `design_reconciliation: dict | None` - same shape as the BR field above.
 - `parallel_trends: dict` - PT test result.
 - `pretrends_power: dict` - power-aware pre-trends assessment when
   applicable.
