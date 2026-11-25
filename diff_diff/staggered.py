@@ -2993,7 +2993,7 @@ class CallawaySantAnna(
                     f"clusters that enter the estimation; found "
                     f"{len(_deletion_units.values)}."
                 )
-            jackknife_payload, _refit_warnings = run_replicates(
+            jackknife_payload, _refit_warnings, _n_refits = run_replicates(
                 self,
                 _jackknife_data,
                 {
@@ -3012,7 +3012,11 @@ class CallawaySantAnna(
                 jackknife_payload, overall_att, group_time_effects, self.alpha
             )
             for _message in fit_messages(
-                jackknife_payload, _refit_warnings, group_time_effects, self.anticipation
+                jackknife_payload,
+                _refit_warnings,
+                group_time_effects,
+                self.anticipation,
+                _n_refits,
             ):
                 warnings.warn(_message, UserWarning, stacklevel=2)
 

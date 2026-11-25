@@ -305,14 +305,16 @@ def run_replicates(
     full_att: float,
     full_cells: Dict[Any, Dict[str, Any]],
     full_masses: Optional[Dict[Any, float]],
-) -> Tuple[JackknifeReplicates, List[str]]:
+) -> Tuple[JackknifeReplicates, List[str], int]:
     """Re-estimate on every delete-one sample.
 
     Each refit is a fresh estimator with the fitted estimator's parameters
     and ``vcov_type="hc1"``; every other parameter, ``cluster`` included, is
     unchanged, so a refit takes the same routing and the same aggregation
-    weights as the full-sample fit. Returns the replicate payload and the
-    refit warnings that the full-sample configuration does not raise itself.
+    weights as the full-sample fit. Returns the replicate payload, the
+    refit warnings that the full-sample configuration does not raise itself,
+    and the number of delete-one refits actually run (which exceeds ``H``
+    when spare clusters were audited and dropped).
 
     The clusters the structural rule left out (``units.spare_*``) are
     refitted as well. One whose omission moves any point input is a deletion
@@ -422,7 +424,7 @@ def run_replicates(
     extra_messages = [
         f"{message} ({count} refit{'s' if count != 1 else ''})" for message, count in extra.values()
     ]
-    return payload, extra_messages
+    return payload, extra_messages, len(candidates)
 
 
 def _any_undefined(payload: JackknifeReplicates) -> bool:
@@ -509,6 +511,7 @@ def fit_messages(
     extra: Sequence[str],
     group_time_effects: Dict[Any, Dict[str, Any]],
     anticipation: int,
+    n_refits: int,
 ) -> List[str]:
     """The consolidated warnings a jackknife fit emits."""
     messages: List[str] = []
@@ -540,11 +543,13 @@ def fit_messages(
     few_treated = _few_treated_fit_message(payload, group_time_effects, anticipation)
     if few_treated is not None:
         messages.append(few_treated)
-    if payload.n_replicates > _MANY_REPLICATES:
+    if n_refits > _MANY_REPLICATES:
+        # Cost is counted in refits run (audited spare clusters included, plus
+        # the baseline estimation), not in the H the variance is built on.
         messages.append(
-            f"Cluster jackknife: {payload.n_replicates} deletion units, so fit() ran "
-            f"{payload.n_replicates + 1} extra estimations. The jackknife is meant for "
-            "few clusters; with this many the default inference is usually adequate."
+            f"Cluster jackknife: {payload.n_replicates} deletion units, and fit() ran "
+            f"{n_refits + 1} extra estimations. The jackknife is meant for few "
+            "clusters; with this many the default inference is usually adequate."
         )
     return messages
 

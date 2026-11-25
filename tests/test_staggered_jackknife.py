@@ -174,6 +174,7 @@ class TestConfigurations:
         [
             ({"estimation_method": "reg"}, {"covariates": ["x"]}),
             ({"estimation_method": "dr"}, {"covariates": ["x"]}),
+            ({"estimation_method": "ipw"}, {"covariates": ["x"]}),
             ({"control_group": "not_yet_treated"}, {}),
             ({"anticipation": 1}, {}),
             ({"base_period": "universal"}, {}),
@@ -219,6 +220,43 @@ class TestConfigurations:
         np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
         assert jk.df_inference == 9
         assert jk.get_loo_effects_df()["cluster"].map(type).eq(str).all()
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_repeated_cross_sections_with_covariates(self, method):
+        rng = np.random.default_rng(6)
+        rows = []
+        uid = 0
+        for c in range(12):
+            g = TWO_COHORTS.get(c, 0)
+            level = rng.normal()
+            for t in range(1, 7):
+                for _ in range(8):
+                    x = rng.normal() + 0.3 * (g > 0)
+                    y = level + 0.1 * t + 0.5 * x + rng.normal() + (0.6 if g and t >= g else 0.0)
+                    rows.append((uid, f"s{c}", t, g, y, x))
+                    uid += 1
+        data = pd.DataFrame(rows, columns=["unit", "state", "t", "g", "y", "x"])
+        params = dict(panel=False, cluster="state", estimation_method=method)
+        overrides = {"covariates": ["x"]}
+        jk = quiet_fit(CallawaySantAnna(vcov_type="jackknife", **params), data, **overrides)
+        full, reps = by_hand(data, "state", list(data["state"].unique()), overrides, **params)
+        np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
+        for gt, cell in jk.group_time_effects.items():
+            expected = eq20(
+                full.group_time_effects[gt]["effect"],
+                [r.group_time_effects[gt]["effect"] for r in reps],
+            )
+            np.testing.assert_allclose(cell["se"], expected, rtol=1e-12, err_msg=str(gt))
+        got = es_frame(jk)
+        rep_att = np.array([es_frame(r)["att"].reindex(got.index).to_numpy() for r in reps])
+        np.testing.assert_allclose(
+            got["se"], eq20(es_frame(full)["att"].to_numpy(), rep_att), rtol=1e-12
+        )
+        groups = group_frame(jk)
+        rep_g = np.array([group_frame(r)["att"].reindex(groups.index).to_numpy() for r in reps])
+        np.testing.assert_allclose(
+            groups["se"], eq20(group_frame(full)["att"].to_numpy(), rep_g), rtol=1e-12
+        )
 
 
 class TestWeightingRoute:
@@ -577,8 +615,19 @@ class TestFewTreatedClusters:
         import diff_diff.staggered_jackknife as module
 
         monkeypatch.setattr(module, "_MANY_REPLICATES", 15)
-        with pytest.warns(UserWarning, match=r"20 deletion units, so fit\(\) ran 21 extra"):
+        with pytest.warns(UserWarning, match=r"20 deletion units, and fit\(\) ran 21 extra"):
             CallawaySantAnna(vcov_type="jackknife").fit(panel, **FIT_KW)
+
+    def test_the_cost_counts_audited_clusters_too(self, monkeypatch):
+        import diff_diff.staggered_jackknife as module
+
+        # Two always-treated clusters are refitted to check they are inert,
+        # then dropped: 9 deletion units, 11 delete-one refits, 1 baseline.
+        data = make_panel({**TWO_COHORTS, 8: 1, 9: 1}, n_clusters=11, seed=13)
+        monkeypatch.setattr(module, "_MANY_REPLICATES", 10)
+        with pytest.warns(UserWarning, match=r"9 deletion units, and fit\(\) ran 12 extra"):
+            jk = CallawaySantAnna(cluster="state", vcov_type="jackknife").fit(data, **FIT_KW)
+        assert jk.df_inference == 8
 
 
 class TestRefusals:
