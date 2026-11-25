@@ -47,6 +47,10 @@ NON_PARTICIPANTS = {
     # (the duck-typed learner protocol DMLDiD consumes) but no DiD estimand,
     # results container, or estimator-contract surface.
     "SieveLearner",
+    # A recorded design, not an estimator: DesignLock.fit() builds the locked
+    # estimator with to_estimator() and fits that. The lock itself is a frozen
+    # record with no constructor configuration to get or set.
+    "DesignLock",
 }
 
 

@@ -15,11 +15,16 @@ Current contents:
   clarity); see ``docs/methodology/REPORTING.md`` and per-estimator
   entries in ``docs/methodology/REGISTRY.md`` for the canonical
   wording.
+- ``check_design_reconciliation`` / ``describe_design_reconciliation`` /
+  ``render_design_reconciliation`` / ``design_reconciliation_lines`` — the
+  ``design_reconciliation`` block (an analysis reconciled against a
+  ``DesignLock``) and its wording; see ``docs/methodology/REPORTING.md``
+  "Design reconciliation".
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from diff_diff.results_base import Diagnostic
 
@@ -35,6 +40,118 @@ def results_design(results: Any) -> Optional[str]:
     if type(results).__name__ != "TripleDifferenceResults":
         return None
     return getattr(results, "design", None)
+
+
+def check_design_reconciliation(reconciliation: Any, results: Any, owner: str) -> None:
+    """
+    Refuse a ``design_reconciliation=`` input the report cannot stand behind.
+
+    It must be a ``DesignReconciliationResults`` made for the very results
+    object being reported (``DesignLock.fit``, or ``reconcile(results=...)``).
+    Without that the report could not tell which fit the status describes.
+    """
+    if reconciliation is None:
+        return
+    from diff_diff.design import DesignReconciliationResults
+
+    if not isinstance(reconciliation, DesignReconciliationResults):
+        raise TypeError(
+            f"design_reconciliation= must be a DesignReconciliationResults (from "
+            f"DesignLock.fit or DesignLock.reconcile); got "
+            f"{type(reconciliation).__name__}."
+        )
+    if reconciliation.results is not results:
+        raise ValueError(
+            f"design_reconciliation= was not made for the results passed to "
+            f"{owner}. Use DesignLock.fit() and report its .results, or pass "
+            f"results= to DesignLock.reconcile()."
+        )
+
+
+def describe_design_reconciliation(reconciliation: Any) -> Optional[Dict[str, Any]]:
+    """
+    The ``design_reconciliation`` block of both report schemas.
+
+    ``None`` when no reconciliation was passed. ``status`` is the reconcile
+    vocabulary (``"match"`` / ``"deviates"``), not a check-section status.
+    """
+    if reconciliation is None:
+        return None
+    by_status: Dict[str, List[Dict[str, Any]]] = {"match": [], "deviates": [], "not checked": []}
+    for check in reconciliation.checks:
+        by_status[check["status"]].append(check)
+    return {
+        "status": reconciliation.status,
+        "declared": bool(reconciliation.declared),
+        "label": reconciliation.label,
+        "lock_sha256": reconciliation.lock_sha256,
+        "n_checks": len(reconciliation.checks),
+        "n_match": len(by_status["match"]),
+        "n_deviates": len(by_status["deviates"]),
+        "n_not_checked": len(by_status["not checked"]),
+        "deviations": [
+            {"item": check["item"], "locked": check["locked"], "realized": check["realized"]}
+            for check in by_status["deviates"]
+        ],
+        "not_checked": [check["item"] for check in by_status["not checked"]],
+    }
+
+
+def render_design_reconciliation(block: Dict[str, Any]) -> str:
+    """
+    The sentence both reports use for a ``design_reconciliation`` block.
+
+    It states the status, how many checks were run, whether the
+    configuration was fitted from the lock or declared, and that the lock
+    does not record when it was made. It does not grade a deviation.
+    """
+    label = block["label"]
+    n_run = block["n_match"] + block["n_deviates"]
+    if block["status"] == "match":
+        outcome = f"agrees with it on all {n_run} checks that were run"
+        declared_outcome = f"agrees with design lock '{label}' on all {n_run} checks that were run"
+    else:
+        items = [deviation["item"] for deviation in block["deviations"]]
+        listed = ", ".join(items[:3])
+        if len(items) > 3:
+            listed += f" and {len(items) - 3} more"
+        outcome = f"deviates from it on {len(items)} of {n_run} checks that were run: {listed}"
+        declared_outcome = (
+            f"deviates from design lock '{label}' on {len(items)} of {n_run} checks "
+            f"that were run: {listed}"
+        )
+    if block["declared"]:
+        sentence = f"As declared to reconcile(), the analysis {declared_outcome}."
+    else:
+        sentence = f"The analysis was fitted from design lock '{label}' and {outcome}."
+    n_skipped = block["n_not_checked"]
+    if n_skipped == 1:
+        sentence += " 1 check was not run."
+    elif n_skipped > 1:
+        sentence += f" {n_skipped} checks were not run."
+    return sentence + " The lock does not record when it was made."
+
+
+def design_reconciliation_lines(block: Dict[str, Any]) -> List[str]:
+    """The body of the ``## Design Reconciliation`` section of a full report."""
+    lines = [
+        render_design_reconciliation(block),
+        "",
+        f"- status: `{block['status']}`",
+        "- configuration: "
+        + ("declared to reconcile()" if block["declared"] else "fitted from the lock"),
+        f"- checks: {block['n_match']} match, {block['n_deviates']} deviate, "
+        f"{block['n_not_checked']} not checked",
+        f"- lock sha256: `{block['lock_sha256']}`",
+    ]
+    for deviation in block["deviations"]:
+        lines.append(
+            f"- deviates: `{deviation['item']}` (locked `{deviation['locked']}`, "
+            f"realized `{deviation['realized']}`)"
+        )
+    if block["not_checked"]:
+        lines.append("- not checked: " + ", ".join(f"`{item}`" for item in block["not_checked"]))
+    return lines
 
 
 def is_staggered_ddd(results: Any) -> bool:

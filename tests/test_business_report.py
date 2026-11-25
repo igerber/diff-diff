@@ -53,6 +53,7 @@ _BR_TOP_LEVEL_KEYS = {
     "context",
     "headline",
     "target_parameter",
+    "design_reconciliation",
     "assumption",
     "pre_trends",
     "sensitivity",

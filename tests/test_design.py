@@ -1791,7 +1791,7 @@ class TestReconcile:
         skipped = sum(1 for check in partial.checks if check["status"] == "not checked")
         assert partial.status == "match" and skipped == 7
         assert f"match - {skipped} not checked" in partial.summary()
-        assert f"not_checked={skipped})" in repr(partial)
+        assert f"not_checked={skipped}, declared=True)" in repr(partial)
         assert "does not\nsay when the design was fixed" in partial.summary()
         # Everything passed: nothing is left unchecked and the status stands alone.
         estimator = lock.to_estimator()
@@ -1799,4 +1799,150 @@ class TestReconcile:
         full = self.reconcile(lock, estimator, first_treat="g", data=analysis, results=fit)
         assert full.status == "match"
         assert "not checked" not in full.summary().split("Checks:")[0]
-        assert "not_checked=0)" in repr(full)
+        assert "not_checked=0, declared=True)" in repr(full)
+
+
+class TestFit:
+    """``DesignLock.fit``: the locked analysis, fitted and reconciled in one call."""
+
+    def test_staggered_estimator_matches_and_equals_the_fit_by_hand(self, staggered):
+        panel, lock = staggered
+        frame = analysis_frame(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reconciliation = lock.fit(frame, first_treat="g")
+            by_hand = lock.to_estimator().fit(
+                frame, outcome="y", unit="unit", time="period", first_treat="g"
+            )
+        assert isinstance(reconciliation, DesignReconciliationResults)
+        assert reconciliation.status == "match"
+        assert set(statuses(reconciliation).values()) == {"match"}
+        assert reconciliation.declared is False
+        assert type(reconciliation.results).__name__ == "CallawaySantAnnaResults"
+        np.testing.assert_allclose(reconciliation.results.att, by_hand.att)
+        np.testing.assert_allclose(reconciliation.results.se, by_hand.se)
+
+    def test_two_group_estimator(self, two_group):
+        frame, lock = two_group
+        reconciliation = lock.fit(frame, treatment="treated", post="post")
+        by_hand = lock.to_estimator().fit(
+            frame, outcome="y", treatment="treated", post="post", unit="unit"
+        )
+        assert reconciliation.status == "match"
+        assert reconciliation.declared is False
+        np.testing.assert_allclose(reconciliation.results.att, by_hand.att)
+        np.testing.assert_allclose(reconciliation.results.se, by_hand.se)
+
+    def covariate_lock(self):
+        panel = make_panel(seed=92)
+        panel["x"] = np.random.default_rng(3).normal(size=len(panel))
+        lock = run(
+            panel,
+            {"did": DifferenceInDifferences()},
+            cohort_periods=[6],
+            n_treated=10,
+            n_simulations=4,
+            estimator_kwargs={"covariates": ["x"]},
+        ).lock(progress=False)
+        frame = analysis_frame(panel)
+        frame["x"] = np.concatenate(
+            [panel["x"].to_numpy(), np.random.default_rng(4).normal(size=len(frame) - len(panel))]
+        )
+        frame["treated"] = (frame["unit"] < 10).astype(int)
+        frame["post"] = (frame["period"] >= 9).astype(int)
+        return frame, lock
+
+    def test_locked_fit_keywords_reach_the_fit(self):
+        frame, lock = self.covariate_lock()
+        reconciliation = lock.fit(frame, treatment="treated", post="post")
+        columns = dict(outcome="y", treatment="treated", post="post", unit="unit")
+        with_x = DifferenceInDifferences().fit(frame, covariates=["x"], **columns)
+        without_x = DifferenceInDifferences().fit(frame, **columns)
+        assert reconciliation.status == "match"
+        np.testing.assert_allclose(reconciliation.results.att, with_x.att)
+        assert abs(reconciliation.results.att - without_x.att) > 1e-8
+
+    def test_estimator_error_propagates(self):
+        frame, lock = self.covariate_lock()
+        columns = dict(outcome="y", treatment="treated", post="post", unit="unit")
+        without_column = frame.drop(columns="x")
+        with pytest.raises(Exception) as by_hand:
+            DifferenceInDifferences().fit(without_column, covariates=["x"], **columns)
+        with pytest.raises(type(by_hand.value)) as from_lock:
+            lock.fit(without_column, treatment="treated", post="post")
+        assert str(from_lock.value) == str(by_hand.value)
+
+    def test_column_arguments_by_family(self, staggered, two_group):
+        panel, cs_lock = staggered
+        frame = analysis_frame(panel)
+        with pytest.raises(ValueError, match="pass first_treat="):
+            cs_lock.fit(frame)
+        with pytest.raises(ValueError, match="pass first_treat="):
+            cs_lock.fit(frame, first_treat="g", post="post")
+        with pytest.raises(ValueError, match="pass first_treat="):
+            cs_lock.fit(frame, treatment="treated", post="post")
+        two_group_frame, did_lock = two_group
+        with pytest.raises(ValueError, match="pass treatment= and post="):
+            did_lock.fit(two_group_frame, treatment="treated")
+        with pytest.raises(ValueError, match="pass treatment= and post="):
+            did_lock.fit(two_group_frame, first_treat="g")
+        with pytest.raises(ValueError, match="pass treatment= and post="):
+            did_lock.fit(two_group_frame, treatment="treated", post="post", first_treat="g")
+
+    def test_refusals(self, staggered):
+        panel, lock = staggered
+        with pytest.raises(TypeError, match="DataFrame"):
+            lock.fit(analysis_frame(panel).to_numpy(), first_treat="g")
+        tampered = dataclasses.replace(lock, alpha=0.10)
+        with pytest.raises(ValueError, match="sha256"):
+            tampered.fit(analysis_frame(panel), first_treat="g")
+
+    def test_realized_design_can_still_deviate(self, staggered):
+        panel, lock = staggered
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fewer = analysis_frame(panel)
+            fewer = fewer[fewer["unit"] != fewer["unit"].max()]
+            reconciliation = lock.fit(fewer, first_treat="g")
+            assert reconciliation.declared is False
+            assert reconciliation.status == "deviates"
+            assert {"n_units", "data_sha256"} <= deviating(reconciliation)
+            changed = analysis_frame(panel)
+            changed.loc[0, "y"] += 1.0
+            assert deviating(lock.fit(changed, first_treat="g")) == {"data_sha256"}
+        # Everything the analyst could have declared is the lock's by construction.
+        configuration = {
+            item: status
+            for item, status in statuses(reconciliation).items()
+            if item.startswith(("estimator", "params.")) or item in ("outcome", "unit", "time")
+        }
+        assert set(configuration.values()) == {"match"}
+
+    def test_reconcile_keeps_the_results_it_was_given(self, staggered):
+        panel, lock = staggered
+        frame = analysis_frame(panel)
+        estimator = lock.to_estimator()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = estimator.fit(frame, outcome="y", unit="unit", time="period", first_treat="g")
+        columns = dict(outcome="y", unit="unit", time="period", first_treat="g")
+        declared = lock.reconcile(estimator, data=frame, results=fit, **columns)
+        assert declared.results is fit and declared.declared is True
+        assert lock.reconcile(estimator, data=frame, **columns).results is None
+
+    def test_contract(self, staggered):
+        panel, lock = staggered
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fitted = lock.fit(analysis_frame(panel), first_treat="g")
+        declared = lock.reconcile(lock.to_estimator(), outcome="y", unit="unit", time="period")
+        assert fitted.to_dict()["declared"] is False and declared.to_dict()["declared"] is True
+        assert "results" not in fitted.to_dict()
+        json.dumps(fitted.to_dict())
+        assert "declared=False)" in repr(fitted)
+        assert "fitted from the lock" in fitted.summary()
+        assert "what was declared to reconcile()" not in fitted.summary()
+        assert "declared to reconcile()" in declared.summary()
+        for text in (fitted.summary(), declared.summary()):
+            assert "say when the design was fixed" in text.replace("\n", " ")
+            assert "pre-specified" not in text

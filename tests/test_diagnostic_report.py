@@ -53,6 +53,7 @@ _TOP_LEVEL_KEYS = {
     "design",
     "headline_metric",
     "target_parameter",
+    "design_reconciliation",
     "parallel_trends",
     "pretrends_power",
     "sensitivity",

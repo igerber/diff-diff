@@ -1093,14 +1093,26 @@ def _make_placebo_generator(
 
 
 def _fit_kwargs(
-    estimator: Any, outcome: str, unit: str, time: str, estimator_kwargs: Dict[str, Any]
+    estimator: Any,
+    outcome: str,
+    unit: str,
+    time: str,
+    estimator_kwargs: Dict[str, Any],
+    treatment: str = _TREATED_COLUMN,
+    post: str = _POST_COLUMN,
+    first_treat: str = _FIRST_TREAT_COLUMN,
 ) -> Dict[str, Any]:
-    """The complete ``fit()`` keywords for one estimator on a placebo frame."""
+    """
+    The complete ``fit()`` keywords for one estimator.
+
+    The treatment columns default to the placebo frame's; ``DesignLock.fit``
+    passes the analysis frame's.
+    """
     if type(estimator).__name__ in _COMMON_TIMING_ESTIMATORS:
         columns: Dict[str, Any] = {
             "outcome": outcome,
-            "treatment": _TREATED_COLUMN,
-            "post": _POST_COLUMN,
+            "treatment": treatment,
+            "post": post,
             "unit": unit,
         }
     else:
@@ -1108,7 +1120,7 @@ def _fit_kwargs(
             "outcome": outcome,
             "unit": unit,
             "time": time,
-            "first_treat": _FIRST_TREAT_COLUMN,
+            "first_treat": first_treat,
         }
     columns.update(estimator_kwargs)
     return columns
@@ -2134,6 +2146,101 @@ class DesignLock(Diagnostic):
 
         return getattr(diff_diff, self.estimator_name)(**copy.deepcopy(self.params))
 
+    def fit(
+        self,
+        data: pd.DataFrame,
+        *,
+        first_treat: Optional[str] = None,
+        treatment: Optional[str] = None,
+        post: Optional[str] = None,
+    ) -> "DesignReconciliationResults":
+        """
+        Fit the locked analysis and reconcile it against this lock.
+
+        Builds the locked estimator (:meth:`to_estimator`), fits it on
+        ``data`` with the locked outcome, unit and time columns and the
+        locked ``estimator_kwargs``, and runs the checks of
+        :meth:`reconcile` on that same frame.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            The analysis data.
+        first_treat : str, optional
+            Column with each unit's real first treatment period (0, inf or
+            NaN for never-treated). Required for the estimators that take
+            one, refused for the others.
+        treatment : str, optional
+            0/1 group column. Required, with ``post``, for
+            ``DifferenceInDifferences`` and ``TwoWayFixedEffects``; refused
+            for the others.
+        post : str, optional
+            0/1 post-period column that goes with ``treatment``.
+
+        Returns
+        -------
+        DesignReconciliationResults
+            The checks, with the fitted results in ``results`` and
+            ``declared=False``.
+
+        Notes
+        -----
+        The estimator class, its parameters, the outcome, unit and time
+        columns and the ``fit()`` keywords are the locked ones by
+        construction, and the data checks run on the frame that was fitted.
+        The realized design can still deviate (unit count, number of treated
+        units, number of cohorts, post-window lengths, the fingerprint of the
+        diagnosed periods). Nothing here says when the lock was made.
+
+        The column arguments name columns of the analysis data and are not
+        taken from the lock: the lock's own ``first_treat`` is the column
+        that truncated the diagnosed panel.
+
+        An exception raised by the estimator's ``fit()`` propagates, and no
+        reconciliation is returned.
+        """
+        estimator = self.to_estimator()
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError("data must be a pandas DataFrame.")
+        columns: Dict[str, str]
+        if self.estimator_name in _COMMON_TIMING_ESTIMATORS:
+            if treatment is None or post is None or first_treat is not None:
+                raise ValueError(
+                    f"{self.estimator_name} is fitted with a 0/1 group column and a "
+                    f"0/1 post-period column: pass treatment= and post=, not "
+                    f"first_treat=."
+                )
+            columns = {"treatment": treatment, "post": post}
+        else:
+            if first_treat is None or treatment is not None or post is not None:
+                raise ValueError(
+                    f"{self.estimator_name} is fitted with a first-treatment-period "
+                    f"column: pass first_treat=, not treatment= or post=."
+                )
+            columns = {"first_treat": first_treat}
+        keywords = _fit_kwargs(
+            estimator,
+            self.outcome,
+            self.unit,
+            self.time,
+            copy.deepcopy(self.estimator_kwargs),
+            **columns,
+        )
+        results = estimator.fit(data, **keywords)
+        return self._reconcile(
+            estimator,
+            outcome=self.outcome,
+            unit=self.unit,
+            time=self.time,
+            first_treat=first_treat,
+            treatment=treatment,
+            post=post,
+            estimator_kwargs=self.estimator_kwargs,
+            data=data,
+            results=results,
+            declared=False,
+        )
+
     def reconcile(
         self,
         estimator: Any,
@@ -2185,8 +2292,10 @@ class DesignLock(Diagnostic):
         This compares what the analyst declares with the lock. Fitted results
         do not record the constructor parameters or column names that
         produced them, so a parameter changed with ``set_params()`` after
-        fitting cannot be detected. ``"match"`` covers the listed checks
-        that were run, and says nothing about when the design was fixed.
+        fitting cannot be detected. :meth:`fit` runs the locked analysis
+        itself and does not rely on a declaration. ``"match"`` covers the
+        listed checks that were run, and says nothing about when the design
+        was fixed.
 
         The data fingerprint covers every column the diagnosed panel had, on
         the locked periods. A column whose values changed there deviates;
@@ -2198,6 +2307,36 @@ class DesignLock(Diagnostic):
         number of treated units, the length of each cohort's post window and
         whether the panel is balanced are.
         """
+        return self._reconcile(
+            estimator,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            first_treat=first_treat,
+            treatment=treatment,
+            post=post,
+            estimator_kwargs=estimator_kwargs,
+            data=data,
+            results=results,
+            declared=True,
+        )
+
+    def _reconcile(
+        self,
+        estimator: Any,
+        *,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: Optional[str],
+        treatment: Optional[str],
+        post: Optional[str],
+        estimator_kwargs: Optional[Dict[str, Any]],
+        data: Optional[pd.DataFrame],
+        results: Optional[Any],
+        declared: bool,
+    ) -> "DesignReconciliationResults":
+        """The checks behind :meth:`reconcile` and :meth:`fit`."""
         self._verify()
         if not hasattr(estimator, "get_params"):
             raise TypeError("reconcile needs the estimator instance used for the analysis.")
@@ -2236,6 +2375,8 @@ class DesignLock(Diagnostic):
             checks=checks,
             label=self.label,
             lock_sha256=self.sha256,
+            results=results,
+            declared=declared,
         )
 
 
@@ -2449,7 +2590,7 @@ def _realized_first_treat(
 @dataclass
 class DesignReconciliationResults(Diagnostic):
     """
-    Results of :meth:`DesignLock.reconcile`.
+    Results of :meth:`DesignLock.reconcile` and :meth:`DesignLock.fit`.
 
     Attributes
     ----------
@@ -2465,12 +2606,23 @@ class DesignReconciliationResults(Diagnostic):
         Label of the locked estimator.
     lock_sha256 : str
         ``sha256`` of the lock that was reconciled against.
+    results : results object or None
+        The fitted results the checks were made for: the fit made by
+        :meth:`DesignLock.fit`, or the ``results`` passed to
+        :meth:`DesignLock.reconcile` (``None`` when none was passed). Not
+        part of ``to_dict()``.
+    declared : bool
+        ``True`` when the estimator, the column names and the ``fit()``
+        keywords were declared to :meth:`DesignLock.reconcile`; ``False``
+        when :meth:`DesignLock.fit` ran the analysis itself.
     """
 
     status: str
     checks: List[Dict[str, Any]]
     label: str
     lock_sha256: str
+    results: Optional[Any] = field(default=None, repr=False, compare=False)
+    declared: bool = True
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -2479,7 +2631,7 @@ class DesignReconciliationResults(Diagnostic):
         return (
             f"DesignReconciliationResults(status={self.status!r}, "
             f"checks={len(self.checks)}, deviating={n_deviating}, "
-            f"not_checked={n_skipped})"
+            f"not_checked={n_skipped}, declared={self.declared})"
         )
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -2502,10 +2654,13 @@ class DesignReconciliationResults(Diagnostic):
         Returns
         -------
         Dict[str, Any]
-            The overall status, the lock reconciled against and every check.
+            The overall status, the lock reconciled against, whether the
+            configuration was declared, and every check. ``results`` is not
+            included.
         """
         return {
             "status": self.status,
+            "declared": self.declared,
             "label": self.label,
             "lock_sha256": self.lock_sha256,
             "checks": copy.deepcopy(self.checks),
@@ -2534,6 +2689,8 @@ class DesignReconciliationResults(Diagnostic):
             "",
             f"{'Locked estimator:':<24} {self.label}",
             f"{'Status:':<24} {self.status}{skipped}",
+            f"{'Configuration:':<24} "
+            f"{'declared to reconcile()' if self.declared else 'fitted from the lock'}",
             f"{'Checks:':<24} {counts[_MATCH]} match, {counts[_DEVIATES]} deviate, "
             f"{counts[_NOT_CHECKED]} not checked",
             f"{'Lock sha256:':<24} {self.lock_sha256}",
@@ -2554,15 +2711,22 @@ class DesignReconciliationResults(Diagnostic):
                     f"{str(check['item'])[:29]:<30}{str(check['locked'])[:16]:<17}"
                     f"{realized[:16]:<17}{check['status']:<14}"
                 )
-        lines.extend(
-            [
-                "",
-                "'match' means every check that was run agrees with the lock. It covers",
-                "what was declared to reconcile() and the listed items only; it does not",
-                "say when the design was fixed, and deviations are not graded.",
-                "=" * width,
-            ]
-        )
+        lines.extend(["", "'match' means every check that was run agrees with the lock. It covers"])
+        if self.declared:
+            lines.extend(
+                [
+                    "what was declared to reconcile() and the listed items only; it does not",
+                    "say when the design was fixed, and deviations are not graded.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "the listed items only; it does not say when the design was fixed, and",
+                    "deviations are not graded.",
+                ]
+            )
+        lines.append("=" * width)
         return "\n".join(lines)
 
     def print_summary(self) -> None:
