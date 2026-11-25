@@ -458,7 +458,11 @@ what is reconciled.
   `compute_pretrends_power(results, violation_type='linear',
   alpha=alpha, target_power=0.80)` for the estimator families that
   ship a `compute_pretrends_power` adapter: `CallawaySantAnnaResults`
-  and `SunAbrahamResults` (the removed `MultiPeriodDiDResults` adapter went
+  and `SunAbrahamResults` (a SunAbraham fit whose cohorts are normalized
+  against different reference periods - `reference_event_times` with
+  more than one entry - is refused by the adapter, so the
+  `pretrends_power` section reports `status="error"` with that reason;
+  the removed `MultiPeriodDiDResults` adapter went
   at 4.0; the TWFE event-study mode's `EventStudyResults` surface is
   rejected by DR pending admission - see
   `_APPLICABILITY["pretrends_power"]` in

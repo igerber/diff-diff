@@ -879,7 +879,9 @@ class TestClusterMetadata:
         from diff_diff.sun_abraham import SunAbrahamResults
 
         names = [f.name for f in dataclasses.fields(SunAbrahamResults)]
-        assert names[-1] == "n_clusters" and names[-2] == "inference_df"
+        # Fields are only ever APPENDED (the positional layout of the earlier
+        # ones never moves): n_clusters at 4.0, then reference_event_times.
+        assert names[-3:] == ["inference_df", "n_clusters", "reference_event_times"]
 
 
 # --------------------------------------------------------------------------- #

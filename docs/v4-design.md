@@ -557,7 +557,8 @@ channel beside the per-row one - the per-row column cannot encode the
 replicate-undefined 0.0 sentinel - and `reference_event_times`, the
 distinct per-cohort positional-base event times whose multi-entry case
 fails the HonestDiD/PreTrendsPower common-reference guard on gapped
-universal grids; amended into [M-092] pre-cut with the
+universal grids (post-cut, `SunAbrahamResults` records its distinct
+per-cohort omitted relative periods in the same field); amended into [M-092] pre-cut with the
 2(b) consumer delivery), and `to_dataframe(level="event_study")`
 emitting the `EVENT_STUDY_SCHEMA` columns as an identical PREFIX from every
 estimator (amended at the 4.0 cut, item 8b [M-093]: a producer may append

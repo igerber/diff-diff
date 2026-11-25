@@ -345,9 +345,12 @@ class EventStudyResults(BaseResults):
         estimated horizon, where NO reference-only row exists to mark
         it, so this field (not ``is_reference``) is the authoritative
         common-reference signal. HonestDiD and PreTrendsPower fail
-        closed when it carries more than one entry. None when the
-        producer records no such notion (varying base, non-CS
-        producers, hand-built surfaces).
+        closed when it carries more than one entry. SunAbraham records
+        the distinct relative periods its cohorts are normalized against
+        (one entry unless some cohort is not observed at
+        ``e = -1 - anticipation`` and falls back to its latest observed
+        pre-treatment period). None when the producer records no such
+        notion (varying base, other producers, hand-built surfaces).
     """
 
     event_time: np.ndarray
