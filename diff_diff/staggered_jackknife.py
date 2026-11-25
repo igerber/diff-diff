@@ -81,6 +81,11 @@ class DeletionUnits:
     cell_treated : dict
         ``{(g, t): positions}``: the deletion units (by position) holding
         treated units of that cell.
+    spare_values, spare_labels, spare_roles : tuple
+        The clusters of the estimation index that the structural rule leaves
+        out (it expects their omission to move nothing). They are refitted
+        too, and any whose omission does move an estimate becomes a deletion
+        unit, so the rule is checked on every fit instead of trusted.
     """
 
     column: str
@@ -90,6 +95,9 @@ class DeletionUnits:
     labels_are_codes: bool
     roles: Tuple[str, ...]
     cell_treated: Dict[Any, Tuple[int, ...]]
+    spare_values: Tuple[Any, ...] = ()
+    spare_labels: Tuple[Any, ...] = ()
+    spare_roles: Tuple[str, ...] = ()
 
 
 def jackknife_se(full: float, replicates: Any) -> float:
@@ -122,14 +130,25 @@ def resolve_deletion_units(
     cluster: Optional[str],
     precomputed: Dict[str, Any],
     influence_func_info: Dict[Any, Any],
+    group_time_effects: Dict[Any, Dict[str, Any]],
 ) -> DeletionUnits:
     """Resolve the deletion units from the estimation sample.
 
-    A deletion unit is a cluster holding at least one unit (observation on
-    the repeated-cross-section route) that enters some estimable ATT(g,t)
-    as treated or as comparison. Rows the fit never uses - a missing unit
-    ID, an always-treated unit - form no deletion unit, so ``H`` counts
-    exactly the clusters whose omission can move an estimate.
+    A deletion unit is a cluster whose omission can move an estimate. It
+    holds at least one unit (observation on the repeated-cross-section
+    route) that either
+
+    - enters some ATT(g,t) cell as treated or as comparison, or
+    - belongs to a cohort whose WHOLE-cohort mass is an aggregation weight:
+      with a cluster column (or any route that weights by fixed cohort
+      masses) that is every cohort with a finite cell, and under a universal
+      base period it is every cohort with a materialized reference cell,
+      whose weight is the cohort mass. Such a unit can have no usable
+      outcome at all and still shift the weights when it is deleted.
+
+    Rows the fit never uses in either way - a missing unit ID, an
+    always-treated unit - form no deletion unit, so ``H`` counts exactly the
+    clusters whose omission can move an estimate.
 
     ``data`` is the caller's frame, row-aligned with the fit's working copy.
     Cluster labels are read from it and never from the working copy: the fit
@@ -147,7 +166,16 @@ def resolve_deletion_units(
             idx = np.asarray(info.get(key, ()), dtype=np.intp)
             if idx.size:
                 contributing[idx] = True
-    ever_treated = np.asarray(precomputed["unit_cohorts"]) > 0
+    cohorts = np.asarray(precomputed["unit_cohorts"])
+    ever_treated = cohorts > 0
+    uses_cohort_masses = fixed_cohort_agg_weights(precomputed) is not None
+    mass_cohorts = {
+        gt[0]
+        for gt, cell in group_time_effects.items()
+        if np.isfinite(cell["effect"]) and (uses_cohort_masses or cell.get("is_reference"))
+    }
+    if mass_cohorts:
+        contributing |= np.isin(cohorts, list(mass_cohorts))
 
     def treated_by_cell(position_of_index: np.ndarray) -> Dict[Any, Tuple[int, ...]]:
         """Deletion-unit positions of each cell's treated units."""
@@ -159,6 +187,7 @@ def resolve_deletion_units(
 
     if cluster is None:
         positions = np.flatnonzero(contributing)
+        spare = np.flatnonzero(~contributing)
         position_of_index = np.full(n_index, -1, dtype=np.intp)
         position_of_index[positions] = np.arange(positions.size)
         return DeletionUnits(
@@ -169,6 +198,9 @@ def resolve_deletion_units(
             labels_are_codes=True,
             roles=tuple("treated" if ever_treated[p] else "control" for p in positions),
             cell_treated=treated_by_cell(position_of_index),
+            spare_values=tuple(index_units[spare].tolist()),
+            spare_labels=tuple(int(p) for p in spare),
+            spare_roles=tuple("treated" if ever_treated[p] else "control" for p in spare),
         )
 
     if bool(precomputed.get("is_panel", True)):
@@ -189,18 +221,27 @@ def resolve_deletion_units(
         first_member[codes] = np.arange(n_index)
     position_of_code = np.full(n_clusters, -1, dtype=np.intp)
     position_of_code[order] = np.arange(len(order))
+    spare = [c for c in range(n_clusters) if position_of_code[c] < 0]
+
+    def labels_of(cluster_codes: Sequence[int]) -> Tuple[Any, ...]:
+        if one_to_one:
+            return tuple(int(first_member[c]) for c in cluster_codes)
+        return tuple(uniques[c] for c in cluster_codes)
+
+    def roles_of(cluster_codes: Sequence[int]) -> Tuple[str, ...]:
+        return tuple("treated" if treated_count[c] > 0 else "control" for c in cluster_codes)
+
     return DeletionUnits(
         column=cluster,
         values=tuple(uniques[c] for c in order),
-        labels=(
-            tuple(int(first_member[c]) for c in order)
-            if one_to_one
-            else tuple(uniques[c] for c in order)
-        ),
+        labels=labels_of(order),
         unit_name="unit" if one_to_one else cluster,
         labels_are_codes=one_to_one,
-        roles=tuple("treated" if treated_count[c] > 0 else "control" for c in order),
+        roles=roles_of(order),
         cell_treated=treated_by_cell(position_of_code[codes]),
+        spare_values=tuple(uniques[c] for c in spare),
+        spare_labels=labels_of(spare),
+        spare_roles=roles_of(spare),
     )
 
 
@@ -214,12 +255,56 @@ def _normalize(message: str) -> str:
     return _NUMBER.sub("#", message)
 
 
+def _close(a: float, b: float) -> bool:
+    """Equal up to rounding, NaN matching NaN."""
+    if np.isnan(a) or np.isnan(b):
+        return bool(np.isnan(a) and np.isnan(b))
+    return bool(np.isclose(a, b, rtol=1e-10, atol=1e-12))
+
+
+def _moves_an_estimate(
+    full_att: float,
+    full_cells: Dict[Any, Dict[str, Any]],
+    full_masses: Optional[Dict[Any, float]],
+    rep_att: float,
+    rep_cells: Dict[Any, Dict[str, Any]],
+    rep_masses: Optional[Dict[Any, float]],
+) -> bool:
+    """Whether a delete-one refit differs from the full sample in any point input.
+
+    Compares the overall ATT, the estimate and aggregation weight of every
+    cell with a finite estimate, and the cohort masses of the cohorts that
+    have such a cell. Cells without a finite estimate and masses no cell
+    uses (an always-treated cohort has both) enter no aggregate, so their
+    disappearance moves nothing.
+    """
+    full_finite = _finite_cells(full_cells)
+    if not _close(full_att, rep_att) or full_finite != _finite_cells(rep_cells):
+        return True
+    for gt in full_finite:
+        cell = full_cells[gt]
+        other = rep_cells[gt]
+        for key in ("effect", "n_treated", "agg_weight"):
+            if (key in cell) != (key in other):
+                return True
+            if key in cell and not _close(float(cell[key]), float(other[key])):
+                return True
+    live = {gt[0] for gt in full_finite}
+    full_live = {g: m for g, m in (full_masses or {}).items() if g in live}
+    rep_live = {g: m for g, m in (rep_masses or {}).items() if g in live}
+    if full_live.keys() != rep_live.keys():
+        return True
+    return any(not _close(float(full_live[g]), float(rep_live[g])) for g in full_live)
+
+
 def run_replicates(
     estimator: "CallawaySantAnna",
     data: pd.DataFrame,
     fit_kwargs: Dict[str, Any],
     units: DeletionUnits,
+    full_att: float,
     full_cells: Dict[Any, Dict[str, Any]],
+    full_masses: Optional[Dict[Any, float]],
 ) -> Tuple[JackknifeReplicates, List[str]]:
     """Re-estimate on every delete-one sample.
 
@@ -228,10 +313,18 @@ def run_replicates(
     unchanged, so a refit takes the same routing and the same aggregation
     weights as the full-sample fit. Returns the replicate payload and the
     refit warnings that the full-sample configuration does not raise itself.
+
+    The clusters the structural rule left out (``units.spare_*``) are
+    refitted as well. One whose omission moves any point input is a deletion
+    unit after all and joins the replicates; one whose omission moves
+    nothing is dropped, as the rule intended.
     """
     params = {**estimator.get_params(), "vcov_type": "hc1"}
     column = data[units.column]
     full_finite = _finite_cells(full_cells)
+    full_point_cells = {
+        gt: {k: cell[k] for k in _CELL_KEYS if k in cell} for gt, cell in full_cells.items()
+    }
 
     # Warnings the same configuration raises on the full sample are not news.
     with warnings.catch_warnings(record=True) as baseline_caught:
@@ -239,6 +332,8 @@ def run_replicates(
         type(estimator)(**params).fit(data, **fit_kwargs)
     baseline = {_normalize(str(w.message)) for w in baseline_caught}
 
+    labels: List[Any] = []
+    roles: List[str] = []
     atts: List[float] = []
     cells: List[Dict[Any, Dict[str, Any]]] = []
     masses: List[Optional[Dict[Any, float]]] = []
@@ -247,10 +342,17 @@ def run_replicates(
     undefined: List[Optional[str]] = []
     extra: Dict[str, Tuple[str, int]] = {}
 
-    for value in units.values:
+    candidates = [
+        (value, label, role, False)
+        for value, label, role in zip(units.values, units.labels, units.roles)
+    ] + [
+        (value, label, role, True)
+        for value, label, role in zip(units.spare_values, units.spare_labels, units.spare_roles)
+    ]
+    for value, label, role, is_spare in candidates:
         subset = data.loc[~column.isin([value])]
         if len(subset) == len(data):
-            # Every deletion unit was resolved from rows of this frame, so a
+            # Every candidate was resolved from rows of this frame, so a
             # deletion that removes none means the two went out of step.
             # Failing here is the only alternative to a silent no-op replicate.
             raise RuntimeError(
@@ -266,14 +368,6 @@ def run_replicates(
                 rep_results = refit.fit(subset, **fit_kwargs)
             except (ValueError, np.linalg.LinAlgError) as exc:
                 reason = str(exc)
-        for w in caught:
-            message = str(w.message)
-            if any(marker in message for marker in _VARIANCE_ONLY_WARNINGS):
-                continue
-            key = _normalize(message)
-            if key in baseline:
-                continue
-            extra[key] = (message, extra.get(key, (message, 0))[1] + 1)
 
         rep_cells: Dict[Any, Dict[str, Any]] = {}
         rep_masses: Optional[Dict[Any, float]] = None
@@ -289,7 +383,22 @@ def run_replicates(
                 rep_masses = fixed_cohort_agg_weights(kit.bookkeeping)
             if not np.isfinite(rep_att):
                 reason = "the overall ATT is not estimable"
+        if is_spare and not _moves_an_estimate(
+            full_att, full_point_cells, full_masses, rep_att, rep_cells, rep_masses
+        ):
+            continue
+
+        for w in caught:
+            message = str(w.message)
+            if any(marker in message for marker in _VARIANCE_ONLY_WARNINGS):
+                continue
+            key = _normalize(message)
+            if key in baseline:
+                continue
+            extra[key] = (message, extra.get(key, (message, 0))[1] + 1)
         rep_finite = _finite_cells(rep_cells)
+        labels.append(label)
+        roles.append(role)
         atts.append(rep_att)
         cells.append(rep_cells)
         masses.append(rep_masses)
@@ -298,10 +407,10 @@ def run_replicates(
         undefined.append(reason)
 
     payload = JackknifeReplicates(
-        labels=units.labels,
+        labels=tuple(labels),
         unit_name=units.unit_name,
         labels_are_codes=units.labels_are_codes,
-        roles=units.roles,
+        roles=tuple(roles),
         att=tuple(atts),
         cells=tuple(cells),
         cohort_masses=tuple(masses),

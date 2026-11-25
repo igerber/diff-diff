@@ -29,6 +29,7 @@ from diff_diff.linalg import (
 )
 from diff_diff.staggered_aggregation import (
     CallawaySantAnnaAggregationMixin,
+    fixed_cohort_agg_weights,
 )
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
@@ -2979,7 +2980,12 @@ class CallawaySantAnna(
             )
 
             _deletion_units = resolve_deletion_units(
-                _jackknife_data, unit, user_cluster, precomputed, influence_func_info
+                _jackknife_data,
+                unit,
+                user_cluster,
+                precomputed,
+                influence_func_info,
+                group_time_effects,
             )
             if len(_deletion_units.values) < 2:
                 raise ValueError(
@@ -2998,7 +3004,9 @@ class CallawaySantAnna(
                     "covariates": covariates,
                 },
                 _deletion_units,
+                float(overall_att),
                 group_time_effects,
+                fixed_cohort_agg_weights(precomputed),
             )
             overall_se, overall_t, overall_p, overall_ci = apply_to_fit(
                 jackknife_payload, overall_att, group_time_effects, self.alpha

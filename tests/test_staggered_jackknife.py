@@ -270,6 +270,88 @@ class TestEstimationSample:
         assert "s9" not in set(jk.get_loo_effects_df()["cluster"])
         np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
 
+    def test_cluster_that_only_carries_cohort_mass_is_a_deletion_unit(self):
+        # With a cluster column the aggregations weight by whole-cohort
+        # masses. Cluster s10 belongs to cohort 2 and has no outcome at all,
+        # so it enters no cell, yet deleting it changes the weights: the
+        # overall ATT moves from 17/11 to 5/3.
+        rows = []
+        for c, g in enumerate([2, 2, 2, 3, 3, 3, 0, 0, 0, 0, 2]):
+            for j in range(2):
+                for t in (1, 2, 3):
+                    effect = 1.0 if (g == 2 and t >= 2) else 3.0 if (g == 3 and t >= 3) else 0.0
+                    rows.append((c * 2 + j, f"s{c:02d}", t, g, np.nan if c == 10 else effect))
+        data = pd.DataFrame(rows, columns=["unit", "state", "t", "g", "y"])
+        labels = list(data["state"].unique())
+        full, reps = by_hand(data, "state", labels, cluster="state")
+        np.testing.assert_allclose(full.att, 17 / 11, rtol=1e-12)
+        np.testing.assert_allclose(reps[-1].att, 5 / 3, rtol=1e-12)
+        jk = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), data)
+        assert jk.df_inference == 10 and jk.n_clusters == 11
+        assert set(jk.get_loo_effects_df()["cluster"]) == set(labels)
+        np.testing.assert_allclose(jk.se, eq20(full.att, [r.att for r in reps]), rtol=1e-12)
+        got = es_frame(jk)
+        rep_att = np.array([es_frame(r)["att"].reindex(got.index).to_numpy() for r in reps])
+        np.testing.assert_allclose(
+            got["se"], eq20(es_frame(full)["att"].to_numpy(), rep_att), rtol=1e-12, atol=1e-15
+        )
+        # Without a cluster column cells are weighted by their own counts,
+        # the outcome-less units enter nothing, and they are not deleted.
+        unit_jk = quiet_fit(CallawaySantAnna(vcov_type="jackknife"), data)
+        assert unit_jk.df_inference == 20 - 1
+
+    def test_reference_cell_mass_makes_a_cohort_unit_a_deletion_unit(self):
+        # Universal base on a gapped grid: horizon -2 mixes cohort 3's
+        # estimate with cohort 5's reference cell, weighted by cohort 5's
+        # whole mass. A cohort-5 unit with no outcome enters no cell but is
+        # in that mass, so deleting it moves the horizon's estimate.
+        data = make_panel({0: 3, 1: 3, 2: 5, 3: 5}, n_clusters=9, n_periods=7, seed=43)
+        data = data[data["t"] != 4].reset_index(drop=True)
+        ghost = data["unit"] == data.loc[data["state"] == "s3", "unit"].iloc[0]
+        data.loc[ghost, "y"] = np.nan
+        units = sorted(data["unit"].unique())
+        ghost_unit = int(data.loc[ghost, "unit"].iloc[0])
+        full, reps = by_hand(data, "unit", units, base_period="universal")
+        dropped = reps[units.index(ghost_unit)]
+        assert abs(es_frame(dropped).loc[-2, "att"] - es_frame(full).loc[-2, "att"]) > 1e-8
+        jk = quiet_fit(CallawaySantAnna(vcov_type="jackknife", base_period="universal"), data)
+        assert jk.df_inference == len(units) - 1
+        got = es_frame(jk)
+        rep_e = [es_frame(r).loc[-2, "att"] for r in reps]
+        np.testing.assert_allclose(
+            got.loc[-2, "se"], eq20(es_frame(full).loc[-2, "att"], rep_e), rtol=1e-12
+        )
+
+    def test_a_cluster_the_rule_misses_is_still_deleted(self, panel, monkeypatch):
+        """The structural rule is checked on every fit, not trusted."""
+        import diff_diff.staggered_jackknife as module
+
+        real = module.resolve_deletion_units
+
+        def forgets_one_cluster(*args, **kwargs):
+            units = real(*args, **kwargs)
+            assert units.spare_values == ()
+            keep = slice(None, -1)
+            return module.DeletionUnits(
+                column=units.column,
+                values=units.values[keep],
+                labels=units.labels[keep],
+                unit_name=units.unit_name,
+                labels_are_codes=units.labels_are_codes,
+                roles=units.roles[keep],
+                cell_treated=units.cell_treated,
+                spare_values=units.values[-1:],
+                spare_labels=units.labels[-1:],
+                spare_roles=units.roles[-1:],
+            )
+
+        expected = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), panel)
+        monkeypatch.setattr(module, "resolve_deletion_units", forgets_one_cluster)
+        got = quiet_fit(CallawaySantAnna(cluster="state", vcov_type="jackknife"), panel)
+        assert got.df_inference == expected.df_inference == 9
+        np.testing.assert_allclose(got.se, expected.se, rtol=1e-12)
+        assert set(got.get_loo_effects_df()["cluster"]) == set(panel["state"].unique())
+
     def test_mixed_type_cluster_labels(self, panel):
         data = panel.copy()
         mapping = {f"s{c}": (c if c % 2 else f"s{c}") for c in range(10)}
