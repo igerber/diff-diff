@@ -167,11 +167,14 @@ Every workflow's Linux job uses `runs-on: ubuntu-24.04`, not `ubuntu-latest` (pi
   not a member of the sudo group` / `Could not restrict access to
   /run/dbus/system_bus_socket`; upstream
   [codex-action#188](https://github.com/openai/codex-action/issues/188)), so the AI PR
-  review job died in under a second and posted nothing.
+  review job died in under a second and posted nothing. Upstream fixed this in
+  codex-action v1.14 (pinned here since #900); the fix has not been exercised on a 26.04
+  runner in this repository.
 - `actions/python-versions` ships Python 3.9 builds for Ubuntu 22.04 and 24.04 only, so the
   3.9 floor leg of the test matrix (and the 3.9 wheel-test leg) cannot set up on 26.04.
 
-Un-pin only after both are fixed upstream and verified on a throwaway branch. The ARM
+Un-pin only after both are fixed upstream and verified on a throwaway branch; the Python
+3.9 gap is still open. The ARM
 matrix entries already used the GitHub-hosted `ubuntu-24.04-arm` label and are unchanged.
 
 ## macOS wheel runner pinned to `macos-15`

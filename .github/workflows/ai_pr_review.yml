@@ -518,7 +518,11 @@ jobs:
         # v1.12 hung after heavy turns (openai/codex-action#150); the fix
         # landed CLI-side in Codex 0.150.0, which the codex-version pin
         # below already exceeds. v1.13 also bounds post-exit output draining.
-        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        # v1.14 reworks the Linux drop-sudo launch (environment rebuilt and
+        # passed over stdin, stderr merged into stdout), stops Codex output
+        # from issuing workflow commands, and fixes drop-sudo on Ubuntu 26.04
+        # (openai/codex-action#188).
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/pr_review_compiled.md
