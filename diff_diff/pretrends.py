@@ -277,7 +277,97 @@ def _extract_container_vcov_subblock(
     sub = _validate_vcov_subblock(
         np.asarray(surface.vcov)[np.ix_(indices, indices)], ses, "PreTrendsPower"
     )
+    # A placebo event study from diagnose_design: the covariance is the sample
+    # covariance of the coefficients across placebo draws, not a fit's own.
+    if _is_placebo_surface(surface):
+        return sub, "placebo_draws"
     return sub, "full_pre_period_vcov"
+
+
+def _validate_violation_magnitude(M: Any) -> None:
+    """Refuse a violation magnitude that is not a finite number.
+
+    A NaN magnitude makes every comparison in the NIS acceptance region
+    false, which would be reported as a rejection probability of one.
+    """
+    values = np.atleast_1d(np.asarray(M, dtype=float))
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"Violation magnitude M must be finite, got {M!r}.")
+
+
+def _is_placebo_surface(obj: Any) -> bool:
+    """Whether ``obj`` is a placebo event study recorded by ``diagnose_design``."""
+    from diff_diff.design import PLACEBO_ESTIMAND
+    from diff_diff.results_base import EventStudyResults
+
+    return isinstance(obj, EventStudyResults) and obj.estimand == PLACEBO_ESTIMAND
+
+
+def _resolve_planned_input(results: Any) -> Any:
+    """Unwrap a ``DesignDiagnosisResults`` to the placebo event study it holds.
+
+    Any other input is returned unchanged. Called once at the top of every
+    public method that takes ``results``; the methods pass the resolved object
+    to each other, so the size warning below is issued once per public call.
+    """
+    from diff_diff.design import DesignDiagnosisResults
+
+    if not isinstance(results, DesignDiagnosisResults):
+        return results
+    if not results.event_study:
+        raise ValueError(
+            "This design diagnosis holds no placebo event study. Run "
+            "diagnose_design(..., event_study=True) to record one."
+        )
+    surfaces = results.event_study_results
+    if not surfaces:
+        raise ValueError(
+            "This design diagnosis recorded no placebo event study for any of "
+            f"its estimators ({', '.join(results.estimators)}). One is recorded "
+            "for CallawaySantAnna and StackedDiD estimators; see the warnings "
+            "diagnose_design issued."
+        )
+    if len(surfaces) > 1:
+        raise ValueError(
+            "This design diagnosis holds placebo event studies for several "
+            f"estimators ({', '.join(surfaces)}). Pass one of them: "
+            "diagnosis.event_study_results[label]."
+        )
+    ((label, surface),) = surfaces.items()
+    if not results.size_controlled.get(label, True):
+        warnings.warn(
+            f"Estimator '{label}' did not pass the size check of the design "
+            "diagnosis, so pre-trend power planned from its placebo event study "
+            "may be overstated.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return surface
+
+
+def _planned_pre_periods(surface: Any, pre_periods: Optional[List[int]]) -> List[Any]:
+    """The pre-periods a planned fit tests, in chronological order."""
+    if pre_periods is not None:
+        return sorted(pre_periods)
+    eligible = (
+        (~surface.is_reference)
+        & np.isfinite(surface.se)
+        & (surface.se > 0)
+        & (surface.event_time < 0)
+    )
+    return sorted(surface.event_time[eligible].tolist())
+
+
+def _planned_withheld_message(tested: List[Any], counted: float, expected: float, n: int) -> str:
+    direction = "more" if counted > expected else "less"
+    return (
+        f"Planned pre-trend power is not reported for a test of "
+        f"{len(tested)} pre-period(s) {tested}: in the {n} placebo draws that "
+        f"test rejected {counted:.1%} of the time with no violation, against "
+        f"{expected:.1%} assumed by the power formula (it rejects {direction} "
+        f"often than assumed, so the formula does not describe it). A test of "
+        f"fewer pre-periods may agree: see power_by_pre_periods."
+    )
 
 
 # =============================================================================
@@ -370,8 +460,11 @@ class PreTrendsPowerResults(Diagnostic):
     # Provenance for downstream tier classification. Populated at fit time
     # from `_extract_pre_period_params`. ``"full_pre_period_vcov"`` when
     # off-diagonal pre-period covariances were used; ``"diag_fallback"``
-    # when only per-period SEs were available; ``"unknown"`` for legacy
-    # serialized results pre-PR-B (backwards-compat default). See
+    # when only per-period SEs were available; ``"placebo_draws"`` when the
+    # input was a placebo event study from ``diagnose_design`` (planned
+    # power for a design that has not been run; the covariance is the sample
+    # covariance of the coefficients across placebo draws); ``"unknown"`` for
+    # legacy serialized results pre-PR-B (backwards-compat default). See
     # ``diagnostic_report._infer_cov_source`` for consumer-side use.
     covariance_source: str = "unknown"
 
@@ -591,6 +684,7 @@ class PreTrendsPowerResults(Diagnostic):
         """
         from scipy import stats
 
+        _validate_violation_magnitude(M)
         n_pre = self.n_pre_periods
 
         # Prefer the persisted fitted weights (populated for all violation
@@ -1086,6 +1180,8 @@ class PreTrendsPower(BaseEstimator):
             - ``"diag_fallback"`` when only the per-period standard
               errors were available (bootstrap / replicate-weight CS or
               SA fits).
+            - ``"placebo_draws"`` when the container is a placebo event
+              study recorded by ``diagnose_design(..., event_study=True)``.
 
             ``DiagnosticReport`` consumes this label downstream to
             decide whether the power-tier should be conservatively
@@ -2081,6 +2177,16 @@ class PreTrendsPower(BaseEstimator):
             ``DMLDiDResults.aggregate('event_study')``, or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2``).
+            A design that has not been run is also accepted: a
+            ``DesignDiagnosisResults`` from ``diagnose_design(...,
+            event_study=True)`` that holds one placebo event study, or one
+            entry of its ``event_study_results``. The result is then planned
+            pre-trend power (``covariance_source == "placebo_draws"``). It is
+            reported only when the pre-trend test over the tested pre-periods
+            rejected, in the placebo draws, at the rate the formula assumes
+            (``ValueError`` with both rates otherwise; see
+            :meth:`power_by_pre_periods`), and for ``pretest_form="nis"``
+            only.
         M : float, optional
             Specific violation magnitude to evaluate. If None, evaluates at
             a default magnitude based on the data.
@@ -2095,6 +2201,12 @@ class PreTrendsPower(BaseEstimator):
         PreTrendsPowerResults
             Power analysis results including power and MDV.
         """
+        if M is not None:
+            _validate_violation_magnitude(M)
+        # A design diagnosis is unwrapped to its placebo event study, which is
+        # also what the result keeps as original_results.
+        results = _resolve_planned_input(results)
+
         # Extract pre-period parameters (now includes relative_times for
         # γ-unit MDV under linear violation_type, plus the covariance-source
         # provenance label for downstream DiagnosticReport / BusinessReport
@@ -2112,6 +2224,16 @@ class PreTrendsPower(BaseEstimator):
         # linear-violation path produces γ-unit MDV per Roth's δ_t = γ·t
         # convention (skip L2 normalization for linear-with-relative_times).
         weights = self._get_violation_weights(n_pre, relative_times=relative_times)
+
+        # A design that has not been run: report power only if the pre-trend
+        # test behaves in the placebo draws as the formula assumes.
+        if _is_placebo_surface(results):
+            tested = _planned_pre_periods(results, pre_periods)
+            counted, expected, n_draws, agrees = self._planned_pretest_check(
+                results, tested, weights, vcov
+            )
+            if not agrees:
+                raise ValueError(_planned_withheld_message(tested, counted, expected, n_draws))
 
         # Compute MDV (dispatches on self.pretest_form)
         mdv = self._compute_mdv(weights, vcov)
@@ -2160,7 +2282,7 @@ class PreTrendsPower(BaseEstimator):
         Parameters
         ----------
         results : results object
-            Event study results.
+            Event study results, or a design-stage input (see :meth:`fit`).
         M : float
             Violation magnitude.
         pre_periods : list of int, optional
@@ -2187,7 +2309,7 @@ class PreTrendsPower(BaseEstimator):
         Parameters
         ----------
         results : results object
-            Event study results.
+            Event study results, or a design-stage input (see :meth:`fit`).
         M_grid : list of float, optional
             Specific violation magnitudes to evaluate. If None, creates
             automatic grid from 0 to 2.5 * MDV.
@@ -2201,6 +2323,7 @@ class PreTrendsPower(BaseEstimator):
         PreTrendsPowerCurve
             Power curve data with plot method.
         """
+        results = _resolve_planned_input(results)
         # Extract parameters (6-tuple includes relative_times + covariance
         # source; the source label is currently unused on the curve path but
         # the unpack must match the helper's signature).
@@ -2208,6 +2331,13 @@ class PreTrendsPower(BaseEstimator):
             results, pre_periods
         )
         weights = self._get_violation_weights(n_pre, relative_times=relative_times)
+        if _is_placebo_surface(results):
+            tested = _planned_pre_periods(results, pre_periods)
+            counted, expected, n_draws, agrees = self._planned_pretest_check(
+                results, tested, weights, vcov
+            )
+            if not agrees:
+                raise ValueError(_planned_withheld_message(tested, counted, expected, n_draws))
 
         # Compute MDV
         mdv = self._compute_mdv(weights, vcov)
@@ -2217,6 +2347,7 @@ class PreTrendsPower(BaseEstimator):
             max_M = min(2.5 * mdv if np.isfinite(mdv) else 10 * np.max(ses), 100)
             M_grid = np.linspace(0, max_M, n_points)
         else:
+            _validate_violation_magnitude(M_grid)
             M_grid = np.asarray(M_grid)
 
         # Compute power at each M
@@ -2233,6 +2364,160 @@ class PreTrendsPower(BaseEstimator):
             pretest_form=self.pretest_form,
         )
 
+    def _planned_pretest_check(
+        self, surface: Any, tested: List[Any], weights: np.ndarray, vcov: np.ndarray
+    ) -> Tuple[float, float, int, bool]:
+        """Does the pre-trend test over ``tested`` behave as the formula assumes?
+
+        Compares how often the test rejected in the placebo draws (no
+        violation is present in any of them) with the rejection probability
+        the formula gives at a violation of zero. Returns the counted rate,
+        the assumed rate, the number of draws and the verdict.
+
+        Planned power is available for the NIS form only: that is the test
+        the placebo record can count, and the one the library's simulation
+        checked against direct trend injection.
+        """
+        from diff_diff.design import _pretest_size_ok, placebo_pretest_rate
+
+        if self.pretest_form != "nis":
+            raise ValueError(
+                "Planned pre-trend power (a design-stage input from "
+                "diagnose_design) is available for pretest_form='nis' only: the "
+                "placebo draws record each coefficient against its own standard "
+                "error, which is the NIS test, and the joint Wald form has not "
+                "been checked against placebo draws."
+            )
+        counted, n_draws = placebo_pretest_rate(surface, tested, self.alpha)
+        expected = float(self._compute_power(0.0, weights, vcov)[0])
+        return counted, expected, n_draws, _pretest_size_ok(counted, expected, n_draws)
+
+    def power_by_pre_periods(self, results: Any, M: Optional[float] = None) -> pd.DataFrame:
+        """
+        Planned pre-trend power by number of pre-periods tested.
+
+        For a design that has not been run: one row per ``K``, where the test
+        covers the ``K`` pre-period coefficients closest to treatment. Each
+        row is :meth:`fit` on those ``K`` coefficients.
+
+        A row describes the same planned data with fewer coefficients tested.
+        It is not a design with fewer periods of data.
+
+        The power formula assumes that each coefficient's own test rejects at
+        its nominal level when nothing is wrong. Every row is checked against
+        the placebo draws: ``placebo_rejection_rate`` is how often the test
+        over that row's coefficients rejected in the draws (none of which has
+        a violation), and ``power_no_violation`` is the rate the formula
+        assumes. Where the two disagree by more than Monte Carlo error the
+        row's ``mdv``, ``max_abs_pre_violation`` and ``power`` are NaN, and
+        one warning lists the rows concerned.
+
+        Parameters
+        ----------
+        results : DesignDiagnosisResults or EventStudyResults
+            A design diagnosis run with ``event_study=True`` that holds one
+            placebo event study, or one entry of its ``event_study_results``.
+            A fitted model is refused: choosing how many pre-periods to test
+            after seeing the estimated event study is a choice made on the
+            outcome. ``fit(results, pre_periods=...)`` remains available for
+            a fitted model.
+        M : float, optional
+            Violation magnitude at which to report ``power``. ``None`` leaves
+            that column NaN.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns ``n_pre_periods``, ``pre_periods`` (the event times
+            tested), ``mdv``, ``max_abs_pre_violation``,
+            ``power_no_violation`` (the probability, under the formula, that
+            the test rejects when there is no violation: above ``alpha`` and
+            growing with ``K``, because the test rejects when any single
+            coefficient is significant), ``placebo_rejection_rate`` (the same
+            rate counted in the placebo draws), and ``power`` at ``M``.
+
+        Raises
+        ------
+        TypeError
+            If ``results`` is not a design-stage input.
+        ValueError
+            If ``violation_type="custom"`` (custom weights are positional for
+            one fixed set of pre-periods and have no defined subset) or
+            ``pretest_form="wald"`` (planned power is available for the NIS
+            form only).
+        """
+        results = _resolve_planned_input(results)
+        if not _is_placebo_surface(results):
+            raise TypeError(
+                "power_by_pre_periods plans a design that has not been run: pass "
+                "a DesignDiagnosisResults from diagnose_design(..., "
+                "event_study=True) or one entry of its event_study_results. For "
+                "a fitted model use fit(results, pre_periods=...)."
+            )
+        if self.violation_type == "custom":
+            raise ValueError(
+                "power_by_pre_periods does not support violation_type='custom': "
+                "custom weights are positional for one fixed set of pre-periods. "
+                "Call fit(results, pre_periods=...) with weights for that set."
+            )
+        if M is not None:
+            _validate_violation_magnitude(M)
+        labels = _planned_pre_periods(results, None)
+        if not labels:
+            raise ValueError("No pre-treatment periods found in event study.")
+        rows: List[Dict[str, Any]] = []
+        withheld: List[int] = []
+        # The extraction repeats its interpretation warnings on every call;
+        # issue each distinct one once for the whole table.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for k in range(1, len(labels) + 1):
+                tested = labels[-k:]
+                _, _, vcov, n_pre, relative_times, _ = self._extract_pre_period_params(
+                    results, tested
+                )
+                weights = self._get_violation_weights(n_pre, relative_times=relative_times)
+                counted, expected, _, agrees = self._planned_pretest_check(
+                    results, tested, weights, vcov
+                )
+                row: Dict[str, Any] = {
+                    "n_pre_periods": n_pre,
+                    "pre_periods": tested,
+                    "mdv": np.nan,
+                    "max_abs_pre_violation": np.nan,
+                    "power_no_violation": expected,
+                    "placebo_rejection_rate": counted,
+                    "power": np.nan,
+                }
+                if agrees:
+                    mdv = self._compute_mdv(weights, vcov)
+                    row["mdv"] = mdv
+                    row["max_abs_pre_violation"] = (
+                        float(mdv * np.max(np.abs(weights))) if np.isfinite(mdv) else mdv
+                    )
+                    if M is not None:
+                        row["power"] = float(self._compute_power(M, weights, vcov)[0])
+                else:
+                    withheld.append(k)
+                rows.append(row)
+        seen = set()
+        for record in caught:
+            key = (record.category, str(record.message))
+            if key not in seen:
+                seen.add(key)
+                warnings.warn(str(record.message), record.category, stacklevel=2)
+        if withheld:
+            warnings.warn(
+                f"Planned pre-trend power is not reported for tests of "
+                f"{withheld} pre-period(s): in the placebo draws those tests "
+                f"rejected, with no violation, at a rate that differs from the "
+                f"one the power formula assumes by more than Monte Carlo error "
+                f"(columns placebo_rejection_rate and power_no_violation).",
+                UserWarning,
+                stacklevel=2,
+            )
+        return pd.DataFrame(rows)
+
     def sensitivity_to_honest_did(
         self,
         results: Any,
@@ -2247,7 +2532,9 @@ class PreTrendsPower(BaseEstimator):
         Parameters
         ----------
         results : results object
-            Event study results.
+            Event study results from a fitted model. A design-stage input
+            (a ``DesignDiagnosisResults`` or one of its placebo event
+            studies) is refused: this method describes a realized estimate.
         pre_periods : list of int, optional
             Explicit list of pre-treatment periods. See fit() for details.
 
@@ -2259,6 +2546,14 @@ class PreTrendsPower(BaseEstimator):
             - honest_M_at_mdv: Corresponding M value for HonestDiD
             - interpretation: Text explaining the relationship
         """
+        results = _resolve_planned_input(results)
+        if _is_placebo_surface(results):
+            raise ValueError(
+                "sensitivity_to_honest_did describes a realized event study; a "
+                "placebo event study from diagnose_design has no estimate to "
+                "compare. Sensitivity planning at the design stage is not "
+                "implemented."
+            )
         pt_results = self.fit(results, pre_periods=pre_periods)
         mdv = pt_results.mdv
         # Level-scale scalar for comparison against the level-scale
@@ -2335,7 +2630,10 @@ def compute_pretrends_power(
     Parameters
     ----------
     results : results object
-        Event study results (CS / SA), or the unified event-study
+        Event study results (CS / SA), a design-stage input (a
+        ``DesignDiagnosisResults`` from ``diagnose_design(...,
+        event_study=True)`` holding one placebo event study, or one entry of
+        its ``event_study_results``), or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
@@ -2403,7 +2701,10 @@ def compute_mdv(
     Parameters
     ----------
     results : results object
-        Event study results (CS / SA), or the unified event-study
+        Event study results (CS / SA), a design-stage input (a
+        ``DesignDiagnosisResults`` from ``diagnose_design(...,
+        event_study=True)`` holding one placebo event study, or one entry of
+        its ``event_study_results``), or the unified event-study
         container from ``CallawaySantAnnaResults.aggregate('event_study')``,
         ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked

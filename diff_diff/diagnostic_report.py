@@ -51,6 +51,7 @@ import pandas as pd
 
 from diff_diff._reporting_helpers import (  # noqa: E402 (top-level import)
     check_design_reconciliation,
+    check_precomputed_pretrends_power,
     describe_design_reconciliation,
     describe_target_parameter,
     design_reconciliation_lines,
@@ -614,6 +615,7 @@ class DiagnosticReport:
                 "aggregate('event_study') surface) and do not accept "
                 "precomputed overrides."
             )
+        check_precomputed_pretrends_power(self._precomputed, "DiagnosticReport")
         # Post-fit event-study derivation cache (see
         # _resolve_event_study_surface): a triple
         # (surface, surface_dict, why) once resolved, plus the bare

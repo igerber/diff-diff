@@ -633,6 +633,15 @@ does not reject, the summary reflects whether the test is well-powered
 trends hold". See `docs/methodology/REPORTING.md` for the full verdict
 and tier rules.
 
+Before the study has run, the same question can be asked of the planned
+design: `diagnose_design(..., event_study=True)` followed by
+`PreTrendsPower().fit(diagnosis)` gives the smallest trend violation the
+planned pre-trend test would detect, and
+`PreTrendsPower().power_by_pre_periods(diagnosis)` shows it by number of
+pre-periods tested. No number is given for a set of pre-periods whose
+pre-trend test, in the placebo draws, does not reject at the rate the power
+formula assumes (typical with few treated units or many pre-periods).
+
 ### Runtime guidance
 ```python
 from diff_diff import practitioner_next_steps

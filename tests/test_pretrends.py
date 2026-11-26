@@ -214,6 +214,28 @@ class TestViolationWeights:
 class TestPowerComputation:
     """Tests for power computation."""
 
+    @pytest.mark.parametrize("pretest_form", ["nis", "wald"])
+    @pytest.mark.parametrize("magnitude", [float("nan"), float("inf")])
+    def test_non_finite_magnitude_is_refused(
+        self, mock_event_study_results, pretest_form, magnitude
+    ):
+        """A NaN ``M`` was reported as power 1.0 (NIS) or alpha (Wald)."""
+        pt = PreTrendsPower(pretest_form=pretest_form)
+        with pytest.raises(ValueError, match="must be finite"):
+            pt.fit(mock_event_study_results, M=magnitude)
+        with pytest.raises(ValueError, match="must be finite"):
+            pt.power_at(mock_event_study_results, magnitude)
+        with pytest.raises(ValueError, match="must be finite"):
+            pt.power_curve(mock_event_study_results, M_grid=[0.5, magnitude])
+        fitted = pt.fit(mock_event_study_results, M=0.5)
+        with pytest.raises(ValueError, match="must be finite"):
+            fitted.power_at(magnitude)
+        with pytest.raises(ValueError, match="must be finite"):
+            compute_pretrends_power(
+                mock_event_study_results, M=magnitude, pretest_form=pretest_form
+            )
+        assert 0.0 <= fitted.power_at(0.5) <= 1.0
+
     def test_power_at_zero_equals_alpha(self):
         """Test that power at M=0 equals alpha (size of test).
 

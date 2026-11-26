@@ -17,10 +17,23 @@ violations of parallel trends. This module provides tools to assess:
 
 Key insights from Roth (2022):
 
-- Pre-trends tests are joint tests that pre-period coefficients equal zero
+- The usual pre-trends check looks for any individually significant pre-period
+  coefficient (the default ``pretest_form="nis"``); a joint Wald test is the
+  alternative (``pretest_form="wald"``)
 - Standard pre-trends tests often have low power against linear trends
 - A "passed" pre-trends test may simply reflect lack of statistical power
 - MDV provides the minimum violation the test could have detected
+
+**Before the study has run.** ``PreTrendsPower`` also accepts a design that
+has not been run: a :class:`~diff_diff.DesignDiagnosisResults` from
+``diagnose_design(..., event_study=True)``, or one entry of its
+``event_study_results``. The result is then planned pre-trend power
+(``covariance_source == "placebo_draws"``), and
+:meth:`~diff_diff.PreTrendsPower.power_by_pre_periods` tabulates it by the
+number of pre-periods tested. Planned power is reported for a set of
+pre-periods only when the pre-trend test over that set rejected, in the
+placebo draws, at the rate the formula assumes; it is available for
+``pretest_form="nis"`` only. See :doc:`design` for the details.
 
 PreTrendsPower
 --------------
@@ -40,6 +53,7 @@ Main class for pre-trends power analysis.
 
       ~PreTrendsPower.fit
       ~PreTrendsPower.power_curve
+      ~PreTrendsPower.power_by_pre_periods
       ~PreTrendsPower.sensitivity_to_honest_did
 
 Example

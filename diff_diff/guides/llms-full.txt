@@ -2442,7 +2442,9 @@ every listed estimator on the same placebo draws. It never estimates a real
 treatment effect.
 
 ```python
-from diff_diff import CallawaySantAnna, ImputationDiD, TwoWayFixedEffects, diagnose_design
+from diff_diff import (
+    CallawaySantAnna, ImputationDiD, PreTrendsPower, TwoWayFixedEffects, diagnose_design,
+)
 
 # `panel`: balanced, pre-treatment only (or pass first_treat= to truncate at
 # the earliest real adoption). One row per unit and period.
@@ -2463,6 +2465,27 @@ null_run = result.results["cs"][0]           # SimulationPowerResults at effect 
 size = null_run.rejection_rate               # should be near alpha
 ok = result.size_controlled["cs"]            # False -> power is not meaningful
 mde = result.mde["cs"]                       # NaN unless size is controlled
+
+# Planned pre-trend power, before any outcome exists: keep the placebo event
+# studies (CallawaySantAnna and StackedDiD candidates), then ask PreTrendsPower.
+plan = diagnose_design(
+    panel, outcome="sales", unit="store", time="year",
+    estimators=[CallawaySantAnna(base_period="universal")],
+    cohort_periods=[2019], n_treated=12, n_simulations=500, seed=2,
+    event_study=True,
+)
+table = PreTrendsPower().power_by_pre_periods(plan)   # one row per number tested
+# columns: n_pre_periods, pre_periods, mdv, max_abs_pre_violation,
+#          power_no_violation (rate the formula assumes with no violation),
+#          placebo_rejection_rate (the same rate counted in the placebo draws), power
+planned = PreTrendsPower().fit(plan, pre_periods=[-4, -3, -2])  # PreTrendsPowerResults
+planned.mdv                                  # smallest violation detected at 80% power
+# The formula assumes each coefficient's own test holds its level. For the
+# pre-periods being planned, PreTrendsPower compares the pre-trend test's
+# rejection rate in the placebo draws with the rate the formula assumes and
+# reports planned power only where they agree: a row that disagrees has NaN
+# mdv, and fit() on such a set raises ValueError with both rates (typical with
+# few treated units or many pre-periods). NIS form only (the default).
 
 # Several estimators were compared, so locking the choice reruns "cs" alone on
 # the same panel with new placebo draws; the lock reports that run.
@@ -2571,10 +2594,11 @@ from diff_diff import PreTrendsPower, compute_pretrends_power, compute_mdv
 
 # Class-based
 ptp = PreTrendsPower()
-results = ptp.compute(event_study_results, M_grid=[0, 0.5, 1.0, 2.0])
+results = ptp.fit(event_study_results)            # results.mdv, results.power
+curve = ptp.power_curve(event_study_results, M_grid=[0, 0.5, 1.0, 2.0])
 
 # Convenience functions
-results = compute_pretrends_power(event_study_results, M_grid=[0, 0.5, 1.0, 2.0])
+results = compute_pretrends_power(event_study_results, M=0.5)
 mdv = compute_mdv(event_study_results, target_power=0.80)
 ```
 
