@@ -319,6 +319,20 @@ class DMLDiDResults(CallawaySantAnnaResults):
             )
         return pd.DataFrame(rows, columns=cols)
 
+    def get_loo_effects_df(self) -> pd.DataFrame:
+        """Not available: ``DMLDiD`` has no cluster jackknife.
+
+        The method is inherited from :class:`CallawaySantAnnaResults`, where it
+        returns the delete-one-cluster estimates of a
+        ``vcov_type="jackknife"`` fit. ``DMLDiD`` has no ``vcov_type`` option,
+        so there are no such estimates and this always raises ``ValueError``.
+        """
+        raise ValueError(
+            "get_loo_effects_df() is not available for DMLDiD results: DMLDiD "
+            "has no cluster jackknife (it has no vcov_type option), so there "
+            "are no delete-one-cluster estimates to return."
+        )
+
     def to_dataframe(self, level: str = "group_time") -> pd.DataFrame:
         """Parent DataFrame; on bad-control fits the ``group_time`` level gains
         ``att_x`` / ``se_x`` (analytical, unlike a bootstrapped ``se``)."""

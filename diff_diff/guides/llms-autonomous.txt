@@ -1135,8 +1135,8 @@ section is the API-reference index.
 - `HonestDiD(...).power_by_M(diagnose_design(..., event_study=True))` -
   planned power of the sensitivity analysis, by `M`, counted on the placebo
   draws (rate at which the robust interval excludes zero with no effect,
-  width, MDE, power at `effect_size`); rows that fail the size rule have
-  blank `mde` / `power`
+  width, MDE, power at `effect_size`, `size_controlled`); rows that fail
+  the size rule have blank `mde` / `power`
 - `compute_pretrends_power(results, ...)` - standalone power analysis
   for the PT test; takes a fitted event-study results object (CS / SA
   results or an `EventStudyResults` container, e.g. the TWFE

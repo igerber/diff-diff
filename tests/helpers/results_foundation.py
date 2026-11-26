@@ -343,7 +343,7 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             estimator_name="DifferenceInDifferences",
         ),
         "DesignDiagnosisResults": diff_diff.DesignDiagnosisResults(
-            results={
+            power_results={
                 "DifferenceInDifferences": [
                     diff_diff.SimulationPowerResults(
                         power=power,
@@ -406,7 +406,7 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
                     "realized": "unit",
                     "status": "deviates",
                 },
-                {"item": "n_units", "locked": 20, "realized": None, "status": "not checked"},
+                {"item": "n_units", "locked": 20, "realized": None, "status": "not_checked"},
             ],
             label="DifferenceInDifferences",
             lock_sha256="0" * 64,

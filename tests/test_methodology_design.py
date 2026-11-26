@@ -81,26 +81,26 @@ class TestSerialCorrelationOverRejection:
     """
 
     def test_unclustered_standard_errors_over_reject(self, serial_correlation_result):
-        null = serial_correlation_result.results["twfe_classical"][0]
+        null = serial_correlation_result.power_results["twfe_classical"][0]
         assert null.true_effect == 0.0
         assert null.rejection_rate > 0.25
         assert serial_correlation_result.size_controlled["twfe_classical"] is False
 
     def test_unit_clustered_standard_errors_are_near_nominal(self, serial_correlation_result):
-        null = serial_correlation_result.results["twfe_clustered"][0]
+        null = serial_correlation_result.power_results["twfe_clustered"][0]
         assert null.rejection_rate < 0.12
         assert serial_correlation_result.size_controlled["twfe_clustered"] is True
 
     def test_both_variants_share_point_estimates(self, serial_correlation_result):
         """Same estimator, same placebo draws: only the inference differs."""
-        cells = serial_correlation_result.results
+        cells = serial_correlation_result.power_results
         for i in range(4):
             assert cells["twfe_classical"][i].mean_estimate == pytest.approx(
                 cells["twfe_clustered"][i].mean_estimate, abs=1e-10
             )
 
     def test_coverage_mirrors_size_under_the_null(self, serial_correlation_result):
-        for cells in serial_correlation_result.results.values():
+        for cells in serial_correlation_result.power_results.values():
             null = cells[0]
             assert null.coverage == pytest.approx(1.0 - null.rejection_rate, abs=1e-12)
 
@@ -109,13 +109,13 @@ class TestEffectInjection:
     """Bertrand et al. (2004), pp.259, 261: add the effect to treated observations."""
 
     def test_power_rises_with_the_injected_effect(self, serial_correlation_result):
-        cells = serial_correlation_result.results["twfe_clustered"]
+        cells = serial_correlation_result.power_results["twfe_clustered"]
         powers = [cell.power for cell in cells]
         assert powers[0] < powers[1] < powers[2] <= powers[3]
         assert powers[3] > 0.8
 
     def test_estimates_are_unbiased_for_the_injected_effect(self, serial_correlation_result):
-        cells = serial_correlation_result.results["twfe_clustered"]
+        cells = serial_correlation_result.power_results["twfe_clustered"]
         for cell in cells:
             # Bias is the same at every effect: the placebo draws are shared.
             assert cell.bias == pytest.approx(cells[0].bias, abs=1e-10)
@@ -123,7 +123,7 @@ class TestEffectInjection:
 
     def test_over_rejecting_test_shows_inflated_power(self, serial_correlation_result):
         """The raw rejection rate of an over-sized test is not size-adjusted."""
-        cells = serial_correlation_result.results
+        cells = serial_correlation_result.power_results
         assert cells["twfe_classical"][1].power > cells["twfe_clustered"][1].power
 
 
@@ -141,7 +141,7 @@ class TestFewTreatedUnits:
             n_treated=2,
             n_simulations=300,
         )
-        for label, cells in result.results.items():
+        for label, cells in result.power_results.items():
             assert cells[0].rejection_rate > 0.15, label
             assert result.size_controlled[label] is False, label
 
@@ -153,7 +153,7 @@ class TestFewTreatedUnits:
             n_treated=20,
             n_simulations=300,
         )
-        for label, cells in result.results.items():
+        for label, cells in result.power_results.items():
             assert cells[0].rejection_rate < 0.12, label
 
 
@@ -162,7 +162,7 @@ class TestDocumentedChoices:
 
     def test_rmse_is_the_existing_sample_sd_form(self, serial_correlation_result):
         """Not Blair et al.'s root mean squared error: the variance term uses ddof=1."""
-        cell = serial_correlation_result.results["twfe_clustered"][2]
+        cell = serial_correlation_result.power_results["twfe_clustered"][2]
         estimates = np.array([r["estimate"] for r in cell.simulation_results])
         bias = estimates.mean() - cell.true_effect
         assert cell.rmse == pytest.approx(np.sqrt(bias**2 + estimates.std(ddof=1) ** 2))
@@ -182,7 +182,7 @@ class TestDocumentedChoices:
             power=0.8,
         )
         assert result.size_controlled["did"] is True
-        spread = result.results["did"][0].std_estimate
+        spread = result.power_results["did"][0].std_estimate
         multiplier = stats.norm.ppf(0.975) + stats.norm.ppf(0.8)
         assert result.mde["did"] == pytest.approx(multiplier * spread, rel=0.25)
         assert result.mde_results["did"].power_at_mde >= 0.8
@@ -208,9 +208,12 @@ class TestDocumentedChoices:
         resampled = diagnose(panel, estimator, **kwargs)
         fixed = diagnose(panel, estimator, resample_units=False, **kwargs)
         assert resampled.resample_units is True and fixed.resample_units is False
-        assert fixed.results["did"][0].n_simulations == 100
+        assert fixed.power_results["did"][0].n_simulations == 100
         # Different designs, hence different draws.
-        assert fixed.results["did"][0].mean_estimate != resampled.results["did"][0].mean_estimate
+        assert (
+            fixed.power_results["did"][0].mean_estimate
+            != resampled.power_results["did"][0].mean_estimate
+        )
 
     def test_staggered_declaration_draws_each_unit_from_the_declared_periods(self):
         panel = ar1_panel(40, 12, 0.3, seed=5)
@@ -222,7 +225,7 @@ class TestDocumentedChoices:
             effect_sizes=[1.0],
             n_simulations=100,
         )
-        for label, cells in result.results.items():
+        for label, cells in result.power_results.items():
             assert cells[1].mean_estimate == pytest.approx(1.0, abs=0.15), label
             assert cells[1].power > cells[0].power, label
 
@@ -273,7 +276,7 @@ class TestLockRerun:
 
     def test_rerun_is_separate_from_the_comparison(self, locked):
         result, lock = locked
-        compared = result.results["twfe_clustered"]
+        compared = result.power_results["twfe_clustered"]
         for cell, row in zip(compared, lock.rerun_results):
             assert row["true_effect"] == cell.true_effect
             assert row["mean_estimate"] != cell.mean_estimate

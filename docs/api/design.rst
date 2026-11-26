@@ -81,8 +81,10 @@ numbers are counted, not derived from a formula: an effect that is the same
 across treated units moves every draw's interval by the size of the effect and
 changes nothing else, so the interval at any effect size follows from the
 no-effect draw. A row whose interval excludes zero too often (the size rule the
-diagnosis applies to its own MDE) shows the rate and leaves ``mde`` and
-``power`` blank. On small panels this happens for ``method="smoothness"`` at
+diagnosis applies to its own MDE) shows the rate, has ``size_controlled``
+set to ``False`` and leaves ``mde`` and ``power`` blank. ``power`` is the share
+of draws whose interval excludes zero, as for the rejection rates of the
+diagnosis. On small panels this happens for ``method="smoothness"`` at
 ``M = 0``, whose interval is built from each fit's own estimated covariance.
 These are powers when parallel trends hold; ``method="combined"`` is not
 planned. Keeping the draws costs about 3 KB per replicate on the diagnosis.
@@ -123,7 +125,7 @@ Either way, the lock does not record when it was made. ``match`` says the
 analysis agrees with the lock on the checks that were run; whether the design
 was fixed before the outcomes were seen depends on when you saved or registered
 the lock file. A deviation is not graded, and checks whose inputs were not passed
-are reported as ``not checked`` next to the status.
+are reported as ``not_checked`` next to the status.
 
 **Reports.** Pass the reconciliation to
 :class:`~diff_diff.BusinessReport` or :class:`~diff_diff.DiagnosticReport` as
@@ -200,7 +202,7 @@ Example
    table = result.to_dataframe()     # one row per estimator and effect size
 
    # The no-effect run of one estimator: its rejection_rate is the size.
-   null_run = result.results["cs"][0]
+   null_run = result.power_results["cs"][0]
    print(null_run.rejection_rate, result.size_controlled["cs"], result.mde["cs"])
 
 Three estimators were compared, so locking the choice reruns it alone, with new

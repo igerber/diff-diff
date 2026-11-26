@@ -130,7 +130,7 @@ _EVENT_STUDY_ESTIMATORS = ("CallawaySantAnna", "StackedDiD")
 # Attribute of a placebo event study that holds, per placebo draw, each
 # pre-period coefficient over its own reported standard error (absolute
 # value). PreTrendsPower counts the pre-trend test's rejections from it for
-# whichever pre-periods it is asked to plan (see placebo_pretest_rate).
+# whichever pre-periods it is asked to plan (see _placebo_pretest_rate).
 _PRETEST_RECORD = "_placebo_pretest"
 # Attribute of a placebo event study that holds the event-study container of
 # every placebo draw behind it, and how many no-effect replicates never became
@@ -141,7 +141,7 @@ _PLACEBO_DRAWS = "_placebo_draws"
 # results_base._validate_vcov_subblock applies when allow_singular=False).
 _RANK_TOLERANCE = 1e-10
 # The estimand label of a placebo event-study surface (EventStudyResults.estimand).
-PLACEBO_ESTIMAND = "placebo"
+_PLACEBO_ESTIMAND = "placebo"
 
 # Printed by both summaries: what a placebo diagnosis does and does not test.
 _SCOPE_LINES = (
@@ -162,7 +162,7 @@ class DesignDiagnosisResults(Diagnostic):
 
     Attributes
     ----------
-    results : dict
+    power_results : dict
         Label -> list of :class:`~diff_diff.SimulationPowerResults`, one per
         entry of ``effect_sizes``. The first entry is the no-effect run, so
         its ``rejection_rate`` is the estimator's size on this design.
@@ -228,7 +228,7 @@ class DesignDiagnosisResults(Diagnostic):
         :class:`~diff_diff.PreTrendsPower` for planned pre-trend power.
     """
 
-    results: Dict[str, List[SimulationPowerResults]]
+    power_results: Dict[str, List[SimulationPowerResults]]
     mde_results: Dict[str, SimulationMDEResults]
     estimators: Dict[str, Any]
     size_controlled: Dict[str, bool]
@@ -300,7 +300,7 @@ class DesignDiagnosisResults(Diagnostic):
             ``n_nan_inference`` and ``mde``.
         """
         rows: List[Dict[str, Any]] = []
-        for label, cells in self.results.items():
+        for label, cells in self.power_results.items():
             rows.extend(
                 _records(
                     label,
@@ -353,7 +353,7 @@ class DesignDiagnosisResults(Diagnostic):
             "time_periods": list(self.time_periods),
             "size_controlled": dict(self.size_controlled),
             "mde": dict(self.mde),
-            "results": self.to_dataframe().to_dict("records"),
+            "power_results": self.to_dataframe().to_dict("records"),
         }
 
     def summary(self) -> str:
@@ -392,7 +392,7 @@ class DesignDiagnosisResults(Diagnostic):
             f"{'Estimator':<26}{'Size':>8}{'Scored':>8}{'Lost':>7}{'Coverage':>10}"
             f"{'Size OK':>9}{'MDE':>10}",
         ]
-        for label, cells in self.results.items():
+        for label, cells in self.power_results.items():
             null = cells[0]
             mde = self.mde[label]
             mde_text = f"{mde:.4g}" if np.isfinite(mde) else "-"
@@ -408,7 +408,7 @@ class DesignDiagnosisResults(Diagnostic):
                 f"{'Estimator':<26}{'Effect':>10}{'Power':>8}{'Bias':>11}{'RMSE':>11}"
                 f"{'Coverage':>10}"
             )
-            for label, cells in self.results.items():
+            for label, cells in self.power_results.items():
                 for cell in cells[1:]:
                     lines.append(
                         f"{label[:25]:<26}{cell.true_effect:>10.4g}"
@@ -811,7 +811,7 @@ def _placebo_event_study(
         base_period=base_period,
         anticipation=0,
         reference_event_times=reference_event_times,
-        estimand=PLACEBO_ESTIMAND,
+        estimand=_PLACEBO_ESTIMAND,
     )
     reported = np.vstack([record[2] for record in used])
     mean_reported = reported.mean(axis=0)
@@ -832,7 +832,7 @@ def _placebo_event_study(
             _PLACEBO_DRAWS,
             {"draws": containers, "n_lost": int(n_lost) + n_excluded},
         )
-    counted, _ = placebo_pretest_rate(surface, pre_labels, alpha)
+    counted, _ = _placebo_pretest_rate(surface, pre_labels, alpha)
     expected = _formula_pretest_rate(vcov[np.ix_(pre, pre)], alpha)
     checks = {
         "n_draws": n_used,
@@ -905,7 +905,7 @@ def _resolve_event_study(results: Any) -> Tuple[Any, Optional["DesignDiagnosisRe
     return surface, results, label
 
 
-def placebo_pretest_rate(surface: Any, tested: Sequence[Any], alpha: float) -> Tuple[float, int]:
+def _placebo_pretest_rate(surface: Any, tested: Sequence[Any], alpha: float) -> Tuple[float, int]:
     """How often the pre-trend test rejected in the placebo draws, for ``tested``.
 
     The test is the one PreTrendsPower models by default: reject when any of
@@ -2132,7 +2132,7 @@ def diagnose_design(
                 )
 
     return DesignDiagnosisResults(
-        results=results,
+        power_results=results,
         mde_results=mde_results,
         estimators={label: _clone(est) for label, est in resolved.items()},
         size_controlled=size_controlled,
@@ -2174,7 +2174,7 @@ def diagnose_design(
 _ABSENT = "<absent>"
 _MATCH = "match"
 _DEVIATES = "deviates"
-_NOT_CHECKED = "not checked"
+_NOT_CHECKED = "not_checked"
 # Lock fields whose NaN entries (a cell that could not be scored, an MDE that
 # was not reported) are stored as None.
 _RECORD_FIELDS = ("comparison_results", "rerun_results", "mde")
@@ -2297,7 +2297,7 @@ def _lock(
             fit_kwargs = _fit_kwargs(chosen, outcome, unit, time, dict(diagnosis.estimator_kwargs))
             # Derived, not an argument: the rerun cannot be re-rolled.
             lock_seed = int(np.random.SeedSequence([int(diagnosis.seed), 1]).generate_state(1)[0])
-            null = diagnosis.results[label][0]
+            null = diagnosis.power_results[label][0]
             n_simulations = int(null.n_simulations) + int(null.n_simulation_failures)
             with _WarningCapture() as capture:
                 _preflight(label, chosen, generator, fit_kwargs, lock_seed)
@@ -2329,7 +2329,7 @@ def _lock(
         meaning = "" if size_ok else " Its power is not meaningful."
         warnings.warn(
             f"The size check gives different verdicts for '{label}'. "
-            f"{_size_facts('Comparison', diagnosis.results[label][0], compared_ok)}; "
+            f"{_size_facts('Comparison', diagnosis.power_results[label][0], compared_ok)}; "
             f"{_size_facts('rerun', rerun_null, size_ok)}. The lock records the "
             f"rerun's verdict, size_controlled={size_ok}.{meaning}",
             UserWarning,
@@ -3126,11 +3126,11 @@ class DesignReconciliationResults(Diagnostic):
     status : str
         ``"match"`` when every check that was run matches the lock,
         otherwise ``"deviates"``. The size of a deviation is not graded, and
-        checks whose inputs were not passed are ``"not checked"``.
+        checks whose inputs were not passed are ``"not_checked"``.
     checks : list of dict
         One entry per reconciled item, with keys ``item``, ``locked``,
         ``realized`` and ``status`` (``"match"``, ``"deviates"`` or
-        ``"not checked"``).
+        ``"not_checked"``).
     label : str
         Label of the locked estimator.
     lock_sha256 : str

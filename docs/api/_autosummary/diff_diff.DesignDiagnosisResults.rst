@@ -26,7 +26,7 @@
    .. autosummary::
 
       ~DesignDiagnosisResults.event_study
-      ~DesignDiagnosisResults.results
+      ~DesignDiagnosisResults.power_results
       ~DesignDiagnosisResults.mde_results
       ~DesignDiagnosisResults.estimators
       ~DesignDiagnosisResults.size_controlled

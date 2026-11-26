@@ -1175,12 +1175,20 @@ def _extract_event_study_params(
         Survey degrees of freedom for t-distribution inference
         (``0.0`` = replicate design with undefined df).
     """
+    from diff_diff.design import _PLACEBO_ESTIMAND, DesignDiagnosisResults
     from diff_diff.results_base import EventStudyResults
 
+    if isinstance(results, DesignDiagnosisResults):
+        raise ValueError(
+            "This is a design diagnosis from diagnose_design: it holds placebo "
+            "draws, not an estimate of an effect, so HonestDiD bounds on it "
+            "have no meaning. To plan a sensitivity analysis from it, use "
+            "HonestDiD.power_by_M (the diagnosis must have been run with "
+            "event_study=True); PreTrendsPower accepts it for planned "
+            "pre-trend power."
+        )
     if isinstance(results, EventStudyResults):
-        from diff_diff.design import PLACEBO_ESTIMAND
-
-        if results.estimand == PLACEBO_ESTIMAND:
+        if results.estimand == _PLACEBO_ESTIMAND:
             raise ValueError(
                 "This is a placebo event study from diagnose_design(..., "
                 "event_study=True): its coefficients are means over placebo "
@@ -3509,20 +3517,24 @@ class HonestDiD(BaseEstimator):
             - ``ci_width``: mean width of the robust interval.
             - ``mde``: the effect magnitude above which, for an effect of
               either sign, at least ``power`` of the scored draws have an
-              interval lying entirely on the effect's side of zero.
+              interval lying entirely on the effect's side of zero. Power as
+              defined below is at least that share, so the target is reached
+              for every effect larger than ``mde``.
             - ``power``: at ``effect_size``, the share of scored draws whose
-              interval lies entirely on the effect's side of zero (an
-              interval that excludes zero on the wrong side is not a
-              detection). At ``effect_size=0`` it is the
-              ``placebo_rejection_rate``. NaN when ``effect_size`` is not
-              given.
+              interval excludes zero, on either side: the definition of the
+              rejection rates ``diagnose_design`` reports. At
+              ``effect_size=0`` it is the ``placebo_rejection_rate``. NaN
+              when ``effect_size`` is not given.
             - ``n_simulations``: draws with a finite robust interval.
             - ``n_simulation_failures``: no-effect replicates without one
               (the estimator or this analysis failed on them, or their event
               study had a different layout).
+            - ``size_controlled``: whether the row passes the size rule
+              below.
 
             ``mde`` and ``power`` are NaN on a row that fails the size rule of
-            ``diagnose_design``: more than 10% of the replicates were lost, or
+            ``diagnose_design`` (``size_controlled`` is False): more than 10%
+            of the replicates were lost, or
             ``placebo_rejection_rate`` exceeds ``alpha`` by more than 1.96
             Monte Carlo standard errors. An interval that excludes zero too
             often when nothing happened has no meaningful power. One warning
@@ -3555,7 +3567,7 @@ class HonestDiD(BaseEstimator):
         """
         from diff_diff.design import (
             _DATA_DEPENDENT_ERRORS,
-            PLACEBO_ESTIMAND,
+            _PLACEBO_ESTIMAND,
             _placebo_draw_record,
             _reemit,
             _resolve_event_study,
@@ -3563,7 +3575,7 @@ class HonestDiD(BaseEstimator):
         from diff_diff.results_base import EventStudyResults
 
         surface, _diagnosis, _label = _resolve_event_study(results)
-        if not (isinstance(surface, EventStudyResults) and surface.estimand == PLACEBO_ESTIMAND):
+        if not (isinstance(surface, EventStudyResults) and surface.estimand == _PLACEBO_ESTIMAND):
             raise TypeError(
                 "power_by_M plans a sensitivity analysis from a design diagnosis "
                 "(diagnose_design(..., event_study=True)) or one of its placebo "
@@ -3674,6 +3686,7 @@ class HonestDiD(BaseEstimator):
             "power",
             "n_simulations",
             "n_simulation_failures",
+            "size_controlled",
         ]
         return pd.DataFrame(rows)[columns]
 
@@ -3805,8 +3818,11 @@ def _score_planned_intervals(
 
     An effect that is the same across treated units moves a draw's interval by
     the value ``theta`` of the target parameter and changes nothing else, so
-    the interval at ``theta`` is ``[ci_lb + theta, ci_ub + theta]``. It detects
-    the effect when it lies entirely on the effect's side of zero.
+    the interval at ``theta`` is ``[ci_lb + theta, ci_ub + theta]``. Power is
+    the share of scored draws whose interval excludes zero, on either side
+    (the rule of ``HonestDiDResults.is_significant`` and of the rejection
+    rates ``diagnose_design`` reports). The MDE is set from the effect's side
+    alone, so the target is reached for every effect larger than it.
     """
     from diff_diff.design import _size_controlled
 
@@ -3832,20 +3848,17 @@ def _score_planned_intervals(
     if not _size_controlled(rate, n, lost, alpha):
         return row
     row["size_controlled"] = True
-    # The smallest magnitude from which the detecting share is at least
-    # ``power``, for a positive effect (a + theta > 0) and for a negative one
-    # (b - theta < 0); the larger of the two, and never below zero.
+    # The smallest magnitude from which the share of intervals lying on the
+    # effect's side of zero is at least ``power``, for a positive effect
+    # (a + theta > 0) and for a negative one (b - theta < 0); the larger of
+    # the two, and never below zero. Power counts exclusions on either side,
+    # so it is at least that share: the target holds above the MDE.
     k = max(int(np.ceil(power * n - 1e-9)), 1)
     positive = float(np.sort(-a)[k - 1])
     negative = float(np.sort(b)[k - 1])
     row["mde"] = max(positive, negative, 0.0)
     if effect_size is not None:
-        if effect_size > 0.0:
-            row["power"] = float(np.mean(a + effect_size > 0.0))
-        elif effect_size < 0.0:
-            row["power"] = float(np.mean(b + effect_size < 0.0))
-        else:
-            row["power"] = rate
+        row["power"] = float(np.mean((a + effect_size > 0.0) | (b + effect_size < 0.0)))
     return row
 
 

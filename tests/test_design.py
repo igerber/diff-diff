@@ -86,7 +86,7 @@ def run(panel, estimators, **kwargs):
 
 
 def estimates(result, label, cell=0):
-    return np.array([r["estimate"] for r in result.results[label][cell].simulation_results])
+    return np.array([r["estimate"] for r in result.power_results[label][cell].simulation_results])
 
 
 ALL_EIGHT = [
@@ -108,8 +108,8 @@ class TestRecovery:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             result = run(panel, [cls() for cls in ALL_EIGHT], effect_sizes=[2.0], n_simulations=4)
-        assert list(result.results) == [cls.__name__ for cls in ALL_EIGHT]
-        for label, cells in result.results.items():
+        assert list(result.power_results) == [cls.__name__ for cls in ALL_EIGHT]
+        for label, cells in result.power_results.items():
             assert cells[0].n_simulations == 4, label
             assert abs(cells[0].mean_estimate) < 1e-2, label
             assert abs(cells[1].mean_estimate - 2.0) < 1e-2, label
@@ -127,7 +127,7 @@ class TestRecovery:
                 effect_sizes=[1.5],
                 n_simulations=4,
             )
-        for label, cells in result.results.items():
+        for label, cells in result.power_results.items():
             assert cells[1].n_simulations == 4, label
             assert abs(cells[1].mean_estimate - 1.5) < 1e-2, label
 
@@ -210,7 +210,7 @@ class TestPlaceboDraws:
             resample_units=False,
             n_simulations=400,
         )
-        cell = result.results["DifferenceInDifferences"][0]
+        cell = result.power_results["DifferenceInDifferences"][0]
         drawn = {round(float(e), 10) for e in estimates(result, "DifferenceInDifferences")}
         assert drawn <= set(enumerated)
         assert len(drawn) > 10
@@ -436,7 +436,7 @@ class TestRefusals:
             },
             resample_units=False,
         )
-        a, b = result.results["by_unit"][0], result.results["by_copy"][0]
+        a, b = result.power_results["by_unit"][0], result.power_results["by_copy"][0]
         assert a.rejection_rate == b.rejection_rate
         assert a.mean_se == pytest.approx(b.mean_se, rel=1e-12)
 
@@ -457,7 +457,7 @@ class TestRefusals:
                 seed=1,
                 progress=False,
             )
-        for cells in result.results.values():
+        for cells in result.power_results.values():
             assert cells[0].n_simulations == 5
 
     def test_common_timing_estimator_under_staggered_declaration(self):
@@ -531,7 +531,7 @@ class TestFailurePolicy:
         _stub_fit(monkeypatch, lambda i, make: make() if i == 1 else _with_nan_inference(make()))
         with pytest.warns(UserWarning):
             result = run(make_panel(seed=32), self.estimators(), n_simulations=15, power=0.8)
-        cell = result.results["twfe"][0]
+        cell = result.power_results["twfe"][0]
         assert cell.n_simulations == 0
         assert cell.n_simulation_failures == 15
         assert np.isnan(cell.rejection_rate)
@@ -539,7 +539,7 @@ class TestFailurePolicy:
         assert result.size_controlled["twfe"] is False
         assert np.isnan(result.mde["twfe"])
         assert "twfe" not in result.mde_results
-        assert result.results["did"][0].n_simulations == 15  # the other estimator completes
+        assert result.power_results["did"][0].n_simulations == 15  # the other estimator completes
 
     def test_some_nan_replicates_leave_rates_over_the_rest(self, monkeypatch):
         # Calls 2..6 are the first five replicates of the effect-0 cell.
@@ -549,7 +549,7 @@ class TestFailurePolicy:
         )
         with pytest.warns(UserWarning):
             result = run(make_panel(seed=33), self.estimators(), n_simulations=20)
-        cell = result.results["twfe"][0]
+        cell = result.power_results["twfe"][0]
         assert cell.n_simulations == 15
         assert cell.n_simulation_failures == 5
         assert result.n_nan_inference["twfe"] == [5]
@@ -565,12 +565,12 @@ class TestFailurePolicy:
         _stub_fit(monkeypatch, behaviour)
         with pytest.warns(UserWarning):
             result = run(make_panel(seed=34), self.estimators(), n_simulations=12)
-        cell = result.results["twfe"][0]
+        cell = result.power_results["twfe"][0]
         assert cell.n_simulations == 0
         assert cell.n_simulation_failures == 12
         assert result.n_nan_inference["twfe"] == [0]
         assert result.size_controlled["twfe"] is False
-        assert result.results["did"][0].n_simulations == 12
+        assert result.power_results["did"][0].n_simulations == 12
 
     def test_value_error_on_every_call_is_refused_by_preflight(self, monkeypatch):
         def behaviour(i, make):
@@ -609,7 +609,7 @@ class TestFailurePolicy:
             result = run(
                 make_panel(seed=38), self.estimators(), n_simulations=n, effect_sizes=[1.0]
             )
-        null, shifted = result.results["twfe"]
+        null, shifted = result.power_results["twfe"]
         assert null.n_simulations == n and null.n_simulation_failures == 0
         assert shifted.n_simulations == 0 and shifted.n_simulation_failures == n
         assert np.isfinite(null.rejection_rate)
@@ -630,7 +630,7 @@ class TestFailurePolicy:
             result = run(panel, self.estimators(), n_simulations=n, power=0.8)
         messages = [str(w.message) for w in caught]
         assert any(m.startswith("[twfe] MDE not reported") for m in messages)
-        assert result.results["twfe"][0].n_simulation_failures == 0
+        assert result.power_results["twfe"][0].n_simulation_failures == 0
         assert result.size_controlled["twfe"]  # the gate looks at effect 0 only
         assert np.isnan(result.mde["twfe"])
         assert "twfe" in result.mde_results  # the search ran; its value is withheld
@@ -767,7 +767,7 @@ class TestWarnings:
         # One per block (pre-flight, the single cell), not one per fit.
         assert len(messages) == 2
         assert any("raised 10 times" in m for m in messages)
-        assert result.results["twfe"][0].n_simulation_failures == 0
+        assert result.power_results["twfe"][0].n_simulation_failures == 0
 
     def test_caller_ignore_filter_does_not_lose_replicates(self, monkeypatch):
         _stub_fit(monkeypatch, _Chatty())
@@ -775,7 +775,7 @@ class TestWarnings:
             warnings.simplefilter("ignore")
             result = run(make_panel(seed=43), self.estimators(), n_simulations=10)
         assert caught == []
-        assert result.results["twfe"][0].n_simulations == 10
+        assert result.power_results["twfe"][0].n_simulations == 10
 
     def test_caller_error_filter_raises_the_labelled_warning(self, monkeypatch):
         _stub_fit(monkeypatch, _Chatty())
@@ -833,7 +833,7 @@ class TestResultsContract:
 
     def test_effect_sizes_are_the_ones_run(self, result):
         assert result.effect_sizes == [0.0, 0.5, 1.0]
-        for cells in result.results.values():
+        for cells in result.power_results.values():
             assert [cell.true_effect for cell in cells] == [0.0, 0.5, 1.0]
 
     def test_dataframe_layout(self, result):
@@ -848,7 +848,7 @@ class TestResultsContract:
         assert ((frame["n_simulations"] + frame["n_simulation_failures"]) == 15).all()
 
     def test_rejection_rate_at_zero_is_the_size(self, result):
-        null = result.results["did"][0]
+        null = result.power_results["did"][0]
         assert null.true_effect == 0.0
         assert null.rejection_rate == null.power
         assert 0.0 <= null.rejection_rate <= 1.0
@@ -861,7 +861,7 @@ class TestResultsContract:
         }
         assert payload["n_treated"] == 10
         assert payload["cohort_periods"] == [6]
-        assert len(payload["results"]) == 6
+        assert len(payload["power_results"]) == 6
         assert payload["data_sha256"] == result.data_sha256
 
     def test_estimators_field_holds_unfitted_copies(self, result):
@@ -961,7 +961,7 @@ class TestConfigurations:
             n_simulations=5,
         )
         assert result.estimator_kwargs == {"covariates": ["x"]}
-        for cells in result.results.values():
+        for cells in result.power_results.values():
             assert cells[0].n_simulations == 5
 
 
@@ -1217,7 +1217,7 @@ class TestLock:
         assert lock.size_controlled is False
         assert lock.rerun_results[0]["size_controlled"] is False
         message = next(str(w.message) for w in caught if "different verdicts" in str(w.message))
-        compared, rerun = result.results["classical"][0], lock.rerun_results[0]
+        compared, rerun = result.power_results["classical"][0], lock.rerun_results[0]
         assert f"Comparison: no-effect rejection rate {compared.rejection_rate:.1%}" in message
         assert f"{compared.n_simulations} scored, {compared.n_simulation_failures} lost" in message
         assert f"rerun: no-effect rejection rate {rerun['rejection_rate']:.1%}" in message
@@ -1425,7 +1425,7 @@ class TestLockSerialization:
 
     def test_cell_that_could_not_be_scored_round_trips(self):
         _, result = diagnosed(single=True)
-        result.results["did"][1] = _failed_cell(1.0, 0.05, "DifferenceInDifferences", 12)
+        result.power_results["did"][1] = _failed_cell(1.0, 0.05, "DifferenceInDifferences", 12)
         lock = result.lock("did")
         failed = lock.comparison_results[1]
         for name in ("power", "power_ci_lower", "power_ci_upper", "bias", "rmse", "coverage"):
@@ -1574,7 +1574,7 @@ class TestReconcile:
         estimator.results_ = types.SimpleNamespace(alpha=0.10)
         reconciliation = self.reconcile(lock, estimator, results=estimator.results_)
         assert deviating(reconciliation) == {"alpha"}
-        assert statuses(self.reconcile(lock))["alpha"] == "not checked"
+        assert statuses(self.reconcile(lock))["alpha"] == "not_checked"
 
     def test_results_of_another_estimator_are_refused(self, staggered):
         _, lock = staggered
@@ -1697,11 +1697,11 @@ class TestReconcile:
     def test_what_is_not_checked(self, staggered):
         panel, lock = staggered
         without_data = statuses(self.reconcile(lock))
-        assert all(without_data[item] == "not checked" for item in self.DATA)
+        assert all(without_data[item] == "not_checked" for item in self.DATA)
         assert self.reconcile(lock).status == "match"
         with_data = statuses(self.reconcile(lock, data=analysis_frame(panel)))
         for item in ("n_treated", "n_cohorts", "n_post_by_cohort"):
-            assert with_data[item] == "not checked"
+            assert with_data[item] == "not_checked"
         for item in ("data_sha256", "n_units", "is_balanced"):
             assert with_data[item] == "match"
 
@@ -1734,7 +1734,7 @@ class TestReconcile:
         assert reconciliation.status == "match"
         assert not [s for s in statuses(reconciliation).values() if s == "deviates"]
         without_post = statuses(self.reconcile(lock, estimator, treatment="treated", data=frame))
-        assert without_post["n_post_by_cohort"] == "not checked"
+        assert without_post["n_post_by_cohort"] == "not_checked"
         assert without_post["n_treated"] == "match"
 
     def test_two_group_structure(self, two_group):
@@ -1788,7 +1788,7 @@ class TestReconcile:
         analysis = analysis_frame(frame)
         # No data and no results: seven checks are not run.
         partial = self.reconcile(lock)
-        skipped = sum(1 for check in partial.checks if check["status"] == "not checked")
+        skipped = sum(1 for check in partial.checks if check["status"] == "not_checked")
         assert partial.status == "match" and skipped == 7
         assert f"match - {skipped} not checked" in partial.summary()
         assert f"not_checked={skipped}, declared=True)" in repr(partial)

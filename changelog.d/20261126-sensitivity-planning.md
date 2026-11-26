@@ -6,8 +6,10 @@
   them. It returns one row per `M`: the rate at which the robust interval
   excluded zero although no effect was present (`placebo_rejection_rate`), the
   interval's mean width (`ci_width`), the minimum detectable effect (`mde`),
-  the power at `effect_size` (`power`), and the number of replicates scored
-  and lost.
+  the power at `effect_size` (`power`: the share of draws whose interval
+  excludes zero, the definition of the rejection rates `diagnose_design`
+  reports), the number of replicates scored and lost, and whether the row
+  passes the size rule (`size_controlled`).
   - The numbers are counted, not derived from a formula. An effect that is the
     same across treated units moves a draw's robust interval by the value of
     the target parameter and changes nothing else, so the interval at any

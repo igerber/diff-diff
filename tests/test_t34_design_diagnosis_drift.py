@@ -337,7 +337,7 @@ def diagnosis(history):
 @pytest.mark.slow
 def test_size_verdicts(diagnosis):
     """Section 3: classical SEs over-reject by a wide margin; the others pass."""
-    size = {label: runs[0].rejection_rate for label, runs in diagnosis.results.items()}
+    size = {label: runs[0].rejection_rate for label, runs in diagnosis.power_results.items()}
     threshold = 0.05 + 1.96 * np.sqrt(0.05 * 0.95 / N_SIMULATIONS)
     assert round(threshold, 3) == 0.080
     assert size["twfe_classical"] > 0.25  # prose: 32.5%
@@ -355,9 +355,9 @@ def test_power_and_mde(diagnosis):
     """Section 3: cs has the most power and the smallest MDE among those passing."""
     passing = ("twfe", "cs", "imp")
     for cell in (1, 2):
-        power = {label: diagnosis.results[label][cell].power for label in passing}
+        power = {label: diagnosis.power_results[label][cell].power for label in passing}
         assert max(power, key=power.get) == "cs"
-    assert abs(diagnosis.results["cs"][2].power - 0.56) < 0.05  # "roughly a coin flip"
+    assert abs(diagnosis.power_results["cs"][2].power - 0.56) < 0.05  # "roughly a coin flip"
     assert min(passing, key=lambda label: diagnosis.mde[label]) == "cs"
     assert abs(diagnosis.mde["cs"] - 0.65) < 0.05
     assert diagnosis.mde["cs"] > TRUE_EFFECT  # the design cannot reliably detect 0.5

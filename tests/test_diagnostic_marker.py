@@ -231,3 +231,21 @@ def test_describe_target_parameter_bacon_still_twfe(bacon_result):
     block = describe_target_parameter(bacon_result)
     assert block["aggregation"] == "twfe"
     assert block["headline_attribute"] == "twfe_estimate"
+
+
+def test_constructed_reconciliation_uses_the_status_vocabulary(constructed):
+    # The shared fixture holds one check of each status; the summary and the
+    # report block must both see the skipped one (its status is "not_checked").
+    from diff_diff._reporting_helpers import describe_design_reconciliation
+
+    reconciliation = constructed["DesignReconciliationResults"]
+    assert [check["status"] for check in reconciliation.checks] == [
+        "match",
+        "deviates",
+        "not_checked",
+    ]
+    assert "1 not checked" in reconciliation.summary()
+    assert "not_checked=1" in repr(reconciliation)
+    block = describe_design_reconciliation(reconciliation)
+    assert (block["n_match"], block["n_deviates"], block["n_not_checked"]) == (1, 1, 1)
+    assert block["not_checked"] == ["n_units"]

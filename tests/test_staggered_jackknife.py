@@ -941,8 +941,11 @@ class TestLeaveOneOutTable:
             res = DMLDiD(seed=0).fit(
                 data, "outcome", "unit", "period", "first_treat", covariates=["x"]
             )
-        with pytest.raises(ValueError, match="requires vcov_type='jackknife'"):
+        # DMLDiD has no vcov_type option: the accessor it inherits says that it
+        # is not available, and does not send the user to another estimator.
+        with pytest.raises(ValueError, match="not available for DMLDiD results") as excinfo:
             res.get_loo_effects_df()
+        assert "CallawaySantAnna" not in str(excinfo.value)
 
 
 def full_labels(reps, by_label):
