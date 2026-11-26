@@ -590,7 +590,11 @@ with clean controls and apply Q-weights to reweight the stacked regression.
 .. note::
 
    The trimmed aggregate ATT may exclude early or late cohorts whose event
-   windows do not fit in the data. Check ``results.trimmed_groups``.
+   windows do not fit in the data, and cohorts left without a treated unit or
+   clean control observed at every event time of the window. Check
+   ``results.trimmed_groups``. On a panel with missing observations, units not
+   observed across a sub-experiment's whole window are excluded from it with a
+   warning.
 
 TROP
 ~~~~

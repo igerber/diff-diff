@@ -441,6 +441,20 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "treated through the event's post-window "
                 "(``A_s > a + kappa_post``)."
             )
+        # Each scheme aggregates the sub-experiment ATTs with its own cohort
+        # share (Wing et al. 2024, Table 1); a getattr default keeps results
+        # stand-ins that predate the field working.
+        weighting = getattr(results, "weighting", "aggregate")
+        if weighting == "population":
+            share_clause = "treated-population-share-weighted"
+        elif weighting == "sample_share":
+            share_clause = "sample-share-weighted"
+        else:
+            share_clause = "treated-unit-share-weighted"
+        if getattr(results, "survey_metadata", None) is not None:
+            mass_clause = "the shares counting those units by their survey weights"
+        else:
+            mass_clause = "the shares counting those units"
         return {
             "name": "overall ATT (average of post-treatment event-study coefficients)",
             "definition": (
@@ -448,10 +462,12 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "``delta_h`` (h >= -anticipation), estimated from the stacked "
                 "sub-experiment panel with delta-method SE. Each sub-"
                 "experiment aligns a treated cohort with its clean-control "
-                "set over the event window ``[-kappa_pre, +kappa_post]``; "
-                "each per-horizon ``delta_h`` is the paper's "
-                "``theta_kappa^e`` treated-share-weighted cross-event "
-                "aggregate. The ``att`` headline is the equally-"
+                "set over the event window ``[-kappa_pre - anticipation, "
+                "+kappa_post]`` and "
+                "holds only the units observed at every event time of that "
+                "window; each per-horizon ``delta_h`` is the paper's "
+                f"``theta_kappa^e`` {share_clause} cross-event "
+                f"aggregate, {mass_clause}. The ``att`` headline is the equally-"
                 "weighted average of these per-horizon coefficients, not a "
                 "separate cross-event weighted aggregate at the ATT level. " + control_clause
             ),

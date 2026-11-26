@@ -1024,6 +1024,10 @@ StackedDiD(
 
 **Alias:** none (the pre-4.0 `Stacked` alias was removed in 4.0; use `StackedDiD`)
 
+**Weighting schemes (Wing et al. 2024, Table 1):** each scheme fixes the share `pi_a` with which sub-experiment `a` enters the aggregate `sum_a pi_a ATT(a, a+e)`: the share of treated units (`"aggregate"`), of the treated units' population (`"population"`, needs `fit(population=...)`: finite, non-negative, constant within a unit) or of all units (`"sample_share"`). Treated AND control rows are weighted so that each arm carries `pi_a`; treated rows have weight 1 only under `"aggregate"`. Under `survey_design=` the shares are formed from survey-weighted unit masses (the design-weighted aggregate), survey columns must be constant within a unit, and replicate refits recompute the weights. A sub-experiment with no treated or control unit of positive weight, or a zero treated population, carries zero weight and is named in a `UserWarning`.
+
+**Complete event windows:** a unit enters a sub-experiment only if it is observed at every event time of the window `[-kappa_pre - anticipation, kappa_post]` (the regression contrasts event-time cell means, which needs the same units in every cell; Wing et al. 2024, Section 5.1). On a panel with missing observations the units that are not are excluded from that sub-experiment with a `UserWarning` giving the counts, and the estimand is the trimmed aggregate ATT over the units observed across their whole window. An adoption event left without a complete treated unit or clean control (including one whose window contains a period no unit observes) is dropped with a warning and listed in `results.trimmed_groups`; if none is left `fit()` raises `ValueError`. Under `survey_design=` both the unit-level exclusion and a dropped event raise `NotImplementedError`. `time` must be integer-valued (consecutive integers) with at most one row per unit and period, and `first_treat` an integer period: duplicates, a missing or fractional `time` and a fractional `first_treat` raise `ValueError`.
+
 **fit() parameters:**
 
 ```python
@@ -1034,7 +1038,7 @@ stacked.fit(
     time: str,
     first_treat: str,
     population: str = None,        # Required when weighting="population"
-    covariates: list[str] = None,  # Columns to balance (requires balance="entropy"); values read at t=a-1-anticipation; balanced windows only
+    covariates: list[str] = None,  # Columns to balance (requires balance="entropy"); values read at t=a-1-anticipation
 ) -> StackedDiDResults
 ```
 

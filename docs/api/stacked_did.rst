@@ -89,7 +89,12 @@ Accessing the stacked dataset::
     stacked = results.stacked_data
     print(stacked[['unit', 'period', '_sub_exp', '_event_time', '_D_sa', '_Q_weight']].head())
 
-Different weighting schemes::
+Different weighting schemes. Each fixes the share with which a sub-experiment
+enters the aggregate (Wing et al. 2024, Table 1): the share of treated units
+(``'aggregate'``, the default), of the treated units' population
+(``'population'``) or of all units (``'sample_share'``). Treated and control
+rows are both weighted so that each arm carries that share; under
+``survey_design=`` the shares are formed from survey-weighted unit masses::
 
     # Population-weighted ATT (requires population column)
     est = StackedDiD(kappa_pre=2, kappa_post=2, weighting='population')
@@ -116,7 +121,7 @@ Comparison with Other Staggered Estimators
      - Pooled WLS on stacked sub-experiments
      - Separate group-time regressions
    * - Compositional balance
-     - Enforced by IC1/IC2 trimming
+     - Enforced by IC1/IC2 trimming and by keeping, in each sub-experiment, only the units observed at every event time of its window (excluded units are reported in a warning)
      - Via balanced event study aggregation
    * - Target parameter
      - Trimmed aggregate ATT
@@ -125,5 +130,5 @@ Comparison with Other Staggered Estimators
      - Full stacked dataset accessible
      - Group-time effects accessible
    * - Covariates
-     - Entropy balancing via ``balance="entropy"`` + ``fit(covariates=...)`` (CBWSDID, Ustyuzhanin 2026); requires ``weighting="aggregate"`` + balanced windows, no ``survey_design``
+     - Entropy balancing via ``balance="entropy"`` + ``fit(covariates=...)`` (CBWSDID, Ustyuzhanin 2026); requires ``weighting="aggregate"``, no ``survey_design``
      - Supported (OR, IPW, DR)

@@ -517,8 +517,10 @@ and covariate-adjusted specifications.)
 2. **Q-weight computation: event-time-specific for aggregate weighting** (`stacked_did.py`,
    `_compute_q_weights()`): Changed aggregate Q-weights from unit counts per sub-experiment
    to observation counts per (event_time, sub_exp), matching R reference `compute_weights()`.
-   For balanced panels, results are unchanged. For unbalanced panels, weights now adjust for
-   varying observation density. Population/sample_share retain unit-count formulas (paper notation).
+   For balanced panels, results are unchanged. Since the complete-window rule (item 6) every
+   sub-experiment holds the same units at every event time, so the observation counts equal the
+   paper's unit counts on ragged input panels too. The three schemes now share one formula on
+   unit masses (item 7).
 
 3. **Anticipation parameter: reference period and dummies** (`stacked_did.py`, `fit()`):
    Reference period now shifts to `e = -1 - anticipation`. Event-time dummies cover the
@@ -530,8 +532,26 @@ and covariate-adjusted specifications.)
    cohort×event-time interactions. Use CallawaySantAnna or ImputationDiD for cohort-level estimates.
 
 5. **n_sub_experiments metadata** (`stacked_did.py`, `fit()`): Now tracks actual built
-   sub-experiments, not all events in omega_kappa. Warns if any sub-experiments are empty
-   after data filtering.
+   sub-experiments, not all events in omega_kappa. An event whose sub-experiment cannot be
+   built (no treated unit or no clean control observed at every event time of its window) is
+   dropped with a warning naming the reason and moves from `groups` to `trimmed_groups`.
+
+6. **Complete event windows** (`stacked_did.py`, `_build_sub_experiment()`): a unit enters a
+   sub-experiment only if it is observed at every event time of the window, as in the paper's
+   stack (Section 5.1). Ragged panels previously returned shifted estimates with no warning,
+   because Equation 3 contrasts event-time cell means. Incomplete units are excluded with a
+   warning (refused under `survey_design=`); duplicate `(unit, time)` rows, a missing or
+   non-integer `time` and a non-integer `first_treat` raise. Deviation from the R reference
+   code, which keeps incomplete units, documented in REGISTRY.md.
+
+7. **Equal cohort shares on both arms** (`stacked_did.py`, `_cohort_share_weights()`): the
+   paper's Table 1 weights treated rows too under population and sample-share weighting; the
+   library set the treated weight to 1 under every scheme, so those two schemes aggregated the
+   arms with different shares and the untreated trends did not cancel. Under `survey_design=`
+   the corrective weights used raw unit counts with the same consequence. One formula now gives
+   both arms the target share `pi_a`, from survey-weighted unit masses when a survey design is
+   present, recomputed in each replicate refit. Aggregate weighting without survey weights is
+   bit-identical.
 
 **Outstanding Concerns:**
 - Population/sample_share Q-weights use paper's unit-count formulas (no R reference to validate)
