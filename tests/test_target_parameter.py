@@ -394,6 +394,42 @@ class TestTargetParameterFitConfigReads:
         assert expected_clause in tp["definition"]
 
     @pytest.mark.parametrize(
+        "weighting, expected_clause",
+        [
+            ("aggregate", "treated-unit-share-weighted"),
+            ("population", "treated-population-share-weighted"),
+            ("sample_share", "sample-share-weighted"),
+        ],
+    )
+    def test_stacked_weighting_names_its_share(self, weighting, expected_clause):
+        """Each StackedDiD weighting scheme aggregates the sub-experiment ATTs
+        with its own cohort share (Wing et al. 2024, Table 1)."""
+        tp = describe_target_parameter(
+            _minimal_result(
+                "StackedDiDResults", control_group="not_yet_treated", weighting=weighting
+            )
+        )
+        assert expected_clause in tp["definition"]
+        assert "survey weights" not in tp["definition"]
+
+    def test_stacked_without_weighting_attribute_reads_as_aggregate(self):
+        tp = describe_target_parameter(
+            _minimal_result("StackedDiDResults", control_group="not_yet_treated")
+        )
+        assert "treated-unit-share-weighted" in tp["definition"]
+
+    def test_stacked_survey_fit_says_shares_are_survey_weighted(self):
+        tp = describe_target_parameter(
+            _minimal_result(
+                "StackedDiDResults",
+                control_group="not_yet_treated",
+                weighting="aggregate",
+                survey_metadata=object(),
+            )
+        )
+        assert "the shares counting those units by their survey weights" in tp["definition"]
+
+    @pytest.mark.parametrize(
         "pt_assumption, expected_tag",
         [("all", "pt_all_combined"), ("post", "pt_post_single_baseline")],
     )

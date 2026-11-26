@@ -585,8 +585,9 @@ class TestStackedDiDParityRVariants:
         )
 
     def test_sample_share_weighting_hc1_matches_clubsandwich_cr1s(self, goldens, panel):
-        """weighting='sample_share' uses a distinct Q-weight formula
-        `Q_sa = ((N^D_a + N^C_a)/(N^D+N^C)) / (N^C_a/N^C)` for controls.
+        """weighting='sample_share' uses the target share
+        `pi_a = (N^D_a + N^C_a)/(N^D+N^C)`, with `Q_sa = pi_a / (N^C_a/N^C)` for
+        controls and `Q_sa = pi_a / (N^D_a/N^D)` for treated rows (Table 1).
         Pin R parity at atol=1e-10 (per R9 P1)."""
         if "sample_share" not in goldens:
             pytest.skip("sample_share variant not in goldens")
@@ -1009,3 +1010,44 @@ class TestCBWSDIDRParity:
                 rtol=0.02,
                 err_msg=f"event {et}: python SE {py_se} vs R cbwsdid SE {r_se}",
             )
+
+    def test_ragged_panel_matches_r_cbwsdid(self):
+        """On a ragged panel R ``cbwsdid`` builds each sub-experiment from the
+        units observed across the whole event window - the complete-window rule
+        StackedDiD applies. The ``dynamic_ragged`` golden block (same panel with
+        ten rows dropped) pins the stack size and the dynamic ATTs."""
+        import warnings
+
+        with open(_CBWSDID_GOLDEN) as f:
+            g = json.load(f)
+        if "dynamic_ragged" not in g:
+            pytest.skip("cbwsdid_golden.json has no dynamic_ragged block; regenerate it")
+        df = pd.read_csv(_CBWSDID_PANEL)
+        drop = (df["unit"].between(1, 5) & (df["time"] == 6)) | (
+            df["unit"].between(55, 59) & (df["time"] == 5)
+        )
+        ragged = df[~drop].reset_index(drop=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = StackedDiD(
+                kappa_pre=2,
+                kappa_post=2,
+                weighting="aggregate",
+                control_group="not_yet_treated",
+                cluster="unit",
+                balance="entropy",
+            ).fit(
+                ragged,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x"],
+            )
+        assert any("not observed at every" in str(w.message) for w in caught)
+        block = g["dynamic_ragged"]
+        assert res.n_stacked_obs == block["nobs"]
+        for et, r_est, r_se in zip(block["event_time"], block["estimate"], block["std_error"]):
+            py = res.event_study_effects[et]["effect"]
+            assert abs(py - r_est) < 1e-5, f"event {et}: python {py} vs R cbwsdid {r_est}"
+            np.testing.assert_allclose(res.event_study_effects[et]["se"], r_se, rtol=0.02)

@@ -439,7 +439,9 @@ the estimand). If either condition fails, pre-process with
 `drop_duplicates([unit, time])` pass, or pick a balance-tolerant
 estimator from the remaining rows (CS/SA/dCDH/Imputation/TwoStage/
 Stacked/ETWFE all accept unbalanced input, with some caveats in
-their own docs).
+their own docs: `StackedDiD`, for one, keeps in each sub-experiment
+only the units observed at every event time of its window, warns
+with the counts, and rejects duplicate `(unit, time)` rows).
 
 For two common reasoning patterns walked through end-to-end (continuous
 dose checked against the existing `has_never_treated` /

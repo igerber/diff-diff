@@ -63,9 +63,13 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         Full stacked dataset with _sub_exp, _event_time, _D_sa,
         _Q_weight columns. Accessible for custom analysis.
     groups : list
-        Adoption events in the trimmed set (Omega_kappa).
+        Adoption events in the trimmed set (Omega_kappa) whose
+        sub-experiment was built: IC1 and IC2 hold and at least one
+        treated unit and one clean control are observed at every event
+        time of the window.
     trimmed_groups : list
-        Adoption events excluded by IC1/IC2.
+        Adoption events excluded by IC1/IC2, or left without a treated
+        unit or clean control observed at every event time of the window.
     time_periods : list
         All time periods in the original data.
     n_obs : int
@@ -75,9 +79,10 @@ class StackedDiDResults(BaseResults, AggregationMixin):
     n_sub_experiments : int
         Number of sub-experiments in the stack.
     n_treated_units : int
-        Distinct treated units across trimmed set.
+        Distinct treated units in the stack (units observed at every
+        event time of their sub-experiment window).
     n_control_units : int
-        Distinct control units across trimmed set.
+        Distinct control units in the stack (same rule).
     kappa_pre : int
         Pre-treatment event-time window size.
     kappa_post : int

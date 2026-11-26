@@ -14,18 +14,18 @@
     "scenario": "S2",
     "description": "StackedDiD: stacked WLS with Q-weight x survey weight composition",
     "estimator": "survey::svyglm",
-    "att": 5.039606586,
-    "se": 0.43170156311,
+    "att": 5.0838104334,
+    "se": 0.41544433376,
     "n_stacked": 678,
     "df": 6,
     "event_study": {
       "0": {
-        "coef": 5.0048694773,
-        "se": 0.4629603277
+        "coef": 5.0230443997,
+        "se": 0.46964959396
       },
       "1": {
-        "coef": 5.0743436947,
-        "se": 0.56222065855
+        "coef": 5.144576467,
+        "se": 0.53261301956
       }
     }
   },

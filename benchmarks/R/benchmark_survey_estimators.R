@@ -323,40 +323,43 @@ rownames(stacked) <- NULL
 n_stacked <- nrow(stacked)
 cat(sprintf("  Stacked dataset: %d observations\n", n_stacked))
 
-# Step 2: Compute Q-weights (sample_share)
-# Count distinct units per sub-experiment
-N_D <- sapply(sub_experiments, function(df) length(unique(df$unit[df$D_sa == 1])))
-N_C <- sapply(sub_experiments, function(df) length(unique(df$unit[df$D_sa == 0])))
-N_Omega_D <- sum(N_D)
-N_Omega_C <- sum(N_C)
-N_grand <- N_Omega_D + N_Omega_C
-
-cat(sprintf("  N_D per sub-exp: %s\n", paste(N_D, collapse = ", ")))
-cat(sprintf("  N_C per sub-exp: %s\n", paste(N_C, collapse = ", ")))
-cat(sprintf("  N_Omega_D = %d, N_Omega_C = %d, N_grand = %d\n",
-            N_Omega_D, N_Omega_C, N_grand))
-
-q_control <- setNames(numeric(length(cohorts)), as.character(cohorts))
-for (a_str in names(N_D)) {
-  n_c <- N_C[a_str]
-  n_d <- N_D[a_str]
-  if (n_c == 0 || N_Omega_C == 0) {
-    q_control[a_str] <- 1.0
-  } else {
-    control_share <- n_c / N_Omega_C
-    sample_share <- (n_d + n_c) / N_grand
-    q_control[a_str] <- sample_share / control_share
-  }
+# Step 2: Compute corrective Q-weights (sample_share)
+# Both arms must aggregate the sub-experiments with the SAME shares, otherwise
+# the untreated trends do not cancel (Wing et al. 2024, Section 5.3). Under a
+# survey design the shares are formed from survey-weighted unit masses
+# (weights are constant within a unit):
+#   W_a^D = sum of treated units' weights,  W_a^C = sum of controls' weights
+#   pi_a  = (W_a^D + W_a^C) / (W^D + W^C)          (sample_share target)
+#   Q     = pi_a / (W_a^D / W^D)  for treated rows (Table 1 treatment weight)
+#   Q     = pi_a / (W_a^C / W^C)  for control rows
+unit_mass <- function(df, d) {
+  u <- df[df$D_sa == d, ]
+  u <- u[!duplicated(u$unit), ]
+  sum(u$weight)
 }
+W_D <- sapply(sub_experiments, unit_mass, d = 1)
+W_C <- sapply(sub_experiments, unit_mass, d = 0)
+W_Omega_D <- sum(W_D)
+W_Omega_C <- sum(W_C)
+
+cat(sprintf("  W_D per sub-exp: %s\n", paste(sprintf("%.6f", W_D), collapse = ", ")))
+cat(sprintf("  W_C per sub-exp: %s\n", paste(sprintf("%.6f", W_C), collapse = ", ")))
+
+target_share <- (W_D + W_C) / (W_Omega_D + W_Omega_C)
+q_treated <- target_share / (W_D / W_Omega_D)
+q_control <- target_share / (W_C / W_Omega_C)
+cat(sprintf("  Q-weights (treated): %s\n",
+            paste(sprintf("%s=%.6f", names(q_treated), q_treated), collapse = ", ")))
 cat(sprintf("  Q-weights (control): %s\n",
             paste(sprintf("%s=%.6f", names(q_control), q_control), collapse = ", ")))
 
-# Assign Q-weights: treated=1, control=q_control[sub_exp]
-stacked$Q_weight <- 1.0
+stacked$Q_weight <- NA_real_
 for (a_str in names(q_control)) {
-  mask <- stacked$sub_exp == as.numeric(a_str) & stacked$D_sa == 0
-  stacked$Q_weight[mask] <- q_control[a_str]
+  in_a <- stacked$sub_exp == as.numeric(a_str)
+  stacked$Q_weight[in_a & stacked$D_sa == 1] <- q_treated[a_str]
+  stacked$Q_weight[in_a & stacked$D_sa == 0] <- q_control[a_str]
 }
+stopifnot(!anyNA(stacked$Q_weight))
 
 # Step 3: Compose Q x survey weight, normalize
 stacked$composed_weight <- stacked$Q_weight * stacked$weight

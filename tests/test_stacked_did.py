@@ -289,7 +289,7 @@ class TestQWeights:
     """Tests for Q-weight computation."""
 
     def test_treated_weight_is_one(self, staggered_data):
-        """All treated observations should have Q=1."""
+        """All treated observations have Q=1 under the default aggregate weighting."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
         results = est.fit(
             staggered_data,
@@ -588,7 +588,8 @@ class TestEdgeCases:
         assert np.isfinite(results.att)
 
     def test_unbalanced_panel(self):
-        """Works with missing observations within the window."""
+        """Missing observations inside a window trim the unit from that
+        sub-experiment (complete-window rule), with a warning."""
         data = generate_staggered_data(
             n_units=200,
             n_periods=12,
@@ -603,17 +604,39 @@ class TestEdgeCases:
         data = data.drop(data.index[drop_idx]).reset_index(drop=True)
 
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        results = est.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-        )
+        with pytest.warns(UserWarning, match="not observed at every"):
+            results = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
         sd = results.stacked_data
         assert np.isfinite(results.att)
         assert np.all(sd["_Q_weight"] > 0)
         assert np.all(np.isfinite(sd["_Q_weight"]))
+        # Every unit left in a sub-experiment covers the whole window.
+        rows = sd.groupby(["_sub_exp", "unit"])["_event_time"].agg(["size", "nunique"])
+        assert (rows["size"] == 5).all() and (rows["nunique"] == 5).all()
+        assert results.n_stacked_obs < len(
+            StackedDiD(kappa_pre=2, kappa_post=2)
+            .fit(
+                generate_staggered_data(
+                    n_units=200,
+                    n_periods=12,
+                    cohort_periods=[4, 6, 8],
+                    never_treated_frac=0.3,
+                    treatment_effect=5.0,
+                    seed=42,
+                ),
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+            .stacked_data
+        )
 
     def test_nan_inference(self):
         """Degenerate case with NaN inference fields."""
@@ -1321,8 +1344,14 @@ class TestStackedDiDVcovType:
         # aggregation, so SE gets atol=1e-10. Both bands match
         # similar "no methodologically significant drift" tolerances
         # used elsewhere in the project.
+        # The ATT is the full-sample fit (w = 1.0, default weighting), whose
+        # Q-weights are untouched. The SE moved from 0.14697256517699428 when
+        # the replicate refits began recomputing the corrective weights from
+        # each replicate's own (non-uniform) weights; the new value is the one
+        # TestStackedDiDCohortShares::test_replicate_refits_recompute_the_shares
+        # justifies against independent per-replicate fits.
         BASELINE_ATT = 2.0807833161293945
-        BASELINE_SE = 0.14697256517699428
+        BASELINE_SE = 0.1447117933599559
         np.testing.assert_allclose(res.att, BASELINE_ATT, atol=1e-13)
         np.testing.assert_allclose(res.se, BASELINE_SE, atol=1e-10)
 
@@ -1899,41 +1928,56 @@ class TestStackedDiDCovariateBalance:
         clone = StackedDiD(**est.get_params())  # round-trip
         assert clone.balance == "entropy"
 
-    def test_ragged_event_window_raises(self):
-        # balance="entropy" requires balanced event windows: on a ragged panel (a unit
-        # missing a non-reference event-time row) the unit-count corrector and the
-        # observation-count aggregate Q diverge, so fail closed. balance="none" still
-        # supports the unbalanced panel.
+    def test_ragged_event_window_trims(self):
+        # A treated unit missing one event-time row is trimmed from its
+        # sub-experiment (complete-window rule), under balance="entropy" exactly
+        # as under balance="none"; the fit equals the fit without that unit.
         df = _balance_panel(seed=10, const_x=True)
         u = int(df.loc[df["first_treat"] == 4, "unit"].iloc[0])
         drop = (df["unit"] == u) & (df["time"] == 5)  # a post-period row (keeps t=a-1 ref)
         dfr = df[~drop].reset_index(drop=True)
-        with pytest.raises(ValueError, match="balanced event windows"):
-            _cb_fit(dfr, balance="entropy", covariates=["x"])
-        assert np.isfinite(_cb_fit(dfr, balance="none").att)
+        dfu = df[df["unit"] != u].reset_index(drop=True)
+        for balance, cov in (("entropy", ["x"]), ("none", None)):
+            with pytest.warns(UserWarning, match="not observed at every"):
+                ragged = _cb_fit(dfr, balance=balance, covariates=cov)
+            removed = _cb_fit(dfu, balance=balance, covariates=cov)
+            np.testing.assert_allclose(ragged.att, removed.att, rtol=1e-12)
+            np.testing.assert_allclose(ragged.se, removed.se, rtol=1e-12)
+            assert ragged.n_treated_units == removed.n_treated_units
+        assert ragged.n_treated_units == df.loc[df["first_treat"] > 0, "unit"].nunique() - 1
+        entropy = _cb_fit(dfr, balance="entropy", covariates=["x"])
+        assert entropy.balance_diagnostics[4]["n_treated"] == 19  # 20 per cohort, one trimmed
 
-    def test_zero_row_eligible_control_raises(self):
+    def test_zero_row_eligible_control_is_trimmed(self):
         # An eligible (never-treated) control with ZERO rows in a cohort's window is
-        # silently dropped by _build_sub_experiment — the count-only guard misses it,
-        # the exact-coverage guard catches it (missing_units).
+        # not in that sub-experiment; with rows missing in every cohort's window it
+        # is in none, and the balanced fit equals the fit without the unit.
         df = _balance_panel(seed=11, const_x=True)
         u = int(df.loc[df["first_treat"] == 0, "unit"].iloc[0])  # a never-treated unit
         drop = (df["unit"] == u) & (df["time"].between(2, 6))  # cohort-4 window [2,6]
         dfz = df[~drop].reset_index(drop=True)
-        with pytest.raises(ValueError, match="balanced event windows"):
-            _cb_fit(dfz, balance="entropy", covariates=["x"])
+        with pytest.warns(UserWarning, match="not observed at every"):
+            ragged = _cb_fit(dfz, balance="entropy", covariates=["x"])
+        removed = _cb_fit(
+            df[df["unit"] != u].reset_index(drop=True), balance="entropy", covariates=["x"]
+        )
+        np.testing.assert_allclose(ragged.att, removed.att, rtol=1e-12)
+        assert u not in set(ragged.stacked_data["unit"])
+        for a, diag in ragged.balance_diagnostics.items():
+            assert diag["n_control"] == removed.balance_diagnostics[a]["n_control"]
 
-    def test_duplicate_and_missing_event_time_raises(self):
-        # A unit with a duplicated event time AND a missing one nets the expected row
-        # count, bypassing a count-only guard; the exact-coverage guard catches the
-        # duplicate (unit, event_time).
+    def test_duplicate_unit_time_rows_raise(self):
+        # Duplicate (unit, time) rows are rejected at fit(), whatever the balance
+        # mode: a duplicated event time would be double-counted in its cell mean.
         df = _balance_panel(seed=12, const_x=True)
         u = int(df.loc[df["first_treat"] == 4, "unit"].iloc[0])
         dupe = df[(df["unit"] == u) & (df["time"] == 3)]  # event_time -1 for cohort 4
         df2 = df[~((df["unit"] == u) & (df["time"] == 5))]  # drop event_time +1
         dfd = pd.concat([df2, dupe], ignore_index=True)  # same row count, ragged coverage
-        with pytest.raises(ValueError, match="balanced event windows"):
+        with pytest.raises(ValueError, match=r"sharing a \(unit, time\) pair"):
             _cb_fit(dfd, balance="entropy", covariates=["x"])
+        with pytest.raises(ValueError, match=r"sharing a \(unit, time\) pair"):
+            _cb_fit(dfd, balance="none")
 
     def test_string_covariate_raises_typeerror(self):
         df = _balance_panel(seed=13, const_x=True)
@@ -2137,13 +2181,14 @@ class TestReferenceSupportGuard:
         return pd.DataFrame(rows)
 
     def test_stack_wide_missing_reference_fails_closed(self):
-        # Calendar period 4 absent; sole cohort a=5 has ref a-1=4 -> the
-        # reference cell is empty stack-wide. IC1 passes (min/max only),
-        # so without the guard this rank-drops and re-normalizes against
-        # an arbitrary horizon while synthesizing a fake e=-1 row.
+        # Calendar period 4 absent; sole cohort a=5 has ref a-1=4. IC1 passes
+        # (min/max only), but no unit can cover the window [3, 7], so the
+        # complete-window rule leaves no sub-experiment and fit() raises,
+        # naming the gap in the time grid (before the complete-window rule
+        # the reference-support guard caught this panel).
         panel = self._gapped_panel([1, 2, 3, 5, 6, 7], [0, 5])
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.raises(ValueError, match="would be fabricated"):
+        with pytest.raises(ValueError, match=r"No sub-experiment has both.*period\(s\) \[4\]"):
             est.fit(
                 panel,
                 outcome="y",
@@ -2153,13 +2198,11 @@ class TestReferenceSupportGuard:
             )
 
     def test_partial_reference_support_still_fits(self):
-        # Cohort 5's own ref period (4) is absent but cohort 7's (6) is
-        # present, so the POOLED omitted category is populated: the
-        # coefficient-vector normalization at e=-1 is real (verified by
-        # execution during the CI-review triage - no rank drop, sane
-        # surface). Ragged per-cohort baseline support affects estimand
-        # composition (documented ragged-window behavior), not the
-        # normalization the container certifies.
+        # Cohort 5's own ref period (4) is absent for every unit, so its
+        # window [3, 7] cannot be covered: the event is dropped with a
+        # warning and listed in trimmed_groups. Cohort 7's window [5, 9] is
+        # complete, so the fit proceeds on it and the normalization at e=-1
+        # is real.
         panel = self._gapped_panel([1, 2, 3, 5, 6, 7, 8, 9], [0, 5, 7])
         est = StackedDiD(kappa_pre=2, kappa_post=2)
         with warnings.catch_warnings(record=True) as caught:
@@ -2172,6 +2215,11 @@ class TestReferenceSupportGuard:
                 first_treat="first_treat",
             )
         assert not [w for w in caught if "Rank-deficient" in str(w.message)]
+        dropped = [w for w in caught if "adoption event(s) were dropped" in str(w.message)]
+        assert len(dropped) == 1 and "[4]" in str(dropped[0].message)
+        assert [float(g) for g in res.groups] == [7.0]
+        assert [float(g) for g in res.trimmed_groups] == [5.0]
+        assert res.n_sub_experiments == 1
         assert res.event_study_effects is not None
         surf = res.aggregate("event_study")
         assert surf.reference_event_times == (-1,)
@@ -2183,13 +2231,13 @@ class TestReferenceSupportGuardEffectiveWeights:
     means positive COMPOSED weight in both baseline cells - raw row
     presence is not enough."""
 
-    def test_zero_q_weight_control_reference_cell_fails_closed(self):
-        # Raw rows exist in both reference cells, but the only control
-        # rows at e=-1 sit in sub-experiments whose treated rows are
-        # absent at that event time - aggregate Q-weights zero them, the
-        # effective control baseline is empty, and (pre-guard, verified
-        # by execution) the design rank-dropped and re-normalized while
-        # the container still certified reference_event_times=(-1,).
+    def test_ragged_reference_cells_leave_no_sub_experiment(self):
+        # Raw rows exist in both reference cells, but cohort 5's controls
+        # all lack its reference period (4) and cohort 7's treated units
+        # all lack theirs (6). Under the complete-window rule neither
+        # sub-experiment keeps both a treated unit and a clean control, so
+        # fit() raises (before that rule the aggregate Q-weights zeroed the
+        # control reference cell and the reference-support guard fired).
         rng = np.random.default_rng(3)
         rows = []
         for u in range(120):
@@ -2212,7 +2260,7 @@ class TestReferenceSupportGuardEffectiveWeights:
                     }
                 )
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.raises(ValueError, match="positive weight.*fabricated"):
+        with pytest.raises(ValueError, match="No sub-experiment has both") as exc:
             est.fit(
                 pd.DataFrame(rows),
                 outcome="y",
@@ -2220,6 +2268,54 @@ class TestReferenceSupportGuardEffectiveWeights:
                 time="time",
                 first_treat="first_treat",
             )
+        assert "no clean control is observed at every event time" in str(exc.value)
+        assert "no treated unit is observed at every event time" in str(exc.value)
+
+    @staticmethod
+    def _balanced_panel(pop_treated=100.0, seed=3):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(90):
+            g = [0, 5, 7][u % 3]
+            for t in range(1, 11):
+                d = 1 if (g and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": u * 0.01 + 0.2 * t + 1.5 * d + rng.normal(0, 0.3),
+                        "first_treat": g,
+                        "pop": pop_treated if g else 50.0,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_kappa_pre_zero_reference_outside_window_fails_closed(self):
+        # kappa_pre = 0: the window [0, kappa_post] does not contain the
+        # reference e = -1, so there is no reference cell at all.
+        with pytest.raises(ValueError, match="positive weight.*fabricated") as exc:
+            StackedDiD(kappa_pre=0, kappa_post=2).fit(
+                self._balanced_panel(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        assert "kappa_pre = 0" in str(exc.value)
+
+    def test_zero_treated_population_fails_closed(self):
+        # weighting="population" with zero treated population zeroes every
+        # control Q-weight, so the control reference cell has no mass.
+        with pytest.raises(ValueError, match="positive weight.*fabricated") as exc:
+            StackedDiD(kappa_pre=2, kappa_post=2, weighting="population").fit(
+                self._balanced_panel(pop_treated=0.0),
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                population="pop",
+            )
+        assert "zero treated population" in str(exc.value)
 
     def test_survey_zeroed_reference_cell_fails_closed(self):
         from diff_diff.survey import SurveyDesign
@@ -2230,10 +2326,11 @@ class TestReferenceSupportGuardEffectiveWeights:
             g = [0, 5, 7][u % 3]
             for t in range(1, 11):
                 d = 1 if (g and t >= g) else 0
-                # controls carry zero pweight at both cohorts' reference
-                # calendar periods -> the control baseline cell has rows
-                # but no effective WLS mass
-                w = 0.0 if (g == 0 and t in (4, 6)) else 1.0
+                # every control carries zero pweight (unit-constant, as the
+                # survey columns must be) -> no sub-experiment has control
+                # mass, every corrective weight is zero, and the guard
+                # reports the empty treated reference cell
+                w = 0.0 if g == 0 else 1.0
                 rows.append(
                     {
                         "unit": u,
@@ -2255,6 +2352,809 @@ class TestReferenceSupportGuardEffectiveWeights:
                     first_treat="first_treat",
                     survey_design=SurveyDesign(weights="w"),
                 )
+
+
+# =============================================================================
+# Complete event windows (ragged panels)
+# =============================================================================
+
+_CW_EFFECTS = {4: (2.0, 0.5), 6: (3.0, 0.25)}  # cohort -> (level, slope in event time)
+
+
+def _cw_panel(noise=0.0, seed=0, n=90, n_periods=10, hetero=True):
+    """Cohorts 4 and 6 plus never-treated; unit levels differ by cohort, and
+    (with ``hetero``) so do the effects, so the trimmed aggregate ATT depends on
+    which treated units each sub-experiment holds."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n):
+        g = (0, 4, 6)[u % 3]
+        level = rng.normal(0, 1) + {0: 0.0, 4: 0.8, 6: -0.5}[g]
+        for t in range(1, n_periods + 1):
+            e = t - g
+            base, slope = _CW_EFFECTS[g] if (g and hetero) else (2.0, 0.5)
+            tau = (base + slope * e) if (g and e >= 0) else 0.0
+            rows.append(
+                {
+                    "unit": u,
+                    "time": t,
+                    "y": level + 0.3 * t + 0.02 * t * t + tau + rng.normal(0, noise),
+                    "first_treat": g,
+                    # population differs by cohort, so population shares are not
+                    # the unit shares
+                    "pop": 100.0 + 10.0 * (u % 7) + (150.0 if g == 6 else 0.0),
+                    "w": 1.0,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _cw_ragged(name, d):
+    """The ragged panels of the complete-window fix, by name."""
+    nt = d["first_treat"] == 0
+    c6 = d["first_treat"] == 6
+    if name == "cohort6_missing_ref":
+        out = d[~(c6 & (d["time"] == 5))]
+    elif name == "cohort6_no_pre":
+        out = d[~(c6 & (d["time"] < 6))]
+    elif name == "half_cohort6_missing_ref":
+        out = d[~(c6 & (d["time"] == 5) & (d["unit"] % 2 == 0))]
+    elif name == "one_nt_obs_missing":
+        u0 = d.loc[nt, "unit"].iloc[0]
+        out = d[~((d["unit"] == u0) & (d["time"] == 5))]
+    elif name == "random_5pct":
+        out = d.drop(np.random.default_rng(1).choice(len(d), len(d) // 20, replace=False))
+    elif name == "period7_absent":
+        out = d[d["time"] != 7]
+    elif name == "nt_missing_7_8":
+        out = d[~(nt & d["time"].between(7, 8))]
+    elif name == "period5_absent":
+        out = d[d["time"] != 5]
+    elif name == "nt_missing_4_8":
+        out = d[~(nt & d["time"].between(4, 8))]
+    else:  # pragma: no cover
+        raise KeyError(name)
+    return out.reset_index(drop=True)
+
+
+def _cw_complete_units(d, a, kappa_pre=2, kappa_post=2, anticipation=0):
+    """Units with an observation at EVERY period of event a's window, found
+    independently of the estimator (wide pivot, no missing cell)."""
+    window = list(range(a - kappa_pre - anticipation, a + kappa_post + 1))
+    wide = (
+        d[d["time"].isin(window)]
+        .pivot(index="unit", columns="time", values="y")
+        .reindex(columns=window)
+    )
+    return set(wide.index[wide.notna().all(axis=1)])
+
+
+def _cw_cells(d, kappa_pre=2, kappa_post=2, anticipation=0):
+    """Per realized event: (complete treated units, complete clean controls)
+    under the default not-yet-treated control rule."""
+    ft = d.groupby("unit")["first_treat"].first()
+    cells = {}
+    for a in sorted(g for g in ft.unique() if g > 0):
+        complete = _cw_complete_units(d, a, kappa_pre, kappa_post, anticipation)
+        treated = complete & set(ft.index[ft == a])
+        control = complete & set(ft.index[(ft == 0) | (ft > a + kappa_post)])
+        if treated and control:
+            cells[a] = (treated, control)
+    return cells
+
+
+def _cw_truth(d, hetero=True, kappa_pre=2, kappa_post=2):
+    """True trimmed aggregate ATT per event time: sum_a (N_a^D / N^D) tau_a(e),
+    N_a^D counting the complete treated units of each realized event."""
+    cells = _cw_cells(d, kappa_pre, kappa_post)
+    n_total = sum(len(t) for t, _ in cells.values())
+    truth = {}
+    for e in range(-kappa_pre, kappa_post + 1):
+        val = 0.0
+        for a, (treated, _) in cells.items():
+            base, slope = _CW_EFFECTS[a] if hetero else (2.0, 0.5)
+            val += len(treated) / n_total * ((base + slope * e) if e >= 0 else 0.0)
+        truth[e] = val
+    return truth, cells
+
+
+def _cw_fit(d, survey_design=None, population=None, **kw):
+    kw.setdefault("kappa_pre", 2)
+    kw.setdefault("kappa_post", 2)
+    return StackedDiD(**kw).fit(
+        d,
+        outcome="y",
+        unit="unit",
+        time="time",
+        first_treat="first_treat",
+        survey_design=survey_design,
+        population=population,
+    )
+
+
+def _cw_quiet_fit(d, **kw):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return _cw_fit(d, **kw)
+
+
+_CW_RECOVERABLE = [
+    "cohort6_missing_ref",
+    "cohort6_no_pre",
+    "half_cohort6_missing_ref",
+    "one_nt_obs_missing",
+    "random_5pct",
+    "period7_absent",
+    "nt_missing_7_8",
+]
+
+
+class TestStackedDiDCompleteWindows:
+    """A unit enters a sub-experiment only if it is observed at every event
+    time of the window (Wing et al. 2024, Section 5.1). Before this rule a
+    ragged panel returned shifted estimates with no warning: the regression
+    contrasts event-time cell means, and unit levels leaked in."""
+
+    @pytest.mark.parametrize("name", _CW_RECOVERABLE)
+    def test_exact_recovery_on_ragged_panels(self, name):
+        d = _cw_ragged(name, _cw_panel())
+        truth, cells = _cw_truth(d)
+        res = _cw_quiet_fit(d)
+        assert [float(g) for g in res.groups] == [float(a) for a in cells]
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9), (name, e)
+        assert res.att == pytest.approx(np.mean([truth[e] for e in (0, 1, 2)]), abs=1e-9)
+
+    def test_balanced_panel_recovers_and_warns_nothing(self):
+        d = _cw_panel()
+        truth, cells = _cw_truth(d)
+        assert sorted(cells) == [4, 6]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            res = _cw_fit(d)
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9)
+        assert res.trimmed_groups == []
+
+    def test_equals_manual_aggregate_of_cohort_contrasts(self):
+        # Independent oracle (paper Eq. 2 / footnote 5): per-cohort DID
+        # contrasts from plain means over the complete units, weighted by the
+        # complete treated-unit shares. No regression, no Q-weights.
+        d = _cw_ragged("random_5pct", _cw_panel(noise=0.5, seed=4))
+        cells = _cw_cells(d)
+        assert len(cells) == 2
+        n_total = sum(len(t) for t, _ in cells.values())
+        res = _cw_quiet_fit(d)
+        for e in (-2, 0, 1, 2):
+            manual = 0.0
+            for a, (treated, control) in cells.items():
+
+                def _mean(units, t):
+                    rows = d[d["unit"].isin(units) & (d["time"] == t)]
+                    assert len(rows) == len(units)
+                    return rows["y"].mean()
+
+                did = (_mean(treated, a + e) - _mean(treated, a - 1)) - (
+                    _mean(control, a + e) - _mean(control, a - 1)
+                )
+                manual += len(treated) / n_total * did
+            np.testing.assert_allclose(res.event_study_effects[e]["effect"], manual, rtol=1e-10)
+
+    def test_equals_the_fit_without_the_incomplete_units(self):
+        # Each incomplete unit here is incomplete in EVERY sub-experiment it
+        # enters (a treated unit sits in one; the never-treated unit misses a
+        # period common to both windows), so removing the units outright must
+        # give the same fit.
+        d = _cw_panel(noise=0.5, seed=7)
+        c6_units = sorted(d.loc[d["first_treat"] == 6, "unit"].unique())[::3]
+        nt_unit = d.loc[d["first_treat"] == 0, "unit"].iloc[0]
+        gone = (d["unit"].isin(c6_units) & (d["time"] == 7)) | (
+            (d["unit"] == nt_unit) & (d["time"] == 5)
+        )
+        with pytest.warns(UserWarning, match="not observed at every"):
+            ragged = _cw_fit(d[~gone].reset_index(drop=True))
+        removed = _cw_fit(d[~d["unit"].isin(list(c6_units) + [nt_unit])].reset_index(drop=True))
+        np.testing.assert_allclose(ragged.att, removed.att, rtol=1e-12)
+        np.testing.assert_allclose(ragged.se, removed.se, rtol=1e-12)
+        np.testing.assert_allclose(ragged.event_study_vcov, removed.event_study_vcov, rtol=1e-12)
+        for e, row in removed.event_study_effects.items():
+            np.testing.assert_allclose(
+                ragged.event_study_effects[e]["effect"], row["effect"], rtol=1e-12
+            )
+            np.testing.assert_allclose(ragged.event_study_effects[e]["se"], row["se"], rtol=1e-12)
+        assert ragged.n_treated_units == removed.n_treated_units
+        assert ragged.n_control_units == removed.n_control_units
+        assert ragged.n_stacked_obs == removed.n_stacked_obs
+
+    def test_unit_is_trimmed_per_sub_experiment(self):
+        # Period 2 lies in cohort 4's window [2, 6] only: the unit leaves that
+        # sub-experiment and stays, with all five rows, in cohort 6's.
+        d = _cw_panel(noise=0.3)
+        nt_unit = d.loc[d["first_treat"] == 0, "unit"].iloc[0]
+        res = _cw_quiet_fit(d[~((d["unit"] == nt_unit) & (d["time"] == 2))].reset_index(drop=True))
+        sd = res.stacked_data
+        assert nt_unit not in set(sd.loc[sd["_sub_exp"] == 4, "unit"])
+        kept = sd[(sd["_sub_exp"] == 6) & (sd["unit"] == nt_unit)]
+        assert sorted(kept["_event_time"]) == [-2, -1, 0, 1, 2]
+
+    def test_q_weights_are_the_unit_count_formula(self):
+        d = _cw_ragged("random_5pct", _cw_panel(noise=0.3))
+        cells = _cw_cells(d)
+        n_d = sum(len(t) for t, _ in cells.values())
+        n_c = sum(len(c) for _, c in cells.values())
+        sd = _cw_quiet_fit(d).stacked_data
+        assert (sd.loc[sd["_D_sa"] == 1, "_Q_weight"] == 1.0).all()
+        for a, (treated, control) in cells.items():
+            q = sd.loc[(sd["_sub_exp"] == a) & (sd["_D_sa"] == 0), "_Q_weight"]
+            assert len(q) == 5 * len(control)
+            np.testing.assert_allclose(
+                q.to_numpy(), (len(treated) / n_d) / (len(control) / n_c), rtol=1e-13
+            )
+
+    def test_trim_warning_reports_the_counts(self):
+        d = _cw_ragged("half_cohort6_missing_ref", _cw_panel())
+        with pytest.warns(UserWarning) as rec:
+            res = _cw_fit(d)
+        msgs = [str(w.message) for w in rec]
+        assert len(msgs) == 1
+        assert "15 treated and 0 control unit-by-sub-experiment entries" in msgs[0]
+        assert "15 of 30 treated, 30 of 30 control" in msgs[0]
+        assert "trimmed aggregate ATT over the units observed across their whole window" in msgs[0]
+        assert res.n_treated_units == 45 and res.n_control_units == 30
+
+    @pytest.mark.parametrize(
+        "name, reason",
+        [
+            ("cohort6_missing_ref", "no treated unit is observed at every event time (0 of 30)"),
+            ("nt_missing_7_8", "no clean control is observed at every event time (0 of 30)"),
+            ("period7_absent", "calendar period(s) [7] of its window are not observed"),
+        ],
+    )
+    def test_event_without_complete_units_is_dropped(self, name, reason):
+        d = _cw_ragged(name, _cw_panel(noise=0.3))
+        with pytest.warns(UserWarning) as rec:
+            res = _cw_fit(d)
+        dropped = [
+            str(w.message) for w in rec if "adoption event(s) were dropped" in str(w.message)
+        ]
+        assert len(dropped) == 1 and reason in dropped[0]
+        assert [float(g) for g in res.groups] == [4.0]
+        assert [float(g) for g in res.trimmed_groups] == [6.0]
+        assert res.n_sub_experiments == 1
+        assert set(res.stacked_data["_sub_exp"]) == {4}
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+
+    def test_no_event_left_raises(self):
+        d = _cw_panel()
+        with pytest.raises(ValueError, match="No sub-experiment has both") as exc:
+            _cw_fit(_cw_ragged("period5_absent", d))
+        assert "period(s) [5] are not observed for any unit" in str(exc.value)
+        with pytest.raises(ValueError, match="No sub-experiment has both") as exc:
+            _cw_fit(_cw_ragged("nt_missing_4_8", d))
+        assert "no clean control is observed at every event time (0 of 30)" in str(exc.value)
+        assert "time grid has gaps" not in str(exc.value)
+
+    def test_biennial_grid_raises_naming_the_missing_periods(self):
+        d = _cw_panel()
+        with pytest.raises(ValueError, match="No sub-experiment has both") as exc:
+            _cw_fit(d[d["time"] % 2 == 0].reset_index(drop=True))
+        assert "period(s) [3, 5, 7, 9] are not observed for any unit" in str(exc.value)
+        assert "re-index time to consecutive integers" in str(exc.value)
+
+    def test_datetime_coded_time_reports_the_span(self):
+        # A datetime column coerces to epoch integers a day apart by ~1e11
+        # or more, so every window misses. The message must describe the
+        # span, not enumerate the missing integers.
+        d = _cw_panel(n=30)
+        dates = pd.Series(pd.date_range("2020-01-01", periods=10, freq="D"))
+        epoch = pd.to_numeric(dates)
+        d["time"] = d["time"].map(dict(zip(range(1, 11), dates)))
+        d["first_treat"] = d["first_treat"].map(
+            {0: 0, 4: int(epoch.iloc[3]), 6: int(epoch.iloc[5])}
+        )
+        with pytest.raises(ValueError, match="No sub-experiment has both") as exc:
+            _cw_fit(d)
+        assert "holds only 10 distinct periods" in str(exc.value)
+
+    def test_input_validation(self):
+        d = _cw_panel(n=30)
+        dup = pd.concat([d, d.iloc[[5]]], ignore_index=True)
+        with pytest.raises(ValueError, match=r"sharing a \(unit, time\) pair"):
+            _cw_fit(dup)
+        nan_time = d.astype({"time": float})
+        nan_time.loc[3, "time"] = np.nan
+        with pytest.raises(ValueError, match="missing or non-finite"):
+            _cw_fit(nan_time)
+        frac = d.astype({"time": float})
+        frac.loc[3, "time"] = 4.5
+        with pytest.raises(ValueError, match="must be integer-valued"):
+            _cw_fit(frac)
+        frac_ft = d.astype({"first_treat": float})
+        frac_ft.loc[frac_ft["first_treat"] == 6, "first_treat"] = 5.5
+        with pytest.raises(ValueError, match="integer adoption periods"):
+            _cw_fit(frac_ft)
+        with pytest.raises(TypeError):
+            _cw_fit(d, kappa_pre=1.5)
+
+    def test_never_treated_encodings_pass_validation(self):
+        d = _cw_panel(n=30, noise=0.2)
+        base = _cw_fit(d)
+        as_inf = d.astype({"first_treat": float})
+        as_inf.loc[as_inf["first_treat"] == 0, "first_treat"] = np.inf
+        np.testing.assert_allclose(_cw_fit(as_inf).att, base.att, rtol=1e-12)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"control_group": "strict"},
+            {"control_group": "never_treated"},
+            {"vcov_type": "hc2_bm"},
+            {"cluster": "unit_subexp"},
+        ],
+        ids=lambda k: "-".join(f"{a}={b}" for a, b in k.items()),
+    )
+    def test_exact_recovery_across_configurations(self, kwargs):
+        # Homogeneous effects, so the truth is 2 + 0.5 e whatever the controls.
+        d = _cw_ragged("random_5pct", _cw_panel(hetero=False))
+        res = _cw_quiet_fit(d, **kwargs)
+        assert len(res.groups) == 2
+        for e in (-2, 0, 1, 2):
+            want = (2.0 + 0.5 * e) if e >= 0 else 0.0
+            assert res.event_study_effects[e]["effect"] == pytest.approx(want, abs=1e-9)
+
+    def test_exact_recovery_with_anticipation(self):
+        # anticipation=1 widens the window to [-3, 2] and moves the reference
+        # to e = -2; the trim uses the widened window.
+        d = _cw_ragged("random_5pct", _cw_panel(hetero=False))
+        res = _cw_quiet_fit(d, anticipation=1)
+        sd = res.stacked_data
+        assert (sd.groupby(["_sub_exp", "unit"]).size() == 6).all()
+        for e in (-3, -1, 0, 1, 2):
+            want = (2.0 + 0.5 * e) if e >= 0 else 0.0
+            assert res.event_study_effects[e]["effect"] == pytest.approx(want, abs=1e-9)
+
+    def test_random_missingness_never_returns_a_wrong_number(self):
+        n_fit = 0
+        for seed in range(30):
+            rng = np.random.default_rng(100 + seed)
+            d = _cw_panel(seed=seed)
+            frac = rng.uniform(0.02, 0.12)
+            d = d.drop(rng.choice(len(d), int(frac * len(d)), replace=False)).reset_index(drop=True)
+            truth, cells = _cw_truth(d)
+            if not cells:
+                with pytest.raises(ValueError, match="No sub-experiment has both"):
+                    _cw_quiet_fit(d)
+                continue
+            res = _cw_quiet_fit(d)
+            n_fit += 1
+            assert [float(g) for g in res.groups] == [float(a) for a in cells], seed
+            for e, val in truth.items():
+                assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9), seed
+        assert n_fit >= 25
+
+
+class TestStackedDiDCompleteWindowsSurvey:
+    """Under survey_design= the unit-level trim is refused: removing units
+    would drop their PSUs and strata from the variance and df_survey."""
+
+    @staticmethod
+    def _designs(d):
+        from diff_diff.survey import SurveyDesign
+
+        d = d.copy()
+        d["psu"] = d["unit"]
+        units = sorted(d["unit"].unique())
+        cols = []
+        n_rep = 10
+        for r in range(n_rep):
+            deleted = set(units[r::n_rep])
+            col = f"rep_{r}"
+            d[col] = np.where(d["unit"].isin(deleted), 0.0, d["w"] * n_rep / (n_rep - 1))
+            cols.append(col)
+        return d, {
+            "tsl": SurveyDesign(weights="w", psu="psu"),
+            "replicate": SurveyDesign(weights="w", replicate_weights=cols, replicate_method="JK1"),
+        }
+
+    @pytest.mark.parametrize("design", ["tsl", "replicate"])
+    @pytest.mark.parametrize(
+        "name", ["half_cohort6_missing_ref", "cohort6_missing_ref", "nt_missing_4_8"]
+    )
+    def test_ragged_panel_is_refused(self, design, name):
+        d, designs = self._designs(_cw_ragged(name, _cw_panel(noise=0.3)))
+        with pytest.raises(NotImplementedError, match="survey_design=") as exc:
+            _cw_fit(d, survey_design=designs[design])
+        assert "not domain estimation" in str(exc.value)
+
+    @pytest.mark.parametrize("design", ["tsl", "replicate"])
+    def test_balanced_panel_fits(self, design):
+        d, designs = self._designs(_cw_panel(noise=0.3))
+        res = _cw_quiet_fit(d, survey_design=designs[design])
+        plain = _cw_fit(_cw_panel(noise=0.3))
+        np.testing.assert_allclose(res.att, plain.att, rtol=1e-10)  # uniform weights
+        assert np.isfinite(res.se) and res.se > 0
+        assert [float(g) for g in res.groups] == [4.0, 6.0]
+
+    @pytest.mark.parametrize("design", ["tsl", "replicate"])
+    def test_dropped_event_is_refused(self, design):
+        # Period 7 is missing for EVERY unit, so cohort 6 cannot be realized.
+        # Dropping it would take the cohort's PSUs out of the design (60 of
+        # 90 PSUs left), so the survey fit refuses instead of proceeding on
+        # cohort 4 as the unweighted fit does.
+        d, designs = self._designs(_cw_ragged("period7_absent", _cw_panel(noise=0.3)))
+        with pytest.raises(NotImplementedError, match="cannot drop adoption event") as exc:
+            _cw_fit(d, survey_design=designs[design])
+        assert "calendar period(s) [7]" in str(exc.value)
+        assert _cw_quiet_fit(d).n_sub_experiments == 1  # the unweighted fit proceeds
+
+    @pytest.mark.parametrize("col", ["w", "psu"])
+    def test_survey_columns_must_be_constant_within_unit(self, col):
+        # A weight that changes over a unit's rows changes each event-time
+        # cell's weighted composition just as a missing row does: positive
+        # time-varying weights returned 2.6174 for a true 2.5 on this panel.
+        d, designs = self._designs(_cw_panel(hetero=False))
+        half = (d["first_treat"] == 6) & (d["unit"] % 2 == 0)
+        if col == "w":
+            d.loc[half & (d["time"] < 6), "w"] = 1.5
+            d.loc[half & (d["time"] >= 6), "w"] = 0.5
+        else:
+            d.loc[half & (d["time"] >= 6), "psu"] = -1
+        with pytest.raises(ValueError, match=f"Survey column '{col}' varies within units"):
+            _cw_fit(d, survey_design=designs["tsl"])
+
+    def test_zero_weight_on_one_row_is_rejected(self):
+        d, designs = self._designs(_cw_panel(hetero=False))
+        d.loc[(d["first_treat"] == 6) & (d["time"] == 5), "w"] = 0.0
+        with pytest.raises(ValueError, match="varies within units"):
+            _cw_fit(d, survey_design=designs["tsl"])
+
+    def test_gapped_grid_diagnosis_takes_precedence(self):
+        d, designs = self._designs(_cw_panel(noise=0.3))
+        with pytest.raises(ValueError, match="No sub-experiment has both"):
+            _cw_fit(d[d["time"] % 2 == 0].reset_index(drop=True), survey_design=designs["tsl"])
+
+
+# =============================================================================
+# Cohort shares: both arms aggregate sub-experiments with the same shares
+# =============================================================================
+
+_CW_SCHEMES = ["aggregate", "population", "sample_share"]
+
+
+def _cw_unequal(d):
+    """Balanced panel with unequal cohort sizes: every second cohort-6 unit removed."""
+    return d[~((d["first_treat"] == 6) & (d["unit"] % 2 == 0))].reset_index(drop=True)
+
+
+def _cw_shares(d, scheme, weight_col=None, kappa_post=2):
+    """Target cohort shares pi_a of a weighting scheme, computed from the input
+    panel independently of the estimator, plus each event's complete unit sets
+    and the unit weights. Events without positive treated and control mass, or
+    with a zero target, are left out."""
+    w = (
+        d.groupby("unit")[weight_col].first()
+        if weight_col
+        else pd.Series(1.0, index=sorted(d["unit"].unique()))
+    )
+    pop = d.groupby("unit")["pop"].first()
+    cells = {
+        a: (sorted(t), sorted(c))
+        for a, (t, c) in _cw_cells(d, kappa_post=kappa_post).items()
+        if w[sorted(t)].sum() > 0 and w[sorted(c)].sum() > 0
+    }
+    if scheme == "aggregate":
+        raw = {a: w[t].sum() for a, (t, c) in cells.items()}
+    elif scheme == "population":
+        raw = {a: (w[t] * pop[t]).sum() for a, (t, c) in cells.items()}
+    else:
+        raw = {a: w[t].sum() + w[c].sum() for a, (t, c) in cells.items()}
+    raw = {a: v for a, v in raw.items() if v > 0}
+    total = sum(raw.values())
+    return {a: v / total for a, v in raw.items()}, cells, w
+
+
+def _cw_share_truth(shares, event_times=(-2, 0, 1, 2)):
+    return {
+        e: sum(
+            share * ((_CW_EFFECTS[a][0] + _CW_EFFECTS[a][1] * e) if e >= 0 else 0.0)
+            for a, share in shares.items()
+        )
+        for e in event_times
+    }
+
+
+def _cw_manual_aggregate(d, shares, cells, w, e):
+    """sum_a pi_a DID_{a,e} from (survey-weighted) cell means: no regression."""
+
+    def _mean(units, t):
+        rows = d[d["unit"].isin(units) & (d["time"] == t)].set_index("unit")["y"]
+        assert len(rows) == len(units)
+        return float(np.average(rows[units], weights=w[units]))
+
+    total = 0.0
+    for a, share in shares.items():
+        treated = [u for u in cells[a][0] if w[u] > 0]
+        control = [u for u in cells[a][1] if w[u] > 0]
+        did = (_mean(treated, a + e) - _mean(treated, a - 1)) - (
+            _mean(control, a + e) - _mean(control, a - 1)
+        )
+        total += share * did
+    return total
+
+
+def _cw_weighted(d, kind, seed=5):
+    """Unit-constant survey weights in column ``w``."""
+    d = d.copy()
+    ft = d.groupby("unit")["first_treat"].first()
+    if kind == "by_cohort":
+        unit_w = ft.map({4: 1.5, 6: 0.5, 0: 1.0})
+    else:  # random
+        rng = np.random.default_rng(seed)
+        unit_w = pd.Series(rng.uniform(0.2, 3.0, len(ft)), index=ft.index)
+    d["w"] = d["unit"].map(unit_w)
+    return d
+
+
+def _cw_survey():
+    from diff_diff.survey import SurveyDesign
+
+    return SurveyDesign(weights="w")
+
+
+class TestStackedDiDCohortShares:
+    """Wing et al. (2024, Section 5.3): the stacked regression recovers a convex
+    combination of sub-experiment ATTs only if the treated arm and the control
+    arm aggregate sub-experiments with the SAME shares. Before the weights were
+    unified, ``population`` and ``sample_share`` set the treated weight to 1
+    (the paper's Table 1 has a treatment weight for both), and survey fits used
+    raw unit counts for the corrective weights; untreated trends then failed to
+    cancel on every panel with a nonlinear time trend."""
+
+    @pytest.mark.parametrize("scheme", _CW_SCHEMES)
+    @pytest.mark.parametrize("panel", ["unequal", "random_5pct"])
+    def test_truth_recovery_under_every_scheme(self, scheme, panel):
+        d = _cw_unequal(_cw_panel()) if panel == "unequal" else _cw_ragged(panel, _cw_panel())
+        shares, _, _ = _cw_shares(d, scheme)
+        assert len(shares) == 2
+        truth = _cw_share_truth(shares)
+        res = _cw_quiet_fit(
+            d, weighting=scheme, population="pop" if scheme == "population" else None
+        )
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9), e
+
+    @pytest.mark.parametrize("scheme", _CW_SCHEMES)
+    def test_q_weights_are_table_1(self, scheme):
+        d = _cw_unequal(_cw_panel(noise=0.3))
+        shares, cells, _ = _cw_shares(d, scheme)
+        n_d = sum(len(t) for t, _ in cells.values())
+        n_c = sum(len(c) for _, c in cells.values())
+        sd = _cw_fit(
+            d, weighting=scheme, population="pop" if scheme == "population" else None
+        ).stacked_data
+        for a, (treated, control) in cells.items():
+            in_a = sd["_sub_exp"] == a
+            np.testing.assert_allclose(
+                sd.loc[in_a & (sd["_D_sa"] == 1), "_Q_weight"].to_numpy(),
+                shares[a] / (len(treated) / n_d),
+                rtol=1e-13,
+            )
+            np.testing.assert_allclose(
+                sd.loc[in_a & (sd["_D_sa"] == 0), "_Q_weight"].to_numpy(),
+                shares[a] / (len(control) / n_c),
+                rtol=1e-13,
+            )
+        if scheme == "aggregate":
+            assert (sd.loc[sd["_D_sa"] == 1, "_Q_weight"] == 1.0).all()
+        else:
+            assert sd.loc[sd["_D_sa"] == 1, "_Q_weight"].nunique() == 2  # not all 1
+
+    @pytest.mark.parametrize("scheme", _CW_SCHEMES)
+    def test_equals_manual_aggregate_under_every_scheme(self, scheme):
+        d = _cw_ragged("random_5pct", _cw_unequal(_cw_panel(noise=0.5, seed=4)))
+        shares, cells, w = _cw_shares(d, scheme)
+        res = _cw_quiet_fit(
+            d, weighting=scheme, population="pop" if scheme == "population" else None
+        )
+        for e in (-2, 0, 1, 2):
+            np.testing.assert_allclose(
+                res.event_study_effects[e]["effect"],
+                _cw_manual_aggregate(d, shares, cells, w, e),
+                rtol=1e-10,
+            )
+
+    @pytest.mark.parametrize("scheme", _CW_SCHEMES)
+    @pytest.mark.parametrize("kind", ["by_cohort", "random"])
+    def test_survey_weighted_truth_recovery(self, scheme, kind):
+        # Survey-weighted cohort shares on both arms. With raw-count corrective
+        # weights the by-cohort case returned an ATT of 2.46 for a true 2.50
+        # (homogeneous effects) on the balanced panel.
+        d = _cw_weighted(_cw_panel(), kind)
+        shares, _, _ = _cw_shares(d, scheme, weight_col="w")
+        truth = _cw_share_truth(shares)
+        res = _cw_quiet_fit(
+            d,
+            weighting=scheme,
+            population="pop" if scheme == "population" else None,
+            survey_design=_cw_survey(),
+        )
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9), e
+
+    @pytest.mark.parametrize("scheme", _CW_SCHEMES)
+    def test_survey_fit_equals_weighted_manual_aggregate(self, scheme):
+        d = _cw_weighted(_cw_unequal(_cw_panel(noise=0.5, seed=4)), "random")
+        shares, cells, w = _cw_shares(d, scheme, weight_col="w")
+        res = _cw_quiet_fit(
+            d,
+            weighting=scheme,
+            population="pop" if scheme == "population" else None,
+            survey_design=_cw_survey(),
+        )
+        for e in (-2, 0, 1, 2):
+            np.testing.assert_allclose(
+                res.event_study_effects[e]["effect"],
+                _cw_manual_aggregate(d, shares, cells, w, e),
+                rtol=1e-10,
+            )
+
+    def test_survey_weights_are_scale_invariant(self):
+        d = _cw_weighted(_cw_panel(noise=0.4), "random")
+        base = _cw_quiet_fit(d, survey_design=_cw_survey())
+        scaled = _cw_quiet_fit(d.assign(w=d["w"] * 7.0), survey_design=_cw_survey())
+        np.testing.assert_allclose(scaled.att, base.att, rtol=1e-12)
+        np.testing.assert_allclose(scaled.se, base.se, rtol=1e-12)
+
+    def test_zero_weight_units_define_a_subpopulation(self):
+        # Half of cohort 6 at weight 0: the estimate is the truth over the
+        # positive-weight units (raw-count corrective weights returned 2.4733
+        # for a true 2.50 on the homogeneous-effects version of this panel).
+        d = _cw_weighted(_cw_panel(), "random")
+        d.loc[(d["first_treat"] == 6) & (d["unit"] % 2 == 0), "w"] = 0.0
+        shares, _, _ = _cw_shares(d, "aggregate", weight_col="w")
+        truth = _cw_share_truth(shares)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = _cw_fit(d, survey_design=_cw_survey())
+        # Both cohorts still carry mass, so no sub-experiment is reported empty.
+        assert not [w for w in caught if "carry zero weight" in str(w.message)]
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9)
+
+    def test_cohort_at_zero_weight_contributes_nothing(self):
+        d = _cw_weighted(_cw_panel(), "by_cohort")
+        d.loc[d["first_treat"] == 6, "w"] = 0.0
+        with pytest.warns(UserWarning, match="carry zero weight") as rec:
+            res = _cw_fit(d, survey_design=_cw_survey(), control_group="never_treated")
+        msg = next(str(w.message) for w in rec if "carry zero weight" in str(w.message))
+        assert "event 6: no treated unit with positive weight" in msg
+        truth = _cw_share_truth({4: 1.0})
+        for e, val in truth.items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9)
+        # The rows stay in the stack (the design is unchanged), at zero weight.
+        sd = res.stacked_data
+        assert set(sd["_sub_exp"]) == {4, 6}
+        assert (sd.loc[sd["_sub_exp"] == 6, "_Q_weight"] == 0.0).all()
+        assert [float(g) for g in res.groups] == [4.0, 6.0]
+
+    def test_event_without_control_mass_is_left_out_of_the_shares(self):
+        # kappa_post=1: event 6's clean controls are the never-treated units
+        # only, event 4's also include cohort 6 (not yet treated through 5).
+        # With every never-treated unit at weight 0, event 6 has no control
+        # mass; its TREATED mass must not enter the totals event 4 is scaled by.
+        d = _cw_weighted(_cw_panel(), "random")
+        d.loc[d["first_treat"] == 0, "w"] = 0.0
+        with pytest.warns(UserWarning, match="carry zero weight") as rec:
+            res = _cw_fit(d, survey_design=_cw_survey(), kappa_post=1)
+        msg = next(str(w.message) for w in rec if "carry zero weight" in str(w.message))
+        assert "event 6: no clean control with positive weight" in msg
+        for e in (-2, 0, 1):
+            want = (_CW_EFFECTS[4][0] + _CW_EFFECTS[4][1] * e) if e >= 0 else 0.0
+            assert res.event_study_effects[e]["effect"] == pytest.approx(want, abs=1e-9)
+        sd = res.stacked_data
+        in_4 = sd["_sub_exp"] == 4
+        np.testing.assert_allclose(sd.loc[in_4 & (sd["_D_sa"] == 1), "_Q_weight"], 1.0)
+        np.testing.assert_allclose(sd.loc[in_4 & (sd["_D_sa"] == 0), "_Q_weight"], 1.0)
+
+    def test_cohort_with_zero_treated_population_warns(self):
+        d = _cw_panel()
+        d.loc[d["first_treat"] == 6, "pop"] = 0.0
+        with pytest.warns(UserWarning, match="carry zero weight") as rec:
+            res = _cw_fit(d, weighting="population", population="pop")
+        msg = next(str(w.message) for w in rec if "carry zero weight" in str(w.message))
+        assert "event 6: zero treated population" in msg
+        for e, val in _cw_share_truth({4: 1.0}).items():
+            assert res.event_study_effects[e]["effect"] == pytest.approx(val, abs=1e-9)
+
+    def test_population_input_is_validated_on_treated_units(self):
+        d = _cw_panel(n=30).astype({"pop": float})
+        kw = dict(weighting="population", population="pop")
+        # A cohort-4 row inside its window [2, 6]: validation reads the stack.
+        treated_row = d.index[(d["first_treat"] == 4) & (d["time"] == 4)][0]
+        nan_pop = d.copy()
+        nan_pop.loc[treated_row, "pop"] = np.nan
+        with pytest.raises(ValueError, match="missing or non-finite"):
+            _cw_fit(nan_pop, **kw)
+        neg_pop = d.copy()
+        neg_pop.loc[d["first_treat"] == 4, "pop"] = -1.0
+        with pytest.raises(ValueError, match="negative value"):
+            _cw_fit(neg_pop, **kw)
+        varying = d.copy()
+        varying.loc[treated_row, "pop"] = varying.loc[treated_row, "pop"] + 5.0
+        with pytest.raises(ValueError, match="varies within 1 treated unit"):
+            _cw_fit(varying, **kw)
+        # Control units' population, and treated rows outside every window,
+        # are never read.
+        unread = d.copy()
+        unread.loc[d["first_treat"] == 0, "pop"] = np.nan
+        unread.loc[(d["first_treat"] == 4) & (d["time"] == 10), "pop"] = -3.0
+        base = _cw_fit(d, **kw)
+        np.testing.assert_allclose(_cw_fit(unread, **kw).att, base.att, rtol=1e-12)
+        # ... whatever they hold: an object column with pd.NA on the controls.
+        as_object = d.astype({"pop": object})
+        as_object.loc[d["first_treat"] == 0, "pop"] = pd.NA
+        res = _cw_fit(as_object, **kw)
+        np.testing.assert_allclose(res.att, base.att, rtol=1e-12)
+        np.testing.assert_allclose(res.se, base.se, rtol=1e-12)
+
+    @staticmethod
+    def _jk1(d, n_rep=10):
+        d = d.copy()
+        units = sorted(d["unit"].unique())
+        cols = []
+        for r in range(n_rep):
+            col = f"rep_{r}"
+            d[col] = np.where(
+                d["unit"].isin(set(units[r::n_rep])), 0.0, d["w"] * n_rep / (n_rep - 1)
+            )
+            cols.append(col)
+        return d, cols
+
+    @pytest.mark.parametrize("mse", [False, True])
+    def test_replicate_refits_recompute_the_shares(self, mse):
+        # Each replicate estimate must be the estimate under THAT replicate's
+        # weights, whose cohort shares differ from the full sample's. The
+        # oracle is independent of the estimator: weighted cell means under
+        # each replicate column, aggregated with that replicate's shares.
+        from diff_diff.survey import SurveyDesign
+
+        d, cols = self._jk1(_cw_weighted(_cw_panel(noise=0.5, seed=4), "by_cohort"))
+        res = _cw_quiet_fit(
+            d,
+            survey_design=SurveyDesign(
+                weights="w", replicate_weights=cols, replicate_method="JK1", mse=mse
+            ),
+        )
+        events = (-2, 0, 1, 2)
+        theta = np.array([res.event_study_effects[e]["effect"] for e in events])
+        reps = []
+        for col in cols:
+            shares, cells, w = _cw_shares(d, "aggregate", weight_col=col)
+            reps.append([_cw_manual_aggregate(d, shares, cells, w, e) for e in events])
+        reps = np.array(reps)
+        centre = theta if mse else reps.mean(axis=0)
+        n_rep = len(cols)
+        oracle_var = (n_rep - 1) / n_rep * ((reps - centre) ** 2).sum(axis=0)
+        reported = np.array([res.event_study_effects[e]["se"] for e in events])
+        np.testing.assert_allclose(reported, np.sqrt(oracle_var), rtol=1e-9)
+
+    def test_replicate_without_control_mass_is_dropped(self):
+        from diff_diff.survey import SurveyDesign
+
+        d = _cw_weighted(_cw_panel(noise=0.5, seed=4), "by_cohort")
+        d = d[d["first_treat"] != 6].reset_index(drop=True)  # one cohort, never-treated controls
+        d, cols = self._jk1(d)
+        d.loc[d["first_treat"] == 0, cols[0]] = 0.0  # replicate 0: no control at all
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = _cw_fit(
+                d,
+                survey_design=SurveyDesign(
+                    weights="w", replicate_weights=cols, replicate_method="JK1"
+                ),
+            )
+        assert any("replicate" in str(w.message).lower() for w in caught)
+        assert np.isfinite(res.se) and res.se > 0
 
 
 @pytest.fixture(scope="module")

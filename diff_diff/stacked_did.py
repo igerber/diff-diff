@@ -41,6 +41,115 @@ __all__ = [
 ]
 
 
+def _cohort_share_weights(
+    sub_exp: np.ndarray,
+    treated: np.ndarray,
+    unit: np.ndarray,
+    weighting: str,
+    row_weights: Optional[np.ndarray] = None,
+    population: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, Dict[Any, str]]:
+    """Corrective Q-weights that give both arms the same cohort shares.
+
+    Wing, Freedman & Hollingsworth (2024, Section 5.3) show the stacked
+    regression recovers a convex combination of the sub-experiment ATTs only
+    if the treated arm and the control arm aggregate sub-experiments with the
+    SAME shares; otherwise the untreated trends do not cancel. With ``w_s`` a
+    unit's survey weight (1 without a survey design) and the sums taken over
+    the units of sub-experiment ``a``::
+
+        W_a^D = sum of w_s over treated units,  W_a^C = sum over controls
+        pi_a  = W_a^D / W^D                              (aggregate)
+        pi_a  = sum of w_s * pop_s over treated / total  (population)
+        pi_a  = (W_a^D + W_a^C) / (W^D + W^C)            (sample_share)
+
+        Q_sa = pi_a / (W_a^D / W^D)   for treated rows
+        Q_sa = pi_a / (W_a^C / W^C)   for control rows
+
+    Without survey weights these are the paper's Table 1 weights (treated
+    ``Q = 1`` under ``aggregate``). A sub-experiment with no treated mass,
+    no control mass, or a zero target share gets ``Q = 0`` on every row and
+    is left out of the totals; its rows stay in the stack.
+
+    Parameters
+    ----------
+    sub_exp, treated, unit : np.ndarray
+        Per stacked row: sub-experiment label, treated flag (1/0), unit id.
+    weighting : {"aggregate", "population", "sample_share"}
+    row_weights : np.ndarray, optional
+        Per-row survey weight, constant within a unit. ``None`` = all ones.
+    population : np.ndarray, optional
+        Per-row population (``weighting="population"`` only); read on
+        treated rows, constant within a unit.
+
+    Returns
+    -------
+    q : np.ndarray
+        Q-weight per stacked row.
+    zero_weight : dict
+        Sub-experiments that receive zero weight, mapped to the reason.
+    """
+    n = len(sub_exp)
+    is_treated = np.asarray(treated) == 1
+    frame = pd.DataFrame(
+        {
+            "a": sub_exp,
+            "u": unit,
+            "d": is_treated,
+            "w": np.ones(n) if row_weights is None else np.asarray(row_weights, dtype=float),
+        }
+    )
+    if population is not None:
+        frame["p"] = np.asarray(population, dtype=float)
+    # One row per (sub-experiment, unit): every stacked unit covers the whole
+    # window and its weight is constant, so the first row carries its mass.
+    units = frame.loc[~frame.duplicated(subset=["a", "u"])]
+    events = list(pd.unique(frame["a"]))
+    w_d = units.loc[units["d"]].groupby("a")["w"].sum().reindex(events, fill_value=0.0)
+    w_c = units.loc[~units["d"]].groupby("a")["w"].sum().reindex(events, fill_value=0.0)
+
+    zero_weight: Dict[Any, str] = {}
+    for a in events:
+        if not w_d[a] > 0:
+            zero_weight[a] = "no treated unit with positive weight"
+        elif not w_c[a] > 0:
+            zero_weight[a] = "no clean control with positive weight"
+    effective = [a for a in events if a not in zero_weight]
+
+    q_treated = pd.Series(0.0, index=events)
+    q_control = pd.Series(0.0, index=events)
+    if effective:
+        w_d_total = float(w_d[effective].sum())
+        w_c_total = float(w_c[effective].sum())
+        if weighting == "aggregate":
+            target = w_d / w_d_total
+        elif weighting == "population":
+            treated_units = units.loc[units["d"]]
+            pop_mass = (
+                (treated_units["w"] * treated_units["p"])
+                .groupby(treated_units["a"])
+                .sum()
+                .reindex(events, fill_value=0.0)
+            )
+            pop_total = float(pop_mass[effective].sum())
+            target = pop_mass / pop_total if pop_total > 0 else pop_mass * 0.0
+            for a in effective:
+                if not pop_mass[a] > 0:
+                    zero_weight[a] = "zero treated population"
+        else:  # sample_share
+            target = (w_d + w_c) / (w_d_total + w_c_total)
+        for a in effective:
+            if a in zero_weight:
+                continue
+            q_treated[a] = target[a] / (w_d[a] / w_d_total)
+            q_control[a] = target[a] / (w_c[a] / w_c_total)
+
+    q = np.where(
+        is_treated, frame["a"].map(q_treated).to_numpy(), frame["a"].map(q_control).to_numpy()
+    ).astype(float)
+    return q, zero_weight
+
+
 class StackedDiD(BaseEstimator):
     """
     Stacked Difference-in-Differences estimator.
@@ -58,10 +167,16 @@ class StackedDiD(BaseEstimator):
     kappa_post : int, default=1
         Number of post-treatment event-time periods.
     weighting : str, default="aggregate"
-        Target estimand weighting scheme per Table 1 of the paper:
-        - "aggregate": Equal weight per adoption event (trimmed aggregate ATT)
-        - "population": Weight by population size of treated cohort
-        - "sample_share": Weight by sample share of each sub-experiment
+        Target estimand weighting scheme per Table 1 of the paper. Each sets
+        the share ``pi_a`` with which sub-experiment ``a`` enters the aggregate
+        ``sum_a pi_a ATT(a, a+e)``, and both the treated and the control rows
+        are weighted so that each arm carries that share:
+        - "aggregate": share of treated units (trimmed aggregate ATT; treated
+          rows have Q = 1)
+        - "population": share of the treated units' population
+        - "sample_share": share of all units (treated plus clean controls)
+        Under ``survey_design=`` the shares are formed from survey-weighted
+        unit masses.
     control_group : str, default="not_yet_treated"
         How to define clean controls per Appendix A of the paper:
         - "not_yet_treated": Units with A_s > a + kappa_post
@@ -133,9 +248,10 @@ class StackedDiD(BaseEstimator):
         trimmed-aggregate-ATT estimand (it changes only how untreated trends are
         estimated, not the treated-cohort weights); at ``b_sa=1`` it reduces to
         the paper's unit-count weighted stacked DID, equal to
-        ``weighting="aggregate"`` on balanced event windows. v1 requires
-        ``weighting="aggregate"`` and **balanced event windows** (ragged windows
-        raise a ``ValueError``), and does not support ``survey_design=``;
+        ``weighting="aggregate"``. v1 requires ``weighting="aggregate"`` and does
+        not support ``survey_design=``; on a ragged panel it runs on the units
+        observed over their whole event window, like the default path (see
+        Notes);
         matching-based balancing and the repeated-treatment extension are out of
         scope. Default ``"none"`` reproduces plain weighted stacked DID.
     df_convention : {"residual", "cluster", "normal"}, default "cluster"
@@ -186,6 +302,23 @@ class StackedDiD(BaseEstimator):
     1. Creating one sub-experiment per adoption cohort with clean controls
     2. Applying Q-weights to reweight the stacked regression
     3. Running a single event-study WLS regression on the weighted stack
+
+    **Complete event windows.** A unit enters a sub-experiment only if it is
+    observed at every event time of the window
+    ``[-kappa_pre - anticipation, kappa_post]``. The regression contrasts
+    event-time cell means, which are within-unit changes only when the same
+    units sit in every cell (the paper's stack has each unit observed for
+    ``kappa_pre + kappa_post + 1`` periods, Section 5.1). On a ragged panel
+    the units that are not are excluded from that sub-experiment with a
+    ``UserWarning`` reporting the counts, and the estimand is the trimmed
+    aggregate ATT over the units observed across their whole window. An
+    adoption event left without a complete treated unit or clean control
+    (including one whose window contains a period no unit observes) is
+    dropped with a warning and listed in ``results.trimmed_groups``; if none
+    is left, ``fit`` raises ``ValueError``. Under ``survey_design=`` both the
+    unit-level exclusion and a dropped event are refused
+    (``NotImplementedError``). ``time`` must
+    be integer-valued with at most one row per unit and period.
 
     References
     ----------
@@ -323,7 +456,8 @@ class StackedDiD(BaseEstimator):
             Use 0 or np.inf for never-treated units.
         population : str, optional
             Column name for population weights. Required only when
-            weighting="population".
+            weighting="population". Read for the treated units in the stack,
+            where it must be finite, non-negative and constant within a unit.
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference. When
             provided, uses Taylor Series Linearization for variance
@@ -350,7 +484,29 @@ class StackedDiD(BaseEstimator):
         Raises
         ------
         ValueError
-            If required columns are missing or data validation fails.
+            If required columns are missing or data validation fails: a
+            missing or non-integer ``time``, a duplicated ``(unit, time)``
+            row, a non-integer ``first_treat``, or no adoption event with
+            both a treated unit and a clean control observed at every event
+            time of the window. Also under ``weighting="population"`` when a
+            treated unit's population is missing, negative or not constant
+            within the unit, and under ``survey_design=`` when a survey column
+            varies within a unit.
+        NotImplementedError
+            Under ``survey_design=`` when a treated or clean-control unit is
+            not observed at every event time of its sub-experiment window, or
+            an adoption event would be dropped for lack of complete units
+            (removing them would drop their PSUs from the design).
+
+        Warns
+        -----
+        UserWarning
+            When units are excluded from a sub-experiment because they are
+            not observed at every event time of its window, and when an
+            adoption event is dropped because no treated unit or no clean
+            control is. Also when a sub-experiment carries zero weight (no
+            treated or control unit with positive survey weight, or a zero
+            treated population under ``weighting="population"``).
         """
         # Fit-time re-check: __init__ and set_params validate eagerly, so
         # this only catches DIRECT attribute mutation (est.anticipation = ...)
@@ -411,11 +567,18 @@ class StackedDiD(BaseEstimator):
         from diff_diff.survey import (
             SurveyDesign,
             _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
         )
 
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
+        # Survey columns must be constant within a unit: the regression
+        # contrasts event-time cell means, and a weight that changes over a
+        # unit's rows changes each cell's weighted composition exactly as a
+        # missing row does (REGISTRY StackedDiD complete-window Note).
+        if survey_design is not None and isinstance(survey_design, SurveyDesign):
+            _validate_unit_constant_survey(data, unit, survey_design)
         _uses_replicate_sd = resolved_survey is not None and resolved_survey.uses_replicate_variance
 
         # Reject fweight and aweight — Q-weight composition is ratio-valued
@@ -464,6 +627,7 @@ class StackedDiD(BaseEstimator):
         df = data.copy()
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
+        self._validate_panel_grid(df, unit, time, first_treat)
 
         # ---- Data setup ----
         # Handle never-treated encoding: both 0 and inf -> inf
@@ -494,10 +658,33 @@ class StackedDiD(BaseEstimator):
         omega_kappa, trimmed = self._trim_adoption_events(omega_A, T_min, T_max, unit_info)
 
         # ---- Build stacked dataset ----
+        # Complete-window rule (REGISTRY StackedDiD Note): a unit enters a
+        # sub-experiment only if it has a row at EVERY integer event time of
+        # the window. Equation 3 contrasts (treated x event-time) and
+        # (control x event-time) cell means, which are within-unit changes
+        # only when the same units sit in every cell (Wing et al. 2024,
+        # Section 5.1: "each unit will be observed for kappa_pre +
+        # kappa_post + 1 time periods").
+        win_lo = -self.kappa_pre - self.anticipation
+        win_hi = self.kappa_post
+        observed_periods = {int(t) for t in time_periods}
         sub_experiments = []
-        skipped_events = []
+        realized_events: List[Any] = []
+        unrealized: Dict[Any, str] = {}
+        coverage: Dict[Any, Dict[str, int]] = {}
         for a in omega_kappa:
-            sub_exp = self._build_sub_experiment(
+            a_int = int(a)
+            # (i) A window period that NO unit observes: no unit can be
+            # complete, so the event cannot be realized.
+            absent = [
+                t for t in range(a_int + win_lo, a_int + win_hi + 1) if t not in observed_periods
+            ]
+            if absent:
+                unrealized[a] = (
+                    f"calendar period(s) {absent} of its window are not observed for any unit"
+                )
+                continue
+            sub_exp, counts = self._build_sub_experiment(
                 df,
                 unit_info,
                 a,
@@ -507,28 +694,150 @@ class StackedDiD(BaseEstimator):
                 outcome,
                 extra_cols=survey_cols,
             )
-            if sub_exp is not None and len(sub_exp) > 0:
+            coverage[a] = counts
+            if sub_exp is not None:
                 sub_experiments.append(sub_exp)
+                realized_events.append(a)
             else:
-                skipped_events.append(a)
+                reasons = []
+                if counts["treated_kept"] == 0:
+                    reasons.append(
+                        "no treated unit is observed at every event time "
+                        f"(0 of {counts['treated_eligible']})"
+                    )
+                if counts["control_kept"] == 0:
+                    reasons.append(
+                        "no clean control is observed at every event time "
+                        f"(0 of {counts['control_eligible']})"
+                    )
+                unrealized[a] = " and ".join(reasons)
 
-        if skipped_events:
-            warnings.warn(
-                f"Sub-experiments for events {skipped_events} were empty " f"after filtering.",
-                UserWarning,
-                stacklevel=2,
+        n_dropped_treated = sum(
+            c["treated_eligible"] - c["treated_kept"] for c in coverage.values()
+        )
+        n_dropped_control = sum(
+            c["control_eligible"] - c["control_kept"] for c in coverage.values()
+        )
+
+        # (ii)/(iii) Under a survey design, removing units for unit-level
+        # missingness is REFUSED before any estimate is formed: their PSUs
+        # and strata would leave the Taylor-linearized meat and df_survey,
+        # which is not domain estimation. An event lost to a period the
+        # whole panel lacks is refused for the same reason further down,
+        # after the "nothing left" diagnosis, which takes precedence when
+        # no event at all can be formed.
+        if survey_design is not None and (n_dropped_treated + n_dropped_control) > 0:
+            raise NotImplementedError(
+                "StackedDiD with survey_design= requires every treated and "
+                "clean-control unit to be observed at every event time of its "
+                f"sub-experiment window [{win_lo}, {win_hi}], but "
+                f"{n_dropped_treated} treated and {n_dropped_control} control "
+                "unit-by-sub-experiment entries are not ("
+                + self._format_coverage(coverage)
+                + "). Without a survey design those units are trimmed; under a "
+                "survey design removing them would drop their PSUs and strata "
+                "from the variance and its degrees of freedom, which is not "
+                "domain estimation. Supply a panel in which every unit is "
+                "observed at every period, or fit without survey_design=."
             )
 
         if len(sub_experiments) == 0:
             raise ValueError(
-                "All sub-experiments are empty after filtering. "
-                "Check your data or reduce kappa values."
+                "No sub-experiment has both a treated unit and a clean control "
+                f"observed at every event time of the window [{win_lo}, {win_hi}] "
+                f"(kappa_pre={self.kappa_pre}, kappa_post={self.kappa_post}, "
+                f"anticipation={self.anticipation}): "
+                + "; ".join(f"event {int(a)}: {why}" for a, why in unrealized.items())
+                + "."
+                + self._describe_time_grid_gaps(T_min, T_max, observed_periods)
+                + " Reduce kappa_pre / kappa_post, or supply the missing observations."
+            )
+
+        if survey_design is not None and unrealized:
+            raise NotImplementedError(
+                "StackedDiD with survey_design= cannot drop adoption event(s) "
+                "that have no sub-experiment of complete units ("
+                + "; ".join(f"event {int(a)}: {why}" for a, why in unrealized.items())
+                + "): the dropped cohorts' PSUs and strata would leave the "
+                "survey variance and its degrees of freedom, which is not "
+                "domain estimation. Remove those cohorts from the data "
+                "yourself (and adjust the design accordingly), narrow the "
+                "event window, or fit without survey_design=."
+            )
+
+        if unrealized:
+            warnings.warn(
+                f"{len(unrealized)} adoption event(s) were dropped because no "
+                "sub-experiment could be formed from units observed at every "
+                f"event time of the window [{win_lo}, {win_hi}]: "
+                + "; ".join(f"event {int(a)}: {why}" for a, why in unrealized.items())
+                + ". They are reported in trimmed_groups and do not enter the "
+                "trimmed aggregate ATT.",
+                UserWarning,
+                stacklevel=2,
+            )
+            trimmed = sorted(list(trimmed) + list(unrealized))
+
+        realized_cov = {a: coverage[a] for a in realized_events}
+        n_trim_t = sum(c["treated_eligible"] - c["treated_kept"] for c in realized_cov.values())
+        n_trim_c = sum(c["control_eligible"] - c["control_kept"] for c in realized_cov.values())
+        if n_trim_t + n_trim_c > 0:
+            warnings.warn(
+                f"{n_trim_t} treated and {n_trim_c} control unit-by-sub-experiment "
+                "entries were excluded because the unit is not observed at every "
+                f"event time of the window [{win_lo}, {win_hi}] ("
+                + self._format_coverage(realized_cov)
+                + "). The stacked regression contrasts event-time cell means, "
+                "which requires the same units at every event time of a "
+                "sub-experiment (Wing et al. 2024, Section 5.1), so the estimand "
+                "is the trimmed aggregate ATT over the units observed across "
+                "their whole window.",
+                UserWarning,
+                stacklevel=2,
             )
 
         stacked_df = pd.concat(sub_experiments, ignore_index=True)
 
         # ---- Compute Q-weights ----
-        stacked_df = self._compute_q_weights(stacked_df, unit, population)
+        # Both arms must carry the same cohort shares (helper docstring), so
+        # the shares are formed from survey-weighted unit masses when a
+        # survey design supplies weights, and recomputed in every replicate.
+        _sub_arr = stacked_df["_sub_exp"].to_numpy()
+        _d_arr = stacked_df["_D_sa"].to_numpy()
+        _unit_arr = stacked_df[unit].to_numpy()
+        _survey_w_rows: Optional[np.ndarray] = None
+        if survey_design is not None and getattr(survey_design, "weights", None) is not None:
+            _survey_w_rows = stacked_df[survey_design.weights].to_numpy(dtype=np.float64)
+        _pop_rows: Optional[np.ndarray] = None
+        if self.weighting == "population":
+            assert population is not None  # validated at the top of fit()
+            self._validate_treated_population(stacked_df, unit, population)
+            # Only treated rows are read: control populations are unused and
+            # may hold anything (missing values, pd.NA in an object column).
+            _treated_rows = _d_arr == 1
+            _pop_rows = np.zeros(len(stacked_df), dtype=np.float64)
+            _pop_rows[_treated_rows] = pd.to_numeric(
+                stacked_df.loc[_treated_rows, population]
+            ).to_numpy(dtype=np.float64)
+        _q_rows, _zero_weight_events = _cohort_share_weights(
+            _sub_arr,
+            _d_arr,
+            _unit_arr,
+            self.weighting,
+            row_weights=_survey_w_rows,
+            population=_pop_rows,
+        )
+        stacked_df["_Q_weight"] = _q_rows
+        if _zero_weight_events:
+            warnings.warn(
+                f"{len(_zero_weight_events)} sub-experiment(s) carry zero weight "
+                "and contribute nothing to the estimates: "
+                + "; ".join(f"event {int(a)}: {why}" for a, why in _zero_weight_events.items())
+                + ". Their rows stay in the stack (and in groups, "
+                "n_sub_experiments and the unit counts).",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # ---- Covariate balancing: design weights b_sa -> effective-mass W_sa ----
         # When balancing, this OVERWRITES `_Q_weight` with the CBWSDID final weights
@@ -598,8 +907,12 @@ class StackedDiD(BaseEstimator):
                 else np.ones(n_stacked, dtype=np.float64)
             )
             composed_weights = Q_weights * survey_weights_stacked
-            # Normalize composed weights to sum = n_stacked
-            composed_weights = composed_weights * (n_stacked / np.sum(composed_weights))
+            # Normalize composed weights to sum = n_stacked. A zero total (no
+            # sub-experiment carries weight) is left as is, so the
+            # reference-support guard below reports it.
+            _composed_sum = float(np.sum(composed_weights))
+            if _composed_sum > 0:
+                composed_weights = composed_weights * (n_stacked / _composed_sum)
         else:
             composed_weights = Q_weights
 
@@ -611,10 +924,12 @@ class StackedDiD(BaseEstimator):
         # defined relative to its cells. Equation 3 is a Q-WEIGHTED WLS,
         # so the check runs on the COMPOSED weights, not raw row
         # presence: a cell whose rows all carry zero effective weight
-        # (aggregate Q-weights zero a sub-experiment's controls at any
-        # event time where that sub-experiment has no treated rows;
-        # survey pweights can zero a cell outright) is as empty as a
-        # missing one. An effectively-empty cell makes the design
+        # (survey pweights can zero a cell outright; population
+        # weighting zeroes every weight when the treated population is
+        # zero) is as empty as a missing one, and with kappa_pre = 0
+        # the reference lies outside the window altogether. Gapped and
+        # ragged panels no longer reach this guard: the complete-window
+        # rule in _build_sub_experiment removes them first. An effectively-empty cell makes the design
         # rank-deficient and QR pivoting silently re-normalizes against
         # an arbitrary surviving column - the surface would then certify
         # a delta_0 = 0 normalization that never happened (and
@@ -636,16 +951,11 @@ class StackedDiD(BaseEstimator):
                 "(delta_0 = 0 at the reference) would be fabricated: the "
                 "regression's effective baseline cell is empty and rank "
                 "handling would silently re-normalize against an "
-                "arbitrary horizon. Causes: a gapped panel where every "
-                "retained cohort's calendar period a - 1 - anticipation "
-                "is absent (the IC1 window check only inspects the "
-                "panel's min/max periods, not interior gaps); ragged "
-                "panels where the only reference-period control rows sit "
-                "in sub-experiments without treated reference rows "
-                "(aggregate Q-weights zero those controls); or survey "
-                "weights that zero out a reference cell. Fill the gap, "
-                "adjust anticipation/kappa_pre so the reference falls on "
-                "an observed period, or drop the affected cohorts."
+                "arbitrary horizon. Causes: kappa_pre = 0 (the reference "
+                "period lies outside the event window; use kappa_pre >= "
+                "1); weighting='population' with zero treated population "
+                "(every weight is then zero); or survey weights "
+                "that zero out a reference cell."
             )
 
         Y = stacked_df[outcome].values
@@ -825,10 +1135,23 @@ class StackedDiD(BaseEstimator):
             # fit() fires before this branch can be reached for any other
             # vcov_type.
             def _refit_stacked(w_r):
-                composed_r = Q_weights * w_r
+                # The corrective weights depend on the survey weights (they
+                # equalize the arms' survey-weighted cohort shares), so each
+                # replicate recomputes them from its own weights.
+                q_r, _ = _cohort_share_weights(
+                    _sub_arr,
+                    _d_arr,
+                    _unit_arr,
+                    self.weighting,
+                    row_weights=w_r,
+                    population=_pop_rows,
+                )
+                composed_r = q_r * w_r
                 w_sum = np.sum(composed_r)
-                if w_sum > 0:
-                    composed_r = composed_r * (n_stacked / w_sum)
+                if not w_sum > 0:
+                    # No sub-experiment has both arms in this replicate.
+                    return np.full(X.shape[1], np.nan)
+                composed_r = composed_r * (n_stacked / w_sum)
                 coef_r, _, _ = solve_ols(
                     X,
                     Y,
@@ -1064,7 +1387,7 @@ class StackedDiD(BaseEstimator):
             event_study_effects=event_study_effects,
             group_effects=None,
             stacked_data=stacked_df,
-            groups=list(omega_kappa),
+            groups=list(realized_events),
             trimmed_groups=list(trimmed),
             time_periods=time_periods,
             n_obs=len(data),
@@ -1094,6 +1417,100 @@ class StackedDiD(BaseEstimator):
 
         self.is_fitted_ = True
         return self.results_
+
+    # =========================================================================
+    # Input validation and coverage messages
+    # =========================================================================
+
+    @staticmethod
+    def _validate_panel_grid(df: pd.DataFrame, unit: str, time: str, first_treat: str) -> None:
+        """Reject inputs the event-time grid cannot represent.
+
+        Event times are integer offsets ``time - a``, each unit contributes
+        one row per event time, and the adoption date ``a`` is an integer
+        period. A missing or fractional ``time``, a duplicated ``(unit,
+        time)`` row or a fractional ``first_treat`` would otherwise be
+        silently mis-assigned (dropped, absorbed into the reference
+        category, double-counted, or shifted by ``int()`` truncation).
+        """
+        t_vals = df[time].to_numpy(dtype=float)
+        n_bad = int(np.sum(~np.isfinite(t_vals)))
+        if n_bad:
+            raise ValueError(
+                f"Column '{time}' has {n_bad} missing or non-finite value(s). "
+                "StackedDiD places every row at an integer event time; drop or "
+                "fill those rows before fitting."
+            )
+        frac = t_vals != np.floor(t_vals)
+        if np.any(frac):
+            raise ValueError(
+                f"Column '{time}' must be integer-valued, but {int(np.sum(frac))} "
+                f"row(s) are not (e.g. {t_vals[frac][:3].tolist()}). Event times "
+                "are integer offsets from the adoption period; re-index time to "
+                "consecutive integers."
+            )
+        dup = df.duplicated(subset=[unit, time], keep=False)
+        if dup.any():
+            example = df.loc[dup, [unit, time]].iloc[0].tolist()
+            raise ValueError(
+                f"Found {int(dup.sum())} rows sharing a ({unit}, {time}) pair "
+                f"(e.g. {example}). StackedDiD requires at most one observation "
+                "per unit and period; aggregate or drop the duplicates."
+            )
+        ft_vals = df[first_treat].to_numpy(dtype=float)
+        ft_frac = np.isfinite(ft_vals) & (ft_vals != np.floor(ft_vals))
+        if np.any(ft_frac):
+            raise ValueError(
+                f"Column '{first_treat}' must hold integer adoption periods (or "
+                "0 / inf for never-treated units), but found non-integer "
+                f"value(s) (e.g. {np.unique(ft_vals[ft_frac])[:3].tolist()})."
+            )
+
+    @staticmethod
+    def _format_coverage(coverage: Dict[Any, Dict[str, int]], limit: int = 12) -> str:
+        """Per-event "kept of eligible" breakdown for the coverage messages."""
+        affected = [
+            (a, c)
+            for a, c in coverage.items()
+            if (c["treated_kept"] < c["treated_eligible"])
+            or (c["control_kept"] < c["control_eligible"])
+        ]
+        if not affected:
+            return "all units kept"
+        text = "kept " + "; ".join(
+            f"event {int(a)}: {c['treated_kept']} of {c['treated_eligible']} treated, "
+            f"{c['control_kept']} of {c['control_eligible']} control"
+            for a, c in affected[:limit]
+        )
+        if len(affected) > limit:
+            text += f"; and {len(affected) - limit} more event(s)"
+        return text
+
+    @staticmethod
+    def _describe_time_grid_gaps(T_min: int, T_max: int, observed_periods: set) -> str:
+        """Sentence naming integer periods the whole panel lacks (bounded cost)."""
+        span = T_max - T_min + 1
+        n_obs_periods = len(observed_periods)
+        if span <= n_obs_periods:
+            return ""
+        advice = (
+            " StackedDiD's event times are integer offsets of the time column, "
+            "so re-index time to consecutive integers (for example the rank of "
+            "each period) or narrow the window."
+        )
+        if span > 10_000:
+            return (
+                f" The time column spans {span} integer values but holds only "
+                f"{n_obs_periods} distinct periods (a datetime or coded time "
+                "column?)." + advice
+            )
+        missing = [t for t in range(T_min, T_max + 1) if t not in observed_periods]
+        shown = missing[:12]
+        more = f" (first 12 of {len(missing)})" if len(missing) > 12 else ""
+        return (
+            f" The panel's time grid has gaps: period(s) {shown}{more} are not "
+            "observed for any unit." + advice
+        )
 
     # =========================================================================
     # Trimming (IC1 + IC2)
@@ -1200,9 +1617,15 @@ class StackedDiD(BaseEstimator):
         first_treat: str,
         outcome: str,
         extra_cols: Optional[List[str]] = None,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Tuple[Optional[pd.DataFrame], Dict[str, int]]:
         """
         Build a single sub-experiment for adoption event a.
+
+        Only units observed at EVERY integer event time of the window
+        ``[-kappa_pre - anticipation, kappa_post]`` are kept (the
+        complete-window rule: the paper's stack has each unit observed for
+        ``kappa_pre + kappa_post + 1`` periods, Section 5.1, and the
+        regression's cell-mean contrasts are within-unit changes only then).
 
         Parameters
         ----------
@@ -1221,8 +1644,14 @@ class StackedDiD(BaseEstimator):
 
         Returns
         -------
-        pd.DataFrame or None
-            Sub-experiment data with _sub_exp, _event_time, _D_sa columns.
+        sub_df : pd.DataFrame or None
+            Sub-experiment data with _sub_exp, _event_time, _D_sa columns, or
+            None when no treated unit or no clean control is complete.
+        counts : dict
+            ``treated_eligible`` / ``control_eligible`` (units eligible by
+            ``first_treat``, with or without rows in the window) and
+            ``treated_kept`` / ``control_kept`` (those observed at every
+            event time).
         """
         a_int = int(a)
         ft = unit_info["_first_treat"].values
@@ -1241,8 +1670,14 @@ class StackedDiD(BaseEstimator):
             control_mask = np.isinf(ft)
         control_units = set(unit_ids[control_mask])
 
+        counts = {
+            "treated_eligible": len(treated_units),
+            "control_eligible": len(control_units),
+            "treated_kept": 0,
+            "control_kept": 0,
+        }
         if len(treated_units) == 0 or len(control_units) == 0:
-            return None
+            return None, counts
 
         # Time window: [a - kappa_pre - anticipation, a + kappa_post]
         # Reference period a-1 (event time e=-1) is included when kappa_pre >= 1
@@ -1256,181 +1691,64 @@ class StackedDiD(BaseEstimator):
         mask = df[unit].isin(all_units) & (df[time] >= t_start) & (df[time] <= t_end)
         sub_df = df.loc[mask].copy()
 
-        if len(sub_df) == 0:
-            return None
+        # Complete-window rule: keep a unit only if it has a row at every
+        # integer event time of the window. Rows are unique per (unit, time)
+        # and integer-valued (``_validate_panel_grid``), so a row count equal
+        # to the window length is exact coverage. ``len(range(...))`` keeps a
+        # non-integer kappa failing with range()'s TypeError.
+        n_expected = len(range(t_start, t_end + 1))
+        rows_per_unit = sub_df.groupby(unit).size()
+        complete = set(rows_per_unit.index[rows_per_unit == n_expected])
+        counts["treated_kept"] = len(treated_units & complete)
+        counts["control_kept"] = len(control_units & complete)
+        if counts["treated_kept"] == 0 or counts["control_kept"] == 0:
+            return None, counts
+        if len(complete) < len(rows_per_unit):
+            sub_df = sub_df.loc[sub_df[unit].isin(complete)].copy()
 
         # Add sub-experiment columns
         sub_df["_sub_exp"] = a
         sub_df["_event_time"] = sub_df[time] - a_int
         sub_df["_D_sa"] = sub_df[unit].isin(treated_units).astype(int)
 
-        return sub_df
+        return sub_df, counts
 
     # =========================================================================
-    # Q-weight computation
+    # Q-weight inputs
     # =========================================================================
 
-    def _compute_q_weights(
-        self,
-        stacked_df: pd.DataFrame,
-        unit_col: str,
-        population_col: Optional[str],
-    ) -> pd.DataFrame:
+    @staticmethod
+    def _validate_treated_population(
+        stacked_df: pd.DataFrame, unit_col: str, population_col: str
+    ) -> None:
+        """Validate the population of the treated units in the stack.
+
+        ``weighting="population"`` reads it into both arms' weights (the
+        paper's Table 1), so it must be finite, non-negative and constant
+        within a unit. Control units, and treated units that never enter the
+        stack, are not read and not validated.
         """
-        Compute Q-weights per Table 1 of Wing et al. (2024).
-
-        Treated observations always get Q = 1.
-        Control observations get Q based on the weighting scheme.
-
-        For aggregate weighting, Q-weights are computed using observation
-        counts per (event_time, sub_exp), matching the R reference
-        ``compute_weights()``. For balanced panels this is equivalent to
-        unit counts per sub-experiment. For unbalanced panels the weights
-        adjust for varying observation density per event time.
-
-        Population and sample_share weighting use unit counts per
-        sub-experiment, following the paper's notation (N_a^D, N_a^C).
-
-        Parameters
-        ----------
-        stacked_df : pd.DataFrame
-            Stacked dataset with _sub_exp, _event_time, and _D_sa columns.
-        unit_col : str
-            Unit column name.
-        population_col : str, optional
-            Population column name (for weighting="population").
-
-        Returns
-        -------
-        pd.DataFrame
-            stacked_df with _Q_weight column added.
-        """
-        if self.weighting == "aggregate":
-            return self._compute_q_weights_aggregate(stacked_df)
-
-        # --- Population and sample_share: unit-count-based formulas ---
-
-        # Count distinct units per sub-experiment
-        sub_exp_stats = (
-            stacked_df.groupby(["_sub_exp", "_D_sa"])[unit_col].nunique().unstack(fill_value=0)
-        )
-
-        # N_a^D and N_a^C per sub-experiment
-        N_D = sub_exp_stats.get(1, pd.Series(dtype=float)).to_dict()
-        N_C = sub_exp_stats.get(0, pd.Series(dtype=float)).to_dict()
-
-        # Totals
-        N_Omega_C = sum(N_C.values())
-
-        if self.weighting == "population":
-            # Pop_a^D: sum of population values for treated units per sub-exp
-            treated_pop = (
-                stacked_df[stacked_df["_D_sa"] == 1]
-                .drop_duplicates(subset=[unit_col, "_sub_exp"])
-                .groupby("_sub_exp")[population_col]
-                .sum()
-                .to_dict()
+        rows = stacked_df.loc[stacked_df["_D_sa"] == 1, [unit_col, population_col]]
+        values = pd.to_numeric(rows[population_col], errors="coerce").to_numpy(dtype=float)
+        bad = ~np.isfinite(values)
+        if np.any(bad):
+            raise ValueError(
+                f"Column '{population_col}' has {int(np.sum(bad))} missing or "
+                "non-finite value(s) on treated units; weighting='population' "
+                "needs a finite population for every treated unit."
             )
-            Pop_D_total = sum(treated_pop.values())
-
-            q_control: Dict[Any, float] = {}
-            for a in N_D:
-                n_c = N_C.get(a, 0)
-                if n_c == 0 or N_Omega_C == 0:
-                    q_control[a] = 1.0
-                    continue
-                control_share = n_c / N_Omega_C
-                pop_d = treated_pop.get(a, 0)
-                pop_share = pop_d / Pop_D_total if Pop_D_total > 0 else 0.0
-                q_control[a] = pop_share / control_share if control_share > 0 else 1.0
-
-        else:  # sample_share
-            N_Omega_D = sum(N_D.values())
-            N_total = {a: N_D.get(a, 0) + N_C.get(a, 0) for a in N_D}
-            N_grand = N_Omega_D + N_Omega_C
-
-            q_control = {}
-            for a in N_D:
-                n_c = N_C.get(a, 0)
-                if n_c == 0 or N_Omega_C == 0:
-                    q_control[a] = 1.0
-                    continue
-                control_share = n_c / N_Omega_C
-                n_total_a = N_total.get(a, 0)
-                sample_share = n_total_a / N_grand if N_grand > 0 else 0.0
-                q_control[a] = sample_share / control_share if control_share > 0 else 1.0
-
-        # Assign weights: treated=1, control=q_control[sub_exp]
-        sub_exp_vals = stacked_df["_sub_exp"].values
-        d_vals = stacked_df["_D_sa"].values
-        weights = np.ones(len(stacked_df))
-        for i in range(len(stacked_df)):
-            if d_vals[i] == 0:
-                weights[i] = q_control.get(sub_exp_vals[i], 1.0)
-
-        stacked_df["_Q_weight"] = weights
-        return stacked_df
-
-    def _compute_q_weights_aggregate(self, stacked_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Compute aggregate Q-weights using observation counts per (event_time, sub_exp).
-
-        Matches the R reference ``compute_weights()`` which computes shares at the
-        (event_time, sub_exp) level, not the sub_exp level. For balanced panels the
-        two approaches are equivalent. For unbalanced panels this adjusts for varying
-        observation density per event time.
-
-        R reference pattern::
-
-            stack_treat_n  = count(D==1) BY event_time
-            stack_control_n = count(D==0) BY event_time
-            sub_treat_n    = count(D==1) BY (sub_exp, event_time)
-            sub_control_n  = count(D==0) BY (sub_exp, event_time)
-            sub_treat_share = sub_treat_n / stack_treat_n
-            sub_control_share = sub_control_n / stack_control_n
-            Q = sub_treat_share / sub_control_share  (for controls)
-            Q = 1  (for treated)
-        """
-        # Step 1: Stack-level totals by (event_time, D_sa)
-        stack_counts = stacked_df.groupby(["_event_time", "_D_sa"]).size().unstack(fill_value=0)
-        stack_treat_n = stack_counts.get(1, pd.Series(0, index=stack_counts.index))
-        stack_control_n = stack_counts.get(0, pd.Series(0, index=stack_counts.index))
-
-        # Step 2: Sub-experiment-level counts by (event_time, sub_exp, D_sa)
-        sub_counts = (
-            stacked_df.groupby(["_event_time", "_sub_exp", "_D_sa"]).size().unstack(fill_value=0)
-        )
-        sub_treat_n = sub_counts.get(1, pd.Series(0, index=sub_counts.index))
-        sub_control_n = sub_counts.get(0, pd.Series(0, index=sub_counts.index))
-
-        # Step 3: Compute shares and Q per (event_time, sub_exp)
-        # Q = (sub_treat_n / stack_treat_n) / (sub_control_n / stack_control_n)
-        q_lookup: Dict[Tuple[Any, Any], float] = {}
-        for et, sub_exp in sub_counts.index:
-            s_treat = sub_treat_n.get((et, sub_exp), 0)
-            s_control = sub_control_n.get((et, sub_exp), 0)
-            st_treat = stack_treat_n.get(et, 0)
-            st_control = stack_control_n.get(et, 0)
-
-            if s_control == 0 or st_treat == 0 or st_control == 0:
-                q_lookup[(et, sub_exp)] = 1.0
-            else:
-                treat_share = s_treat / st_treat
-                control_share = s_control / st_control
-                q_lookup[(et, sub_exp)] = treat_share / control_share if control_share > 0 else 1.0
-
-        # Step 4: Assign weights via vectorized merge
-        et_vals = stacked_df["_event_time"].values
-        sub_exp_vals = stacked_df["_sub_exp"].values
-        d_vals = stacked_df["_D_sa"].values
-        weights = np.ones(len(stacked_df))
-
-        for i in range(len(stacked_df)):
-            if d_vals[i] == 0:
-                weights[i] = q_lookup.get((et_vals[i], sub_exp_vals[i]), 1.0)
-
-        stacked_df["_Q_weight"] = weights
-        return stacked_df
+        if np.any(values < 0):
+            raise ValueError(
+                f"Column '{population_col}' has negative value(s) on treated "
+                "units; weighting='population' needs non-negative populations."
+            )
+        varying = rows.groupby(unit_col)[population_col].nunique()
+        if (varying > 1).any():
+            raise ValueError(
+                f"Column '{population_col}' varies within {int((varying > 1).sum())} "
+                "treated unit(s); weighting='population' needs one population "
+                "value per unit."
+            )
 
     # =========================================================================
     # Covariate balancing (CBWSDID, Ustyuzhanin 2026)
@@ -1475,52 +1793,13 @@ class StackedDiD(BaseEstimator):
         Nt_C: Dict[Any, float] = {}
         diagnostics: Dict[Any, Dict[str, Any]] = {}
 
-        # Balanced event windows are required: the paper's unit-count corrective and
-        # diff-diff's observation-count "aggregate" Q-weights coincide only when every
-        # unit is observed at every event time. On ragged windows they diverge (the
-        # count-convention is unresolved — out of scope for v1), so fail closed rather
-        # than silently producing unit-count estimates that differ from balance="none".
-        # The check validates exact (unit x event_time) coverage, not just row counts:
-        # it catches (a) eligible units with zero rows in the window (silently dropped
-        # by _build_sub_experiment, so invisible to a count), (b) wrong row counts, and
-        # (c) duplicate (unit, event_time) rows that a count-only check would let pass
-        # alongside a compensating missing row.
-        expected_events = list(range(-self.kappa_pre - self.anticipation, self.kappa_post + 1))
-        n_expected = len(expected_events)
-        ft_by_unit = df.drop_duplicates(subset=[unit]).set_index(unit)[first_treat]
-
-        def _expected_units(a_val: Any) -> set:
-            treated = set(ft_by_unit[ft_by_unit == a_val].index)
-            if self.control_group == "not_yet_treated":
-                controls = set(ft_by_unit[ft_by_unit > a_val + self.kappa_post].index)
-            elif self.control_group == "strict":
-                controls = set(
-                    ft_by_unit[ft_by_unit > a_val + self.kappa_post + self.kappa_pre].index
-                )
-            else:  # never_treated
-                controls = set(ft_by_unit[np.isinf(ft_by_unit)].index)
-            return treated | controls
-
+        # Every sub-experiment in the stack is balanced by construction: fit()
+        # rejects duplicate (unit, time) rows and _build_sub_experiment keeps
+        # only units observed at every event time of the window. The paper's
+        # unit-count corrective and the observation-count "aggregate" Q-weights
+        # therefore coincide here, on ragged input panels too.
         for a in sub_exps:
             sub = stacked_df[stacked_df["_sub_exp"] == a]
-            counts = sub.groupby(unit).size()
-            present_units = set(counts.index)
-            missing_eligible = _expected_units(a) - present_units  # zero-row eligible units
-            wrong_count = set(counts[counts != n_expected].index)
-            dup_mask = sub.duplicated(subset=[unit, "_event_time"], keep=False)
-            dup_units = set(sub.loc[dup_mask, unit].unique())
-            bad = missing_eligible | wrong_count | dup_units
-            if bad:
-                raise ValueError(
-                    f"balance='entropy' requires balanced event windows, but cohort a={a} "
-                    f"has {len(bad)} treated/clean-control unit(s) without exact coverage of "
-                    f"the {n_expected} event times {expected_events} (zero-row, missing/extra, "
-                    f"or duplicated (unit, event_time) rows; e.g. {list(bad)[:3]}). Covariate "
-                    "balancing on unbalanced/ragged panels is out of scope for v1 because the "
-                    "paper's unit-count corrective and diff-diff's observation-count "
-                    "'aggregate' Q-weights diverge off balanced panels. Use balance='none', or "
-                    "restrict to a balanced window."
-                )
             treated_units = list(pd.unique(sub.loc[sub["_D_sa"] == 1, unit]))
             control_units = list(pd.unique(sub.loc[sub["_D_sa"] == 0, unit]))
 
