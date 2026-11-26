@@ -642,6 +642,14 @@ pre-periods tested. No number is given for a set of pre-periods whose
 pre-trend test, in the placebo draws, does not reject at the rate the power
 formula assumes (typical with few treated units or many pre-periods).
 
+The sensitivity analysis of Step 6 can be planned the same way:
+`HonestDiD(method=...).power_by_M(diagnosis, M_grid=[...], effect_size=...)`
+runs it on every placebo draw and reports, per `M`, how often the robust
+interval excluded zero with no effect present, the minimum detectable effect
+and the power at the effect you care about. A row whose interval excludes zero
+too often is shown without planned numbers; on small panels that is common for
+`method="smoothness"` at `M = 0`.
+
 ### Runtime guidance
 ```python
 from diff_diff import practitioner_next_steps

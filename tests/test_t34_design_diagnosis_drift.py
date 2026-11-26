@@ -33,6 +33,7 @@ import pytest
 from diff_diff import (
     BusinessReport,
     CallawaySantAnna,
+    HonestDiD,
     ImputationDiD,
     PreTrendsPower,
     TwoWayFixedEffects,
@@ -230,6 +231,12 @@ def test_quotes_in_rendered_surface():
             "             2 0.357               0.084                   0.092",
             "             3   NaN               0.111                   0.152",
             "rejected 29.6% of the 500 no-effect replicates, against 25.0%",
+            # Section 5: the planned sensitivity analysis (same 500 draws).
+            "0.0                    0.04     0.890 0.652  0.616",
+            "0.5                    0.00     2.178 1.311  0.010",
+            "1.0                    0.00     3.467 2.046  0.000",
+            "0.0                   0.202      0.73  NaN    NaN",
+            "M=0 (excludes zero with no effect in 20.2%; 0",
         ],
         surface="output",
     )
@@ -249,6 +256,13 @@ def test_quotes_in_rendered_surface():
             "**0.357**",  # planned MDV, two pre-period months
             "**15.2%**",  # counted, three months
             "**11.1%**",  # assumed, three months
+            "**0.652**",  # relative magnitudes, planned MDE at M = 0
+            "**1.311**",  # at M = 0.5
+            "**2.046**",  # at M = 1
+            "**61.6%**",  # power at an effect of 0.5, M = 0
+            "**1.0%**",  # the same at M = 0.5
+            "**4.0%**",  # no-effect draws whose interval excluded zero, M = 0
+            "**20.2%**",  # the same for the smoothness interval at M = 0
         ],
         surface="markdown",
     )
@@ -291,6 +305,10 @@ def test_notebook_design_matches():
         "seed=SEED + 2,",
         "event_study=True,",
         "PreTrendsPower().power_by_pre_periods(plan)",
+        "relative = HonestDiD().power_by_M(",
+        "M_grid=[0, 0.5, 1.0],",
+        "effect_size=0.5,",
+        'smooth = HonestDiD(method="smoothness").power_by_M(plan, M_grid=[0], progress=False)',
     ):
         assert fragment in src, f"notebook no longer contains: {fragment}"
 
@@ -402,3 +420,25 @@ def test_pretrend_plan_with_more_replicates(history):
     _, table = pretrend_plan(history, 2000)
     assert table["mdv"].isna().all()
     assert 0.055 <= table.iloc[0]["placebo_rejection_rate"] <= 0.07
+
+
+@pytest.mark.slow
+def test_sensitivity_plan(history):
+    """Section 5: relative magnitudes is planned, the smoothness interval is withheld."""
+    plan, _ = pretrend_plan(history, 500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        relative = HonestDiD().power_by_M(
+            plan, M_grid=[0, 0.5, 1.0], effect_size=TRUE_EFFECT, progress=False
+        )
+        smooth = HonestDiD(method="smoothness").power_by_M(plan, M_grid=[0], progress=False)
+    assert relative["n_simulations"].tolist() == [500, 500, 500]
+    assert relative["n_simulation_failures"].tolist() == [0, 0, 0]
+    assert relative["placebo_rejection_rate"].tolist() == pytest.approx([0.04, 0.0, 0.0], abs=1e-12)
+    assert relative["mde"].tolist() == pytest.approx([0.652, 1.311, 2.046], abs=2e-3)
+    assert relative["power"].tolist() == pytest.approx([0.616, 0.010, 0.0], abs=1e-12)
+    assert relative["ci_width"].tolist() == pytest.approx([0.890, 2.178, 3.467], abs=2e-3)
+    row = smooth.iloc[0]
+    assert row["placebo_rejection_rate"] == pytest.approx(0.202, abs=1e-12)
+    assert row["ci_width"] == pytest.approx(0.73, abs=5e-3)
+    assert np.isnan(row["mde"])

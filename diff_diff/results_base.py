@@ -397,7 +397,9 @@ class EventStudyResults(BaseResults):
     #: that ``diagnose_design(..., event_study=True)`` records (the column
     #: is the mean of placebo coefficients over the draws, and ``se`` their
     #: spread: not an estimate of an effect; ``PreTrendsPower`` accepts such
-    #: a surface for planned pre-trend power, ``HonestDiD`` refuses it).
+    #: a surface for planned pre-trend power and ``HonestDiD.power_by_M``
+    #: for planned sensitivity power, while ``HonestDiD.fit`` and the other
+    #: fitted-model entry points refuse it).
     #: None means the column is an ATT (every other
     #: producer), keeping their rendering byte-stable. ``summary()`` uses
     #: it as the column heading and ``to_dict()`` serializes it, so the

@@ -132,6 +132,10 @@ _EVENT_STUDY_ESTIMATORS = ("CallawaySantAnna", "StackedDiD")
 # value). PreTrendsPower counts the pre-trend test's rejections from it for
 # whichever pre-periods it is asked to plan (see placebo_pretest_rate).
 _PRETEST_RECORD = "_placebo_pretest"
+# Attribute of a placebo event study that holds the event-study container of
+# every placebo draw behind it, and how many no-effect replicates never became
+# one. HonestDiD.power_by_M runs on those containers (see _placebo_draw_record).
+_PLACEBO_DRAWS = "_placebo_draws"
 # The placebo covariance is not reported when its smallest eigenvalue is at or
 # below this multiple of its largest (the near-singularity threshold
 # results_base._validate_vcov_subblock applies when allow_singular=False).
@@ -655,8 +659,8 @@ def _plain(value: Any) -> Any:
     return value.item() if isinstance(value, np.generic) else value
 
 
-def _event_study_record(result: Any) -> Optional[Tuple[Any, np.ndarray, np.ndarray]]:
-    """One replicate's event study: its layout and its coefficient and SE vectors.
+def _event_study_record(result: Any) -> Optional[Tuple[Any, np.ndarray, np.ndarray, Any]]:
+    """One replicate's event study: layout, coefficient and SE vectors, container.
 
     The layout is the rows that are a reference row or carry a finite estimate
     and a finite positive standard error, together with the provenance the
@@ -686,13 +690,14 @@ def _event_study_record(result: Any) -> Optional[Tuple[Any, np.ndarray, np.ndarr
         ),
         surface.event_time_convention,
     )
-    return (rows, provenance), att[estimated], se[estimated]
+    return (rows, provenance), att[estimated], se[estimated], surface
 
 
 def _placebo_event_study(
     estimator: Any,
-    records: Sequence[Optional[Tuple[Any, np.ndarray, np.ndarray]]],
+    records: Sequence[Optional[Tuple[Any, ...]]],
     alpha: float,
+    n_lost: int = 0,
 ) -> Tuple[Optional[EventStudyResults], Optional[Dict[str, Any]], Optional[str]]:
     """Reduce one estimator's no-effect event studies to one planned surface.
 
@@ -703,14 +708,20 @@ def _placebo_event_study(
     sample covariance of the coefficient vectors across the draws. The other
     inference columns follow from those two; they describe how one draw varies
     around the mean of the draws, not an estimated effect.
+
+    A record is ``(layout, coefficients, standard errors)`` followed, when the
+    replicate's event-study container was kept, by that container. ``n_lost``
+    is the number of no-effect replicates that produced no record at all (the
+    fit raised or its inference was not finite); it is carried on the surface
+    with the draws so that a consumer can count every lost replicate.
     """
     n_captured = len(records)
     usable = [record for record in records if record is not None]
     if not usable:
         return None, None, "no no-effect replicate produced an event study"
     counts: Dict[Any, int] = {}
-    for layout, _att, _se in usable:
-        counts[layout] = counts.get(layout, 0) + 1
+    for record in usable:
+        counts[record[0]] = counts.get(record[0], 0) + 1
     # Most frequent layout; ties to the one with more rows, then to a fixed
     # order, so the choice never depends on iteration order.
     layout = min(counts, key=lambda key: (-counts[key], -len(key[0]), repr(key)))
@@ -812,6 +823,15 @@ def _placebo_event_study(
         _PRETEST_RECORD,
         {"labels": pre_labels, "abs_t": np.abs(draws[:, pre] / reported[:, pre])},
     )
+    # The draws' own containers, for consumers that run a fitted-model analysis
+    # on every draw. Kept only when every averaged draw has one.
+    containers = [record[3] if len(record) > 3 else None for record in used]
+    if all(container is not None for container in containers):
+        setattr(
+            surface,
+            _PLACEBO_DRAWS,
+            {"draws": containers, "n_lost": int(n_lost) + n_excluded},
+        )
     counted, _ = placebo_pretest_rate(surface, pre_labels, alpha)
     expected = _formula_pretest_rate(vcov[np.ix_(pre, pre)], alpha)
     checks = {
@@ -825,6 +845,64 @@ def _placebo_event_study(
         "pretest_agrees": _pretest_size_ok(counted, expected, n_used),
     }
     return surface, checks, None
+
+
+def _placebo_draw_record(surface: Any) -> Tuple[List[Any], int]:
+    """The event-study containers of the placebo draws behind ``surface``.
+
+    Returns the containers of the draws the placebo event study averaged, in
+    order, and the number of no-effect replicates that are not among them (the
+    fit raised, its inference was not finite, its event study could not be
+    aggregated, or its layout differed from the retained one). Each container
+    is what ``aggregate("event_study")`` returned for that placebo fit, so a
+    fitted-model analysis can be run on every draw.
+
+    Raises ``ValueError`` when the surface does not carry them (it was rebuilt
+    or copied field by field, or was pickled by a version that did not keep
+    them).
+    """
+    record = getattr(surface, _PLACEBO_DRAWS, None)
+    if record is None:
+        raise ValueError(
+            "This placebo event study does not carry its placebo draws. Pass "
+            "the object diagnose_design(..., event_study=True) returned (its "
+            "event_study_results entry), not a rebuilt copy; a diagnosis "
+            "pickled by an earlier version has to be run again."
+        )
+    return list(record["draws"]), int(record["n_lost"])
+
+
+def _resolve_event_study(results: Any) -> Tuple[Any, Optional["DesignDiagnosisResults"], Any]:
+    """Unwrap a ``DesignDiagnosisResults`` to the placebo event study it holds.
+
+    Returns ``(surface, diagnosis, label)``. Any other input is returned
+    unchanged as ``(results, None, None)``. Raises ``ValueError`` when the
+    diagnosis was run without ``event_study=True``, recorded no placebo event
+    study, or recorded several (one has to be named).
+    """
+    if not isinstance(results, DesignDiagnosisResults):
+        return results, None, None
+    if not results.event_study:
+        raise ValueError(
+            "This design diagnosis holds no placebo event study. Run "
+            "diagnose_design(..., event_study=True) to record one."
+        )
+    surfaces = results.event_study_results
+    if not surfaces:
+        raise ValueError(
+            "This design diagnosis recorded no placebo event study for any of "
+            f"its estimators ({', '.join(results.estimators)}). One is recorded "
+            "for CallawaySantAnna and StackedDiD estimators; see the warnings "
+            "diagnose_design issued."
+        )
+    if len(surfaces) > 1:
+        raise ValueError(
+            "This design diagnosis holds placebo event studies for several "
+            f"estimators ({', '.join(surfaces)}). Pass one of them: "
+            "diagnosis.event_study_results[label]."
+        )
+    ((label, surface),) = surfaces.items()
+    return surface, results, label
 
 
 def placebo_pretest_rate(surface: Any, tested: Sequence[Any], alpha: float) -> Tuple[float, int]:
@@ -1859,6 +1937,10 @@ def diagnose_design(
         planned power for a set only where that count agrees with the rate
         its formula assumes. ``summary()`` shows the comparison for the test
         over all pre-periods, and a warning is issued when it disagrees.
+        The event-study container of every no-effect replicate is kept with
+        the placebo event study as well (about 3 KB each);
+        :meth:`~diff_diff.HonestDiD.power_by_M` runs a sensitivity analysis
+        on each of them to plan its power.
         Unrelated to a ``fit()`` keyword of the same name passed through
         ``estimator_kwargs``.
 
@@ -2015,7 +2097,9 @@ def diagnose_design(
             mde_results[label] = found
         mde[label] = value
         if captured is not None:
-            surface, checks, reason = _placebo_event_study(est, captured, alpha)
+            surface, checks, reason = _placebo_event_study(
+                est, captured, alpha, n_lost=int(cells[0].n_simulation_failures)
+            )
             if surface is None or checks is None:
                 warnings.warn(
                     f"[{label}] no placebo event study is recorded: {reason}.",
