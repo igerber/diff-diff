@@ -1350,10 +1350,16 @@ sources:
     drift_risk: low
     docs:
       - path: docs/methodology/REGISTRY.md
-        section: "Pre-trends"
+        section: "PreTrendsPower"
         type: methodology
       - path: docs/api/pretrends.rst
         type: api_reference
+      - path: docs/api/design.rst
+        type: api_reference
+        note: "Planned pre-trend power from a design diagnosis; power_by_pre_periods"
+      - path: docs/tutorials/34_design_diagnosis.ipynb
+        type: tutorial
+        note: "Planned pre-trend power section"
       - path: docs/tutorials/04_parallel_trends.ipynb
         type: tutorial
       - path: docs/tutorials/07_pretrends_power.ipynb
@@ -1496,6 +1502,9 @@ sources:
       - path: docs/tutorials/34_design_diagnosis.ipynb
         type: tutorial
         note: "diagnose_design, lock, DesignLock.fit, reconcile and the report keyword on one worked panel; drift-locked at tests/test_t34_design_diagnosis_drift.py"
+      - path: docs/api/pretrends.rst
+        type: api_reference
+        note: "Design-stage input: PreTrendsPower on a placebo event study recorded by diagnose_design(event_study=True)"
       - path: docs/index.rst
         type: user_guide
         note: "Diagnostics & Sensitivity table row"

@@ -34,6 +34,7 @@ from diff_diff import (
     BusinessReport,
     CallawaySantAnna,
     ImputationDiD,
+    PreTrendsPower,
     TwoWayFixedEffects,
     diagnose_design,
 )
@@ -225,6 +226,10 @@ def test_quotes_in_rendered_surface():
             "all 28 checks that were run",
             "warning | design_deviation",
             "By-hand ATT 0.393 vs locked ATT 0.393",
+            # Section 5: the planned pre-trend check (500 replicates, seed 36).
+            "             2 0.357               0.084                   0.092",
+            "             3   NaN               0.111                   0.152",
+            "rejected 29.6% of the 500 no-effect replicates, against 25.0%",
         ],
         surface="output",
     )
@@ -239,6 +244,11 @@ def test_quotes_in_rendered_surface():
             "**55.5%**",  # cs power at 0.5, rerun
             "**28 checks**",
             "**0.393**",
+            "**8.4%**",  # formula's false-alarm rate, two pre-period months
+            "**9.2%**",  # the same rate counted in the placebo draws
+            "**0.357**",  # planned MDV, two pre-period months
+            "**15.2%**",  # counted, three months
+            "**11.1%**",  # assumed, three months
         ],
         surface="markdown",
     )
@@ -276,6 +286,11 @@ def test_notebook_design_matches():
         "np.random.default_rng(SEED + 1).choice(N_STORES, size=N_TREATED, replace=False)",
         'lock.fit(analysis, first_treat="first_treat")',
         'CallawaySantAnna(control_group="not_yet_treated")',
+        'estimators={"cs": CallawaySantAnna(base_period="universal")}',
+        "n_simulations=500",
+        "seed=SEED + 2,",
+        "event_study=True,",
+        "PreTrendsPower().power_by_pre_periods(plan)",
     ):
         assert fragment in src, f"notebook no longer contains: {fragment}"
 
@@ -343,3 +358,47 @@ def test_lock_rerun(diagnosis, history):
     assert abs(null["rejection_rate"] - 0.065) < 0.02
     assert abs(at_half["rejection_rate"] - 0.555) < 0.05
     assert abs(lock.mde - 0.66) < 0.05
+
+
+def pretrend_plan(history, n_simulations):
+    """Section 5's run: the chosen estimator alone, new seed, universal base."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        plan = diagnose_design(
+            history,
+            estimators={"cs": CallawaySantAnna(base_period="universal")},
+            cohort_periods=[PLACEBO_ADOPTION],
+            n_treated=N_TREATED,
+            n_simulations=n_simulations,
+            seed=SEED + 2,
+            event_study=True,
+            progress=False,
+            **COLUMNS,
+        )
+        return plan, PreTrendsPower().power_by_pre_periods(plan)
+
+
+@pytest.mark.slow
+def test_pretrend_plan(history):
+    """Section 5: two rows are planned, the checks over three or more months are not."""
+    plan, table = pretrend_plan(history, 500)
+    assert len(table) == 17
+    assert table["mdv"].notna().tolist() == [True, True] + [False] * 15
+    two, three = table.iloc[1], table.iloc[2]
+    assert two["mdv"] == pytest.approx(0.357, abs=2e-3)
+    assert two["power_no_violation"] == pytest.approx(0.084, abs=1e-3)
+    assert two["placebo_rejection_rate"] == pytest.approx(0.092, abs=1e-12)
+    assert three["power_no_violation"] == pytest.approx(0.111, abs=1e-3)
+    assert three["placebo_rejection_rate"] == pytest.approx(0.152, abs=1e-12)
+    checks = plan._event_study_checks["cs"]
+    assert checks["pretest_rejection_rate"] == pytest.approx(0.296, abs=1e-12)
+    assert checks["pretest_expected_rate"] == pytest.approx(0.250, abs=1e-3)
+    assert checks["pretest_agrees"] is False
+
+
+@pytest.mark.slow
+def test_pretrend_plan_with_more_replicates(history):
+    """Section 5: with 2,000 replicates every row is blank; one coefficient rejects ~6%."""
+    _, table = pretrend_plan(history, 2000)
+    assert table["mdv"].isna().all()
+    assert 0.055 <= table.iloc[0]["placebo_rejection_rate"] <= 0.07

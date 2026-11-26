@@ -609,6 +609,13 @@ what is reconciled.
   statistic; otherwise it falls back to Bonferroni over the per-row
   p-values (a documented conservative downgrade, not a defect).
 
+- **Note:** Planned pre-trends power is refused. A
+  `PreTrendsPowerResults` computed from a placebo event study of
+  `diagnose_design` (`covariance_source == "placebo_draws"`) describes
+  a design that had not been run, not the fit being reported, so
+  `DiagnosticReport` and `BusinessReport` raise `ValueError` when it is
+  passed as `precomputed["pretrends_power"]` (on every `BusinessReport`
+  path, including `diagnostics=` and `auto_diagnostics=False`).
 - **Note:** Cluster-jackknife parallel-trends policy (same deviation
   by omission as `hc2_bm`). When the source fit's `vcov_type` is
   `"jackknife"` (`CallawaySantAnna`), the PT check does NOT run the
