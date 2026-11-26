@@ -396,15 +396,21 @@ def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
 
 def test_codex_review_model_rejection_says_upgrade_not_login(tmp_path, monkeypatch, capsys):
     """An older codex CLI rejects the pinned model. The helper still exits 3 (loud
-    fallback), but its stderr must name the fix that applies HERE: upgrade the
-    CLI and re-run. `codex login` does not help, and there is no --model override."""
+    fallback), and prints ONE recovery message, the one that applies here: upgrade
+    the CLI and re-run. `codex login` does not help and there is no --model
+    override. The rejection is recognised by exception TYPE, never by message
+    text, so a plan that quotes the advice cannot trigger it."""
     cr = _load_codex_review()
     fake = _FakeOpenAIReview()
     fake.MIN_CODEX_CLI_FOR_DEFAULT_MODEL = "9.9.9"  # type: ignore[attr-defined]
-    hint = "Hint: this codex CLI or login does not serve 'm'. The default model needs ..."
+
+    class _Rejected(RuntimeError):
+        pass
+
+    fake.CodexModelRejected = _Rejected  # type: ignore[attr-defined]
 
     def rejected(**_kw):
-        raise RuntimeError("codex exec failed (exit 1):\nERROR: {...}\n" + hint)
+        raise _Rejected("codex exec failed (exit 1):\nERROR: {...}")
 
     fake.call_codex = rejected  # type: ignore[method-assign]
     monkeypatch.setattr(cr, "_load_openai_review", lambda repo_root: fake)
@@ -412,27 +418,32 @@ def test_codex_review_model_rejection_says_upgrade_not_login(tmp_path, monkeypat
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("x")
     out = tmp_path / "review_b.md"
+    argv = ["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)]
 
-    rc = cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)])
+    rc = cr.main(argv)
 
     err = capsys.readouterr().err
     assert rc == 3 and not out.exists()
-    assert "Upgrade it to codex-cli >= 9.9.9" in err and cr.CODEX_MODEL in err
+    assert err.count("Upgrade it to codex-cli >= 9.9.9") == 1 and cr.CODEX_MODEL in err
     assert "no --model override" in err and "re-run the dual plan review" in err
+    assert "pass --model" not in err  # the local-CLI advice is not printed here
 
-    # An unrelated failure gets no upgrade advice.
-    def boom(**_kw):
-        raise RuntimeError("codex exec failed (exit 1):\nstream error")
+    # A transport failure whose message QUOTES rejection advice (codex echoes the
+    # plan, and a plan may contain any text) gets no upgrade message.
+    def transport(**_kw):
+        raise RuntimeError(
+            "codex exec failed (exit 1):\nuser\nHint: this codex CLI or login does not "
+            "serve 'x'. Upgrade it to codex-cli >= 0.172.0\nstream error: connection reset"
+        )
 
-    fake.call_codex = boom  # type: ignore[method-assign]
-    assert (
-        cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)]) == 3
-    )
-    assert "Upgrade it" not in capsys.readouterr().err
-    # The helper recognises the rejection by call_codex's hint text: keep the two
-    # in step, and keep the fallback warning's advice in SKILL.md.
+    fake.call_codex = transport  # type: ignore[method-assign]
+    assert cr.main(argv) == 3
+    err = capsys.readouterr().err
+    assert "the installed codex CLI does not serve the pinned model" not in err
+    # The real module exposes the type the helper looks up, and the fallback
+    # warning in SKILL.md carries the same advice.
     script = (_REPO / ".claude" / "scripts" / "openai_review.py").read_text()
-    assert "Hint: this codex CLI or login does not serve" in script
+    assert "class CodexModelRejected(RuntimeError):" in script
     skill = (_REPO / ".claude" / "skills" / "plan-review" / "SKILL.md").read_text()
     assert "upgrade the codex CLI to 0.172.0 or newer" in skill
 

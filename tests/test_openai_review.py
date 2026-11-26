@@ -3436,27 +3436,33 @@ class TestCallCodex:
         fake_subprocess["stderr_text"] = "auth failure: token expired\n"
         with pytest.raises(RuntimeError, match="codex exec failed") as exc:
             review_mod.call_codex("p", "gpt-5.4", "/r")
-        assert "Hint:" not in str(exc.value)  # the upgrade hint is model-rejection-only
+        # An ordinary failure is a plain RuntimeError, not a model rejection.
+        assert type(exc.value) is RuntimeError
 
-    def test_model_rejection_adds_cli_upgrade_hint(self, review_mod, fake_subprocess):
+    def test_model_rejection_raises_dedicated_exception(self, review_mod, fake_subprocess):
         """An older codex CLI rejects the default model with `model_not_found`
-        (0.162.1 vs gpt-6.2-sol); the error names the minimum CLI and --model."""
+        (0.162.1 vs gpt-6.2-sol). call_codex reports that as a TYPE carrying the
+        model; the message is codex's stderr with no recovery advice in it, so
+        each caller prints the one message that applies to it."""
         fake_subprocess["returncode"] = 1
         fake_subprocess["stderr_text"] = (
             'ERROR: {"type":"error","status":400,"error":{"code":"model_not_found",'
             '"subreason":"model_not_in_accessible_catalog"}}\n'
         )
-        with pytest.raises(RuntimeError, match="codex exec failed") as exc:
+        with pytest.raises(review_mod.CodexModelRejected, match="codex exec failed") as exc:
             review_mod.call_codex("p", review_mod.DEFAULT_MODEL, "/r")
-        msg = str(exc.value)
-        assert "Hint:" in msg and review_mod.MIN_CODEX_CLI_FOR_DEFAULT_MODEL in msg
-        assert "--model" in msg and review_mod.DEFAULT_MODEL in msg
+        assert isinstance(exc.value, RuntimeError)  # generic handlers keep working
+        assert exc.value.model == review_mod.DEFAULT_MODEL
+        assert "Hint" not in str(exc.value) and "--model" not in str(exc.value)
+        advice = review_mod.codex_model_rejection_advice(review_mod.DEFAULT_MODEL)
+        assert review_mod.MIN_CODEX_CLI_FOR_DEFAULT_MODEL in advice
+        assert "--model" in advice and review_mod.DEFAULT_MODEL in advice
 
-    def test_upgrade_hint_ignores_model_not_found_in_the_echoed_prompt(
-        self, review_mod, fake_subprocess
-    ):
-        """codex echoes the prompt to stderr; a reviewed diff that merely MENTIONS
-        `model_not_found` followed by an unrelated failure must not get the hint."""
+    def test_model_rejection_ignores_the_echoed_prompt(self, review_mod, fake_subprocess):
+        """codex echoes the prompt to stderr. A reviewed diff that MENTIONS
+        `model_not_found`, or a previous review that quotes the complete error
+        record, followed by an unrelated failure, is not a model rejection: only
+        the record that ENDS the stream counts."""
         fake_subprocess["returncode"] = 1
         fake_subprocess["stderr_text"] = (
             'user\n+    if "model_not_found" in text:\n'
@@ -3465,9 +3471,7 @@ class TestCallCodex:
         )
         with pytest.raises(RuntimeError, match="codex exec failed") as exc:
             review_mod.call_codex("p", review_mod.DEFAULT_MODEL, "/r")
-        assert "Hint:" not in str(exc.value)
-        # A previous review embedded verbatim in the prompt can carry the COMPLETE
-        # error record at line start; only the record that ENDS the stream counts.
+        assert type(exc.value) is RuntimeError
         record = 'ERROR: {"type":"error","status":400,"error":{"code":"model_not_found"}}'
         fake_subprocess["stderr_text"] = (
             "user\n<previous-review-output>\n" + record + "\n</previous-review-output>\n"
@@ -3477,13 +3481,12 @@ class TestCallCodex:
         )
         with pytest.raises(RuntimeError, match="codex exec failed") as exc:
             review_mod.call_codex("p", review_mod.DEFAULT_MODEL, "/r")
-        assert "Hint:" not in str(exc.value)
+        assert type(exc.value) is RuntimeError
         # ... and the same record as the final lines (how codex 0.162.1 ends a
-        # rejected-model run: the record printed twice) does get the hint.
+        # rejected-model run: the record printed twice) is a rejection.
         fake_subprocess["stderr_text"] = "user\nprompt\n" + record + "\n" + record + "\n"
-        with pytest.raises(RuntimeError, match="codex exec failed") as exc:
+        with pytest.raises(review_mod.CodexModelRejected):
             review_mod.call_codex("p", review_mod.DEFAULT_MODEL, "/r")
-        assert "Hint:" in str(exc.value)
 
     def test_empty_output_file_raises(self, review_mod, fake_subprocess):
         fake_subprocess["output"] = ""
@@ -3545,7 +3548,7 @@ class TestMainTimeoutForwarding:
     backends). New scaffolding: no other test drives main() via sys.argv."""
 
     @staticmethod
-    def _run_main(monkeypatch, tmp_path, review_mod, extra_argv):
+    def _run_main(monkeypatch, tmp_path, review_mod, extra_argv, call_codex=None):
         import sys as _sys
 
         inputs = {
@@ -3572,7 +3575,7 @@ class TestMainTimeoutForwarding:
             recorded["model"] = model
             return "## ok", {"backend": "codex"}
 
-        monkeypatch.setattr(review_mod, "call_codex", _fake_call_codex)
+        monkeypatch.setattr(review_mod, "call_codex", call_codex or _fake_call_codex)
         monkeypatch.setattr(review_mod, "_detect_backend", lambda requested: "codex")
         monkeypatch.setattr(review_mod, "_scan_sensitive_files", lambda root: [])
         monkeypatch.setattr(review_mod, "_print_sensitive_notice", lambda *a, **k: None)
@@ -3585,6 +3588,25 @@ class TestMainTimeoutForwarding:
             monkeypatch, tmp_path, review_mod, ["--backend", "codex", "--timeout", "7200"]
         )
         assert rc in (0, None) and rec["timeout_s"] == 7200
+
+    def test_main_prints_one_upgrade_hint_on_model_rejection(
+        self, monkeypatch, tmp_path, review_mod, capsys
+    ):
+        """The local review CLI turns CodexModelRejected into exit 1 plus ONE hint
+        line (minimum CLI version, --model); no review file is written."""
+
+        def _rejected(prompt, model, repo_root, effort="xhigh", timeout_s=None):
+            raise review_mod.CodexModelRejected("codex exec failed (exit 1):\nERROR: {...}", model)
+
+        with pytest.raises(SystemExit) as exc:
+            self._run_main(
+                monkeypatch, tmp_path, review_mod, ["--backend", "codex"], call_codex=_rejected
+            )
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert err.count("Hint:") == 1
+        assert review_mod.MIN_CODEX_CLI_FOR_DEFAULT_MODEL in err and "--model" in err
+        assert not (tmp_path / "out" / "review.md").exists()
 
     def test_omitted_and_zero_mean_no_timeout(self, monkeypatch, tmp_path, review_mod):
         _, rec = self._run_main(monkeypatch, tmp_path, review_mod, ["--backend", "codex"])

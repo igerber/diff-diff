@@ -82,7 +82,12 @@ python tools/reviewer-eval/run_eval.py compare --subdir gpt62sol --blinded
 # 5. After unblinding: the session-log audit (outputs go OUTSIDE the repo or
 #    under the gitignored runs/ — a root-level file dirties the tree and trips
 #    the identity guard) and the mechanical verdict (PROVISIONAL without
-#    --audit-hits, DEFINITIVE with it)
+#    --audit-hits, DEFINITIVE with it). DEFINITIVE also needs a valid exposure
+#    history: this checkout's campaign ledger and frozen ref must be the
+#    campaign's own. The F,G example below is a COMPLETED contrast, so re-running
+#    it in a fresh checkout yields 44 reviews and a NON-mechanical verdict even
+#    with --audit-hits (reviewer_verdict.COMPLETED_CAMPAIGNS); a new campaign
+#    registers its own contrast first.
 python tools/reviewer-eval/run_eval.py audit --subdir gpt62sol -o /tmp/<scratch>/hits.json
 python tools/reviewer-eval/run_eval.py verdict --subdir gpt62sol --grades <reconciled.json> \
     --control F --candidate G [--audit-hits /tmp/<scratch>/hits.json] [--expect-head <sha>]

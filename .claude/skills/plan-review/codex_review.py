@@ -88,12 +88,6 @@ def _codex_present(mod) -> bool:
     return bool(shutil.which("codex")) and os.path.exists(mod.CODEX_AUTH_PATH)
 
 
-def _is_model_rejection(message: str) -> bool:
-    """True when ``call_codex`` reported codex's model-rejection record (it then
-    appends its upgrade hint; see openai_review.call_codex)."""
-    return "Hint: this codex CLI or login does not serve" in message
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--prompt-file", required=True, help="rendered reviewer prompt")
@@ -131,9 +125,12 @@ def main(argv=None) -> int:
         )
     except Exception as exc:
         print(f"codex: review failed or timed out ({type(exc).__name__}: {exc})", file=sys.stderr)
-        if _is_model_rejection(str(exc)):
-            # call_codex's own hint offers `--model`, which this helper does not
-            # expose (the model is a production pin), so say what applies here.
+        rejected = getattr(mod, "CodexModelRejected", None)
+        if rejected is not None and isinstance(exc, rejected):
+            # Recognised by exception TYPE, never by message text (the message
+            # echoes the plan, which may quote anything). The local review CLI
+            # offers `--model` here; this helper does not expose it (the model
+            # is a production pin), so it prints the one message that applies.
             print(
                 f"codex: the installed codex CLI does not serve the pinned model "
                 f"{CODEX_MODEL!r}. Upgrade it to codex-cli >= "
