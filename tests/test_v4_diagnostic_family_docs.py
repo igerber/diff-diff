@@ -5,8 +5,8 @@ section 3.5 and the item-9 line of section 9). It pins the 4.0 public-surface
 claim that the library ships ESTIMATORS plus a DIAGNOSTIC FAMILY, on every
 catalogue that used to file ``BaconDecomposition`` as an estimator:
 
-1. ``docs/api/index.rst`` - the Estimators autosummary is exactly the 23
-   spec-3.1 estimator classes; ``BaconDecomposition``, ``RDPlot`` and
+1. ``docs/api/index.rst`` - the Estimators autosummary contains the 23
+   spec-3.1 estimator classes plus experimental ChainedDiD; ``BaconDecomposition``, ``RDPlot`` and
    ``RDDensityTest`` are catalogued under Diagnostics; the ``bacon`` module
    page sits in the Diagnostics & Inference toctree; no stub is referenced
    from two ``:toctree:`` autosummary blocks (the ``-W`` build would warn).
@@ -56,12 +56,13 @@ pytestmark = pytest.mark.skipif(
 
 THIS_TEST_REF = "tests/test_v4_diagnostic_family_docs.py"
 
-# The 23 estimator classes of spec section 3.1 (27 -> 24 at 4.0, minus Bacon).
+# The 23 cut estimators of spec section 3.1, plus experimental ChainedDiD.
 ESTIMATOR_ROSTER = {
     "DifferenceInDifferences",
     "TwoWayFixedEffects",
     "SyntheticDiD",
     "CallawaySantAnna",
+    "ChainedDiD",
     "ChaisemartinDHaultfoeuille",
     "SunAbraham",
     "ImputationDiD",
@@ -193,16 +194,16 @@ def _ids(names):
 # ---------------------------------------------------------------------------
 
 
-def test_api_estimators_autosummary_is_exactly_the_23_estimators():
+def test_api_estimators_autosummary_matches_the_current_roster():
     body = _section_body(API_INDEX.read_text(), "Estimators")
     entries = _autosummary_entries(body)
     counts = _identity_counter(entries)
     assert max(counts.values()) == 1, "duplicate entry in the Estimators autosummary"
     assert set(counts) == _ids(
         ESTIMATOR_ROSTER
-    ), f"Estimators autosummary drift: {sorted(entries)} vs the spec-3.1 roster"
+    ), f"Estimators autosummary drift: {sorted(entries)} vs the current estimator roster"
     assert not (set(counts) & _ids(DIAGNOSTIC_ENTRY_POINTS))
-    assert len(entries) == 23
+    assert len(entries) == len(ESTIMATOR_ROSTER)
 
 
 def test_api_diagnostics_autosummary_catalogues_bacon_rdplot_and_density_test():
@@ -251,7 +252,7 @@ def test_api_estimators_intro_no_longer_names_the_bacon_diagnostic():
 def test_homepage_estimator_table_has_no_bacon_row():
     counts = _estimator_table_counts(_section_body(HOMEPAGE.read_text(), "Supported Estimators"))
     assert "BaconDecomposition" not in counts
-    assert sum(counts.values()) == 23
+    assert sum(counts.values()) == len(ESTIMATOR_ROSTER)
 
 
 def test_homepage_diagnostics_table_lists_the_family_entry_points():
@@ -304,7 +305,7 @@ def test_readme_files_bacon_under_diagnostics_not_estimators():
     assert "api/bacon.html" in diagnostics
     assert "BaconDecomposition" in diagnostics
     api_count = len(_autosummary_entries(_section_body(API_INDEX.read_text(), "Estimators")))
-    assert _bullet_count(estimators) == api_count == 23
+    assert _bullet_count(estimators) == api_count == len(ESTIMATOR_ROSTER)
 
 
 def test_llms_txt_files_bacon_under_diagnostics_not_estimators():
@@ -315,7 +316,7 @@ def test_llms_txt_files_bacon_under_diagnostics_not_estimators():
     assert "api/bacon.html" not in estimators
     assert "api/bacon.html" in diagnostics
     assert "BaconDecomposition" in diagnostics
-    assert _bullet_count(estimators) == 23
+    assert _bullet_count(estimators) == len(ESTIMATOR_ROSTER)
 
 
 # ---------------------------------------------------------------------------

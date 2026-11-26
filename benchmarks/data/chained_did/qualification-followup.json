@@ -1,0 +1,1392 @@
+{
+  "status": "complete",
+  "mode": "qualification",
+  "replications_per_case": 10000,
+  "seed": 20261103,
+  "seed_derivation": "SeedSequence([seed,case_index,replication]).generate_state(1,dtype=uint64)[0]",
+  "python": "3.12.11",
+  "numpy": "2.3.5",
+  "pandas": "2.3.3",
+  "scipy": "1.15.3",
+  "baseline_sha256": "93b99edee3eedca4d4d421742d350d98eae2e07a1a7c03c4741f18bbb8edeeaf",
+  "source_hashes": {
+    "diff_diff/chained_did.py": "88de46fcee3edf3ff8710ae89fdd356c7cf726e0d21eec569cf6a736e6163e61",
+    "diff_diff/chained_did_results.py": "e88ee7515d8d1b27432e3e2681c055df386aedace3ed0d811cbaaf218534067a",
+    "benchmarks/python/validate_chained_did.py": "4b6466659badc98efc56e01bea482fa34c2b4ac3bac783a35a228bc727d097cd",
+    "benchmarks/python/diagnose_chained_did.py": "4813859170b69e778077cd897ce567c02e2861a33596f9492337232669b3bbfd"
+  },
+  "cases": [
+    {
+      "n": 1000,
+      "observation": "balanced",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 1000,
+      "observation": "rotating",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 1000,
+      "observation": "intermittent",
+      "clusters": 50,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 1000,
+      "observation": "cohort_dependent",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 1000,
+      "observation": "rotating",
+      "clusters": 0,
+      "null": true,
+      "violation": "none"
+    },
+    {
+      "n": 4000,
+      "observation": "balanced",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 4000,
+      "observation": "rotating",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 4000,
+      "observation": "intermittent",
+      "clusters": 100,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 4000,
+      "observation": "cohort_dependent",
+      "clusters": 0,
+      "null": false,
+      "violation": "none"
+    },
+    {
+      "n": 4000,
+      "observation": "rotating",
+      "clusters": 0,
+      "null": true,
+      "violation": "none"
+    },
+    {
+      "n": 1000,
+      "observation": "intermittent",
+      "clusters": 0,
+      "null": false,
+      "violation": "selection"
+    },
+    {
+      "n": 1000,
+      "observation": "intermittent",
+      "clusters": 0,
+      "null": false,
+      "violation": "parallel_trends"
+    },
+    {
+      "n": 1000,
+      "observation": "intermittent",
+      "clusters": 0,
+      "null": false,
+      "violation": "propensity"
+    }
+  ],
+  "results": {
+    "3": {
+      "design": {
+        "n": 1000,
+        "observation": "cohort_dependent",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 131.27786515799926,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.004217254834744999,
+              "bias_mcse": 0.001745545520803128,
+              "rmse": 0.1745967638907853,
+              "empirical_sd": 0.1745545520803128,
+              "mean_variance": 0.029079516938461086,
+              "variance_ratio": 0.9543876920614853,
+              "coverage": 0.9454,
+              "coverage_mcse": 0.002271977992851163,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9454,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.6676352734042855,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.02209782280897322,
+              "z_sd": 1.0273884100455624,
+              "z_quantiles": [
+                -1.986126903111886,
+                0.028931993501330126,
+                2.0210605676074924
+              ],
+              "abs_z_95": 2.0032940903149226
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0032704880534337732,
+              "bias_mcse": 0.0022051287522764727,
+              "rmse": 0.22052610194817635,
+              "empirical_sd": 0.22051287522764726,
+              "mean_variance": 0.04668849540750063,
+              "variance_ratio": 0.9601563855390314,
+              "coverage": 0.941,
+              "coverage_mcse": 0.0023562470159132305,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.941,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.8456498407186579,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 0.011333702000538036,
+              "z_sd": 1.0245803284812915,
+              "z_quantiles": [
+                -2.0223754935463965,
+                0.010442176888611876,
+                2.0521386021621484
+              ],
+              "abs_z_95": 2.042569120147097
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.004943153549368695,
+              "bias_mcse": 0.0029441246611644372,
+              "rmse": 0.2944392417830176,
+              "empirical_sd": 0.2944124661164437,
+              "mean_variance": 0.08498386690819941,
+              "variance_ratio": 0.9804469461059877,
+              "coverage": 0.9492,
+              "coverage_mcse": 0.0021958907076628374,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9492,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 1.1395155204752805,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.019682535941848107,
+              "z_sd": 1.0158717959631522,
+              "z_quantiles": [
+                -1.9268240063517061,
+                0.009972758474586644,
+                2.000759693478983
+              ],
+              "abs_z_95": 1.9677695357735312
+            }
+          }
+        }
+      }
+    },
+    "1": {
+      "design": {
+        "n": 1000,
+        "observation": "rotating",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 140.00030349999906,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.001323499260753369,
+              "bias_mcse": 0.001620844583904231,
+              "rmse": 0.16208175765595845,
+              "empirical_sd": 0.1620844583904231,
+              "mean_variance": 0.025458163078809923,
+              "variance_ratio": 0.9690458273862632,
+              "coverage": 0.947,
+              "coverage_mcse": 0.0022403347964087875,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.947,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.624807583586931,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.010894583108481197,
+              "z_sd": 1.0180993535357588,
+              "z_quantiles": [
+                -1.993208797189272,
+                -0.013347859393126224,
+                1.9720070364102893
+              ],
+              "abs_z_95": 1.9894837158337104
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.00025078982128379224,
+              "bias_mcse": 0.002144539432324312,
+              "rmse": 0.21444336691559499,
+              "empirical_sd": 0.21445394323243122,
+              "mean_variance": 0.044746184443885964,
+              "variance_ratio": 0.972944206028066,
+              "coverage": 0.9456,
+              "coverage_mcse": 0.0022680529094357567,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9456,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.8280869064583192,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.0048702029687784035,
+              "z_sd": 1.017196308315831,
+              "z_quantiles": [
+                -2.000114149540391,
+                -0.002980728664950169,
+                2.0155492378922517
+              ],
+              "abs_z_95": 2.0077499032341724
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.003082104431259669,
+              "bias_mcse": 0.00255637814690246,
+              "rmse": 0.25564361247271516,
+              "empirical_sd": 0.255637814690246,
+              "mean_variance": 0.0642804683179382,
+              "variance_ratio": 0.9836233719336921,
+              "coverage": 0.9474,
+              "coverage_mcse": 0.0022323359962156232,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9474,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.9919701571612728,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.010047504946419853,
+              "z_sd": 1.0141812636118788,
+              "z_quantiles": [
+                -2.040061187483886,
+                -0.01644035411304571,
+                1.9379583737238693
+              ],
+              "abs_z_95": 1.9855505837981042
+            }
+          }
+        }
+      }
+    },
+    "2": {
+      "design": {
+        "n": 1000,
+        "observation": "intermittent",
+        "clusters": 50,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 194.71834558699993,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0005264341135986506,
+              "bias_mcse": 0.0012214187439244836,
+              "rmse": 0.12213690166869545,
+              "empirical_sd": 0.12214187439244835,
+              "mean_variance": 0.014653363380809688,
+              "variance_ratio": 0.9822186108051235,
+              "coverage": 0.9425,
+              "coverage_mcse": 0.002327955111251074,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9425,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.4706646388773877,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 0.0017917739094081753,
+              "z_sd": 1.0275380804430727,
+              "z_quantiles": [
+                -2.0310746956361627,
+                0.019137275742775496,
+                2.011454875445718
+              ],
+              "abs_z_95": 2.020078150619346
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0005472209231043301,
+              "bias_mcse": 0.0017954690925307854,
+              "rmse": 0.1795387656296257,
+              "empirical_sd": 0.17954690925307853,
+              "mean_variance": 0.03142110763441152,
+              "variance_ratio": 0.9746880093226397,
+              "coverage": 0.939,
+              "coverage_mcse": 0.0023933031567271216,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.939,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.688502160960106,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 0.0007407049553786692,
+              "z_sd": 1.0359450287848009,
+              "z_quantiles": [
+                -2.0826234403932826,
+                0.010582331794590802,
+                2.0322927940295514
+              ],
+              "abs_z_95": 2.057125312037281
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0015722690443644716,
+              "bias_mcse": 0.002123396008428074,
+              "rmse": 0.21233480474340996,
+              "empirical_sd": 0.2123396008428074,
+              "mean_variance": 0.045540686302278276,
+              "variance_ratio": 1.0100376852230484,
+              "coverage": 0.9471,
+              "coverage_mcse": 0.002238338446258741,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9471,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.8287403822030684,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.009089813126256485,
+              "z_sd": 1.0172800710704153,
+              "z_quantiles": [
+                -1.987875853402501,
+                0.018440712664434943,
+                1.9945306085504944
+              ],
+              "abs_z_95": 1.9927242733280717
+            }
+          }
+        }
+      }
+    },
+    "0": {
+      "design": {
+        "n": 1000,
+        "observation": "balanced",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 212.30504135499905,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0003188183686200219,
+              "bias_mcse": 0.0006719698663028727,
+              "rmse": 0.06719438305276682,
+              "empirical_sd": 0.06719698663028727,
+              "mean_variance": 0.0043337829570821,
+              "variance_ratio": 0.9597708626924155,
+              "coverage": 0.9429,
+              "coverage_mcse": 0.002320335967053048,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9429,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.257938871881968,
+              "meets_prespecified_thresholds": false,
+              "z_mean": -0.008168687819807357,
+              "z_sd": 1.022115545177736,
+              "z_quantiles": [
+                -2.049460396211594,
+                -0.0030078315923897114,
+                1.9925834302323464
+              ],
+              "abs_z_95": 2.033461884905313
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.00012628080670751274,
+              "bias_mcse": 0.0009467839996726071,
+              "rmse": 0.09467375014892301,
+              "empirical_sd": 0.09467839996726071,
+              "mean_variance": 0.008673852115963426,
+              "variance_ratio": 0.9676319362830239,
+              "coverage": 0.9466,
+              "coverage_mcse": 0.0022482980229498045,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9466,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.364877370789074,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.00501409054352129,
+              "z_sd": 1.018688903420637,
+              "z_quantiles": [
+                -2.0142987737228406,
+                -0.0038610055869863847,
+                1.9571033542902663
+              ],
+              "abs_z_95": 1.986961839159858
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0011362418760114679,
+              "bias_mcse": 0.0011193654971189966,
+              "rmse": 0.11193671974776302,
+              "empirical_sd": 0.11193654971189965,
+              "mean_variance": 0.012641326790022582,
+              "variance_ratio": 1.008901635085632,
+              "coverage": 0.9517,
+              "coverage_mcse": 0.0021439941697681923,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9517,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.440350692768527,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.008256984872346678,
+              "z_sd": 0.9976640471941446,
+              "z_quantiles": [
+                -1.9699501431068833,
+                -0.002172773005770127,
+                1.937381690959387
+              ],
+              "abs_z_95": 1.9486413338897823
+            }
+          }
+        }
+      }
+    },
+    "4": {
+      "design": {
+        "n": 1000,
+        "observation": "rotating",
+        "clusters": 0,
+        "null": true,
+        "violation": "none"
+      },
+      "elapsed_seconds": 99.66611969400037,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0012398916080528781,
+              "bias_mcse": 0.001576024729588171,
+              "rmse": 0.15759947004982638,
+              "empirical_sd": 0.1576024729588171,
+              "mean_variance": 0.024898224913089337,
+              "variance_ratio": 1.0024029363882747,
+              "coverage": 0.9468,
+              "coverage_mcse": 0.0022443208326796775,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9468,
+              "rejection_at_zero": 0.0532,
+              "rejection_mcse": 0.002244320832679677,
+              "mean_interval_width": 0.6178842348460777,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.008258081261993046,
+              "z_sd": 1.0022246939686272,
+              "z_quantiles": [
+                -2.0244534861424213,
+                -0.0009686074608361642,
+                1.9622893885785406
+              ],
+              "abs_z_95": 1.9847069878373989
+            },
+            "g2_t3": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0018936694531897916,
+              "bias_mcse": 0.0020896605726734747,
+              "rmse": 0.20896418925870838,
+              "empirical_sd": 0.2089660572673475,
+              "mean_variance": 0.043613629851242515,
+              "variance_ratio": 0.998782067321735,
+              "coverage": 0.9476,
+              "coverage_mcse": 0.002228323136351638,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9476,
+              "rejection_at_zero": 0.0524,
+              "rejection_mcse": 0.002228323136351638,
+              "mean_interval_width": 0.8175240427069372,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.009136627776334666,
+              "z_sd": 1.0045010524315756,
+              "z_quantiles": [
+                -1.9813412736238698,
+                -0.0050153927984515085,
+                1.9843711294021653
+              ],
+              "abs_z_95": 1.9817122716393976
+            },
+            "g3_t4": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -1.295979725728138e-05,
+              "bias_mcse": 0.002473590264424336,
+              "rmse": 0.24734665852141333,
+              "empirical_sd": 0.24735902644243363,
+              "mean_variance": 0.06219633947669803,
+              "variance_ratio": 1.0165044856761114,
+              "coverage": 0.9497,
+              "coverage_mcse": 0.002185632860294702,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9497,
+              "rejection_at_zero": 0.0503,
+              "rejection_mcse": 0.0021856328602947016,
+              "mean_interval_width": 0.9758776241024957,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.001225993645996478,
+              "z_sd": 0.9965649248388969,
+              "z_quantiles": [
+                -1.9466383005949466,
+                0.0072858182169957385,
+                1.978539623387434
+              ],
+              "abs_z_95": 1.9626585098475011
+            }
+          }
+        }
+      }
+    },
+    "6": {
+      "design": {
+        "n": 4000,
+        "observation": "rotating",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 148.03879536900058,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.00024007977169748784,
+              "bias_mcse": 0.0007846954949319544,
+              "rmse": 0.07846599320050732,
+              "empirical_sd": 0.07846954949319544,
+              "mean_variance": 0.006339494691970662,
+              "variance_ratio": 1.0295615713048254,
+              "coverage": 0.9535,
+              "coverage_mcse": 0.0021056531053333543,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9535,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.312033298507766,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.0017093092296618384,
+              "z_sd": 0.9860883289756504,
+              "z_quantiles": [
+                -1.91767887057109,
+                -0.0014157948727167903,
+                1.9296306703252684
+              ],
+              "abs_z_95": 1.926176465522221
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0003989759705795848,
+              "bias_mcse": 0.00103628560504758,
+              "rmse": 0.1036241470230668,
+              "empirical_sd": 0.10362856050475801,
+              "mean_variance": 0.011125483307114846,
+              "variance_ratio": 1.0360004774189548,
+              "coverage": 0.9548,
+              "coverage_mcse": 0.0020774253295846763,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9548,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.4133341694436416,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.0054297156457058845,
+              "z_sd": 0.9831340729244586,
+              "z_quantiles": [
+                -1.904801210403122,
+                -0.011800724728690305,
+                1.9243295007573904
+              ],
+              "abs_z_95": 1.9169034166853263
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.003750950095361194,
+              "bias_mcse": 0.0012576222979062287,
+              "rmse": 0.125811869291745,
+              "empirical_sd": 0.12576222979062288,
+              "mean_variance": 0.015968210968285056,
+              "variance_ratio": 1.0096150224616562,
+              "coverage": 0.9526,
+              "coverage_mcse": 0.00212492917529032,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9526,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.4951230986122531,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.030279163469914567,
+              "z_sd": 0.9958700365206283,
+              "z_quantiles": [
+                -1.913504410142896,
+                0.03209378132295074,
+                1.9760515574499091
+              ],
+              "abs_z_95": 1.9335936985603908
+            }
+          }
+        }
+      }
+    },
+    "8": {
+      "design": {
+        "n": 4000,
+        "observation": "cohort_dependent",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 152.9021948640002,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0010421150298114412,
+              "bias_mcse": 0.0008473223262765445,
+              "rmse": 0.08473440443336876,
+              "empirical_sd": 0.08473223262765445,
+              "mean_variance": 0.007219270665769527,
+              "variance_ratio": 1.005532298376495,
+              "coverage": 0.9505,
+              "coverage_mcse": 0.0021690954335851615,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9505,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.3329724916707266,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.013224646580046996,
+              "z_sd": 0.9979007632004807,
+              "z_quantiles": [
+                -1.9848396725903723,
+                -0.005755619942266796,
+                1.920911392940589
+              ],
+              "abs_z_95": 1.9542183388003183
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0012374436412052603,
+              "bias_mcse": 0.0010783728581403459,
+              "rmse": 0.10783899383099683,
+              "empirical_sd": 0.1078372858140346,
+              "mean_variance": 0.011578850836459608,
+              "variance_ratio": 0.9956978338096836,
+              "coverage": 0.9503,
+              "coverage_mcse": 0.0021732443488940672,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9503,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.42165293714533986,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.01309631732194421,
+              "z_sd": 1.002772548947394,
+              "z_quantiles": [
+                -1.9571671600570812,
+                -0.02207635938339421,
+                1.9504946971898518
+              ],
+              "abs_z_95": 1.956108577418235
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0015098496404060135,
+              "bias_mcse": 0.0014530149115586852,
+              "rmse": 0.1453020706174635,
+              "empirical_sd": 0.14530149115586852,
+              "mean_variance": 0.020980082542759227,
+              "variance_ratio": 0.9937269085615065,
+              "coverage": 0.9468,
+              "coverage_mcse": 0.0022443208326796775,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9468,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.5674354143928517,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.008653408914133005,
+              "z_sd": 1.0054754095250538,
+              "z_quantiles": [
+                -1.9939603296911421,
+                -0.0016421425336125583,
+                1.9713412870073914
+              ],
+              "abs_z_95": 1.9856366071541764
+            }
+          }
+        }
+      }
+    },
+    "5": {
+      "design": {
+        "n": 4000,
+        "observation": "balanced",
+        "clusters": 0,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 290.5276722509989,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.00016703584389032855,
+              "bias_mcse": 0.00032967978300034353,
+              "rmse": 0.03296675303097594,
+              "empirical_sd": 0.032967978300034353,
+              "mean_variance": 0.0010836006400644623,
+              "variance_ratio": 0.9969758113463951,
+              "coverage": 0.9489,
+              "coverage_mcse": 0.0022020170299068996,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9489,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.12902240242958884,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.0035929332509566764,
+              "z_sd": 1.0017835804147048,
+              "z_quantiles": [
+                -1.9679610071273481,
+                0.019117788971210796,
+                1.9630023460248316
+              ],
+              "abs_z_95": 1.9649398226290329
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0001328674623848336,
+              "bias_mcse": 0.000464079220777053,
+              "rmse": 0.04640579183474591,
+              "empirical_sd": 0.0464079220777053,
+              "mean_variance": 0.002167955904894891,
+              "variance_ratio": 1.006621490875534,
+              "coverage": 0.9499,
+              "coverage_mcse": 0.002181513007066427,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9499,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.18249233763385087,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.0011688734815904908,
+              "z_sd": 0.9970345769133263,
+              "z_quantiles": [
+                -1.9645085670765754,
+                0.013807855841549487,
+                1.9539882694094666
+              ],
+              "abs_z_95": 1.960172500908972
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0005398262575155854,
+              "bias_mcse": 0.000563968561892882,
+              "rmse": 0.05639661993315518,
+              "empirical_sd": 0.056396856189288205,
+              "mean_variance": 0.0031625012021522544,
+              "variance_ratio": 0.9943079434025028,
+              "coverage": 0.9492,
+              "coverage_mcse": 0.0021958907076628374,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9492,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.22039472406764868,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.010486654730707866,
+              "z_sd": 1.0036548948577808,
+              "z_quantiles": [
+                -1.9790221034301445,
+                0.015951468678190618,
+                1.958898240618538
+              ],
+              "abs_z_95": 1.966770231239412
+            }
+          }
+        }
+      }
+    },
+    "7": {
+      "design": {
+        "n": 4000,
+        "observation": "intermittent",
+        "clusters": 100,
+        "null": false,
+        "violation": "none"
+      },
+      "elapsed_seconds": 260.6998880020001,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.00026878887926207184,
+              "bias_mcse": 0.0006087798588529814,
+              "rmse": 0.060875535315885555,
+              "empirical_sd": 0.060877985885298136,
+              "mean_variance": 0.003694090604613123,
+              "variance_ratio": 0.9967517157929459,
+              "coverage": 0.945,
+              "coverage_mcse": 0.0022798026230356006,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.945,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.23729309282637956,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.005880406864338889,
+              "z_sd": 1.0150255918193025,
+              "z_quantiles": [
+                -2.0455289993225305,
+                -0.011276272023742668,
+                1.9877303550039966
+              ],
+              "abs_z_95": 2.0170344275182273
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.0005151236263158943,
+              "bias_mcse": 0.0008935537244744143,
+              "rmse": 0.08935238944377952,
+              "empirical_sd": 0.08935537244744143,
+              "mean_variance": 0.00794091197131758,
+              "variance_ratio": 0.9945555447225363,
+              "coverage": 0.9445,
+              "coverage_mcse": 0.002289535979188796,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9445,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.34777180918031264,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.007068846030442143,
+              "z_sd": 1.0177232001432281,
+              "z_quantiles": [
+                -2.0184060044081886,
+                -0.012152676177432504,
+                2.003142336721603
+              ],
+              "abs_z_95": 2.0112627673786045
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.00046818713628571373,
+              "bias_mcse": 0.001079725627270353,
+              "rmse": 0.10796817907887475,
+              "empirical_sd": 0.10797256272703529,
+              "mean_variance": 0.011461892055639283,
+              "variance_ratio": 0.9831719852588979,
+              "coverage": 0.9445,
+              "coverage_mcse": 0.002289535979188796,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9445,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.41781177503485883,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.004481785754366645,
+              "z_sd": 1.01809314062556,
+              "z_quantiles": [
+                -2.0166714218930544,
+                -0.0004258039164022858,
+                1.9837474325850057
+              ],
+              "abs_z_95": 2.006565997547963
+            }
+          }
+        }
+      }
+    },
+    "9": {
+      "design": {
+        "n": 4000,
+        "observation": "rotating",
+        "clusters": 0,
+        "null": true,
+        "violation": "none"
+      },
+      "elapsed_seconds": 140.2502569570006,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.0004111797309783051,
+              "bias_mcse": 0.000786991501875898,
+              "rmse": 0.07869628932418579,
+              "empirical_sd": 0.0786991501875898,
+              "mean_variance": 0.006198077545048631,
+              "variance_ratio": 1.0007300014118599,
+              "coverage": 0.9501,
+              "coverage_mcse": 0.0021773835215689505,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9501,
+              "rejection_at_zero": 0.0499,
+              "rejection_mcse": 0.0021773835215689492,
+              "mean_interval_width": 0.30853378508250684,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.005035293658274068,
+              "z_sd": 1.0008129376844974,
+              "z_quantiles": [
+                -1.9408169293598319,
+                0.012959471208656969,
+                1.9784113254173599
+              ],
+              "abs_z_95": 1.9581221714812949
+            },
+            "g2_t3": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.001050418745617564,
+              "bias_mcse": 0.001041716973074626,
+              "rmse": 0.10417178468859388,
+              "empirical_sd": 0.10417169730746259,
+              "mean_variance": 0.010854592372599248,
+              "variance_ratio": 1.0002626170567914,
+              "coverage": 0.9485,
+              "coverage_mcse": 0.0022101527096560544,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9485,
+              "rejection_at_zero": 0.0515,
+              "rejection_mcse": 0.0022101527096560544,
+              "mean_interval_width": 0.40827194418734636,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.00973086959239889,
+              "z_sd": 1.0010687921758095,
+              "z_quantiles": [
+                -1.9642575475072774,
+                0.008321804609112957,
+                1.9861922185684566
+              ],
+              "abs_z_95": 1.9696482006508376
+            },
+            "g3_t4": {
+              "truth": 0.0,
+              "replications": 10000,
+              "failures": 0,
+              "bias": -0.001762310409929624,
+              "bias_mcse": 0.0012576328550949233,
+              "rmse": 0.1257693447535003,
+              "empirical_sd": 0.12576328550949234,
+              "mean_variance": 0.015434351400635694,
+              "variance_ratio": 0.9758445357150868,
+              "coverage": 0.9467,
+              "coverage_mcse": 0.0022463105306257196,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9467,
+              "rejection_at_zero": 0.0533,
+              "rejection_mcse": 0.002246310530625719,
+              "mean_interval_width": 0.48678704888635876,
+              "meets_prespecified_thresholds": true,
+              "z_mean": -0.014051974213968333,
+              "z_sd": 1.0137598922410809,
+              "z_quantiles": [
+                -1.9784834087021765,
+                -0.0028404263086091075,
+                1.9806813627156354
+              ],
+              "abs_z_95": 1.9794518244833976
+            }
+          }
+        }
+      }
+    },
+    "10": {
+      "design": {
+        "n": 1000,
+        "observation": "intermittent",
+        "clusters": 0,
+        "null": false,
+        "violation": "selection"
+      },
+      "elapsed_seconds": 149.98925528499967,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {
+            "IPW propensity fit failed: Logistic regression did not converge in 25 iterations. Propensity score estimates may be unreliable.": 301
+          },
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 301,
+              "bias": 0.30971948374344205,
+              "bias_mcse": 0.00123780613648487,
+              "rmse": 0.332843935483255,
+              "empirical_sd": 0.12190348207376443,
+              "mean_variance": 0.014640508145282958,
+              "variance_ratio": 0.9851989230421198,
+              "coverage": 0.2632,
+              "coverage_mcse": 0.004403700262279439,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.2713681822868337,
+              "rejection_at_zero": 0.9699,
+              "rejection_mcse": 0.0017086248856902446,
+              "mean_interval_width": 0.47334412851716723,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 2.573211960687419,
+              "z_sd": 1.02123349388991,
+              "z_quantiles": [
+                0.5786320479286295,
+                2.5590156544429536,
+                4.59124568109343
+              ],
+              "abs_z_95": 4.245454868857546
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 301,
+              "bias": 0.30181728534156305,
+              "bias_mcse": 0.0017339623869158656,
+              "rmse": 0.3467735981940523,
+              "empirical_sd": 0.17076668673678344,
+              "mean_variance": 0.029240928599637485,
+              "variance_ratio": 1.002731956610578,
+              "coverage": 0.5594,
+              "coverage_mcse": 0.004964591020416485,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.5767604907722446,
+              "rejection_at_zero": 0.9699,
+              "rejection_mcse": 0.0017086248856902446,
+              "mean_interval_width": 0.6687596704925153,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 1.774245791155438,
+              "z_sd": 1.0079673739093187,
+              "z_quantiles": [
+                -0.1912462679460911,
+                1.7624193327975808,
+                3.818655910174921
+              ],
+              "abs_z_95": 3.4502158773144793
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 301,
+              "bias": 0.44379139730027806,
+              "bias_mcse": 0.0024194090144431537,
+              "rmse": 0.5037047101583547,
+              "empirical_sd": 0.2382718704714388,
+              "mean_variance": 0.0550227089244787,
+              "variance_ratio": 0.9691620946580533,
+              "coverage": 0.5079,
+              "coverage_mcse": 0.004999375861045057,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.5236622332199196,
+              "rejection_at_zero": 0.9699,
+              "rejection_mcse": 0.0017086248856902446,
+              "mean_interval_width": 0.9150320323480879,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 1.9215870030836832,
+              "z_sd": 1.0549037064948277,
+              "z_quantiles": [
+                -0.08269565981636287,
+                1.909002003035749,
+                4.045332316236637
+              ],
+              "abs_z_95": 3.691381696916717
+            }
+          }
+        }
+      }
+    },
+    "11": {
+      "design": {
+        "n": 1000,
+        "observation": "intermittent",
+        "clusters": 0,
+        "null": false,
+        "violation": "parallel_trends"
+      },
+      "elapsed_seconds": 149.1788728269985,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 2.5923947479165568,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.7521974789414307,
+              "bias_mcse": 0.0008330121150799783,
+              "rmse": 0.7567955108583567,
+              "empirical_sd": 0.08330121150799782,
+              "mean_variance": 0.0068569637524843186,
+              "variance_ratio": 0.9881644330230893,
+              "coverage": 0.0,
+              "coverage_mcse": 0.0,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.0,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.3243340289126125,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 9.102078439861934,
+              "z_sd": 1.0403879397644527,
+              "z_quantiles": [
+                7.113816253745072,
+                9.102477547876504,
+                11.167365104398582
+              ],
+              "abs_z_95": 10.787841272336342
+            },
+            "g2_t3": {
+              "truth": 2.6180143123990307,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.8019365329085422,
+              "bias_mcse": 0.001183711803843327,
+              "rmse": 0.810624782488988,
+              "empirical_sd": 0.1183711803843327,
+              "mean_variance": 0.013892298751219553,
+              "variance_ratio": 0.9914758891107488,
+              "coverage": 0.0,
+              "coverage_mcse": 0.0,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.0,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.4615742152775251,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 6.820353393974694,
+              "z_sd": 1.0291090538092698,
+              "z_quantiles": [
+                4.824687252368925,
+                6.809293875178487,
+                8.849218640078265
+              ],
+              "abs_z_95": 8.51479748936089
+            },
+            "g3_t4": {
+              "truth": 3.350038149052618,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.7974843547231698,
+              "bias_mcse": 0.0014536186675311383,
+              "rmse": 0.810622757715912,
+              "empirical_sd": 0.14536186675311383,
+              "mean_variance": 0.020669826213904438,
+              "variance_ratio": 0.9782184326971763,
+              "coverage": 0.0002,
+              "coverage_mcse": 0.00014140721339450828,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.0002,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.562706738350993,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 5.574840634622723,
+              "z_sd": 1.0731711738306486,
+              "z_quantiles": [
+                3.580832419850364,
+                5.568368576653017,
+                7.72095115024115
+              ],
+              "abs_z_95": 7.380711320861592
+            }
+          }
+        }
+      }
+    },
+    "12": {
+      "design": {
+        "n": 1000,
+        "observation": "intermittent",
+        "clusters": 0,
+        "null": false,
+        "violation": "propensity"
+      },
+      "elapsed_seconds": 144.01954894200026,
+      "variants": {
+        "fitted_empirical": {
+          "failures": {},
+          "targets": {
+            "overall": {
+              "truth": 3.2242670754154847,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.10041252024972414,
+              "bias_mcse": 0.0012260674471804133,
+              "rmse": 0.15847266272727012,
+              "empirical_sd": 0.12260674471804132,
+              "mean_variance": 0.014629748246063338,
+              "variance_ratio": 0.9732135099325975,
+              "coverage": 0.8557,
+              "coverage_mcse": 0.0035139366812735823,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.8557,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.47121778505119516,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 0.8436742261384025,
+              "z_sd": 1.0345993059032845,
+              "z_quantiles": [
+                -1.1392315736272403,
+                0.828819267507573,
+                2.8934464848287984
+              ],
+              "abs_z_95": 2.5869684852844097
+            },
+            "g2_t3": {
+              "truth": 3.332688995347808,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.11584823821102397,
+              "bias_mcse": 0.0016301484512075833,
+              "rmse": 0.19997999060498536,
+              "empirical_sd": 0.16301484512075834,
+              "mean_variance": 0.02575928156474173,
+              "variance_ratio": 0.9693473666851636,
+              "coverage": 0.8769,
+              "coverage_mcse": 0.003285519593610727,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.8769,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.6245603800717073,
+              "meets_prespecified_thresholds": false,
+              "z_mean": 0.7376802436599997,
+              "z_sd": 1.0405238106751202,
+              "z_quantiles": [
+                -1.2493157844882798,
+                0.730864488769541,
+                2.8151823824068356
+              ],
+              "abs_z_95": 2.4917556553067737
+            },
+            "g3_t4": {
+              "truth": 3.3861450053055644,
+              "replications": 10000,
+              "failures": 0,
+              "bias": 0.007500032568309223,
+              "bias_mcse": 0.0017691277992061165,
+              "rmse": 0.1770628486571775,
+              "empirical_sd": 0.17691277992061166,
+              "mean_variance": 0.03078407261801188,
+              "variance_ratio": 0.9835754067953072,
+              "coverage": 0.9446,
+              "coverage_mcse": 0.002287593495357075,
+              "nominal_binomial_mcse": 0.0021794494717703367,
+              "coverage_given_valid": 0.9446,
+              "rejection_at_zero": 1.0,
+              "rejection_mcse": 0.0,
+              "mean_interval_width": 0.6861356188513233,
+              "meets_prespecified_thresholds": true,
+              "z_mean": 0.046638484775978074,
+              "z_sd": 1.0147957472649543,
+              "z_quantiles": [
+                -1.9554278201037094,
+                0.04638717196466406,
+                2.0476993012243527
+              ],
+              "abs_z_95": 2.0041661217589066
+            }
+          }
+        }
+      }
+    }
+  },
+  "acceptance_rule": "zero failures; |bias|<.1 empirical SD; variance ratio [.9,1.1]; 95% coverage and null 5% rejection within 3 binomial MCSE",
+  "interpretation": "Oracle variants are diagnostics, not public estimator options. Reference agreement is a separate report.",
+  "core_thresholds_pass": false
+}

@@ -12,8 +12,14 @@ Difference-in-Differences
 
 - **Angrist, J. D., & Pischke, J.-S. (2009).** *Mostly Harmless Econometrics: An Empiricist's Companion*. Princeton University Press. Chapter 5: Differences-in-Differences.
 
+Chained Difference-in-Differences
+---------------------------------
+
+- **Bellégo, C., Benatia, D., & Dortet-Bernadet, V. (2025).** "The chained difference-in-differences." *Journal of Econometrics*. https://doi.org/10.1016/j.jeconom.2024.105783
+
 Two-Way Fixed Effects
 ---------------------
+
 
 - **Wooldridge, J. M. (2010).** *Econometric Analysis of Cross Section and Panel Data* (2nd ed.). MIT Press.
 

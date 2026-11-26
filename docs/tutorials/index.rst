@@ -261,6 +261,13 @@ Modern estimators for designs the basic toolkit cannot handle.
       lane, and reading the ATT_X pre-test.
 
 
+   .. grid-item-card:: Chained DiD: Incomplete Panels
+      :link: 34_chained_did
+      :link-type: doc
+
+      Recover effects from overlapping two-date observations, inspect
+      unsupported targets and distinguish treatment IPW from attrition correction.
+
 .. toctree::
    :maxdepth: 1
    :caption: Advanced Methods
@@ -279,6 +286,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    LWDiD Rolling Transformations <31_lwdid>
    Double ML DiD (Chang 2020) <32_dml_did>
    Bad Controls (Caetano et al.) <33_bad_controls>
+   Chained DiD: Incomplete Panels <34_chained_did>
 
 Study Design
 ------------
