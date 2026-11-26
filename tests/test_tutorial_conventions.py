@@ -122,10 +122,6 @@ _EM_DASH = "—"
 # Rules each notebook violated when the guard was introduced. See the module
 # docstring: entries are deleted as notebooks are repaired, never added.
 KNOWN_VIOLATIONS: Dict[str, FrozenSet[str]] = {
-    "04_parallel_trends": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "05_honest_did": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "06_power_analysis": frozenset({EXECUTED, EM_DASH, DRIFT_TEST}),
-    "07_pretrends_power": frozenset({EXECUTED, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "10_trop": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "11_imputation_did": frozenset(
         {EXECUTED, JARGON, BLANKET_WARNING_FILTER, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}
@@ -147,7 +143,6 @@ KNOWN_VIOLATIONS: Dict[str, FrozenSet[str]] = {
     "21_had_pretest_workflow": frozenset({JARGON, EM_DASH}),
     "22_had_survey_design": frozenset({EXECUTED, JARGON, EM_DASH, MATPLOTLIB_GUARD}),
     "23_spillover_tva": frozenset({EXECUTED, JARGON, EM_DASH}),
-    "24_staggered_vs_collapsed_power": frozenset({REMOVED_NAME, BLANKET_WARNING_FILTER, EM_DASH}),
     "25_synthetic_control_policy": frozenset({EM_DASH}),
     "26_composition_drift_calibration": frozenset({MATPLOTLIB_GUARD}),
     "32_dml_did": frozenset({REMOVED_NAME, EM_DASH}),
