@@ -2470,7 +2470,7 @@ result = diagnose_design(
 )
 result.print_summary()
 table = result.to_dataframe()    # one row per estimator and effect size
-null_run = result.results["cs"][0]           # SimulationPowerResults at effect 0
+null_run = result.power_results["cs"][0]           # SimulationPowerResults at effect 0
 size = null_run.rejection_rate               # should be near alpha
 ok = result.size_controlled["cs"]            # False -> power is not meaningful
 mde = result.mde["cs"]                       # NaN unless size is controlled
@@ -2496,11 +2496,13 @@ honest_plan = HonestDiD(method="relative_magnitude").power_by_M(
     plan, M_grid=[0, 0.5, 1.0], effect_size=0.5, power=0.80,
 )
 # columns: M, placebo_rejection_rate (interval excludes zero with no effect; a
-#          valid interval stays at or below alpha), ci_width, mde, power,
-#          n_simulations, n_simulation_failures
-# mde / power are NaN on a row that fails the diagnosis size rule (typical for
-# method="smoothness" at M=0 on a small panel). method="combined" is refused;
-# a fitted model is refused (use sensitivity_analysis).
+#          valid interval stays at or below alpha), ci_width, mde, power
+#          (share of draws whose interval excludes zero at effect_size),
+#          n_simulations, n_simulation_failures, size_controlled
+# mde / power are NaN and size_controlled is False on a row that fails the
+# diagnosis size rule (typical for method="smoothness" at M=0 on a small
+# panel). method="combined" is refused; a fitted model is refused (use
+# sensitivity_analysis).
 # The formula assumes each coefficient's own test holds its level. For the
 # pre-periods being planned, PreTrendsPower compares the pre-trend test's
 # rejection rate in the placebo draws with the rate the formula assumes and
@@ -2577,7 +2579,7 @@ and `checks` (one per item: `estimator_name`, `params.<name>`,
 `estimator_kwargs.<key>`, `outcome`, `unit`, `time`, `alpha`, and with `data`:
 `data_sha256`, `n_units`, `is_balanced`, `n_treated`, `n_cohorts`,
 `n_post_by_cohort`). Any checked item that differs gives `"deviates"`; items
-whose inputs were not passed are `"not checked"`. It compares what you declare
+whose inputs were not passed are `"not_checked"`. It compares what you declare
 with the lock (fitted results do not record their configuration), does not
 compare adoption dates (placebo dates lie inside the diagnosed panel), and
 `"match"` covers the checks that were run only. The lock does not record when it
@@ -2588,7 +2590,7 @@ outcomes were seen.
 timing only), CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD,
 StackedDiD, EfficientDiD (common or staggered timing).
 
-**Returns** `DesignDiagnosisResults`: `results` (label -> list of
+**Returns** `DesignDiagnosisResults`: `power_results` (label -> list of
 `SimulationPowerResults`, aligned with `effect_sizes`; the first is the
 no-effect run), `size_controlled`, `n_nan_inference`, `mde`, `mde_results`,
 the declared design, `seed`, `data_sha256`, `time_periods`.

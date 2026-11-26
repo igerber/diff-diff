@@ -98,7 +98,7 @@ def describe_design_reconciliation(reconciliation: Any) -> Optional[Dict[str, An
     """
     if reconciliation is None:
         return None
-    by_status: Dict[str, List[Dict[str, Any]]] = {"match": [], "deviates": [], "not checked": []}
+    by_status: Dict[str, List[Dict[str, Any]]] = {"match": [], "deviates": [], "not_checked": []}
     for check in reconciliation.checks:
         by_status[check["status"]].append(check)
     return {
@@ -109,12 +109,12 @@ def describe_design_reconciliation(reconciliation: Any) -> Optional[Dict[str, An
         "n_checks": len(reconciliation.checks),
         "n_match": len(by_status["match"]),
         "n_deviates": len(by_status["deviates"]),
-        "n_not_checked": len(by_status["not checked"]),
+        "n_not_checked": len(by_status["not_checked"]),
         "deviations": [
             {"item": check["item"], "locked": check["locked"], "realized": check["realized"]}
             for check in by_status["deviates"]
         ],
-        "not_checked": [check["item"] for check in by_status["not checked"]],
+        "not_checked": [check["item"] for check in by_status["not_checked"]],
     }
 
 

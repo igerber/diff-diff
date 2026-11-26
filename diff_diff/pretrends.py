@@ -297,10 +297,10 @@ def _validate_violation_magnitude(M: Any) -> None:
 
 def _is_placebo_surface(obj: Any) -> bool:
     """Whether ``obj`` is a placebo event study recorded by ``diagnose_design``."""
-    from diff_diff.design import PLACEBO_ESTIMAND
+    from diff_diff.design import _PLACEBO_ESTIMAND
     from diff_diff.results_base import EventStudyResults
 
-    return isinstance(obj, EventStudyResults) and obj.estimand == PLACEBO_ESTIMAND
+    return isinstance(obj, EventStudyResults) and obj.estimand == _PLACEBO_ESTIMAND
 
 
 def _resolve_planned_input(results: Any) -> Any:
@@ -2359,7 +2359,7 @@ class PreTrendsPower(BaseEstimator):
         the placebo record can count, and the one the library's simulation
         checked against direct trend injection.
         """
-        from diff_diff.design import _pretest_size_ok, placebo_pretest_rate
+        from diff_diff.design import _placebo_pretest_rate, _pretest_size_ok
 
         if self.pretest_form != "nis":
             raise ValueError(
@@ -2369,7 +2369,7 @@ class PreTrendsPower(BaseEstimator):
                 "error, which is the NIS test, and the joint Wald form has not "
                 "been checked against placebo draws."
             )
-        counted, n_draws = placebo_pretest_rate(surface, tested, self.alpha)
+        counted, n_draws = _placebo_pretest_rate(surface, tested, self.alpha)
         expected = float(self._compute_power(0.0, weights, vcov)[0])
         return counted, expected, n_draws, _pretest_size_ok(counted, expected, n_draws)
 

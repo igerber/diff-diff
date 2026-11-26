@@ -122,7 +122,7 @@ def _independent_surface(n_pre=4, se=0.5, inflate=(), n_draws=4000, seed=0):
         base_period="universal",
         anticipation=0,
         reference_event_times=(-1,),
-        estimand=design_module.PLACEBO_ESTIMAND,
+        estimand=design_module._PLACEBO_ESTIMAND,
     )
     ratios = np.abs(np.random.default_rng(seed).normal(size=(n_draws, n_pre)))
     for column in inflate:
@@ -270,7 +270,7 @@ class TestSurface:
         label = "CallawaySantAnna"
         assert searched.mde_results, "the MDE search must have run for this check to bind"
         checks = searched._event_study_checks[label]
-        assert checks["n_draws"] == searched.results[label][0].n_simulations
+        assert checks["n_draws"] == searched.power_results[label][0].n_simulations
         reference = plain._event_study_checks[label]
         for key in ("n_draws", "n_excluded", "se_ratio", "pretest_rejection_rate"):
             assert checks[key] == reference[key], key
@@ -405,11 +405,11 @@ class TestReduction:
             design_module._formula_pretest_rate(surface.vcov[:2, :2], 0.05), abs=NIS_ATOL
         )
         # The same count for a subset, and at another level.
-        counted, n_draws = design_module.placebo_pretest_rate(surface, [-2], 0.10)
+        counted, n_draws = design_module._placebo_pretest_rate(surface, [-2], 0.10)
         assert n_draws == 200
         assert counted == pytest.approx(np.mean(np.abs(values[:, 1]) > 1.6448536269514722))
         with pytest.raises(ValueError, match="not in this placebo event study"):
-            design_module.placebo_pretest_rate(surface, [-9], 0.05)
+            design_module._placebo_pretest_rate(surface, [-9], 0.05)
 
     @pytest.mark.parametrize("scale, direction", [(0.6, "more"), (1.8, "less")])
     def test_full_set_verdict_in_both_directions(self, scale, direction):
@@ -582,7 +582,7 @@ class TestNotRecorded:
                 event_study=flag,
                 estimator_kwargs={"event_study": False},
             )
-            assert diagnosis.results["TwoWayFixedEffects"][0].n_simulations == 40
+            assert diagnosis.power_results["TwoWayFixedEffects"][0].n_simulations == 40
             assert diagnosis.event_study_results == {}
 
 
@@ -773,7 +773,7 @@ class TestPowerByPrePeriods:
             )
             assert row["power"] == pytest.approx(fitted.power, abs=NIS_ATOL)
             assert row["power_no_violation"] == pytest.approx(fitted.power_at(0.0), abs=NIS_ATOL)
-            counted, _ = design_module.placebo_pretest_rate(cs_surface, row["pre_periods"], 0.05)
+            counted, _ = design_module._placebo_pretest_rate(cs_surface, row["pre_periods"], 0.05)
             assert row["placebo_rejection_rate"] == counted
         assert np.all(np.isnan(planner.power_by_pre_periods(cs_diagnosis)["power"]))
 

@@ -331,7 +331,7 @@ def run_point(task):
                 "n_pre": len(labels),
                 "se_ratio_min": round(min(ratios), 4),
                 "se_ratio_max": round(max(ratios), 4),
-                "size": round(float(diagnosis.results[label][0].rejection_rate), 4),
+                "size": round(float(diagnosis.power_results[label][0].rejection_rate), 4),
                 "pretest_counted": round(checks["pretest_rejection_rate"], 4),
                 "pretest_expected": round(checks["pretest_expected_rate"], 4),
                 "pretest_agrees": bool(checks["pretest_agrees"]),
@@ -392,7 +392,7 @@ def run_selection(task):
     comparison = diagnose(
         panel, estimators, cohorts, N_DIAGNOSIS, int(compare_seed), effect_sizes=[effect]
     )
-    powers = {label: float(comparison.results[label][1].power) for label in estimators}
+    powers = {label: float(comparison.power_results[label][1].power) for label in estimators}
     picked = max(estimators, key=lambda label: powers[label])
     surface = comparison.event_study_results.get(picked)
     rerun = diagnose(panel, {picked: estimators[picked]}, cohorts, N_DIAGNOSIS, int(rerun_seed))
@@ -418,7 +418,7 @@ def selection_effect_size(n_units, panel_seed, pilot_seed):
         int(pilot_seed),
         event_study=False,
     )
-    return 2.0 * float(pilot.results["never_treated"][0].std_estimate)
+    return 2.0 * float(pilot.power_results["never_treated"][0].std_estimate)
 
 
 def main():

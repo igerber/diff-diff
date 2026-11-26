@@ -37,6 +37,7 @@ COLUMNS = [
     "power",
     "n_simulations",
     "n_simulation_failures",
+    "size_controlled",
 ]
 
 
@@ -198,21 +199,22 @@ class TestShiftIdentity:
         assert row["n_simulations"] == n_simulations
         assert row["n_simulation_failures"] == 0
         counted = np.mean((injected[:, 0] > 0) | (injected[:, 1] < 0))
-        detected = np.mean(injected[:, 0] > 0)
         by_hand_rate = np.mean((no_effect[:, 0] > 0) | (no_effect[:, 1] < 0))
         assert row["placebo_rejection_rate"] == pytest.approx(by_hand_rate, abs=1e-12)
         np.testing.assert_allclose(
             row["ci_width"], np.mean(no_effect[:, 1] - no_effect[:, 0]), rtol=1e-12
         )
+        passes = design_module._size_controlled(by_hand_rate, n_simulations, 0, 0.05)
+        assert bool(row["size_controlled"]) is passes
         if np.isnan(row["mde"]):
             # Withheld by the size rule: the planned numbers are blank together.
             assert np.isnan(row["power"])
-            assert not design_module._size_controlled(by_hand_rate, n_simulations, 0, 0.05)
+            assert not passes
         else:
-            assert row["power"] == pytest.approx(detected, abs=1e-12)
-            # No draw excludes zero on the wrong side of a positive effect
-            # here, so the two-sided count agrees as well.
-            assert counted == pytest.approx(detected, abs=1e-12)
+            # Power is the share of really injected fits whose interval
+            # excludes zero, the rejection rate diagnose_design reports.
+            assert passes
+            assert row["power"] == pytest.approx(counted, abs=1e-12)
 
     def test_relative_magnitude_rows_are_reported(self, cs_diagnosis):
         """The identity test above is not vacuous: these rows pass the size rule."""
@@ -375,14 +377,32 @@ class TestScoring:
         # The positive side needed far less.
         assert _score(lower, upper, alpha=0.5, effect_size=0.9)["power"] >= 0.8
 
-    def test_wrong_side_exclusion_is_not_a_detection(self):
-        # One interval lies entirely below zero. With no effect it is a
-        # rejection; for a small positive effect it is not a detection.
+    def test_power_counts_exclusions_on_either_side(self):
+        # One interval lies entirely below zero. It excludes zero with no
+        # effect, and still does for a small positive effect: power is the
+        # share of intervals that exclude zero, as for any rejection rate.
         lower = np.array([-3.0] + [-1.0] * 99)
         upper = np.array([-2.0] + [1.0] * 99)
         assert _score(lower, upper)["placebo_rejection_rate"] == pytest.approx(0.01)
-        assert _score(lower, upper, effect_size=0.5)["power"] == 0.0
+        assert _score(lower, upper, effect_size=0.5)["power"] == pytest.approx(0.01)
         assert _score(lower, upper, effect_size=-0.5)["power"] == pytest.approx(0.01)
+        # Once the effect moves that interval across zero it stops counting.
+        assert _score(lower, upper, effect_size=2.5)["power"] == pytest.approx(0.99)
+
+    def test_mde_is_set_from_the_effects_side_only(self):
+        # 30 intervals lie below zero. Shifted by a positive effect of 0.7
+        # they still exclude zero, on the wrong side, so power is already at
+        # the target there; the MDE does not count them and stays at 1.
+        lower = np.array([-3.0] * 30 + [-1.0] * 70)
+        upper = np.array([-2.0] * 30 + [1.0] * 70)
+        row = _score(lower, upper, alpha=0.5, power=0.3, effect_size=0.7)
+        assert row["power"] == pytest.approx(0.3)
+        assert row["mde"] == pytest.approx(1.0)
+        # Above the MDE the target holds for both signs.
+        for sign in (1.0, -1.0):
+            assert (
+                _score(lower, upper, alpha=0.5, power=0.3, effect_size=sign * 1.001)["power"] >= 0.3
+            )
 
     def test_power_at_zero_effect_is_the_placebo_rate(self):
         lower = np.array([1.0, -3.0] + [-1.0] * 98)
@@ -508,7 +528,8 @@ class TestTable:
         draws, _ = design_module._placebo_draw_record(cs_surface)
         intervals = _intervals(HonestDiD(), draws, 0.5)
         row = _table(HonestDiD(), cs_surface, M_grid=[0.5], effect_size=-3.0).iloc[0]
-        assert row["power"] == pytest.approx(np.mean(intervals[:, 1] - 3.0 < 0), abs=1e-12)
+        expected = np.mean((intervals[:, 1] - 3.0 < 0) | (intervals[:, 0] - 3.0 > 0))
+        assert row["power"] == pytest.approx(expected, abs=1e-12)
 
     def test_progress_lines(self, cs_diagnosis, capsys):
         with warnings.catch_warnings():
@@ -534,6 +555,7 @@ class TestSizeRule:
         assert row["placebo_rejection_rate"] > 0.15
         assert np.isfinite(row["ci_width"])
         assert np.isnan(row["mde"]) and np.isnan(row["power"])
+        assert bool(row["size_controlled"]) is False
         withheld = [w for w in recorded if "fails the size check" in str(w.message)]
         assert len(withheld) == 1
         assert "M=0 (excludes zero with no effect in" in str(withheld[0].message)
@@ -543,6 +565,7 @@ class TestSizeRule:
             warnings.simplefilter("error")
             table = HonestDiD().power_by_M(cs_diagnosis, M_grid=[1.0], progress=False)
         assert np.isfinite(table["mde"][0])
+        assert bool(table["size_controlled"][0]) is True
 
     def test_only_the_failing_rows_are_blank(self, panel, cs):
         diagnosis = _diagnose(panel, [cs], n_simulations=60, n_treated=4)
@@ -571,7 +594,7 @@ class TestLostReplicates:
         monkeypatch.setattr(CallawaySantAnna, "fit", flaky)
         diagnosis = _diagnose(panel, [cs], n_simulations=40)
         monkeypatch.undo()
-        null = diagnosis.results["CallawaySantAnna"][0]
+        null = diagnosis.power_results["CallawaySantAnna"][0]
         assert null.n_simulation_failures > 0.1 * 40
         surface = diagnosis.event_study_results["CallawaySantAnna"]
         draws, n_lost = design_module._placebo_draw_record(surface)
@@ -724,6 +747,9 @@ class TestRefusals:
             lambda: honest.fit(cs_surface),
             lambda: honest.sensitivity_analysis(cs_surface),
             lambda: honest.breakdown_value(cs_surface),
+            # The diagnosis itself gets the same pointer, not a generic error.
+            lambda: honest.fit(cs_diagnosis),
+            lambda: honest.sensitivity_analysis(cs_diagnosis),
         ):
             with pytest.raises(ValueError, match="HonestDiD.power_by_M"):
                 call()
@@ -787,7 +813,7 @@ class TestWarningsAndContract:
         plain = _diagnose(panel, [cs], event_study=False)
         assert plain.summary() != ""
         for with_draws, without in zip(
-            cs_diagnosis.results["CallawaySantAnna"], plain.results["CallawaySantAnna"]
+            cs_diagnosis.power_results["CallawaySantAnna"], plain.power_results["CallawaySantAnna"]
         ):
             assert with_draws.power == without.power
             assert with_draws.mean_estimate == without.mean_estimate
