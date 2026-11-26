@@ -2211,8 +2211,16 @@ def _fit_ts(est, data, **kw):
         )
 
 
-def _assert_results_bit_equal(r0, r1):
-    """Assert two TwoStageDiDResults are numerically identical (NaN-aware).
+# The two fits compared by ``_assert_results_match`` run the same code path, so
+# they agree to floating-point roundoff. They are NOT guaranteed bit-identical:
+# two runs of the same BLAS-backed linear algebra can differ in the last bit
+# (seen on the macOS CI legs). 1e-12 relative is about four orders of magnitude
+# above that noise and far below anything a change of code path would produce.
+_NOOP_RTOL = 1e-12
+
+
+def _assert_results_match(r0, r1):
+    """Assert two TwoStageDiDResults agree to roundoff (NaN-aware).
 
     Bootstrapped fits materialize the percentile ``event_study_effects`` /
     ``group_effects`` at fit time, so those legacy fields are compared
@@ -2220,11 +2228,11 @@ def _assert_results_bit_equal(r0, r1):
     ``aggregate()`` containers are compared instead.
     """
 
-    def _eq(a, b):
-        return a == b or (np.isnan(a) and np.isnan(b))
+    def _close(a, b, msg=""):
+        np.testing.assert_allclose(a, b, rtol=_NOOP_RTOL, atol=0.0, equal_nan=True, err_msg=msg)
 
-    assert _eq(r0.att, r1.att)
-    assert _eq(r0.se, r1.se)
+    _close(r0.att, r1.att, "att differs")
+    _close(r0.se, r1.se, "se differs")
     assert (r0.bootstrap_results is None) == (r1.bootstrap_results is None)
     if r0.bootstrap_results is not None:
         for attr in ("event_study_effects", "group_effects"):
@@ -2234,7 +2242,7 @@ def _assert_results_bit_equal(r0, r1):
             assert set(e0) == set(e1)
             for k in e0:
                 for f in ("effect", "se"):
-                    assert _eq(e0[k][f], e1[k][f]), f"{attr}[{k}][{f}] differs"
+                    _close(e0[k][f], e1[k][f], f"{attr}[{k}][{f}] differs")
         return
     for attr in ("event_study_effects", "group_effects"):
         assert getattr(r0, attr) is None and getattr(r1, attr) is None
@@ -2247,10 +2255,8 @@ def _assert_results_bit_equal(r0, r1):
         labels = "event_time" if level == "event_study" else "label"
         np.testing.assert_array_equal(getattr(c0, labels), getattr(c1, labels))
         for f in ("att", "se"):
-            # Exact (NaN-aware) equality: vcov_type="hc1" is a pure no-op.
-            np.testing.assert_array_equal(
-                getattr(c0, f), getattr(c1, f), err_msg=f"{level}.{f} differs"
-            )
+            # vcov_type="hc1" is a no-op: equal to roundoff, NaN in the same places.
+            _close(getattr(c0, f), getattr(c1, f), f"{level}.{f} differs")
 
 
 def _assert_full_bootstrap_nan(r):
@@ -2392,46 +2398,58 @@ class TestTwoStageDiDVcovType:
         assert r.cluster_name is None
         assert r.n_clusters is None
 
-    # ---- bit-equality regression guards (vcov_type='hc1' is a pure no-op) ----
+    # ---- no-op regression guards: vcov_type='hc1' changes nothing beyond roundoff ----
 
-    def test_default_path_bit_equal(self):
+    def test_default_path_is_a_no_op(self):
         data = generate_test_data(n_units=80, seed=10)
         r0 = _fit_ts(TwoStageDiD(), data)
         r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data)
-        _assert_results_bit_equal(r0, r1)
+        _assert_results_match(r0, r1)
 
-    def test_cluster_path_bit_equal(self):
+    def test_cluster_path_is_a_no_op(self):
         data = generate_test_data(n_units=80, seed=11)
         data["st"] = data["unit"] % 7
         r0 = _fit_ts(TwoStageDiD(cluster="st"), data)
         r1 = _fit_ts(TwoStageDiD(cluster="st", vcov_type="hc1"), data)
-        _assert_results_bit_equal(r0, r1)
+        _assert_results_match(r0, r1)
 
-    def test_tsl_survey_path_bit_equal(self):
+    def test_tsl_survey_path_is_a_no_op(self):
         data, _ = _add_survey_cols(generate_test_data(n_units=80, seed=12))
         design = SurveyDesign(weights="w")
         r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
         r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
-        _assert_results_bit_equal(r0, r1)
+        _assert_results_match(r0, r1)
 
-    def test_replicate_survey_path_bit_equal(self):
+    def test_replicate_survey_path_is_a_no_op(self):
         data, rep_cols = _add_survey_cols(generate_test_data(n_units=80, seed=13))
         design = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
         r0 = _fit_ts(TwoStageDiD(), data, survey_design=design)
         r1 = _fit_ts(TwoStageDiD(vcov_type="hc1"), data, survey_design=design)
-        _assert_results_bit_equal(r0, r1)
+        _assert_results_match(r0, r1)
 
-    def test_bootstrap_path_bit_equal(self):
+    def test_bootstrap_path_is_a_no_op(self):
         data = generate_test_data(n_units=80, seed=14)
         r0 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99), data)
         r1 = _fit_ts(TwoStageDiD(n_bootstrap=199, seed=99, vcov_type="hc1"), data)
-        _assert_results_bit_equal(r0, r1)
+        _assert_results_match(r0, r1)
         b0, b1 = r0.bootstrap_results, r1.bootstrap_results
-        assert b0.overall_att_se == b1.overall_att_se
-        if b0.event_study_ses:
-            assert b0.event_study_ses == b1.event_study_ses
-        if b0.group_ses:
-            assert b0.group_ses == b1.group_ses
+        np.testing.assert_allclose(
+            b0.overall_att_se, b1.overall_att_se, rtol=_NOOP_RTOL, atol=0.0, equal_nan=True
+        )
+        for field in ("event_study_ses", "group_ses"):
+            d0, d1 = getattr(b0, field), getattr(b1, field)
+            assert bool(d0) == bool(d1), field
+            if d0:
+                assert set(d0) == set(d1), field
+                for key in d0:
+                    np.testing.assert_allclose(
+                        d0[key],
+                        d1[key],
+                        rtol=_NOOP_RTOL,
+                        atol=0.0,
+                        equal_nan=True,
+                        err_msg=f"{field}[{key}] differs",
+                    )
 
     # ---- cluster + replicate rejection ----
 
