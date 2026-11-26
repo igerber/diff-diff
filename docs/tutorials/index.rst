@@ -292,8 +292,8 @@ Assess identifying assumptions and size your study before committing to it.
       :link: 04_parallel_trends
       :link-type: doc
 
-      Assess pre-treatment evidence relevant to parallel trends, check
-      test power, and run the full diagnostic suite.
+      Assess pre-treatment evidence relevant to parallel trends: trend
+      and equivalence tests, placebos, and event-study pre-periods.
 
    .. grid-item-card:: Honest DiD Sensitivity
       :link: 05_honest_did

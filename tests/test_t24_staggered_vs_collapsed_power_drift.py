@@ -37,8 +37,6 @@ Structure (mirrors T25's split):
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pytest
 
@@ -91,27 +89,23 @@ def collapse_2x2(panel, rollout_start, tail_start=None):
 
 
 def fit_2x2(panel, rollout_start, tail_start=None):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        r = DifferenceInDifferences(cluster="unit").fit(
-            collapse_2x2(panel, rollout_start, tail_start),
-            outcome="outcome",
-            treatment="treated",
-            post="post",
-        )
+    r = DifferenceInDifferences(cluster="unit").fit(
+        collapse_2x2(panel, rollout_start, tail_start),
+        outcome="outcome",
+        treatment="treated",
+        post="post",
+    )
     return r.att, r.se, r.conf_int, bool(r.p_value < 0.05)
 
 
 def fit_cs(panel):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        r = CallawaySantAnna(control_group="never_treated").fit(
-            panel,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-        )
+    r = CallawaySantAnna(control_group="never_treated").fit(
+        panel,
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+    )
     return r.att, r.se, r.conf_int, bool(r.p_value < 0.05)
 
 
@@ -233,7 +227,10 @@ def test_rendered_surface_quotes():
             "~60% of the true lift",
             "0.800",  # 2x2 coverage, fast (4.0 df_convention flip: t(G-1) CIs; was 0.796)
             "0.004",  # 2x2 coverage, slow ("almost never")
-            "0.924",  # CS coverage, fast (~95% regardless of speed)
+            "0.924",  # CS coverage, fast
+            "0.960",  # CS coverage, moderate
+            "0.928",  # CS coverage, slow
+            "92% to 96% of the time at every speed",
             "~81%",  # "2x2 reports ~81% of CS's number"
             # Section 2 headline: paired power + the MDE crossover prose
             "2x2 power = 0.89",  # 4.0 df_convention flip (was 0.90 under residual df)
@@ -257,6 +254,13 @@ def test_headline_claims_present_in_prose():
     assert "diluted" in md, "dilution framing dropped from the narrative"
     assert "near parity" in md, "MDE near-parity / crossover claim dropped"
     assert "MDE" in md and "staggered" in md
+    # CS's target is named by the live attribute, and the units of the MDE are stated
+    assert "(`results.att`)" in md
+    assert "the MDE here is the size of the at-launch lift" in md
+    # the simulate_* helpers are described as they behave: same seed and generator give
+    # the same panels; the built-in generator differs by estimator family
+    assert "draw independently per estimator" not in md
+    assert "passing one shared `data_generator` to both calls" in md
 
 
 def test_notebook_kwargs_match():
@@ -285,8 +289,12 @@ def test_notebook_kwargs_match():
         "effect_growth=growth",
         'DifferenceInDifferences(cluster="unit")',
         'CallawaySantAnna(control_group="never_treated")',
+        "plot_event_study(",
+        'res_cs.aggregate("event_study")',
     ):
         assert needle in src, f"notebook drifted from locked config: {needle!r}"
+    # the fits are warning-free, so nothing is suppressed
+    assert "warnings" not in src
 
 
 # --------------------------------------------------------------------------- #
