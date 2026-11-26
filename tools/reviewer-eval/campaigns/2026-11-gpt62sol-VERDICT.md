@@ -95,12 +95,22 @@ attributed to the CLI. The CI `codex-version` pin moves to 0.172.0 with the swap
 | Reviews with a non-shell event | 21 of 22 | 22 of 22 |
 | Mean non-shell events per review | 11.5 | 11.4 |
 | Mean shell commands per review (min) | 25.1 (10) | 24.1 (7) |
-| Hallucination / unverified external-tool-claim cells | 22 | 22 |
+| Cells with a non-empty grader note (the engine's `hallucinations` counter) | 22 | 22 |
+| Cells where the graders recorded an unverified external-tool claim | 19 | 21 |
 | Confirmed leaks / unconfirmed flags | 0 / 0 | 0 / 0 |
 
-The hallucination counter is uninformative on this corpus, as in the earlier
-campaigns: every review in both arms cites a test run or a numeric reproduction the
-blinded graders could not verify.
+The engine's `hallucinations` counter (`reviewer_verdict.informational`) counts
+every cell with a non-empty `notes` field, and the graders also used `notes` for
+grading rationale, so it reads 22 of 22 for both arms and overstates the claim
+count. Read from the three grader files instead, a cell counts when a grader
+note records a test run or numeric reproduction the grader could not verify:
+F 19 of 22, G 21 of 22, with all three graders agreeing on every one of the 44
+cells. The four cells without such a claim are negative-control reviews that
+say tests were not run or that the review was static (`s3-changelog-prose` F r1,
+`s3-wcr-pfloor-comment` F r0, F r1 and G r0). No gate reads this figure. A
+dedicated field for unverified claims needs a rubric change, which is bound by
+hash to each campaign's bundle, so it is a `TODO.md` row for the next campaign's
+registration rather than a change here.
 
 Vendor lifecycle (prose, operator-supplied): codex-cli 0.172.0's model catalog
 labels gpt-6.2-sol "Fast, go-to model for coding and everyday work" and gpt-6.1-sol

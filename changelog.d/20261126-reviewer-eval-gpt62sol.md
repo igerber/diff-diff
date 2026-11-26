@@ -1,14 +1,18 @@
 ### Changed
 - **AI review surfaces move to gpt-6.2-sol on codex-cli 0.172.0**: the CI PR
   reviewer (`.github/workflows/ai_pr_review.yml`), the `/ai-review-local` default
-  (`openai_review.DEFAULT_MODEL`) and the plan-review dual engine's codex half now
-  run gpt-6.2-sol @ xhigh, after reviewer-eval campaign 3 returned a mechanical
+  model for both of its backends (`openai_review.DEFAULT_MODEL`) and the
+  plan-review dual engine's codex half now use gpt-6.2-sol. The `xhigh` reasoning
+  effort is pinned on the codex invocations (CI, the local codex backend,
+  plan review); the local Responses API backend sets no effort and is not the
+  validated path. This follows reviewer-eval campaign 3, which returned a mechanical
   GO against gpt-6.1-sol (6 vs 5 reliably caught bugs of 10, no regression, no
   false positive on the negative controls, one judgment flag;
   `tools/reviewer-eval/campaigns/2026-11-gpt62sol-VERDICT.md`). gpt-6.2-sol is not
   reachable on codex-cli 0.162.1, so the CI `codex-version` pin and the harness
   pin move to 0.172.0 together; a local codex CLI older than that cannot run the
-  new default. The plan-review surface carries the model over without a
+  new default (the local script and the plan-review helper now say so when the
+  model is rejected). The plan-review surface carries the model over without a
   plan-review campaign, as in 2026-10.
 - **`/ai-review-local` no longer tells the codex reviewer it has no shell
   access**: the local prompt adaptation replaced the criteria's `grep` directive

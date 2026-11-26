@@ -205,8 +205,13 @@ verbatim, then the contents of `<work_dir>/review_a.md`:
 ```
 > ⚠ **codex unavailable — SINGLE-Claude fallback.** This is the un-validated
 > weak arm (Campaign 1, measured with gpt-5.6-sol: caught 1/9 hard plan defects vs 7/9 for the dual
-> engine). Run `codex login` and re-review for full coverage.
+> engine). Check `codex_review.py`'s stderr for the cause: run `codex login` if codex is not
+> logged in, or upgrade the codex CLI to 0.172.0 or newer if it rejected the model. Then
+> re-review for full coverage.
 ```
+
+The codex half is verified on codex-cli 0.172.0; 0.162.1 rejects the pinned model
+(`model_not_found`), which lands here as exit 3 with an upgrade message on stderr.
 
 The review still persists and gates normally.
 

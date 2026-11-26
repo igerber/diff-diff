@@ -248,7 +248,7 @@ class CodexReviewer:
 
     def experiment_tag(self, config: Config) -> str:
         """Opaque identity = sha(model, effort, sandbox, action_version, cli, prompt,
-        backend).
+        backend, isolated codex config).
 
         Everything that defines the experiment beyond case/config/repeat. Two
         configs sharing id "B" but differing in model (or any of these) get
@@ -257,6 +257,10 @@ class CodexReviewer:
         ``call_codex``) so editing HOW codex is run busts the cache too — not only
         edits to the model, prompt, or declared config. ``action_version`` is folded
         in so changing the documented confound can never silently resume a stale run.
+        The last term hashes ``ISOLATED_CONFIG_TOML``, the config every harness
+        codex call runs under: it decides the reviewer's tool surface (e.g.
+        ``[features] apps``), so a settings-only change must not resume reviews
+        produced with different connector access. Read at call time, not cached.
         """
         raw = "|".join(
             [
@@ -267,6 +271,7 @@ class CodexReviewer:
                 self.cli_version(),
                 self.base_prompt_sha,
                 self.backend_contract_sha,
+                hashlib.sha256(ISOLATED_CONFIG_TOML.encode("utf-8")).hexdigest()[:16],
             ]
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]

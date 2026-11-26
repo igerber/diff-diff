@@ -708,6 +708,27 @@ def test_experiment_tag_differs_when_backend_wrapper_changes(monkeypatch):
     ), "a codex-wrapper change must yield a distinct experiment tag"
 
 
+def test_experiment_tag_differs_when_only_the_isolated_codex_config_changes(monkeypatch):
+    """The isolated home's config.toml sets the reviewer's tool surface. Toggling
+    ONLY `apps` (same model/effort/sandbox/prompt/cli/wrapper) must yield a
+    distinct tag, so a resumed matrix cannot reuse reviews produced with different
+    connector access."""
+    from adapters import codex_reviewer as cr
+    from eval_core.models import Config
+
+    r = _make_reviewer(monkeypatch)
+    cfg = Config(id="B", model="gpt-5.4")
+    tag_apps_off = r.experiment_tag(cfg)
+    assert "apps = false" in cr.ISOLATED_CONFIG_TOML
+    monkeypatch.setattr(
+        cr, "ISOLATED_CONFIG_TOML", cr.ISOLATED_CONFIG_TOML.replace("apps = false", "apps = true")
+    )
+    tag_apps_on = r.experiment_tag(cfg)
+    assert tag_apps_on != tag_apps_off
+    monkeypatch.undo()
+    assert _make_reviewer(monkeypatch).experiment_tag(cfg) == tag_apps_off  # deterministic
+
+
 def test_resume_reruns_when_backend_wrapper_changes(monkeypatch):
     """A cached run must NOT be resumed once the codex-invocation wrapper changed,
     even when the case/config and the built prompt are byte-identical.

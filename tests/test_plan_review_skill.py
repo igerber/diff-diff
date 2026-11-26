@@ -394,6 +394,49 @@ def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
     assert not out.exists()
 
 
+def test_codex_review_model_rejection_says_upgrade_not_login(tmp_path, monkeypatch, capsys):
+    """An older codex CLI rejects the pinned model. The helper still exits 3 (loud
+    fallback), but its stderr must name the fix that applies HERE: upgrade the
+    CLI and re-run. `codex login` does not help, and there is no --model override."""
+    cr = _load_codex_review()
+    fake = _FakeOpenAIReview()
+    fake.MIN_CODEX_CLI_FOR_DEFAULT_MODEL = "9.9.9"  # type: ignore[attr-defined]
+    hint = "Hint: this codex CLI or login does not serve 'm'. The default model needs ..."
+
+    def rejected(**_kw):
+        raise RuntimeError("codex exec failed (exit 1):\nERROR: {...}\n" + hint)
+
+    fake.call_codex = rejected  # type: ignore[method-assign]
+    monkeypatch.setattr(cr, "_load_openai_review", lambda repo_root: fake)
+    monkeypatch.setattr(cr, "_codex_present", lambda mod: True)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("x")
+    out = tmp_path / "review_b.md"
+
+    rc = cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)])
+
+    err = capsys.readouterr().err
+    assert rc == 3 and not out.exists()
+    assert "Upgrade it to codex-cli >= 9.9.9" in err and cr.CODEX_MODEL in err
+    assert "no --model override" in err and "re-run the dual plan review" in err
+
+    # An unrelated failure gets no upgrade advice.
+    def boom(**_kw):
+        raise RuntimeError("codex exec failed (exit 1):\nstream error")
+
+    fake.call_codex = boom  # type: ignore[method-assign]
+    assert (
+        cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)]) == 3
+    )
+    assert "Upgrade it" not in capsys.readouterr().err
+    # The helper recognises the rejection by call_codex's hint text: keep the two
+    # in step, and keep the fallback warning's advice in SKILL.md.
+    script = (_REPO / ".claude" / "scripts" / "openai_review.py").read_text()
+    assert "Hint: this codex CLI or login does not serve" in script
+    skill = (_REPO / ".claude" / "skills" / "plan-review" / "SKILL.md").read_text()
+    assert "upgrade the codex CLI to 0.172.0 or newer" in skill
+
+
 # --------------------------------------------------------------------------- #
 # Round-2 AI-review lifecycle contracts (SKILL.md is agent-executed prose, so
 # these assert the corrected instructions are present — the code-level parts

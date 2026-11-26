@@ -10,7 +10,12 @@ through to the LOUD single-Claude fallback without wedging the gate:
 
   0  codex review written to --output
   2  codex unavailable (not installed / not logged in)
-  3  codex timed out or errored
+  3  codex timed out or errored (including an old codex CLI rejecting the model)
+
+The pinned model needs codex-cli >= openai_review.MIN_CODEX_CLI_FOR_DEFAULT_MODEL
+(0.172.0 is the version it was verified on; 0.162.1 rejects it). On that
+rejection this helper says to UPGRADE the CLI and re-run the dual review: it has
+no --model override, and logging in again does not help.
 
 Both non-zero exits are treated identically by SKILL.md (loud fallback).
 """
@@ -83,6 +88,12 @@ def _codex_present(mod) -> bool:
     return bool(shutil.which("codex")) and os.path.exists(mod.CODEX_AUTH_PATH)
 
 
+def _is_model_rejection(message: str) -> bool:
+    """True when ``call_codex`` reported codex's model-rejection record (it then
+    appends its upgrade hint; see openai_review.call_codex)."""
+    return "Hint: this codex CLI or login does not serve" in message
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--prompt-file", required=True, help="rendered reviewer prompt")
@@ -120,6 +131,17 @@ def main(argv=None) -> int:
         )
     except Exception as exc:
         print(f"codex: review failed or timed out ({type(exc).__name__}: {exc})", file=sys.stderr)
+        if _is_model_rejection(str(exc)):
+            # call_codex's own hint offers `--model`, which this helper does not
+            # expose (the model is a production pin), so say what applies here.
+            print(
+                f"codex: the installed codex CLI does not serve the pinned model "
+                f"{CODEX_MODEL!r}. Upgrade it to codex-cli >= "
+                f"{getattr(mod, 'MIN_CODEX_CLI_FOR_DEFAULT_MODEL', '0.172.0')} "
+                f"(`codex --version`), then re-run the dual plan review. Logging in "
+                f"again will not help, and plan review has no --model override.",
+                file=sys.stderr,
+            )
         return 3
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(review)
