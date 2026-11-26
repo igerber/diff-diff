@@ -171,10 +171,12 @@ class StackedDiD(BaseEstimator):
         the share ``pi_a`` with which sub-experiment ``a`` enters the aggregate
         ``sum_a pi_a ATT(a, a+e)``, and both the treated and the control rows
         are weighted so that each arm carries that share:
+
         - "aggregate": share of treated units (trimmed aggregate ATT; treated
           rows have Q = 1)
         - "population": share of the treated units' population
         - "sample_share": share of all units (treated plus clean controls)
+
         Under ``survey_design=`` the shares are formed from survey-weighted
         unit masses.
     control_group : str, default="not_yet_treated"
