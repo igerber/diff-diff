@@ -1,0 +1,79 @@
+{
+  "pass1": {
+    "pass": 1,
+    "rulings": [
+      {
+        "case": "s4-cs-unbalanced-nan-outcome",
+        "bug_id": "s4-cs-unbalanced-nan-outcome:b1",
+        "arm": "M2",
+        "repeat": 1,
+        "verdict": "partial",
+        "evidence": "**P0:** Routing unbalanced panels through covariate outcome regression exposes an incorrectly scaled influence function.",
+        "leak": "none",
+        "leak_evidence": "",
+        "reason": "The ground-truth defect is that the unbalanced-panel routing detection in diff_diff/staggered.py (symbol _is_unbalanced_panel, lines 1865-1890) counts rows that are present but carry a missing/non-finite outcome as observed, so a panel unbalanced only through NaN outcomes takes the wrong estimation path. This review's only substantive finding is a different defect: double division of the control nuisance term in the covariate outcome-regression influence function, located at diff_diff/staggered.py:L2211-L2221 (the new routing call) and L4187-L4216 (_outcome_regression_rc). Nothing in the review mentions missing or non-finite outcomes, row-presence balance detection, or lines 1865-1890, so it is not a catch. The rubric defines partial as 'right file or right class of defect, wrong defect or wrong location' and the review does raise a defect in the same file (diff_diff/staggered.py) on the same new allow_unbalanced_panel route, which is the right-file / wrong-defect / wrong-location case; missed is the residual category for a review that offers neither the right file nor the right class. The rubric also asks that such a cell be graded partial 'so the record shows why'. Partial counts as missed for every gate, so the ruling does not change any gate outcome."
+      }
+    ]
+  },
+  "pass2": {
+    "pass": 2,
+    "leak_rulings": [
+      {"case": "s1-coef-dict-collision", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. Claims test runs and an in-memory restore of the guard (unverifiable tool runs, not a leak criterion)."},
+      {"case": "s1-coef-dict-collision", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. Unverifiable test-run claims only."},
+      {"case": "s1-coef-dict-collision", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s1-coef-dict-collision", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+
+      {"case": "s1-cs-dr-plugin-se", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. The GitHub URL containing blob/master is a web link target in prose, not a git command or code span. Cites the worktree's REGISTRY.md note about the earlier ddof=1 discrepancy, which is a repository file, not a confirmation criterion."},
+      {"case": "s1-cs-dr-plugin-se", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+      {"case": "s1-cs-dr-plugin-se", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+      {"case": "s1-cs-dr-plugin-se", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+
+      {"case": "s2-acrt-single-dose", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-acrt-single-dose", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+      {"case": "s2-acrt-single-dose", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-acrt-single-dose", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+
+      {"case": "s2-cic-practitioner-screen", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "One markdown link target (the Melly-Santangelo paper review link) is an absolute path under tools/reviewer-eval/runs/.worktrees/<49-character leaf>/docs/methodology/papers/. It is a link target in prose, not a code span, and a path under the reviewer's own worktree is never a trigger under the rubric. It points at a repository doc inside that worktree, not at a sibling run artifact, inject.diff, case.json or the corpus directory. No confirmation criterion met."},
+      {"case": "s2-cic-practitioner-screen", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. States it relied on the repository's docs/methodology/papers review file, which is a repository file in its own checkout."},
+      {"case": "s2-cic-practitioner-screen", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-cic-practitioner-screen", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. The review labels its own findings M1/M2/M3; that is the review's internal numbering, unrelated to the arm labels."},
+
+      {"case": "s2-had-cluster-guard", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-had-cluster-guard", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-had-cluster-guard", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s2-had-cluster-guard", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+
+      {"case": "s2-nan-dof-fail-closed", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. A raw.githubusercontent.com URL containing /main/ is a web link target for a third-party package, not a git command naming the main ref."},
+      {"case": "s2-nan-dof-fail-closed", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. /main/ and /master/ appear only inside third-party web link targets."},
+      {"case": "s2-nan-dof-fail-closed", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+      {"case": "s2-nan-dof-fail-closed", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a web link target."},
+
+      {"case": "s3-changelog-prose", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s3-changelog-prose", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. Says 'The prior attribution concern is resolved' without naming a source; a re-review framing in prose, with no commit message, other ref or run artifact cited, so no confirmation criterion is met."},
+      {"case": "s3-changelog-prose", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. Refers to a 'prior P3 attribution concern' being resolved without naming a source; no confirmation criterion met."},
+      {"case": "s3-changelog-prose", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. Refers to 'the prior wording issue' without naming a source; no confirmation criterion met."},
+
+      {"case": "s3-wcr-pfloor-comment", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s3-wcr-pfloor-comment", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "The only git command in a code span is `git diff --check`, which contains no marker-list entry and names no ref. The statement that the parent and PR versions of the file have identical abstract syntax trees compares the diff's own base and head, which is not a reach to other refs. Not a flag, no confirmation criterion met."},
+      {"case": "s3-wcr-pfloor-comment", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s3-wcr-pfloor-comment", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+
+      {"case": "s4-cs-unbalanced-nan-outcome", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master and versioned blob paths appear only inside third-party web link targets."},
+      {"case": "s4-cs-unbalanced-nan-outcome", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside third-party web link targets."},
+      {"case": "s4-cs-unbalanced-nan-outcome", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s4-cs-unbalanced-nan-outcome", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. blob/master appears only inside a third-party web link target."},
+
+      {"case": "s4-lpdid-survey-unreduced-design", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. Wording overlaps the ground-truth rationale only through code fragments such as `design @ coef`, which never count."},
+      {"case": "s4-lpdid-survey-unreduced-design", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. No verbatim 12-word prose sentence from the rationale; the shared `response - design @ coef` fragment is code from the diff."},
+      {"case": "s4-lpdid-survey-unreduced-design", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block."},
+      {"case": "s4-lpdid-survey-unreduced-design", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span; no fenced block. 'discards those residuals and evaluates `design @ coef`' paraphrases the rationale but is not a verbatim 12-word sentence."},
+
+      {"case": "s4-wcr-saturated-guard-order", "arm": "M1", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. Mentions 'the earlier review findings' without naming a source; re-review framing only, no confirmation criterion met."},
+      {"case": "s4-wcr-saturated-guard-order", "arm": "M1", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "No marker in any code span. Says 'Prior degeneracy finding remains open' without naming a source; re-review framing only, no confirmation criterion met."},
+      {"case": "s4-wcr-saturated-guard-order", "arm": "M2", "repeat": 0, "leak": "none", "leak_evidence": "", "note": "Contains two fenced Python blocks (numpy reproducers calling wild_bootstrap_se). Both scanned in full: no marker-list entry and no git command."},
+      {"case": "s4-wcr-saturated-guard-order", "arm": "M2", "repeat": 1, "leak": "none", "leak_evidence": "", "note": "Contains one fenced Python block (numpy reproducer calling wild_bootstrap_se). Scanned in full: no marker-list entry and no git command. Mentions 'previously reported' fixes without naming a source; no confirmation criterion met."}
+    ],
+    "grade_corrections": [],
+    "s3_corrections": []
+  }
+}

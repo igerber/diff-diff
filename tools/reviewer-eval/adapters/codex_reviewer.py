@@ -45,15 +45,28 @@ from adapters import ci_prompt, worktree
 from adapters.openai_review_loader import load_openai_review
 
 # The ONE source of the isolated codex home's config.toml (the step-0 probes
-# write the same constant into their temp home). Exactly the two keys CI's
-# codex-action also sets (`ai_pr_review.yml`: sandbox + safety-strategy): no
-# `[features]` table, no MCP servers, no hooks, no memories, no `notify`, so
-# codex's DEFAULT tool surface applies, as it does in CI. The user's live
-# `~/.codex/config.toml` (MCP servers, warp hooks, a memories store) would
+# write the same constant into their temp home). The two keys CI's
+# codex-action also sets (`ai_pr_review.yml`: sandbox + safety-strategy), plus
+# ONE feature switch: no MCP servers, no hooks, no memories, no `notify`, so
+# codex's DEFAULT tool surface applies otherwise, as it does in CI. The user's
+# live `~/.codex/config.toml` (MCP servers, warp hooks, a memories store) would
 # otherwise give the reviewer data channels that leave no shell `exec` event
 # for the session-log audit to see, and make the local arms an unfaithful
 # proxy for the CI home.
-ISOLATED_CONFIG_TOML = 'sandbox_mode = "read-only"\napproval_policy = "never"\n'
+#
+# `apps = false` (2026-11-26, campaign 3, user decision): the harness
+# authenticates with the ChatGPT-account credential, which carries the
+# account's app connectors (`codex_apps/...`), while CI authenticates with an
+# API key and is taken to have none (an inference from the auth mode; not run
+# under an API key locally). In the campaign-3 off-corpus probes gpt-6.2-sol
+# called the GitHub connector (24 `github.fetch_file` calls in one review, one
+# `github.fetch_pr_comments` in another), a channel that reads the PUBLISHED
+# repository rather than the case worktree. Disabling it for every arm removes
+# that CI-divergent channel; one probe with the switch showed no `codex_apps`
+# event. Web search stays on (CI parity).
+ISOLATED_CONFIG_TOML = (
+    'sandbox_mode = "read-only"\napproval_policy = "never"\n\n[features]\napps = false\n'
+)
 
 # Path of the live isolated home while `isolated_codex_home()` is active, else
 # None. `review()` records `codex_home_isolated` from it; `run_eval` writes it
@@ -170,7 +183,9 @@ class CodexReviewer:
 
     # Efforts this reviewer will actually execute. `xhigh` verified 2026-10-16
     # on codex-cli 0.162.1 (gpt-5.6-sol by harness smoke, gpt-6-astra by a
-    # `codex exec` probe with the exact argv `_build_codex_cmd` emits). `max`
+    # `codex exec` probe with the exact argv `_build_codex_cmd` emits) and
+    # 2026-11-26 on codex-cli 0.172.0 (gpt-6.1-sol by harness smoke,
+    # gpt-6.2-sol by a `codex exec` probe of the same argv shape). `max`
     # verified only on codex-cli 0.144.5 (2026-07-18, gpt-5.5 / gpt-5.6-sol /
     # gpt-5.6-terra; invalid levels 400 with an enum error, so accepted ==
     # executed) and retained UNVERIFIED on the current pin. `ultra` (observed

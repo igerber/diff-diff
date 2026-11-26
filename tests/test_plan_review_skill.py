@@ -168,7 +168,7 @@ def test_reviewer_invocations_are_pinned():
     byte-match silently. The codex pins live at the real `call_codex` site
     (`codex_review.py`); the Claude subagent model pin lives in SKILL.md."""
     codex = (_SKILL / "codex_review.py").read_text()
-    assert 'CODEX_MODEL = "gpt-6.1-sol"' in codex
+    assert 'CODEX_MODEL = "gpt-6.2-sol"' in codex
     assert 'CODEX_EFFORT = "xhigh"' in codex
     # The ceiling EQUALS the code-review harness's CALL_TIMEOUT_S (read with a
     # regex: codex_reviewer.py imports eval_core/adapters, which this file's
@@ -355,7 +355,7 @@ def test_codex_review_forwards_pins_and_prints_sensitive_notice(tmp_path, monkey
     assert len(fake.codex_calls) == 1
     call = fake.codex_calls[0]
     assert call["prompt"] == "RENDERED PROMPT"
-    assert call["model"] == cr.CODEX_MODEL == "gpt-6.1-sol"
+    assert call["model"] == cr.CODEX_MODEL == "gpt-6.2-sol"
     assert call["effort"] == cr.CODEX_EFFORT == "xhigh"
     assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 3600.0
 

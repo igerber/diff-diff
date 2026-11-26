@@ -867,7 +867,8 @@ def apply_token_budget(
 # estimate_cost does not model).
 # Source: https://developers.openai.com/api/docs/pricing
 # MAINTENANCE: Update when OpenAI changes pricing. The gpt-5.6-* and gpt-6-*
-# rows were verified 2026-10-15; older rows are unchanged since their last check.
+# rows were verified 2026-10-15 and the gpt-6.2-sol row on 2026-11-26; older
+# rows are unchanged since their last check.
 PRICING = {
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-pro": (30.00, 180.00),
@@ -879,6 +880,7 @@ PRICING = {
     "gpt-6-astra": (10.00, 50.00),
     "gpt-6-sol": (2.00, 10.00),
     "gpt-6.1-sol": (2.00, 10.00),
+    "gpt-6.2-sol": (2.00, 10.00),
     "gpt-6-luna": (0.10, 0.50),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
@@ -931,15 +933,6 @@ _SUBSTITUTIONS = [
         "If the PR fixes a pattern bug",
         "If the changes fix a pattern bug",
     ),
-    # Strip the shell-only `grep` directive — the local Responses API path
-    # has no shell access and would either hallucinate having run grep or
-    # silently skip the check. Replace with a static-context directive that
-    # scopes the check to the loaded source files.
-    (
-        '   - Command to check: `grep -n "pattern" diff_diff/*.py`',
-        "   - Verify by inspecting the loaded source files (no shell access "
-        "in this path; do not claim to have run `grep`)",
-    ),
     (
         "the PR has prior AI review comments",
         "there is a previous review",
@@ -963,15 +956,39 @@ _SUBSTITUTIONS = [
     ),
 ]
 
+# API-backend-only substitution: strip the shell-only `grep` directive. The
+# Responses API path has no shell access and would either hallucinate having run
+# grep or silently skip the check, so the directive is replaced with a
+# static-context one scoped to the loaded source files. The CODEX backend DOES
+# have a shell and keeps the original directive: until 2026-11 this substitution
+# was applied to both backends, so the codex prompt told an agentic reviewer it
+# had "no shell access". gpt-6.1-sol ignored that; gpt-6.2-sol obeyed it (zero
+# shell commands in 3 of 3 off-corpus probes on merged PR #841's diff,
+# codex-cli 0.172.0, reading the published repository through web search or the
+# ChatGPT-account GitHub connector instead, which cannot contain unpushed
+# changes). With the substitution api-only, three probes of the same diff ran
+# 34, 26 and 24 shell commands (one under the reviewer-eval isolated codex
+# home, two under the real home) with no connector call.
+_API_ONLY_SUBSTITUTIONS = [
+    (
+        '   - Command to check: `grep -n "pattern" diff_diff/*.py`',
+        "   - Verify by inspecting the loaded source files (no shell access "
+        "in this path; do not claim to have run `grep`)",
+    ),
+]
 
-def _adapt_review_criteria(criteria_text: str) -> str:
+
+def _adapt_review_criteria(criteria_text: str, shell_access: bool = False) -> str:
     """Adapt the CI PR review prompt for local code-change review framing.
 
-    Applies substitutions from _SUBSTITUTIONS and warns if any don't match,
-    which indicates the source prompt (pr_review.md) has changed.
+    Applies substitutions from _SUBSTITUTIONS (and, when the backend has no
+    shell, _API_ONLY_SUBSTITUTIONS) and warns if any don't match, which
+    indicates the source prompt (pr_review.md) has changed. ``shell_access`` is
+    True for the codex backend, which keeps the prompt's shell directives.
     """
     text = criteria_text
-    for old, new in _SUBSTITUTIONS:
+    substitutions = _SUBSTITUTIONS if shell_access else _SUBSTITUTIONS + _API_ONLY_SUBSTITUTIONS
+    for old, new in substitutions:
         if old not in text:
             print(
                 f"Warning: prompt substitution did not match — source prompt "
@@ -1010,12 +1027,18 @@ def compile_prompt(
     delta_diff_text: "str | None" = None,
     delta_changed_files_text: "str | None" = None,
     structured_findings: "list[dict] | None" = None,
+    shell_access: bool = False,
 ) -> str:
-    """Assemble the full review prompt."""
+    """Assemble the full review prompt.
+
+    ``shell_access`` is True for the codex (agentic) backend, whose prompt keeps
+    the criteria's shell directives; the api backend is single-shot and gets
+    the static-context wording (see _API_ONLY_SUBSTITUTIONS).
+    """
     sections: list[str] = []
 
     # Section 1: Review instructions (adapted from pr_review.md)
-    sections.append(_adapt_review_criteria(criteria_text))
+    sections.append(_adapt_review_criteria(criteria_text, shell_access=shell_access))
 
     # Section 2: Methodology registry
     sections.append("---\n")
@@ -1143,7 +1166,11 @@ def compile_prompt(
 # ---------------------------------------------------------------------------
 
 ENDPOINT = "https://api.openai.com/v1/responses"
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "gpt-6.2-sol"
+# Oldest codex CLI verified to serve DEFAULT_MODEL (0.162.1 rejects gpt-6.2-sol
+# with `model_not_found`; 0.172.0 accepts it; versions in between were not
+# probed). Informational: used for the failure hint in call_codex.
+MIN_CODEX_CLI_FOR_DEFAULT_MODEL = "0.172.0"
 DEFAULT_TIMEOUT = 300  # seconds
 REASONING_TIMEOUT = 900  # seconds
 DEFAULT_MAX_TOKENS = 16384
@@ -1335,11 +1362,12 @@ def _detect_backend(requested: str) -> str:
 
 
 # Reasoning-effort values the codex backend accepts. `xhigh` verified live on
-# codex-cli 0.162.1 (2026-10); minimal/low/medium/high/max are carried over from
-# the codex-cli 0.144.5 / Responses API verification of 2026-07-18 and were not
-# re-verified. `ultra` was observed accepted only on codex-cli 0.153.4 via a
-# ChatGPT login, is not verified on 0.162.1 nor on the API path, and is
-# intentionally excluded.
+# codex-cli 0.162.1 (2026-10) and 0.172.0 (2026-11); minimal/low/medium/high/max
+# are carried over from the codex-cli 0.144.5 / Responses API verification of
+# 2026-07-18 and were not re-verified. `ultra` was observed accepted only on
+# codex-cli 0.153.4 via a ChatGPT login (the 0.172.0 model catalog lists it for
+# the Sol tier but it was not exercised), is not verified on the API path, and
+# is intentionally excluded.
 _CODEX_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -1348,7 +1376,7 @@ def _build_codex_cmd(
 ) -> "list[str]":
     """Construct the argv for `codex exec`.
 
-    Pinned to match the CI Codex action's invocation (gpt-6.1-sol + xhigh effort +
+    Pinned to match the CI Codex action's invocation (gpt-6.2-sol + xhigh effort +
     read-only sandbox) so local reviews give CI-equivalent quality. ``effort``
     defaults to the production/CI value (xhigh) so this argv stays byte-identical
     for production callers; the reviewer-eval harness passes other levels
@@ -1497,6 +1525,13 @@ def call_codex(
                 entries.append("\n".join(current))
                 current = None
                 continue
+            # Known limit (kept on purpose): codex can print a tool event while a
+            # shell command is still running (0.172.0: `web search:` lines between
+            # a start line and its status line), and human-mode stderr gives no
+            # way to tell such a line from a literal line of a multi-line command
+            # (a heredoc may contain `web search: ...`). The entry keeps every
+            # line: over-inclusion can add a stray event line to a command's
+            # recorded text, never hide part of the command from the audit.
             current.append(raw)
             if len(current) >= _ENTRY_CAP:
                 entries.append("\n".join(current) + "\n[truncated]")
@@ -1600,8 +1635,23 @@ def call_codex(
             )
 
         if proc.returncode != 0:
+            hint = ""
+            # Match codex's own error record (`ERROR: {...,"code":"model_not_found",...}`)
+            # and only in the LAST lines of stderr, where codex prints the failure
+            # that ended the run. codex echoes the whole prompt first, and the
+            # prompt can carry the same record verbatim (a reviewed diff, or a
+            # previous review quoting an earlier rejection), so the record's mere
+            # presence earlier in the stream proves nothing about this failure.
+            tail = "\n".join(stderr_buf.getvalue().rstrip().splitlines()[-3:])
+            if re.search(r'^ERROR: \{.*"code"\s*:\s*"model_not_found"', tail, re.MULTILINE):
+                hint = (
+                    f"\nHint: this codex CLI or login does not serve {model!r}. The default "
+                    f"model needs codex-cli >= {MIN_CODEX_CLI_FOR_DEFAULT_MODEL} "
+                    f"(`codex --version`; upgrade with `npm install -g @openai/codex` or your "
+                    f"installer), or pass --model with one your CLI lists."
+                )
             raise RuntimeError(
-                f"codex exec failed (exit {proc.returncode}):\n" f"{stderr_buf.getvalue()}"
+                f"codex exec failed (exit {proc.returncode}):\n" f"{stderr_buf.getvalue()}{hint}"
             )
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             raise RuntimeError(
@@ -2166,6 +2216,7 @@ def main() -> None:
         delta_diff_text=delta_diff_text,
         delta_changed_files_text=delta_changed_files_text,
         structured_findings=structured_findings,
+        shell_access=(backend == "codex"),
     )
 
     est_tokens = estimate_tokens(prompt)

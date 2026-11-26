@@ -1,25 +1,36 @@
-# Pre-Registered Decision Rule: gpt-5.6-sol -> gpt-6.1-sol Reviewer Evaluation (campaign 2)
+# Pre-Registered Decision Rule: gpt-6.1-sol -> gpt-6.2-sol Reviewer Evaluation (campaign 3)
 
-Date: 2026-10-17. Pre-registered in PR #PR1B (frozen at that PR's labeled, CI-green HEAD). The
-candidate arm is NEVER run on the corpus before the campaign: its first corpus
-run is the campaign itself, so pre-registration holds by construction. The
-verdict is computed MECHANICALLY by `run_eval.py verdict` (`reviewer_verdict.py`)
-from the reconciled grading table; this file may not be edited after the
-campaign starts (the campaign's frozen PR-1 HEAD pins it).
+Date: 2026-11-26. Pre-registered on a frozen LOCAL commit (anchors: the local tag
+`campaign-gpt62sol` and the ledger ref `refs/campaign/F-G/frozen`; see "Corpus
+floor and provenance"). The candidate arm is NEVER run on the corpus before the
+campaign: its first corpus run is the campaign itself, so pre-registration holds
+by construction. The verdict is computed MECHANICALLY by `run_eval.py verdict`
+(`reviewer_verdict.py`) from the reconciled grading table; this file may not be
+edited after the campaign starts (the frozen commit pins it).
 
-**Relation to campaign 1 (gpt-6-astra, `campaigns/2026-10-gpt6-DECISION_RULE.md`):**
-campaign 1 is complete (44/44 runs on `225a4afb`, local tag `campaign-gpt6`,
-mechanical DEFINITIVE NO-GO on one regression, accepted by the user on
-2026-10-17; its verdict file lands in PR-2 together with this campaign's).
-This rule is the SAME rule with arm F = gpt-6.1-sol in the candidate seat:
-the gates, definitions, precedence, grading protocol, audit, ledger and stop
-conditions below are unchanged in substance, only the candidate letter and
-model differ. F is judged against a FRESH control sample (B is re-run in the
-new subdir; the campaign-1 B artifacts are never mixed in). Astra's numbers
-are shown next to F's in the verdict file DESCRIPTIVELY only (same corpus,
-same control model, different control sample); no gate compares E and F.
-`REGISTERED_CONTRASTS` keeps `(B, E)` so the campaign-1 ledger records stay
-interpretable; `(B, F)` is the contrast this campaign registers.
+**Relation to campaign 2 (gpt-6.1-sol, `campaigns/2026-10-gpt61sol-DECISION_RULE.md`):**
+campaign 2 is complete (44/44 runs on `e1674c0e`, local tag `campaign-gpt61sol`,
+mechanical DEFINITIVE PARITY, accepted as GO by the user on 2026-10-17, so
+gpt-6.1-sol @ xhigh is production and arm F is the control). This rule is the
+SAME rule with arm F = gpt-6.1-sol in the control seat and arm G = gpt-6.2-sol
+in the candidate seat: the gates, definitions, precedence, grading protocol,
+audit, ledger and stop conditions below are unchanged in substance. Three
+things differ, all stated here before any candidate exposure:
+
+1. **CLI.** gpt-6.2-sol is rejected on codex-cli 0.162.1
+   (`model_not_in_accessible_catalog`, ChatGPT-account login) and accepted on
+   0.172.0, so every arm is re-pinned to codex-cli 0.172.0. F is judged as a
+   FRESH control sample on the new CLI (F is re-run in the new subdir; the
+   campaign-2 F artifacts no longer exist and its grades are never mixed in).
+2. **Freeze anchor.** The campaign runs on a local commit and ONE PR follows
+   it (user direction of 2026-10-17, as campaign 2 actually ran); the PR-based
+   wording of the earlier rules is replaced below.
+3. **One added descriptive read** (non-gating, see "Informational"): the fresh
+   F per-bug status (0.172.0) next to the committed campaign-2 F status
+   (0.162.1), the CLI-bump read. No gate compares them.
+
+`REGISTERED_CONTRASTS` keeps `(B, E)` and `(B, F)` so the earlier ledger
+records stay interpretable; `(F, G)` is the contrast this campaign registers.
 
 This file is NOT grader-facing. Graders receive `GRADING_RUBRIC.md` only.
 
@@ -27,15 +38,41 @@ This file is NOT grader-facing. Graders receive `GRADING_RUBRIC.md` only.
 
 | Arm | Model | Effort | Repeats | Role |
 |-----|-------|--------|---------|------|
-| B | gpt-5.6-sol | xhigh | k=2 | control (current production) |
-| F | gpt-6.1-sol | xhigh | k=2 | candidate |
+| F | gpt-6.1-sol | xhigh | k=2 | control (current production) |
+| G | gpt-6.2-sol | xhigh | k=2 | candidate |
 
-No probe arms. CLI pinned to codex-cli 0.162.1 on every arm (the runner refuses a
+No probe arms. CLI pinned to codex-cli 0.172.0 on every arm (the runner refuses a
 live `codex --version` mismatch); CI pins the same version. Every harness codex
 call runs under an isolated `CODEX_HOME` that mirrors CI's codex-action home
-(credential + `sandbox_mode = "read-only"` + `approval_policy = "never"`; no MCP
-servers, hooks or memories; codex's DEFAULT features otherwise, web search
-included).
+(credential + `sandbox_mode = "read-only"` + `approval_policy = "never"` +
+`[features] apps = false`; no MCP servers, hooks or memories; codex's DEFAULT
+features otherwise, web search included). The default feature surface on 0.172.0 differs from 0.162.1
+(`codex features list` under the isolated home on both versions, 2026-11-26,
+gitignored `runs/features-<version>.txt`): 18 flags are newly on
+(`api_key_cyber_access_programs`, `bedrock_setup_wizard`, `cli_daybreak`,
+`code_mode_host_output_truncation`, `code_mode_interrupt`,
+`deferred_tool_world_state`, `guardian_include_additional_context`,
+`incremental_tools`, `incremental_tools_legacy`, `incremental_tools_legacy_gcp`,
+`mcp_lazy_stdio_startup`, `mcp_oauth_refresh_coordination`,
+`prediction_preserve_parent_tools`, `reasoning_effort_override`,
+`retain_client_tool_outputs`, `tui_workspace`, `unified_image_budget`,
+`untrusted_as_tool_output`) and one is newly off (`unified_exec_zsh_fork`).
+Both arms run the same surface, and a channel that leaves no shell `exec`
+line is classified `unaudited` exactly as before.
+
+**One feature is switched off for every arm: `apps`** (user decision,
+2026-11-26, before any candidate corpus exposure). The harness logs in with
+the ChatGPT-account credential, which carries the account's app connectors
+(`codex_apps/...`); CI logs in with an API key and is taken to have none (an
+inference from the auth mode, not verified under an API key). In the
+pre-registration off-corpus probes (merged PR #841's diff, xhigh, isolated
+home, six gpt-6.2-sol reviews) the candidate called the GitHub connector in
+two reviews (24 `github.fetch_file` calls in one, one
+`github.fetch_pr_comments` in another); the one gpt-6.1-sol probe did not.
+The connector reads the PUBLISHED repository rather than the case worktree,
+so on historical cases it can return code that already contains the fix.
+With `apps = false` one probe showed no `codex_apps` event. Web search stays
+on, as in the earlier campaigns.
 
 ## Definitions
 
@@ -56,23 +93,23 @@ per-cell field (`leak: none | confirmed` in the reconciled table; graders write
   `known_topic_id` exemption branch is NOT ported. The bundle's "do NOT flag"
   wording for known topics stays (reviewer advice, not grader instruction).
 
-## Gates (F vs B; symmetric on catches)
+## Gates (G vs F; symmetric on catches)
 
 1. **Regression NO-GO** = ANY ground-truth bug (`must_catch` true OR false)
-   that B reliably catches and F has status MISSED (the status definitions
+   that F reliably catches and G has status MISSED (the status definitions
    under "Voided repeats" are the executable wording). `must_catch` stays in
-   the case files as a reporting label only. B UNSTABLE / F MISSED is a
+   the case files as a reporting label only. F UNSTABLE / G MISSED is a
    judgment FLAG reported next to the mechanical outcome; it never changes the
    label by itself.
-2. **FP NO-GO** = F's S3 FP total > B's. Small-sample note (2 S3 cases x k=2,
-   B expected at 0): the verdict prints every FP's text next to this gate so
+2. **FP NO-GO** = G's S3 FP total > F's. Small-sample note (2 S3 cases x k=2,
+   F expected at 0): the verdict prints every FP's text next to this gate so
    the user can rule a control invalid, as happened in 2026-07; the mechanical
    verdict stands unless the user overrides it in writing in the verdict.
 3. **GO** = zero regressions, the FP gate passes, FEWER THAN 2
-   reliable-to-unstable downgrades (bugs B catches 2/2 and F catches 1/2), and
-   >= 1 strict improvement: F reliably catches ANY bug on which B has status
-   MISSED (the two s4-wcr bugs DO count), OR F has strictly fewer S3 FPs than B
-   (only reachable if B posts >= 1 FP).
+   reliable-to-unstable downgrades (bugs F catches 2/2 and G catches 1/2), and
+   >= 1 strict improvement: G reliably catches ANY bug on which F has status
+   MISSED (the two s4-wcr bugs DO count), OR G has strictly fewer S3 FPs than F
+   (only reachable if F posts >= 1 FP).
 4. **PARITY** = zero regressions and the FP gate passes, and EITHER no strict
    improvement OR >= 2 reliable-to-unstable downgrades -> the user decides,
    with these inputs reported: judgment flags, the downgrade and upgrade
@@ -92,15 +129,15 @@ per-bug status is computed from its remaining (non-void, OK) repeats:
 - MISSED = caught in no remaining repeat (>= 1 remaining);
 - UNGRADEABLE = no remaining repeat.
 
-Gates use these statuses (regression = B RELIABLE and F MISSED; downgrade = B
-RELIABLE and F UNSTABLE; improvement = F RELIABLE and B MISSED; UNGRADEABLE
+Gates use these statuses (regression = F RELIABLE and G MISSED; downgrade = F
+RELIABLE and G UNSTABLE; improvement = G RELIABLE and F MISSED; UNGRADEABLE
 never satisfies a gate, it only contests). A void or ungradeable cell ALWAYS
 contests: its case is reported "contested by leak" on whichever gates the case
 feeds (gates 1/3/downgrades for a bug case, gate 2 for an S3 case). Audit hits
 never contest a gate (see "Hit list"). A contested gate goes to the user, never
 decided mechanically: the user records in the verdict one of "accept
 mechanical", "override to GO" or "override to NO-GO", with the reason, and
-PR-2 swaps exactly when that final call is GO. A void cell is NOT re-run
+the single follow-up PR swaps exactly when that final call is GO. A void cell is NOT re-run
 (resume would reuse the cached artifact and the leak is a property of that
 review); it stays void.
 
@@ -125,7 +162,13 @@ campaigns are handled by the stop conditions below.
 2x-p95 flag, the input-cost estimate from `openai_review.PRICING`); the
 vendor-lifecycle read is prose the verdict file carries.
 
-- Per-arm latency (flag if F p95 > 2x B).
+- Per-arm latency (flag if G p95 > 2x F).
+- **CLI-bump read** (campaign 3 only, descriptive): the fresh F per-bug status
+  on codex-cli 0.172.0 next to the committed campaign-2 F status on 0.162.1
+  (`campaigns/2026-10-gpt61sol-VERDICT.md`). Same corpus, prompt and rubric
+  bytes, same model id, different CLI and an independent sample, so a
+  difference cannot be attributed to the CLI alone. No gate uses it; it
+  informs the user's separate decision on the CI `codex-version` pin.
 - Hallucination / unverified external-tool-claim count per arm (counted once
   per (case, arm, repeat)).
 - Leakage count per arm (distinct confirmed cells) and unconfirmed-flag count.
@@ -210,14 +253,22 @@ Blinding caveat: with two k=2 arms the labels are a clean 50/50 blind.
 ## Corpus floor and provenance
 
 The campaign runs only with >= 8 verified cases including >= 2 S4 cases
-(`verdict` refuses below the floor). Provenance recorded in the verdict:
-frozen PR-1 HEAD sha, tree sha, local tag, PR number, subdir, later main
-merge sha. The manifest's `repo_head_sha`/`repo_tree_sha` must equal them,
+(`verdict` refuses below the floor). The campaign runs on a frozen LOCAL
+commit. Provenance recorded in the verdict: that commit's sha and tree sha,
+the local tag `campaign-gpt62sol` (never pushed; it keeps the sha resolvable
+after the PR is squashed), the subdir, and later the PR number and main merge
+sha. The manifest's `repo_head_sha`/`repo_tree_sha` must equal them,
 with `run_head_shas == [<HEAD>]`, `run_head_missing == 0`,
 `run_dirty_any == false`, `run_marker_mismatch == 0`, `run_not_isolated == 0`;
 `verdict` recomputes the aggregates from the sealed artifacts and refuses on
-any difference. Any push to PR-1 after the campaign starts VOIDS the run (a
-voided campaign is re-run into a fresh subdir on the new HEAD).
+any difference. Moving HEAD before the verdict is final VOIDS the run (the
+post-run stages refuse a HEAD or tree that differs from the manifest's; a
+voided campaign is re-run into a fresh subdir on the new HEAD and judged by
+the ledger rule below). Once the DEFINITIVE verdict is recorded, the later
+commits that add the verdict files and any swap, and the rebase/squash into
+the single PR, do NOT void it: they are after the measurement, and the tag
+and `refs/campaign/F-G/frozen` keep the frozen revision auditable. This
+paragraph is procedural, not code-enforced, beyond the guards named in it.
 
 **Campaign ledger (enforced by `run_eval.py`):** the first dispatch of the
 registered contrast creates the local git ref
@@ -300,5 +351,6 @@ selected ONLY as the exact registered campaign: `run --configs <control>,<candid
 --k 2` with no `--k-per` and no `--strata`; `smoke` refuses it outright. So
 "the candidate's first corpus run is the campaign" holds by construction in
 code, not only by protocol. An EMPTY `session_commands`
-on the 0.162.1 control smoke was a STOP condition before the PR-1 commit (it
-did not occur: the smoke parsed 8/8 exec blocks).
+on the 0.172.0 control smoke was a STOP condition before the freeze (it did
+not occur: the smoke of arm F on 2026-11-26 parsed 32/32 exec blocks, with 6
+non-shell events, under the isolated home with `apps = false`).

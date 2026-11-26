@@ -25,11 +25,11 @@ Pipeline:
 Usage:
   python tools/reviewer-eval/run_eval.py verify-corpus
   python tools/reviewer-eval/run_eval.py smoke   # smokes the role=control arm
-  python tools/reviewer-eval/run_eval.py run --subdir gpt61sol --configs B,F --k 2
-  python tools/reviewer-eval/run_eval.py compare --subdir gpt61sol --blinded
-  python tools/reviewer-eval/run_eval.py audit --subdir gpt61sol -o <scratch>/hits.json
-  python tools/reviewer-eval/run_eval.py verdict --subdir gpt6 --grades <reconciled.json> \\
-      --control B --candidate E [--audit-hits <scratch>/hits.json] [--expect-head <sha>]
+  python tools/reviewer-eval/run_eval.py run --subdir gpt62sol --configs F,G --k 2
+  python tools/reviewer-eval/run_eval.py compare --subdir gpt62sol --blinded
+  python tools/reviewer-eval/run_eval.py audit --subdir gpt62sol -o <scratch>/hits.json
+  python tools/reviewer-eval/run_eval.py verdict --subdir gpt62sol --grades <reconciled.json> \\
+      --control F --candidate G [--audit-hits <scratch>/hits.json] [--expect-head <sha>]
 """
 
 from __future__ import annotations
@@ -341,10 +341,14 @@ def _candidate_exposure_violations(
 
     selected = {c.id for c in configs}
     # The role=control arm is production: it is measured by definition, so a
-    # former candidate promoted by a swap (2026-10: F) stays smokeable and may
-    # run outside its registered contrast; every OTHER registered candidate is
-    # confined to its campaign shape.
-    cands = (selected & _registered_candidates()) - {_control_id()}
+    # former candidate promoted by a swap (2026-10: F, 2026-11: G) stays
+    # smokeable and may run outside its registered contrast. The same holds for
+    # every arm that served as the CONTROL of a registered contrast (it was
+    # production when that campaign ran, e.g. F after the 2026-11 swap): its
+    # corpus output is already measured, so there is no first exposure left to
+    # protect. Every OTHER registered candidate is confined to its campaign shape.
+    former_controls = {ctrl for ctrl, _cand in reviewer_verdict.REGISTERED_CONTRASTS}
+    cands = (selected & _registered_candidates()) - {_control_id()} - former_controls
     if not cands:
         return []
     if command == "smoke":
@@ -693,6 +697,22 @@ def _exposure_status(
         "surface_diff_stat": "",
         "timeout_only": False,
     }
+    import reviewer_verdict
+
+    recorded = reviewer_verdict.COMPLETED_CAMPAIGNS.get(tuple(contrast))
+    if recorded and first.get("head") != recorded:
+        # A finished campaign re-dispatched under a NEW local ledger (a fresh
+        # checkout has neither the original ledger nor its frozen ref): the
+        # candidate's first exposure was the recorded revision, not this one.
+        status.update(
+            mechanical=False,
+            reason=(
+                f"re-run of a completed contrast: its recorded first-dispatch revision is "
+                f"{recorded}, this ledger's first dispatch is {first.get('head')} "
+                f"(a new local ledger cannot re-register a finished campaign)"
+            ),
+        )
+        return status
     if subdir == first.get("subdir") and not status["head_changed"]:
         status.update(mechanical=True, reason="first dispatch of the contrast (frozen revision)")
         return status
@@ -1749,7 +1769,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(func=cmd_smoke)
 
     pr = sub.add_parser("run", help="full comparison matrix; saves raw reviews")
-    pr.add_argument("--configs", default="B,F")
+    pr.add_argument("--configs", default="F,G")
     pr.add_argument("--strata", nargs="*", default=None)
     pr.add_argument("--subdir", default="full")
     pr.add_argument(

@@ -2,7 +2,7 @@
 
 Called by SKILL.md with an already-rendered reviewer prompt. Detects codex,
 invokes `openai_review.call_codex` with the campaign-graded model/effort
-pins (gpt-6.1-sol @ xhigh; the production code-review pin) under a read-only sandbox, writes the codex
+pins (gpt-6.2-sol @ xhigh; the production code-review pin) under a read-only sandbox, writes the codex
 review. Before invoking, it runs openai_review's own sensitive-file scan +
 stderr notice (the codex `--cd` read surface is the whole repo — the same
 notice the `/ai-review-local` codex path prints). Exit codes let SKILL.md fall
@@ -24,15 +24,19 @@ import sys
 # Codex pins follow the PRODUCTION code-review model (lockstep-tested against the
 # CI workflow and openai_review.DEFAULT_MODEL). gpt-5.6-sol was the engine
 # Campaign 1 graded (arm C, as-run; exploratory / non-gating); gpt-6.1-sol was
-# carried over by the 2026-10 code-review campaign 2
-# (tools/reviewer-eval/campaigns/2026-10-gpt61sol-VERDICT.md), NOT re-run through
-# plan-review-eval. To re-validate: first re-pin
-# tools/plan-review-eval/config/configs.json cli_version (the composite
-# "<claude-code version> | codex-cli <version>" string on all five arms) to the
-# live Claude Code + codex CLI pair, add a gpt-6.1-sol arm, run that harness
-# against the sol baseline (TODO.md row). tests/test_plan_review_skill.py asserts
-# these pins.
-CODEX_MODEL = "gpt-6.1-sol"
+# carried over by the 2026-10 code-review campaign 2 and gpt-6.2-sol by the
+# 2026-11 code-review campaign 3
+# (tools/reviewer-eval/campaigns/2026-11-gpt62sol-VERDICT.md), NEITHER re-run
+# through plan-review-eval. The only plan-review evidence for gpt-6.2-sol is one
+# off-corpus probe of the rendered reviewer prompt (2026-11-26: 35 shell
+# commands against the local repo, no web search, no connector call), which
+# shows it reads the repository, not how well it reviews plans. To re-validate:
+# first re-pin tools/plan-review-eval/config/configs.json cli_version (the
+# composite "<claude-code version> | codex-cli <version>" string on all five
+# arms) to the live Claude Code + codex CLI pair, add a gpt-6.2-sol arm, run
+# that harness against the sol baseline (TODO.md row).
+# tests/test_plan_review_skill.py asserts these pins.
+CODEX_MODEL = "gpt-6.2-sol"
 CODEX_EFFORT = "xhigh"
 # The timeout equals the code-review harness's CALL_TIMEOUT_S
 # (tools/reviewer-eval/adapters/codex_reviewer.py; tests/test_plan_review_skill.py
