@@ -3116,9 +3116,13 @@ class TestStackedDiDCohortShares:
         # weights, whose cohort shares differ from the full sample's. The
         # oracle is independent of the estimator: weighted cell means under
         # each replicate column, aggregated with that replicate's shares.
+        # The weights vary by unit: with weights constant within a cohort this
+        # jackknife removes the same mass from every cohort, the shares never
+        # move, and refits that reused the full-sample corrective weights
+        # would pass as well.
         from diff_diff.survey import SurveyDesign
 
-        d, cols = self._jk1(_cw_weighted(_cw_panel(noise=0.5, seed=4), "by_cohort"))
+        d, cols = self._jk1(_cw_weighted(_cw_panel(noise=0.5, seed=4), "random"))
         res = _cw_quiet_fit(
             d,
             survey_design=SurveyDesign(
@@ -3127,11 +3131,14 @@ class TestStackedDiDCohortShares:
         )
         events = (-2, 0, 1, 2)
         theta = np.array([res.event_study_effects[e]["effect"] for e in events])
-        reps = []
+        reps, rep_shares = [], []
         for col in cols:
             shares, cells, w = _cw_shares(d, "aggregate", weight_col=col)
+            rep_shares.append(shares[4])
             reps.append([_cw_manual_aggregate(d, shares, cells, w, e) for e in events])
         reps = np.array(reps)
+        full_share = _cw_shares(d, "aggregate", weight_col="w")[0][4]
+        assert max(abs(s - full_share) for s in rep_shares) > 0.01
         centre = theta if mse else reps.mean(axis=0)
         n_rep = len(cols)
         oracle_var = (n_rep - 1) / n_rep * ((reps - centre) ** 2).sum(axis=0)
