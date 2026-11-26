@@ -51,6 +51,7 @@ import numpy as np
 
 from diff_diff._reporting_helpers import (
     check_design_reconciliation,
+    check_precomputed_pretrends_power,
     describe_design_reconciliation,
     describe_target_parameter,
     design_reconciliation_lines,
@@ -429,6 +430,7 @@ class BusinessReport:
                 "aggregate('event_study') surface) and do not accept "
                 "precomputed overrides."
             )
+        check_precomputed_pretrends_power(self._dr_precomputed, "BusinessReport")
 
         resolved_alpha = alpha if alpha is not None else getattr(results, "alpha", 0.05)
         self._context = BusinessContext(

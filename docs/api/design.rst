@@ -41,6 +41,35 @@ test inference - size and power - on your panel's own error structure. They do
 not test parallel trends: a design that passes the size check can still be
 biased if treatment goes to units on a different trend.
 
+**Planned pre-trend power.** With ``event_study=True`` the diagnosis also keeps,
+for each ``CallawaySantAnna`` and ``StackedDiD`` estimator, a placebo event
+study: the mean and the covariance, across the no-effect draws, of the
+event-study coefficients of each fit
+(``DesignDiagnosisResults.event_study_results``). Pass the diagnosis to
+:class:`~diff_diff.PreTrendsPower` and it returns, before any outcome exists,
+the smallest trend violation the design's pre-trend test would detect with the
+target power; :meth:`~diff_diff.PreTrendsPower.power_by_pre_periods` shows how
+that changes with the number of pre-periods tested. These numbers come from
+Roth's (2022) formula, which assumes that each coefficient's own test rejects
+at its nominal level when nothing is wrong. That assumption is checked against
+the placebo draws, none of which contains a violation: for the pre-periods
+being planned, ``PreTrendsPower`` counts how often the pre-trend test rejected
+in the draws and compares the count with the rate the formula assumes. Planned
+power is reported only where the two agree within Monte Carlo error. Where
+they do not (typically with few treated units or many pre-periods), ``fit``
+raises with both rates and the by-pre-period table leaves the row blank; a
+test of fewer pre-periods often still agrees. ``summary()`` shows the
+comparison for the test over all pre-periods. Planned power is available for
+the default pre-test form (any coefficient individually significant) only.
+The surface's ``att`` column is a mean of placebo coefficients, labelled
+``estimand="placebo"``, and its ``se`` is the spread of one fit's coefficient,
+not inference on an effect; plot it with ``ylabel="Placebo estimate"``.
+If you compared several estimators and picked one, its placebo event study
+comes from draws that informed the pick. For pre-trend planning the choice did
+not see, rerun ``diagnose_design`` with the chosen estimator alone and a new
+``seed``, and use that run for pre-trend planning only: the lock is still taken
+from the comparison run.
+
 **Design lock.** :meth:`~diff_diff.DesignDiagnosisResults.lock` records one
 estimator and its configuration as a :class:`~diff_diff.DesignLock`. Comparing
 several estimators and then quoting the chosen one's power from the same runs

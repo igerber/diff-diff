@@ -15,6 +15,7 @@
       ~PreTrendsPower.fit
       ~PreTrendsPower.get_params
       ~PreTrendsPower.power_at
+      ~PreTrendsPower.power_by_pre_periods
       ~PreTrendsPower.power_curve
       ~PreTrendsPower.sensitivity_to_honest_did
       ~PreTrendsPower.set_params

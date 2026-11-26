@@ -54,6 +54,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from diff_diff.power import (
     SimulationMDEResults,
@@ -61,7 +62,8 @@ from diff_diff.power import (
     simulate_mde,
     simulate_power,
 )
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, EventStudyResults
+from diff_diff.utils import safe_inference
 
 __all__ = [
     "diagnose_design",
@@ -121,6 +123,21 @@ _PREFLIGHT_ATTEMPTS = 5
 _MAX_LOST_SHARE = 0.10
 _MIN_PRE_PERIODS = 2
 _MAX_ERROR_MESSAGES = 5
+
+# Candidates whose placebo event study is recorded under event_study=True: the
+# classes whose aggregate("event_study") container PreTrendsPower admits.
+_EVENT_STUDY_ESTIMATORS = ("CallawaySantAnna", "StackedDiD")
+# Attribute of a placebo event study that holds, per placebo draw, each
+# pre-period coefficient over its own reported standard error (absolute
+# value). PreTrendsPower counts the pre-trend test's rejections from it for
+# whichever pre-periods it is asked to plan (see placebo_pretest_rate).
+_PRETEST_RECORD = "_placebo_pretest"
+# The placebo covariance is not reported when its smallest eigenvalue is at or
+# below this multiple of its largest (the near-singularity threshold
+# results_base._validate_vcov_subblock applies when allow_singular=False).
+_RANK_TOLERANCE = 1e-10
+# The estimand label of a placebo event-study surface (EventStudyResults.estimand).
+PLACEBO_ESTIMAND = "placebo"
 
 # Printed by both summaries: what a placebo diagnosis does and does not test.
 _SCOPE_LINES = (
@@ -190,6 +207,21 @@ class DesignDiagnosisResults(Diagnostic):
         Columns the fingerprint covers.
     time_periods : list
         Period values of the panel actually used.
+    event_study : bool
+        Whether placebo event studies were requested.
+    event_study_results : dict
+        Label -> :class:`~diff_diff.EventStudyResults`, the placebo event
+        study of each ``CallawaySantAnna`` or ``StackedDiD`` estimator for
+        which one could be recorded; empty when ``event_study`` is False.
+        Its ``att`` column is the mean of the no-effect replicates'
+        event-study coefficients, ``vcov`` their sample covariance across the
+        replicates, and ``se`` the square root of its diagonal: the spread of
+        one fit's coefficient, which is what a single fit's standard error
+        should equal. ``t_stat``, ``p_value`` and the interval compare that
+        mean with that spread; they are not inference on an effect, and the
+        error bars of a plot of the surface show the spread. The surface
+        carries ``estimand="placebo"``. Pass this object (or one entry) to
+        :class:`~diff_diff.PreTrendsPower` for planned pre-trend power.
     """
 
     results: Dict[str, List[SimulationPowerResults]]
@@ -218,12 +250,31 @@ class DesignDiagnosisResults(Diagnostic):
     data_sha256: str
     data_columns: List[str]
     time_periods: List[Any]
+    event_study: bool = False
+    # Excluded from ==: the surfaces hold arrays, on which dataclass equality
+    # raises.
+    event_study_results: Dict[str, EventStudyResults] = field(default_factory=dict, compare=False)
     # The configuration as diagnosed (lock() refuses one that was changed
     # afterwards) and the labels lock() has rerun.
     _classes: Dict[str, type] = field(default_factory=dict, repr=False, compare=False)
     _params: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
     _fit_keywords: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
     _rerun_labels: List[str] = field(default_factory=list, repr=False, compare=False)
+    # Per label, how its placebo event study was reduced: draws used, draws
+    # excluded, the reported-SE ratio per pre-period, and how often a
+    # pre-trend test over all pre-periods rejected in the no-effect draws
+    # against the rate the power formula assumes.
+    _event_study_checks: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore a pickled object, filling fields added after it was pickled."""
+        self.__dict__.update(state)
+        # Fields with a default_factory have no class-level fallback.
+        self.__dict__.setdefault("event_study", False)
+        self.__dict__.setdefault("event_study_results", {})
+        self.__dict__.setdefault("_event_study_checks", {})
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -288,6 +339,7 @@ class DesignDiagnosisResults(Diagnostic):
             "resample_units": self.resample_units,
             "estimator_kwargs": dict(self.estimator_kwargs),
             "seed": self.seed,
+            "event_study": self.event_study,
             "n_units": self.n_units,
             "n_periods": self.n_periods,
             "n_obs": self.n_obs,
@@ -359,6 +411,8 @@ class DesignDiagnosisResults(Diagnostic):
                         f"{_fmt_rate(cell.power):>8}{_fmt_num(cell.bias):>11}"
                         f"{_fmt_num(cell.rmse):>11}{_fmt_rate(cell.coverage):>10}"
                     )
+        if self.event_study:
+            lines.extend(_event_study_lines(self, width))
         lines.extend(
             [
                 "",
@@ -536,8 +590,11 @@ class _PlaceboFit:
     anything else propagates.
     """
 
-    def __init__(self, estimator: Any) -> None:
+    def __init__(self, estimator: Any, capture: Optional[List[Any]] = None) -> None:
         self._estimator = estimator
+        # None, or the list that receives one event-study record per scored
+        # replicate (see _event_study_record).
+        self._capture = capture
         self.n_fits = 0
         self.n_nan = 0
         self.n_raised = 0
@@ -560,12 +617,315 @@ class _PlaceboFit:
         if not _has_scalar_inference(result) or not _has_finite_inference(result):
             self.n_nan += 1
             raise ValueError("non-finite inference")
+        if self._capture is not None:
+            self._capture.append(_event_study_record(result))
         return result
 
 
 def _clone(estimator: Any) -> Any:
     """An unfitted copy with the same constructor parameters."""
     return type(estimator)(**estimator.get_params())
+
+
+# ---------------------------------------------------------------------------
+# Placebo event study
+# ---------------------------------------------------------------------------
+
+
+def _event_study_skip_reason(estimator: Any) -> Optional[str]:
+    """Why no placebo event study is recorded for this estimator, else None."""
+    name = type(estimator).__name__
+    if name not in _EVENT_STUDY_ESTIMATORS:
+        return (
+            f"{name} event studies are not an input PreTrendsPower accepts from "
+            f"diagnose_design (recorded for: {', '.join(_EVENT_STUDY_ESTIMATORS)})"
+        )
+    if estimator.get_params().get("vcov_type") == "jackknife":
+        return (
+            "the pre-trend check of a cluster-jackknife fit compares each "
+            "coefficient with a t(H-1) reference under a Bonferroni correction, "
+            "which is not the test PreTrendsPower models (reports skip pre-trends "
+            "power for such fits too)"
+        )
+    return None
+
+
+def _plain(value: Any) -> Any:
+    """A numpy scalar as the Python scalar it wraps; anything else unchanged."""
+    return value.item() if isinstance(value, np.generic) else value
+
+
+def _event_study_record(result: Any) -> Optional[Tuple[Any, np.ndarray, np.ndarray]]:
+    """One replicate's event study: its layout and its coefficient and SE vectors.
+
+    The layout is the rows that are a reference row or carry a finite estimate
+    and a finite positive standard error, together with the provenance the
+    consumers read. Two replicates are averaged only if their layouts are
+    equal, so a surface's provenance is that of every draw behind it. ``None``
+    when the aggregation fails on this draw.
+    """
+    try:
+        surface = result.aggregate("event_study")
+    except _DATA_DEPENDENT_ERRORS:
+        return None
+    event_time = [_plain(v) for v in surface.event_time.tolist()]
+    is_reference = np.asarray(surface.is_reference, dtype=bool)
+    att = np.asarray(surface.att, dtype=float)
+    se = np.asarray(surface.se, dtype=float)
+    estimated = ~is_reference & np.isfinite(att) & np.isfinite(se) & (se > 0)
+    keep = is_reference | estimated
+    rows = tuple((event_time[i], bool(is_reference[i])) for i in range(len(event_time)) if keep[i])
+    reference_event_times = surface.reference_event_times
+    provenance = (
+        surface.source,
+        surface.base_period,
+        (
+            None
+            if reference_event_times is None
+            else tuple(_plain(v) for v in reference_event_times)
+        ),
+        surface.event_time_convention,
+    )
+    return (rows, provenance), att[estimated], se[estimated]
+
+
+def _placebo_event_study(
+    estimator: Any,
+    records: Sequence[Optional[Tuple[Any, np.ndarray, np.ndarray]]],
+    alpha: float,
+) -> Tuple[Optional[EventStudyResults], Optional[Dict[str, Any]], Optional[str]]:
+    """Reduce one estimator's no-effect event studies to one planned surface.
+
+    Returns ``(surface, checks, None)`` when a surface is reported and
+    ``(None, None, reason)`` when it is not.
+
+    The coefficients are the means over the draws and the covariance is the
+    sample covariance of the coefficient vectors across the draws. The other
+    inference columns follow from those two; they describe how one draw varies
+    around the mean of the draws, not an estimated effect.
+    """
+    n_captured = len(records)
+    usable = [record for record in records if record is not None]
+    if not usable:
+        return None, None, "no no-effect replicate produced an event study"
+    counts: Dict[Any, int] = {}
+    for layout, _att, _se in usable:
+        counts[layout] = counts.get(layout, 0) + 1
+    # Most frequent layout; ties to the one with more rows, then to a fixed
+    # order, so the choice never depends on iteration order.
+    layout = min(counts, key=lambda key: (-counts[key], -len(key[0]), repr(key)))
+    rows, provenance = layout
+    used = [record for record in usable if record[0] == layout]
+    n_used = len(used)
+    n_excluded = n_captured - n_used
+    if n_excluded / n_captured > _MAX_LOST_SHARE:
+        return (
+            None,
+            None,
+            f"{n_excluded} of {n_captured} no-effect replicates had a different "
+            f"event-study layout or no event study (more than {_MAX_LOST_SHARE:.0%})",
+        )
+    labels = [label for label, is_ref in rows if not is_ref]
+    k = len(labels)
+    pre = [position for position, label in enumerate(labels) if label < 0]
+    if not pre:
+        name = type(estimator).__name__
+        hint = (
+            " (StackedDiD estimates no pre-period at kappa_pre=1; set kappa_pre >= 2)"
+            if name == "StackedDiD"
+            else ""
+        )
+        return None, None, f"the event study has no estimated pre-treatment period{hint}"
+    if n_used < 2 * k + 1:
+        return (
+            None,
+            None,
+            f"{n_used} replicates are too few for the covariance of {k} "
+            f"coefficients (the library requires at least {2 * k + 1}); raise n_simulations",
+        )
+    draws = np.vstack([record[1] for record in used])
+    vcov = np.atleast_2d(np.cov(draws, rowvar=False, ddof=1))
+    singular = "the placebo covariance of the event-study coefficients is "
+    if not np.all(np.isfinite(vcov)):
+        return None, None, singular + "not finite"
+    eigenvalues = np.linalg.eigvalsh((vcov + vcov.T) / 2.0)
+    if eigenvalues[-1] <= 0.0 or eigenvalues[0] <= _RANK_TOLERANCE * eigenvalues[-1]:
+        return (
+            None,
+            None,
+            singular + "rank-deficient (the replicates contain too few distinct "
+            "placebo assignments; this happens on a small panel with "
+            "resample_units=False)",
+        )
+    means = draws.mean(axis=0)
+    spread = np.sqrt(np.diag(vcov))
+    n_rows = len(rows)
+    att = np.zeros(n_rows)
+    columns = {
+        name: np.full(n_rows, np.nan)
+        for name in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper")
+    }
+    position = 0
+    for i, (_label, is_ref) in enumerate(rows):
+        if is_ref:
+            continue
+        t_stat, p_value, conf_int = safe_inference(
+            float(means[position]), float(spread[position]), alpha=alpha
+        )
+        att[i] = means[position]
+        columns["se"][i] = spread[position]
+        columns["t_stat"][i] = t_stat
+        columns["p_value"][i] = p_value
+        columns["conf_int_lower"][i] = conf_int[0]
+        columns["conf_int_upper"][i] = conf_int[1]
+        position += 1
+    source, base_period, reference_event_times, convention = provenance
+    surface = EventStudyResults(
+        event_time=np.asarray([label for label, _ in rows]),
+        att=att,
+        se=columns["se"],
+        t_stat=columns["t_stat"],
+        p_value=columns["p_value"],
+        conf_int_lower=columns["conf_int_lower"],
+        conf_int_upper=columns["conf_int_upper"],
+        is_reference=np.asarray([is_ref for _, is_ref in rows], dtype=bool),
+        n=np.full(n_rows, np.nan),
+        n_kind=None,
+        time_scale="relative",
+        event_time_convention=convention,
+        vcov=vcov,
+        vcov_index=np.asarray(labels),
+        alpha=alpha,
+        source=source,
+        base_period=base_period,
+        anticipation=0,
+        reference_event_times=reference_event_times,
+        estimand=PLACEBO_ESTIMAND,
+    )
+    reported = np.vstack([record[2] for record in used])
+    mean_reported = reported.mean(axis=0)
+    pre_labels = [labels[i] for i in pre]
+    # Kept on the surface so that the check below can be repeated for any
+    # subset of the pre-periods (PreTrendsPower does, for the set it plans).
+    setattr(
+        surface,
+        _PRETEST_RECORD,
+        {"labels": pre_labels, "abs_t": np.abs(draws[:, pre] / reported[:, pre])},
+    )
+    counted, _ = placebo_pretest_rate(surface, pre_labels, alpha)
+    expected = _formula_pretest_rate(vcov[np.ix_(pre, pre)], alpha)
+    checks = {
+        "n_draws": n_used,
+        "n_excluded": n_excluded,
+        "n_pre": len(pre),
+        "n_post": k - len(pre),
+        "se_ratio": {labels[i]: float(mean_reported[i] / spread[i]) for i in pre},
+        "pretest_rejection_rate": counted,
+        "pretest_expected_rate": expected,
+        "pretest_agrees": _pretest_size_ok(counted, expected, n_used),
+    }
+    return surface, checks, None
+
+
+def placebo_pretest_rate(surface: Any, tested: Sequence[Any], alpha: float) -> Tuple[float, int]:
+    """How often the pre-trend test rejected in the placebo draws, for ``tested``.
+
+    The test is the one PreTrendsPower models by default: reject when any of
+    the tested pre-period coefficients is individually significant at
+    ``alpha`` (normal critical value), with each draw's own reported standard
+    errors, as a fitted model would run it. No violation is present in any
+    draw, so this is the test's false-alarm rate on this panel.
+
+    Returns the rate and the number of draws. Raises ``ValueError`` when the
+    surface does not carry its per-draw record (it was rebuilt or copied
+    field by field) or ``tested`` names a period that is not in it.
+    """
+    record = getattr(surface, _PRETEST_RECORD, None)
+    if record is None:
+        raise ValueError(
+            "This placebo event study carries no per-draw record, so the "
+            "pre-trend test's rejection rate in the placebo draws cannot be "
+            "counted. Pass the object diagnose_design(..., event_study=True) "
+            "returned (its event_study_results entry), not a rebuilt copy."
+        )
+    position = {label: i for i, label in enumerate(record["labels"])}
+    missing = [label for label in tested if label not in position]
+    if missing:
+        raise ValueError(
+            f"Pre-periods {missing} are not in this placebo event study's "
+            f"per-draw record (recorded: {record['labels']})."
+        )
+    columns = [position[label] for label in tested]
+    critical = float(stats.norm.ppf(1.0 - alpha / 2.0))
+    abs_t = record["abs_t"]
+    rejected = np.any(abs_t[:, columns] > critical, axis=1)
+    return float(rejected.mean()), int(abs_t.shape[0])
+
+
+def _formula_pretest_rate(vcov: np.ndarray, alpha: float) -> float:
+    """Rejection rate of the any-coefficient pre-test with no violation.
+
+    The rate Roth's (2022) formula implies: the coefficients are normal with
+    covariance ``vcov`` and each is compared with the normal critical value
+    times its own standard deviation. This is PreTrendsPower's NIS power at a
+    violation of zero.
+    """
+    from diff_diff.pretrends import _compute_nis_acceptance_prob
+
+    critical = float(stats.norm.ppf(1.0 - alpha / 2.0))
+    accept = _compute_nis_acceptance_prob(0.0, np.zeros(vcov.shape[0]), vcov, critical)
+    return float(1.0 - accept)
+
+
+def _pretest_size_ok(counted: float, expected: float, n_draws: int) -> bool:
+    """Whether the counted no-violation rejection rate agrees with the expected one.
+
+    True when the two differ by at most 1.96 Monte Carlo standard errors of a
+    rate estimated from ``n_draws`` replicates at the expected rate (the form
+    of ``_size_controlled``, applied in both directions: a pre-test that
+    rejects less often than the formula assumes makes the planned power too
+    high, one that rejects more often makes it meaningless).
+    """
+    if n_draws <= 0 or not np.isfinite(counted) or not np.isfinite(expected):
+        return False
+    tolerance = 1.96 * math.sqrt(expected * (1.0 - expected) / n_draws)
+    return bool(abs(counted - expected) <= tolerance)
+
+
+def _event_study_lines(diagnosis: "DesignDiagnosisResults", width: int) -> List[str]:
+    """The placebo event-study block of ``DesignDiagnosisResults.summary()``."""
+    lines = ["", "-" * width, "Placebo event studies (no-effect runs)".center(width), "-" * width]
+    if not diagnosis._event_study_checks:
+        lines.append("None recorded.")
+        return lines
+    lines.append(f"{'':<22}{'':>6}{'':>6}{'':>5}{'':>14}{'All pre-periods test':>25}")
+    lines.append(
+        f"{'Estimator':<22}{'Draws':>6}{'Excl.':>6}{'Pre':>5}{'SE ratio':>14}"
+        f"{'counted':>9}{'assumed':>9}{'Agree':>7}"
+    )
+    for label, checks in diagnosis._event_study_checks.items():
+        ratios = list(checks["se_ratio"].values())
+        lines.append(
+            f"{label[:21]:<22}{checks['n_draws']:>6}{checks['n_excluded']:>6}"
+            f"{checks['n_pre']:>5}{f'{min(ratios):.2f} to {max(ratios):.2f}':>14}"
+            f"{_fmt_rate(checks['pretest_rejection_rate']):>9}"
+            f"{_fmt_rate(checks['pretest_expected_rate']):>9}"
+            f"{('yes' if checks['pretest_agrees'] else 'NO'):>7}"
+        )
+    lines.extend(
+        [
+            "",
+            "'All pre-periods test': how often a pre-trend test over every pre-period",
+            "(any coefficient individually significant) rejected in the no-effect",
+            "draws, and how often the power formula assumes it does. PreTrendsPower",
+            "repeats this comparison for the pre-periods it is asked to plan and",
+            "reports planned power only where the two agree;",
+            "PreTrendsPower().power_by_pre_periods(...) shows it by number tested.",
+            "'SE ratio': mean reported standard error of a pre-period coefficient",
+            "over its spread across the draws.",
+        ]
+    )
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -1203,10 +1563,11 @@ def _run_cell(
     n_simulations: int,
     alpha: float,
     seed: int,
+    capture: Optional[List[Any]] = None,
 ) -> Tuple[Any, _PlaceboFit]:
     """One estimator at one effect size, through ``simulate_power``."""
     name = type(estimator).__name__
-    adapter = _PlaceboFit(_clone(estimator))
+    adapter = _PlaceboFit(_clone(estimator), capture)
     try:
         cell = simulate_power(
             adapter,
@@ -1319,18 +1680,26 @@ def _run_estimator(
     seed: int,
     progress: bool,
     stacklevel: int = 4,
-) -> Tuple[List[Any], List[int], bool, Optional[Any], float]:
+    event_study: bool = False,
+) -> Tuple[List[Any], List[int], bool, Optional[Any], float, Optional[List[Any]]]:
     """Every effect size, the size check and the MDE search for one estimator.
 
     Returns the cells, the non-finite-inference counts, whether the size
-    check passed, the MDE search result (``None`` when it did not run) and
-    the reported MDE (NaN when not reported). Warnings are re-emitted with
-    the label.
+    check passed, the MDE search result (``None`` when it did not run), the
+    reported MDE (NaN when not reported), and the event-study records of the
+    no-effect cell (``None`` unless ``event_study`` is set and the estimator
+    records a placebo event study). Warnings are re-emitted with the label.
+
+    Only the no-effect cell captures event studies: the other effect cells and
+    the MDE search build their adapters without a capture list.
     """
     cells: List[Any] = []
     nan_counts: List[int] = []
     null_adapter: Optional[_PlaceboFit] = None
-    for effect in effects:
+    captured: Optional[List[Any]] = None
+    if event_study and _event_study_skip_reason(estimator) is None:
+        captured = []
+    for position, effect in enumerate(effects):
         with _WarningCapture() as capture:
             cell, adapter = _run_cell(
                 estimator,
@@ -1342,6 +1711,7 @@ def _run_estimator(
                 n_simulations,
                 alpha,
                 seed,
+                capture=captured if position == 0 else None,
             )
         _reemit(label, capture.records, stacklevel)
         cells.append(cell)
@@ -1381,7 +1751,7 @@ def _run_estimator(
         _reemit(label, capture.records, stacklevel)
         if progress:
             print(f"  {caller}: {label}, MDE search: {_fmt_num(value)}")
-    return cells, nan_counts, size_ok, found, value
+    return cells, nan_counts, size_ok, found, value, captured
 
 
 # ---------------------------------------------------------------------------
@@ -1407,6 +1777,7 @@ def diagnose_design(
     estimator_kwargs: Optional[Dict[str, Any]] = None,
     seed: Optional[int] = None,
     progress: bool = True,
+    event_study: bool = False,
 ) -> DesignDiagnosisResults:
     """
     Diagnose a planned DiD design on your own untreated panel.
@@ -1474,12 +1845,29 @@ def diagnose_design(
         Seed of the placebo draws. ``None`` draws one and records it.
     progress : bool, default=True
         Print one line per estimator and effect.
+    event_study : bool, default=False
+        Also record a placebo event study for each ``CallawaySantAnna`` and
+        ``StackedDiD`` estimator (not for one with ``vcov_type="jackknife"``):
+        the mean and the covariance, across the no-effect replicates, of the
+        event-study coefficients of each fit. The result is stored in
+        ``event_study_results`` and is what
+        :class:`~diff_diff.PreTrendsPower` reads to plan pre-trend power
+        before any outcome exists. The record also keeps, per replicate,
+        each pre-period coefficient over its own reported standard error, so
+        that the pre-trend test's rejection rate with no violation can be
+        counted for any set of pre-periods; ``PreTrendsPower`` reports
+        planned power for a set only where that count agrees with the rate
+        its formula assumes. ``summary()`` shows the comparison for the test
+        over all pre-periods, and a warning is issued when it disagrees.
+        Unrelated to a ``fit()`` keyword of the same name passed through
+        ``estimator_kwargs``.
 
     Returns
     -------
     DesignDiagnosisResults
         One :class:`~diff_diff.SimulationPowerResults` per estimator and
-        effect, the size check, and the minimum detectable effects.
+        effect, the size check, the minimum detectable effects, and the
+        placebo event studies when requested.
 
     Notes
     -----
@@ -1489,6 +1877,14 @@ def diagnose_design(
     a data-dependent error or returns non-finite inference is excluded from
     every rate and counted; an estimator that loses more than 10% of its
     no-effect replicates fails the size check.
+
+    A placebo event study is computed on the same draws as the comparison of
+    estimators. If you compared several estimators and picked one, its placebo
+    event study comes from draws that informed the pick. For pre-trend
+    planning that the choice did not see, rerun ``diagnose_design`` with the
+    chosen estimator alone and a new ``seed``, and use that run for pre-trend
+    planning only: the lock is still taken from the comparison run, because a
+    lock made from a single-estimator run records no comparison and no rerun.
 
     The methodology, its sources and the choices that have no paper source
     are documented in ``docs/methodology/REGISTRY.md`` ``## DesignDiagnosis``.
@@ -1512,6 +1908,9 @@ def diagnose_design(
         raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
     if power is not None and not alpha < power < 1.0:
         raise ValueError(f"power must satisfy alpha < power < 1, got {power}.")
+    if not isinstance(event_study, (bool, np.bool_)):
+        raise ValueError(f"event_study must be True or False, got {event_study!r}.")
+    event_study = bool(event_study)
 
     resolved = _resolve_estimators(estimators)
     # A private copy: the caller's dict and the lists in it stay theirs.
@@ -1562,6 +1961,14 @@ def diagnose_design(
                 UserWarning,
                 stacklevel=2,
             )
+        if event_study:
+            reason = _event_study_skip_reason(est)
+            if reason is not None:
+                warnings.warn(
+                    f"[{label}] no placebo event study is recorded: {reason}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     data_sha256, data_columns = _data_fingerprint(panel, unit, time)
     data_generator = _make_placebo_generator(
@@ -1581,9 +1988,11 @@ def diagnose_design(
     size_controlled: Dict[str, bool] = {}
     mde_results: Dict[str, SimulationMDEResults] = {}
     mde: Dict[str, float] = {}
+    event_study_results: Dict[str, EventStudyResults] = {}
+    event_study_checks: Dict[str, Dict[str, Any]] = {}
 
     for label, est in resolved.items():
-        cells, nan_counts, size_ok, found, value = _run_estimator(
+        cells, nan_counts, size_ok, found, value, captured = _run_estimator(
             "diagnose_design",
             label,
             est,
@@ -1597,6 +2006,7 @@ def diagnose_design(
             power,
             resolved_seed,
             progress,
+            event_study=event_study,
         )
         results[label] = cells
         n_nan_inference[label] = nan_counts
@@ -1604,6 +2014,38 @@ def diagnose_design(
         if found is not None:
             mde_results[label] = found
         mde[label] = value
+        if captured is not None:
+            surface, checks, reason = _placebo_event_study(est, captured, alpha)
+            if surface is None or checks is None:
+                warnings.warn(
+                    f"[{label}] no placebo event study is recorded: {reason}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            event_study_results[label] = surface
+            event_study_checks[label] = checks
+            if not checks["pretest_agrees"]:
+                warnings.warn(
+                    f"[{label}] a pre-trend test over all {checks['n_pre']} "
+                    f"pre-periods (any coefficient individually significant at "
+                    f"{alpha:g}) rejected {checks['pretest_rejection_rate']:.1%} of "
+                    f"the {checks['n_draws']} no-effect replicates, against "
+                    f"{checks['pretest_expected_rate']:.1%} assumed by the "
+                    f"pre-trend power formula. PreTrendsPower repeats this "
+                    f"comparison for the pre-periods it plans and reports planned "
+                    f"power only where the two agree; a test of fewer pre-periods "
+                    f"may still agree (see PreTrendsPower.power_by_pre_periods).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if not size_ok:
+                warnings.warn(
+                    f"[{label}] did not pass the size check, so pre-trend power "
+                    f"planned from its placebo event study may be overstated.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     return DesignDiagnosisResults(
         results=results,
@@ -1632,6 +2074,9 @@ def diagnose_design(
         data_sha256=data_sha256,
         data_columns=data_columns,
         time_periods=periods.tolist(),
+        event_study=event_study,
+        event_study_results=event_study_results,
+        _event_study_checks=event_study_checks,
         _classes={label: type(est) for label, est in resolved.items()},
         _params={label: _snapshot(est.get_params()) for label, est in resolved.items()},
         _fit_keywords=_snapshot(fit_extras),
@@ -1773,7 +2218,7 @@ def _lock(
             with _WarningCapture() as capture:
                 _preflight(label, chosen, generator, fit_kwargs, lock_seed)
             _reemit(label, capture.records, stacklevel=4)
-            cells, nan_counts, size_ok, _found, mde = _run_estimator(
+            cells, nan_counts, size_ok, _found, mde, _captured = _run_estimator(
                 "lock",
                 label,
                 chosen,

@@ -42,6 +42,27 @@ def results_design(results: Any) -> Optional[str]:
     return getattr(results, "design", None)
 
 
+def check_precomputed_pretrends_power(precomputed: Dict[str, Any], owner: str) -> None:
+    """
+    Refuse a planned pre-trends power result in ``precomputed=``.
+
+    A ``PreTrendsPowerResults`` computed from a placebo event study
+    (``covariance_source == "placebo_draws"``) describes a design that had
+    not been run. A report describes one fitted model, so the two cannot be
+    combined.
+    """
+    supplied = precomputed.get("pretrends_power")
+    if supplied is None:
+        return
+    if getattr(supplied, "covariance_source", None) == "placebo_draws":
+        raise ValueError(
+            f"{owner}: precomputed['pretrends_power'] was computed from a "
+            f"placebo event study of diagnose_design (a planned design, not "
+            f"the fit being reported). Pass pre-trends power computed from the "
+            f"fitted results, or omit the key."
+        )
+
+
 def check_design_reconciliation(reconciliation: Any, results: Any, owner: str) -> None:
     """
     Refuse a ``design_reconciliation=`` input the report cannot stand behind.

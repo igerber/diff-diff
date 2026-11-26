@@ -1129,6 +1129,9 @@ section is the API-reference index.
   version; adds a "believable-magnitude" check against a power curve.
 - `equivalence_test_trends(df, ...)` - Bilinski-Hatfield-style
   equivalence test (alternative framing of the PT test).
+- `PreTrendsPower().fit(diagnose_design(..., event_study=True))` - the same
+  analysis for a design that has not been run (planned pre-trend power);
+  `power_by_pre_periods` tabulates it by number of pre-periods tested
 - `compute_pretrends_power(results, ...)` - standalone power analysis
   for the PT test; takes a fitted event-study results object (CS / SA
   results or an `EventStudyResults` container, e.g. the TWFE

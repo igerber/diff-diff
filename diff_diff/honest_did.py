@@ -1178,6 +1178,17 @@ def _extract_event_study_params(
     from diff_diff.results_base import EventStudyResults
 
     if isinstance(results, EventStudyResults):
+        from diff_diff.design import PLACEBO_ESTIMAND
+
+        if results.estimand == PLACEBO_ESTIMAND:
+            raise ValueError(
+                "This is a placebo event study from diagnose_design(..., "
+                "event_study=True): its coefficients are means over placebo "
+                "draws, not estimates of an effect, so HonestDiD bounds on it "
+                "have no meaning. Sensitivity planning at the design stage is "
+                "not implemented; PreTrendsPower accepts this object for "
+                "planned pre-trend power."
+            )
         return _extract_container_params(results)
 
     # Try CallawaySantAnnaResults

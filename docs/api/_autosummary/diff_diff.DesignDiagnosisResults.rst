@@ -25,6 +25,7 @@
 
    .. autosummary::
 
+      ~DesignDiagnosisResults.event_study
       ~DesignDiagnosisResults.results
       ~DesignDiagnosisResults.mde_results
       ~DesignDiagnosisResults.estimators
@@ -51,4 +52,5 @@
       ~DesignDiagnosisResults.data_sha256
       ~DesignDiagnosisResults.data_columns
       ~DesignDiagnosisResults.time_periods
+      ~DesignDiagnosisResults.event_study_results
 

@@ -393,7 +393,12 @@ class EventStudyResults(BaseResults):
     #: The estimand label for the ``att`` column when the producer's
     #: per-horizon estimand is NOT an ATT - HeterogeneousAdoptionDiD's
     #: per-horizon "WAS"/"WAS_d_lower" (row M-027; ``_from_had`` relays
-    #: ``target_parameter``). None means the column is an ATT (every other
+    #: ``target_parameter``), or ``"placebo"`` on the placebo event study
+    #: that ``diagnose_design(..., event_study=True)`` records (the column
+    #: is the mean of placebo coefficients over the draws, and ``se`` their
+    #: spread: not an estimate of an effect; ``PreTrendsPower`` accepts such
+    #: a surface for planned pre-trend power, ``HonestDiD`` refuses it).
+    #: None means the column is an ATT (every other
     #: producer), keeping their rendering byte-stable. ``summary()`` uses
     #: it as the column heading and ``to_dict()`` serializes it, so the
     #: numbers never silently change meaning. Optional provenance appended
