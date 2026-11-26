@@ -211,7 +211,8 @@ verbatim, then the contents of `<work_dir>/review_a.md`:
 ```
 
 The codex half is verified on codex-cli 0.172.0; 0.162.1 rejects the pinned model
-(`model_not_found`), which lands here as exit 3 with an upgrade message on stderr.
+(`model_not_found`), which lands here as exit 3 with codex's own "model is not
+supported" error on stderr.
 
 The review still persists and gates normally.
 

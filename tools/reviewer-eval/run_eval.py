@@ -1776,7 +1776,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--k",
         type=int,
         default=2,
-        help="repeats per (case, config); the default B,E contrast is registered at k=2",
+        help="repeats per (case, config); a registered campaign contrast runs only at k=2",
     )
     pr.add_argument(
         "--k-per",

@@ -11,8 +11,9 @@
   `tools/reviewer-eval/campaigns/2026-11-gpt62sol-VERDICT.md`). gpt-6.2-sol is not
   reachable on codex-cli 0.162.1, so the CI `codex-version` pin and the harness
   pin move to 0.172.0 together; a local codex CLI older than that cannot run the
-  new default (the local script and the plan-review helper now say so when the
-  model is rejected). The plan-review surface carries the model over without a
+  new default (it fails with codex's own "model is not supported" error; the
+  local review guide and the plan-review fallback warning name the minimum
+  version). The plan-review surface carries the model over without a
   plan-review campaign, as in 2026-10.
 - **`/ai-review-local` no longer tells the codex reviewer it has no shell
   access**: the local prompt adaptation replaced the criteria's `grep` directive
@@ -21,8 +22,7 @@
   gpt-6.1-sol ignored the sentence; gpt-6.2-sol obeyed it, running no shell
   command in 3 of 3 off-corpus probes and reading the published repository
   instead, which cannot contain unpushed changes. With the fix it ran 24 to 34
-  shell commands per review. A model rejection by an older codex CLI now ends
-  with a hint naming the minimum CLI version (0.172.0) and `--model`.
+  shell commands per review.
 
 ### Internal
 - **Codex reviewer campaign 3 (gpt-6.1-sol -> gpt-6.2-sol)**: `tools/reviewer-eval`

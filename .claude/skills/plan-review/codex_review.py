@@ -12,10 +12,11 @@ through to the LOUD single-Claude fallback without wedging the gate:
   2  codex unavailable (not installed / not logged in)
   3  codex timed out or errored (including an old codex CLI rejecting the model)
 
-The pinned model needs codex-cli >= openai_review.MIN_CODEX_CLI_FOR_DEFAULT_MODEL
-(0.172.0 is the version it was verified on; 0.162.1 rejects it). On that
-rejection this helper says to UPGRADE the CLI and re-run the dual review: it has
-no --model override, and logging in again does not help.
+The pinned model needs a codex CLI that serves it: verified on codex-cli 0.172.0;
+0.162.1 rejects it. That rejection is an ordinary exit 3 with codex's own error
+("model is not supported") on stderr; the fix is to upgrade the CLI and re-run
+the dual review (this helper has no --model override, and logging in again does
+not help). SKILL.md's fallback warning says the same.
 
 Both non-zero exits are treated identically by SKILL.md (loud fallback).
 """
@@ -125,20 +126,6 @@ def main(argv=None) -> int:
         )
     except Exception as exc:
         print(f"codex: review failed or timed out ({type(exc).__name__}: {exc})", file=sys.stderr)
-        rejected = getattr(mod, "CodexModelRejected", None)
-        if rejected is not None and isinstance(exc, rejected):
-            # Recognised by exception TYPE, never by message text (the message
-            # echoes the plan, which may quote anything). The local review CLI
-            # offers `--model` here; this helper does not expose it (the model
-            # is a production pin), so it prints the one message that applies.
-            print(
-                f"codex: the installed codex CLI does not serve the pinned model "
-                f"{CODEX_MODEL!r}. Upgrade it to codex-cli >= "
-                f"{getattr(mod, 'MIN_CODEX_CLI_FOR_DEFAULT_MODEL', '0.172.0')} "
-                f"(`codex --version`), then re-run the dual plan review. Logging in "
-                f"again will not help, and plan review has no --model override.",
-                file=sys.stderr,
-            )
         return 3
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(review)

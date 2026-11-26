@@ -1167,10 +1167,10 @@ def compile_prompt(
 
 ENDPOINT = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-6.2-sol"
-# Oldest codex CLI verified to serve DEFAULT_MODEL (0.162.1 rejects gpt-6.2-sol
-# with `model_not_found`; 0.172.0 accepts it; versions in between were not
-# probed). Informational: used in the advice callers print on CodexModelRejected.
-MIN_CODEX_CLI_FOR_DEFAULT_MODEL = "0.172.0"
+# DEFAULT_MODEL needs a codex CLI that serves it: 0.162.1 rejects gpt-6.2-sol
+# (`model_not_found`), 0.172.0 accepts it; versions in between were not probed.
+# The script does not try to diagnose that rejection (codex's own error names
+# the unsupported model); the minimum is documented in ai-review-local.md.
 DEFAULT_TIMEOUT = 300  # seconds
 REASONING_TIMEOUT = 900  # seconds
 DEFAULT_MAX_TOKENS = 16384
@@ -1446,28 +1446,6 @@ def _non_negative_int(value: str) -> int:
     return n
 
 
-class CodexModelRejected(RuntimeError):
-    """codex ended the run with its `model_not_found` error record: this codex
-    CLI or login does not serve ``model`` (e.g. codex-cli 0.162.1 and
-    gpt-6.2-sol). A RuntimeError subclass, so callers that treat every codex
-    failure alike keep working; callers that can advise the user check the type.
-    The message carries codex's stderr and NO recovery advice."""
-
-    def __init__(self, message: str, model: str):
-        super().__init__(message)
-        self.model = model
-
-
-def codex_model_rejection_advice(model: str) -> str:
-    """Recovery advice for the local review CLI (which has a --model flag)."""
-    return (
-        f"this codex CLI or login does not serve {model!r}. The default model needs "
-        f"codex-cli >= {MIN_CODEX_CLI_FOR_DEFAULT_MODEL} (`codex --version`; upgrade with "
-        f"`npm install -g @openai/codex` or your installer), or pass --model with one "
-        f"your CLI lists."
-    )
-
-
 def call_codex(
     prompt: str,
     model: str,
@@ -1657,20 +1635,9 @@ def call_codex(
             )
 
         if proc.returncode != 0:
-            message = f"codex exec failed (exit {proc.returncode}):\n{stderr_buf.getvalue()}"
-            # A model rejection is recognised by codex's own error record
-            # (`ERROR: {...,"code":"model_not_found",...}`) and only in the LAST
-            # lines of stderr, where codex prints the failure that ended the run.
-            # codex echoes the whole prompt first, and the prompt can carry the
-            # same record verbatim (a reviewed diff, a previous review quoting an
-            # earlier rejection), so its presence earlier in the stream proves
-            # nothing about this failure. The rejection is reported as a TYPE
-            # (CodexModelRejected), never as advice text in the message: each
-            # caller prints the one recovery message that applies to it.
-            tail = "\n".join(stderr_buf.getvalue().rstrip().splitlines()[-3:])
-            if re.search(r'^ERROR: \{.*"code"\s*:\s*"model_not_found"', tail, re.MULTILINE):
-                raise CodexModelRejected(message, model)
-            raise RuntimeError(message)
+            raise RuntimeError(
+                f"codex exec failed (exit {proc.returncode}):\n" f"{stderr_buf.getvalue()}"
+            )
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             raise RuntimeError(
                 f"codex produced no output at {tmp_path}\n" f"stderr:\n{stderr_buf.getvalue()}"
@@ -2306,17 +2273,12 @@ def main() -> None:
         _print_sensitive_notice(codex_repo_root, _scan_sensitive_files(codex_repo_root))
         # 0 means "no timeout" on both backends: proc.wait(timeout=0) would
         # kill codex at once, so 0 (and an omitted flag) map to None here.
-        try:
-            review_content, usage = call_codex(
-                prompt=prompt,
-                model=args.model,
-                repo_root=codex_repo_root,
-                timeout_s=(None if not args.timeout else args.timeout),
-            )
-        except CodexModelRejected as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            print(f"Hint: {codex_model_rejection_advice(exc.model)}", file=sys.stderr)
-            sys.exit(1)
+        review_content, usage = call_codex(
+            prompt=prompt,
+            model=args.model,
+            repo_root=codex_repo_root,
+            timeout_s=(None if not args.timeout else args.timeout),
+        )
     else:
         review_content, usage = call_openai(prompt, args.model, api_key, timeout=args.timeout)
 
