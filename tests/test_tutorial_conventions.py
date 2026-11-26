@@ -122,15 +122,10 @@ _EM_DASH = "—"
 # Rules each notebook violated when the guard was introduced. See the module
 # docstring: entries are deleted as notebooks are repaired, never added.
 KNOWN_VIOLATIONS: Dict[str, FrozenSet[str]] = {
-    "01_basic_did": frozenset({EXECUTED, EM_DASH, DRIFT_TEST}),
-    "02_staggered_did": frozenset({REMOVED_NAME, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "03_synthetic_did": frozenset({EXECUTED, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "04_parallel_trends": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "05_honest_did": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "06_power_analysis": frozenset({EXECUTED, EM_DASH, DRIFT_TEST}),
     "07_pretrends_power": frozenset({EXECUTED, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "08_triple_diff": frozenset({REMOVED_NAME, DRIFT_TEST}),
-    "09_real_world_examples": frozenset({MATPLOTLIB_GUARD, DRIFT_TEST}),
     "10_trop": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "11_imputation_did": frozenset(
         {EXECUTED, JARGON, BLANKET_WARNING_FILTER, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}
