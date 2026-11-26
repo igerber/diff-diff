@@ -10,10 +10,11 @@
   false positive on the negative controls, one judgment flag;
   `tools/reviewer-eval/campaigns/2026-11-gpt62sol-VERDICT.md`). gpt-6.2-sol is not
   reachable on codex-cli 0.162.1, so the CI `codex-version` pin and the harness
-  pin move to 0.172.0 together; a local codex CLI older than that cannot run the
-  new default (it fails with codex's own "model is not supported" error; the
-  local review guide and the plan-review fallback warning name the minimum
-  version). The plan-review surface carries the model over without a
+  pin move to 0.172.0 together. Locally the new default is verified on codex-cli
+  0.172.0 and rejected by 0.162.1 (the run fails with codex's own "model is not
+  supported" error); versions in between were not tested. The local review guide
+  and the plan-review fallback warning say to upgrade when the model is rejected.
+  The plan-review surface carries the model over without a
   plan-review campaign, as in 2026-10.
 - **`/ai-review-local` no longer tells the codex reviewer it has no shell
   access**: the local prompt adaptation replaced the criteria's `grep` directive

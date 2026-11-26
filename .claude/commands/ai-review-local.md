@@ -25,9 +25,11 @@ Choose with `--backend {auto,codex,api}` (default `auto`):
   exists (i.e. `codex login` has been completed); otherwise fall back to `api`.
 - **`codex`**: requires `codex` CLI installed (`brew install --cask codex` or
   `npm install -g @openai/codex`) and `codex login` completed. The default model
-  (`gpt-6.2-sol`) needs **codex-cli 0.172.0 or newer** (`codex --version`): 0.162.1
-  rejects it, and the run fails with codex's own `model_not_found` / "model is not
-  supported" error. Upgrade the CLI, or pass `--model` with a model your CLI serves.
+  (`gpt-6.2-sol`) is **verified on codex-cli 0.172.0** (`codex --version`). 0.162.1
+  rejects it, and the run then fails with codex's own `model_not_found` / "model is
+  not supported" error; versions in between were not tested. If your CLI rejects
+  the model, upgrade it (0.172.0 is known to work), or pass `--model` with a model
+  your CLI serves.
 - **`api`**: requires `OPENAI_API_KEY` env var. Fast iteration mode.
 
 Notes:

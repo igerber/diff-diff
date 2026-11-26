@@ -3,13 +3,13 @@ user
 <PROMPT REDACTED>
 codex
 <TEXT REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc "git status --short && git log -5 --oneline && rg --files -g 'AGENTS.md' -g 'pyproject.toml' -g '*synthetic_control*' -g 'TODO.md' -g 'DEFERRED.md' -g '*firpo*' -g '*abadie*' -g 'changelog.d/README.md'" in <PATH>
 web search: <QUERY REDACTED>
  succeeded in 3186ms:
 <OUTPUT REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc "sed -n '300,615p' diff_diff/synthetic_control.py
 <OTHER REDACTED>
@@ -21,7 +21,7 @@ exec
  succeeded in 0ms:
 <OUTPUT REDACTED>
 web search: <QUERY REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc "nl -ba diff_diff/synthetic_control.py | sed -n '1970,2173p'
 <OTHER REDACTED>
@@ -32,12 +32,12 @@ exec
 <OTHER REDACTED>
  succeeded in 0ms:
 <OUTPUT REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc 'PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q tests/test_methodology_synthetic_control.py' in <PATH>
  exited 1 in 62ms:
 <OUTPUT REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc "nl -ba diff_diff/synthetic_control_results.py | sed -n '414,459p;1065,1175p;2255,2310p'
 <OTHER REDACTED>
@@ -112,7 +112,7 @@ exec
 <OTHER REDACTED>
  succeeded in 0ms:
 <OUTPUT REDACTED>
-web search: 
+web search:
 exec
 /bin/zsh -lc "PYTHONDONTWRITEBYTECODE=1 python -c 'import runpy, warnings, pandas as pd
 <OTHER REDACTED>
