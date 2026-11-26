@@ -14,13 +14,14 @@ intentionally do NOT exist at HEAD. `tests/test_v4_matrix.py` enforces their
 absence until their phase ships, and flips to enforcing their presence when the
 matrix row flips. Nothing in this document is an undocumented deviation; it is
 the documentation. (Amended 2026-11-01, item 10: phases 1-5 have shipped, so every
-3.9/4.0 symbol described here exists at HEAD; the phase-6 4.1 `event_study()` front door
-is the one surface still described but not built - sketch only, specified in its own plan.)
+3.9/4.0 symbol described here exists at HEAD; the phase-6 `event_study()` front door
+is the one surface still described but not built - sketch only, specified in its own plan.
+Amended 2026-11-26, user decision: 4.1.0 shipped without the front door, which moves to 4.2.)
 
 Companion artifacts: `docs/v4-deprecations.yaml` (the lifecycle ledger - single
 source of truth for every old/new/version/status fact; this prose never
 restates per-row lifecycle data and instead cites rows as `[M-###]`),
-`tests/test_v4_matrix.py` (enforcement), ROADMAP.md "4.1 `event_study()` comparison
+`tests/test_v4_matrix.py` (enforcement), ROADMAP.md "4.2 `event_study()` comparison
 front door" (the program's one remaining queued item; the "4.0 API unification" entry
 was retired at the release, 2026-11-01).
 
@@ -60,14 +61,16 @@ WooldridgeDiD, StackedDiD, LPDiD) stays separate classes - ecosystem-wide,
 method switches succeed only when estimators share an estimand and input
 contract, and these differ structurally (ImputationDiD/TwoStageDiD have no
 control-group concept at all). SyntheticControl and SyntheticDiD stay separate
-(disjoint weight machinery). The 4.1 `event_study()` comparison front door is
+(disjoint weight machinery). The 4.2 `event_study()` comparison front door is
 sketched in section 9 but not specified here.
 
 ## 2. Release-line rule and warning policy
 
 **Ladder:** 3.9 ships the new surface additively plus FutureWarnings on old
 surface (sklearn playbook) -> 4.0 removes deprecated surface, flips results
-storage (section 5) and the two default policies -> 4.1 adds the front door.
+storage (section 5) and the two default policies -> 4.2 adds the front door.
+(Amended 2026-11-26, user decision: the front door was laddered for 4.1; 4.1.0
+shipped the design-stage tooling and fixes without it, so it moves to 4.2.)
 (Amended 2026-11-01, item 9b, user decision: the 4.0-era compatibility
 properties scheduled for a 5.0 removal were retired AT 4.0 - no release ever
 carried them - so the released 3.x names `overall_*`, `period_effects` and
@@ -1093,7 +1096,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] + its results-field mirror [M-143] (shipped: tests/test_v4_merge_cic.py; method= is keyword-only and lowercase-only, the QDiD CLASS is deprecated while the METHOD is not, and ChangesInChangesResults.estimator -> .method carries a dual-key to_dict() window through 3.9) |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
 | 5: enforcement | 4.0 | SHIPPED 2026-11-01 (items 1-9b + the release, item 10). Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] removed at 4.0 (item 9b; the planned 5.0 window was retired); storage flips [M-050..M-058] (their 4.0 -> 5.0 shims retired at 4.0, item 9b); default policies [M-004..M-006, M-128..M-131, M-080] + the shared cluster contract [M-155] (7b) and the SpilloverDiD df_convention knob [M-154] (7c); merged-class behavior enforcements [M-083] [M-085]; placebo-wrapper calendar contract [M-156] [M-157] (item 9b); warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (DeprecationWarning in 3.13.0, removed at 4.0 - item 9b); the LWDiD result-alias pair [M-151] [M-152] (removed at 4.0, item 9b); docs/llms.txt/README refresh |
-| 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
+| 6: front door | 4.2 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
 differs when that phase performs one of the row's lifecycle transitions (the

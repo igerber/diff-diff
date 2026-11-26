@@ -16,7 +16,7 @@ B. PHASE-TABLE AGREEMENT with the section-9 phase table.
    expansion - in the cell of its current ``phase``.
    Direction 2: every id cited in the cell of phase P resolves to a live row
    that is terminal (``done``/``removed`` - exempt both directions) or has P's
-   ship-version (phases 2/3/4 -> "3.9", 5 -> "4.0", 6 -> "4.1") among its
+   ship-version (phases 2/3/4 -> "3.9", 5 -> "4.0", 6 -> "4.2") among its
    ``introduced_in``/``deprecated_in``/``removed_in`` - or ``decision_due`` for
    ``env-default`` rows (the ``decision_due`` channel is pinned on synthetic
    rows in ``test_direction2_predicate_on_synthetic_rows``; M-008, the real
@@ -100,7 +100,7 @@ _TERMINAL_STATUSES = {"done", "removed"}
 # Phase -> version that phase ships in (phase 1 predates the ledger and ships
 # nothing; the table's own "Ships in" column is cross-checked in
 # test_ship_version_map_matches_table).
-_SHIP_VERSION = {2: "3.9", 3: "3.9", 4: "3.9", 5: "4.0", 6: "4.1"}
+_SHIP_VERSION = {2: "3.9", 3: "3.9", 4: "3.9", 5: "4.0", 6: "4.2"}
 
 # Enforcement horizon (v4-design section 2 release ladder): maps the CURRENT
 # (major, minor) to the version whose deprecation windows must already be
@@ -117,6 +117,7 @@ _NEXT_RELEASE = {
     (3, 12): "4.0",
     (3, 13): "4.0",
     (4, 0): "4.1",
+    (4, 1): "4.2",
 }
 
 # Section-8 vocabulary predicate (Duty A). Every param/field rename token in
