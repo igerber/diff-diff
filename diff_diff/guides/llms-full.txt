@@ -2382,6 +2382,10 @@ sensitivity = honest.sensitivity_analysis(
     M_grid=[0, 0.5, 1.0, 1.5, 2.0],
 )
 sensitivity.plot()
+
+# Before the study has run: planned power of the same analysis, by M, counted on
+# the placebo draws of diagnose_design(..., event_study=True). Returns a DataFrame.
+plan_table = honest.power_by_M(diagnosis, M_grid=[0, 0.5, 1.0], effect_size=0.5)
 ```
 
 ### Convenience Functions
@@ -2443,7 +2447,8 @@ treatment effect.
 
 ```python
 from diff_diff import (
-    CallawaySantAnna, ImputationDiD, PreTrendsPower, TwoWayFixedEffects, diagnose_design,
+    CallawaySantAnna, HonestDiD, ImputationDiD, PreTrendsPower, TwoWayFixedEffects,
+    diagnose_design,
 )
 
 # `panel`: balanced, pre-treatment only (or pass first_treat= to truncate at
@@ -2480,6 +2485,18 @@ table = PreTrendsPower().power_by_pre_periods(plan)   # one row per number teste
 #          placebo_rejection_rate (the same rate counted in the placebo draws), power
 planned = PreTrendsPower().fit(plan, pre_periods=[-4, -3, -2])  # PreTrendsPowerResults
 planned.mdv                                  # smallest violation detected at 80% power
+
+# Planned sensitivity analysis from the same diagnosis: HonestDiD is run on the
+# event study of every no-effect placebo draw and the intervals are counted.
+honest_plan = HonestDiD(method="relative_magnitude").power_by_M(
+    plan, M_grid=[0, 0.5, 1.0], effect_size=0.5, power=0.80,
+)
+# columns: M, placebo_rejection_rate (interval excludes zero with no effect; a
+#          valid interval stays at or below alpha), ci_width, mde, power,
+#          n_simulations, n_simulation_failures
+# mde / power are NaN on a row that fails the diagnosis size rule (typical for
+# method="smoothness" at M=0 on a small panel). method="combined" is refused;
+# a fitted model is refused (use sensitivity_analysis).
 # The formula assumes each coefficient's own test holds its level. For the
 # pre-periods being planned, PreTrendsPower compares the pre-trend test's
 # rejection rate in the placebo draws with the rate the formula assumes and

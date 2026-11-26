@@ -1185,8 +1185,8 @@ def _extract_event_study_params(
                 "This is a placebo event study from diagnose_design(..., "
                 "event_study=True): its coefficients are means over placebo "
                 "draws, not estimates of an effect, so HonestDiD bounds on it "
-                "have no meaning. Sensitivity planning at the design stage is "
-                "not implemented; PreTrendsPower accepts this object for "
+                "have no meaning. To plan a sensitivity analysis from it, use "
+                "HonestDiD.power_by_M; PreTrendsPower accepts this object for "
                 "planned pre-trend power."
             )
         return _extract_container_params(results)
@@ -2978,6 +2978,11 @@ class HonestDiD(BaseEstimator):
     >>> # Sensitivity curve over M values
     >>> sensitivity = honest.sensitivity_analysis(results, M_grid=[0, 0.5, 1, 1.5, 2])
     >>> sensitivity.plot()
+
+    Notes
+    -----
+    :meth:`power_by_M` plans this analysis before any outcome exists, from the
+    placebo draws of ``diagnose_design(..., event_study=True)``.
     """
 
     def __init__(
@@ -3416,10 +3421,7 @@ class HonestDiD(BaseEstimator):
             Results containing bounds and CIs for each M value.
         """
         if M_grid is None:
-            if self.method == "relative_magnitude":
-                M_grid = [0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
-            else:
-                M_grid = [0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
+            M_grid = _default_M_grid(self.method)
 
         M_values = np.array(M_grid)
         if np.any(M_values < 0):
@@ -3448,6 +3450,232 @@ class HonestDiD(BaseEstimator):
             original_se=first_result.original_se,
             alpha=self.alpha,
         )
+
+    def power_by_M(
+        self,
+        results: Any,
+        M_grid: Optional[List[float]] = None,
+        effect_size: Optional[float] = None,
+        power: float = 0.80,
+        progress: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Planned power of this sensitivity analysis, by ``M``, before any outcome exists.
+
+        Runs this analysis (:meth:`fit`, with this instance's ``method``,
+        ``alpha`` and ``l_vec``) on the event study of every no-effect placebo
+        draw that ``diagnose_design(..., event_study=True)`` recorded, and
+        counts. Nothing is approximated by a formula: each row reports what
+        the robust interval did on placebo designs drawn from your own panel.
+
+        An effect that is the same across treated units at each event time
+        moves every post-period coefficient by that event time's effect and
+        leaves the pre-period coefficients and the covariance unchanged, so it
+        moves a draw's robust interval by the value of the target parameter
+        ``l_vec' tau`` and changes nothing else. The interval at any effect
+        size therefore follows from the draw's no-effect interval.
+
+        Parameters
+        ----------
+        results : DesignDiagnosisResults or EventStudyResults
+            A design diagnosis that holds exactly one placebo event study, or
+            one entry of its ``event_study_results``. A fitted model is
+            refused with ``TypeError``: choosing ``M``, ``method`` or
+            ``l_vec`` from this table after seeing the estimate is a choice
+            made on the outcome. Use :meth:`sensitivity_analysis` there.
+        M_grid : list of float, optional
+            Values of ``M`` to plan, one row each. Default: the grid
+            :meth:`sensitivity_analysis` uses for this ``method``.
+        effect_size : float, optional
+            A value of the target parameter ``l_vec' tau`` at which to report
+            ``power``. With the default ``l_vec`` this is the average
+            post-period effect, so the constant effect ``e`` that
+            ``diagnose_design`` injects is ``effect_size=e``; for another
+            ``l_vec`` that effect corresponds to ``e * sum(l_vec)``.
+        power : float, default=0.80
+            Target power for the ``mde`` column.
+        progress : bool, default=True
+            Print one line per ``M``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per ``M``:
+
+            - ``M``
+            - ``placebo_rejection_rate``: share of the scored draws whose
+              robust interval excludes zero although no effect is present. A
+              valid interval does so in at most ``alpha`` of them.
+            - ``ci_width``: mean width of the robust interval.
+            - ``mde``: the effect magnitude above which, for an effect of
+              either sign, at least ``power`` of the scored draws have an
+              interval lying entirely on the effect's side of zero.
+            - ``power``: at ``effect_size``, the share of scored draws whose
+              interval lies entirely on the effect's side of zero (an
+              interval that excludes zero on the wrong side is not a
+              detection). At ``effect_size=0`` it is the
+              ``placebo_rejection_rate``. NaN when ``effect_size`` is not
+              given.
+            - ``n_simulations``: draws with a finite robust interval.
+            - ``n_simulation_failures``: no-effect replicates without one
+              (the estimator or this analysis failed on them, or their event
+              study had a different layout).
+
+            ``mde`` and ``power`` are NaN on a row that fails the size rule of
+            ``diagnose_design``: more than 10% of the replicates were lost, or
+            ``placebo_rejection_rate`` exceeds ``alpha`` by more than 1.96
+            Monte Carlo standard errors. An interval that excludes zero too
+            often when nothing happened has no meaningful power. One warning
+            lists the rows concerned.
+
+        Raises
+        ------
+        TypeError
+            If ``results`` is not a design diagnosis or a placebo event study.
+        ValueError
+            If ``method="combined"`` (its interval is not supported by the
+            paper, so no planned number is reported for it), if an argument is
+            invalid, if the placebo event study does not carry its draws, or
+            if this analysis could not be computed on any draw.
+
+        Notes
+        -----
+        These are powers when parallel trends hold in the placebo draws; under
+        ``method="smoothness"`` a linear difference in trends between treated
+        and never-treated units does not change them. Effects that differ
+        across treated units would change the standard errors, as in the rest
+        of the diagnosis.
+
+        ``method="smoothness"`` with ``M > 0`` solves an optimization per draw:
+        about 0.2 seconds each with 7 pre-periods and close to a second with
+        17, so a row takes minutes at 500 draws. ``M = 0`` and
+        ``method="relative_magnitude"`` take milliseconds per draw. The
+        default grid for ``method="smoothness"`` has six values above 0; pass
+        a short ``M_grid`` in the units of your outcome.
+        """
+        from diff_diff.design import (
+            _DATA_DEPENDENT_ERRORS,
+            PLACEBO_ESTIMAND,
+            _placebo_draw_record,
+            _reemit,
+            _resolve_event_study,
+        )
+        from diff_diff.results_base import EventStudyResults
+
+        surface, _diagnosis, _label = _resolve_event_study(results)
+        if not (isinstance(surface, EventStudyResults) and surface.estimand == PLACEBO_ESTIMAND):
+            raise TypeError(
+                "power_by_M plans a sensitivity analysis from a design diagnosis "
+                "(diagnose_design(..., event_study=True)) or one of its placebo "
+                f"event studies; got {type(results).__name__}. For a fitted model "
+                "use sensitivity_analysis."
+            )
+        if self.method == "combined":
+            raise ValueError(
+                "power_by_M does not plan method='combined': the library's "
+                "interval for it is not supported by the paper (Rambachan & Roth "
+                "2023, Proposition 4.2). Plan method='smoothness' or "
+                "method='relative_magnitude'."
+            )
+        if M_grid is None:
+            M_grid = _default_M_grid(self.method)
+        try:
+            M_values = np.asarray(list(M_grid), dtype=float).ravel()
+        except (TypeError, ValueError):
+            raise ValueError(f"M_grid must be a list of numbers, got {M_grid!r}") from None
+        if M_values.size == 0 or not np.all(np.isfinite(M_values)) or np.any(M_values < 0):
+            raise ValueError(
+                f"M_grid must be a non-empty list of finite, non-negative values, got {M_grid!r}"
+            )
+        if isinstance(power, bool) or not isinstance(power, (int, float, np.floating)):
+            raise ValueError(f"power must be a number between 0 and 1, got {power!r}")
+        if not 0.0 < float(power) < 1.0:
+            raise ValueError(f"power must be between 0 and 1, got {power!r}")
+        if effect_size is not None:
+            if isinstance(effect_size, bool) or not isinstance(
+                effect_size, (int, float, np.integer, np.floating)
+            ):
+                raise ValueError(f"effect_size must be a finite number, got {effect_size!r}")
+            if not np.isfinite(effect_size):
+                raise ValueError(f"effect_size must be a finite number, got {effect_size!r}")
+            effect_size = float(effect_size)
+        draws, n_lost = _placebo_draw_record(surface)
+
+        if progress:
+            print(
+                f"  power_by_M: method={self.method}, {len(draws)} placebo draws, "
+                f"{M_values.size} values of M"
+            )
+        rows: List[Dict[str, Any]] = []
+        errors: Dict[str, int] = {}
+        captured: List[warnings.WarningMessage] = []
+        for M in M_values:
+            ci_lb = np.full(len(draws), np.nan)
+            ci_ub = np.full(len(draws), np.nan)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                for position, draw in enumerate(draws):
+                    try:
+                        fitted = self.fit(draw, M=float(M))
+                    except _DATA_DEPENDENT_ERRORS as exc:
+                        message = f"{type(exc).__name__}: {exc}"
+                        errors[message] = errors.get(message, 0) + 1
+                        continue
+                    ci_lb[position] = fitted.ci_lb
+                    ci_ub[position] = fitted.ci_ub
+            captured.extend(caught)
+            row = _score_planned_intervals(
+                ci_lb, ci_ub, n_lost, self.alpha, float(power), effect_size
+            )
+            row = {"M": float(M), **row}
+            rows.append(row)
+            if progress:
+                rate = row["placebo_rejection_rate"]
+                rate_text = "n/a" if np.isnan(rate) else f"{rate:.1%}"
+                print(
+                    f"  power_by_M: M={float(M):g}: excludes zero with no effect in "
+                    f"{rate_text} ({row['n_simulations']} scored, "
+                    f"{row['n_simulation_failures']} lost)"
+                )
+        _reemit("HonestDiD.power_by_M", captured, stacklevel=3)
+
+        if not any(row["n_simulations"] for row in rows):
+            reason = max(errors, key=lambda key: errors[key]) if errors else "no finite interval"
+            raise ValueError(
+                "This sensitivity analysis could not be computed on any placebo "
+                f"draw, so it would not run on this design either. Most frequent "
+                f"error: {reason}"
+            )
+        withheld = [row for row in rows if not row["size_controlled"]]
+        if withheld:
+            parts = []
+            for row in withheld:
+                total = row["n_simulations"] + row["n_simulation_failures"]
+                rate = row["placebo_rejection_rate"]
+                rate_text = "n/a" if np.isnan(rate) else f"{rate:.1%}"
+                parts.append(
+                    f"M={row['M']:g} (excludes zero with no effect in {rate_text}; "
+                    f"{row['n_simulation_failures']} of {total} replicates lost)"
+                )
+            warnings.warn(
+                "No planned power or MDE is reported where the robust interval "
+                f"fails the size check at alpha={self.alpha:g} on the placebo "
+                f"draws: {'; '.join(parts)}. An interval that excludes zero too "
+                "often when no effect is present, or that could not be computed "
+                "on more than 10% of the replicates, has no meaningful power.",
+                UserWarning,
+                stacklevel=2,
+            )
+        columns = [
+            "M",
+            "placebo_rejection_rate",
+            "ci_width",
+            "mde",
+            "power",
+            "n_simulations",
+            "n_simulation_failures",
+        ]
+        return pd.DataFrame(rows)[columns]
 
     def _find_breakdown(
         self, results: Any, M_values: np.ndarray, ci_list: List[Tuple[float, float]]
@@ -3547,6 +3775,78 @@ class HonestDiD(BaseEstimator):
                 lo = mid
 
         return (lo + hi) / 2
+
+
+# =============================================================================
+# Design-stage planning (HonestDiD.power_by_M)
+# =============================================================================
+
+
+def _default_M_grid(method: str) -> List[float]:
+    """The grid ``sensitivity_analysis`` and ``power_by_M`` use when none is given."""
+    if method == "relative_magnitude":
+        return [0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    return [0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
+
+
+def _score_planned_intervals(
+    ci_lb: np.ndarray,
+    ci_ub: np.ndarray,
+    n_lost: int,
+    alpha: float,
+    power: float,
+    effect_size: Optional[float],
+) -> Dict[str, Any]:
+    """Score one row of ``HonestDiD.power_by_M`` from the draws' no-effect intervals.
+
+    ``ci_lb`` / ``ci_ub`` hold one robust interval per placebo draw, computed
+    with no effect present; a draw whose interval is not finite is lost.
+    ``n_lost`` counts the replicates lost before any interval was computed.
+
+    An effect that is the same across treated units moves a draw's interval by
+    the value ``theta`` of the target parameter and changes nothing else, so
+    the interval at ``theta`` is ``[ci_lb + theta, ci_ub + theta]``. It detects
+    the effect when it lies entirely on the effect's side of zero.
+    """
+    from diff_diff.design import _size_controlled
+
+    scored = np.isfinite(ci_lb) & np.isfinite(ci_ub)
+    a = np.asarray(ci_lb, dtype=float)[scored]
+    b = np.asarray(ci_ub, dtype=float)[scored]
+    n = int(a.size)
+    lost = int(n_lost) + int(scored.size - n)
+    row: Dict[str, Any] = {
+        "placebo_rejection_rate": np.nan,
+        "ci_width": np.nan,
+        "mde": np.nan,
+        "power": np.nan,
+        "n_simulations": n,
+        "n_simulation_failures": lost,
+        "size_controlled": False,
+    }
+    if n == 0:
+        return row
+    rate = float(np.mean((a > 0.0) | (b < 0.0)))
+    row["placebo_rejection_rate"] = rate
+    row["ci_width"] = float(np.mean(b - a))
+    if not _size_controlled(rate, n, lost, alpha):
+        return row
+    row["size_controlled"] = True
+    # The smallest magnitude from which the detecting share is at least
+    # ``power``, for a positive effect (a + theta > 0) and for a negative one
+    # (b - theta < 0); the larger of the two, and never below zero.
+    k = max(int(np.ceil(power * n - 1e-9)), 1)
+    positive = float(np.sort(-a)[k - 1])
+    negative = float(np.sort(b)[k - 1])
+    row["mde"] = max(positive, negative, 0.0)
+    if effect_size is not None:
+        if effect_size > 0.0:
+            row["power"] = float(np.mean(a + effect_size > 0.0))
+        elif effect_size < 0.0:
+            row["power"] = float(np.mean(b + effect_size < 0.0))
+        else:
+            row["power"] = rate
+    return row
 
 
 # =============================================================================

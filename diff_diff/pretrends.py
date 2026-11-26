@@ -310,31 +310,12 @@ def _resolve_planned_input(results: Any) -> Any:
     public method that takes ``results``; the methods pass the resolved object
     to each other, so the size warning below is issued once per public call.
     """
-    from diff_diff.design import DesignDiagnosisResults
+    from diff_diff.design import _resolve_event_study
 
-    if not isinstance(results, DesignDiagnosisResults):
+    surface, diagnosis, label = _resolve_event_study(results)
+    if diagnosis is None:
         return results
-    if not results.event_study:
-        raise ValueError(
-            "This design diagnosis holds no placebo event study. Run "
-            "diagnose_design(..., event_study=True) to record one."
-        )
-    surfaces = results.event_study_results
-    if not surfaces:
-        raise ValueError(
-            "This design diagnosis recorded no placebo event study for any of "
-            f"its estimators ({', '.join(results.estimators)}). One is recorded "
-            "for CallawaySantAnna and StackedDiD estimators; see the warnings "
-            "diagnose_design issued."
-        )
-    if len(surfaces) > 1:
-        raise ValueError(
-            "This design diagnosis holds placebo event studies for several "
-            f"estimators ({', '.join(surfaces)}). Pass one of them: "
-            "diagnosis.event_study_results[label]."
-        )
-    ((label, surface),) = surfaces.items()
-    if not results.size_controlled.get(label, True):
+    if not diagnosis.size_controlled.get(label, True):
         warnings.warn(
             f"Estimator '{label}' did not pass the size check of the design "
             "diagnosis, so pre-trend power planned from its placebo event study "
@@ -2551,8 +2532,8 @@ class PreTrendsPower(BaseEstimator):
             raise ValueError(
                 "sensitivity_to_honest_did describes a realized event study; a "
                 "placebo event study from diagnose_design has no estimate to "
-                "compare. Sensitivity planning at the design stage is not "
-                "implemented."
+                "compare. To plan a sensitivity analysis at the design stage, "
+                "use HonestDiD.power_by_M."
             )
         pt_results = self.fit(results, pre_periods=pre_periods)
         mdv = pt_results.mdv

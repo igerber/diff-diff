@@ -1237,6 +1237,12 @@ sources:
         type: api_reference
       - path: docs/tutorials/05_honest_did.ipynb
         type: tutorial
+      - path: docs/api/design.rst
+        type: api_reference
+        note: "Planned sensitivity analysis: HonestDiD.power_by_M on a design diagnosis"
+      - path: docs/tutorials/34_design_diagnosis.ipynb
+        type: tutorial
+        note: "Plan the sensitivity analysis (section 5); drift-locked at tests/test_t34_design_diagnosis_drift.py"
       - path: README.md
         section: "Diagnostics & Sensitivity (one-line entry)"
         type: user_guide
@@ -1505,6 +1511,9 @@ sources:
       - path: docs/api/pretrends.rst
         type: api_reference
         note: "Design-stage input: PreTrendsPower on a placebo event study recorded by diagnose_design(event_study=True)"
+      - path: docs/api/honest_did.rst
+        type: api_reference
+        note: "HonestDiD.power_by_M reads the placebo draws kept by diagnose_design(event_study=True)"
       - path: docs/index.rst
         type: user_guide
         note: "Diagnostics & Sensitivity table row"

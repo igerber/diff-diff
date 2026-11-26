@@ -70,6 +70,23 @@ not see, rerun ``diagnose_design`` with the chosen estimator alone and a new
 ``seed``, and use that run for pre-trend planning only: the lock is still taken
 from the comparison run.
 
+**Planned sensitivity analysis.** The same diagnosis keeps the event study of
+every no-effect placebo draw, and
+:meth:`~diff_diff.HonestDiD.power_by_M` runs a
+:class:`~diff_diff.HonestDiD` sensitivity analysis on each of them. It returns,
+per restriction parameter ``M``, how often the robust interval excluded zero
+with no effect present (``placebo_rejection_rate``), the interval's mean width,
+the minimum detectable effect and the power at an effect size you name. The
+numbers are counted, not derived from a formula: an effect that is the same
+across treated units moves every draw's interval by the size of the effect and
+changes nothing else, so the interval at any effect size follows from the
+no-effect draw. A row whose interval excludes zero too often (the size rule the
+diagnosis applies to its own MDE) shows the rate and leaves ``mde`` and
+``power`` blank. On small panels this happens for ``method="smoothness"`` at
+``M = 0``, whose interval is built from each fit's own estimated covariance.
+These are powers when parallel trends hold; ``method="combined"`` is not
+planned. Keeping the draws costs about 3 KB per replicate on the diagnosis.
+
 **Design lock.** :meth:`~diff_diff.DesignDiagnosisResults.lock` records one
 estimator and its configuration as a :class:`~diff_diff.DesignLock`. Comparing
 several estimators and then quoting the chosen one's power from the same runs

@@ -21,6 +21,18 @@ Two main restriction types are supported:
 2. **Smoothness (ΔSD)**: Bounds on the second differences of the trend violations,
    restricting how much the violation can change between periods.
 
+**Before the study has run.** :meth:`~diff_diff.HonestDiD.power_by_M` plans the
+sensitivity analysis for a design that has no outcome yet. Give it a
+:func:`~diff_diff.diagnose_design` result run with ``event_study=True`` and it
+runs the analysis on the event study of every no-effect placebo draw, then
+reports, per ``M``: how often the robust interval excluded zero although no
+effect was present, its mean width, the minimum detectable effect, and the
+power at an effect size you name. Nothing is approximated by a formula. Rows on
+which the interval excludes zero too often are shown with that rate and without
+planned numbers. ``fit``, ``sensitivity_analysis`` and ``breakdown_value``
+describe an estimate and refuse a placebo event study. See
+:doc:`design` and the ``HonestDiD`` section of the methodology registry.
+
 HonestDiD
 ---------
 
@@ -40,6 +52,7 @@ Main class for computing honest bounds and confidence intervals.
       ~HonestDiD.fit
       ~HonestDiD.sensitivity_analysis
       ~HonestDiD.breakdown_value
+      ~HonestDiD.power_by_M
 
 Example
 ~~~~~~~

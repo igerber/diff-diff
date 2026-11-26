@@ -15,6 +15,7 @@
       ~HonestDiD.breakdown_value
       ~HonestDiD.fit
       ~HonestDiD.get_params
+      ~HonestDiD.power_by_M
       ~HonestDiD.sensitivity_analysis
       ~HonestDiD.set_params
 

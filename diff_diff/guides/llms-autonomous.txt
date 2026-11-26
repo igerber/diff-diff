@@ -1132,6 +1132,11 @@ section is the API-reference index.
 - `PreTrendsPower().fit(diagnose_design(..., event_study=True))` - the same
   analysis for a design that has not been run (planned pre-trend power);
   `power_by_pre_periods` tabulates it by number of pre-periods tested
+- `HonestDiD(...).power_by_M(diagnose_design(..., event_study=True))` -
+  planned power of the sensitivity analysis, by `M`, counted on the placebo
+  draws (rate at which the robust interval excludes zero with no effect,
+  width, MDE, power at `effect_size`); rows that fail the size rule have
+  blank `mde` / `power`
 - `compute_pretrends_power(results, ...)` - standalone power analysis
   for the PT test; takes a fitted event-study results object (CS / SA
   results or an `EventStudyResults` container, e.g. the TWFE
