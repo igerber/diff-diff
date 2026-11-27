@@ -4147,6 +4147,42 @@ class TestAnalyticalFiniteDfAlphaOverride:
         topics = {c.get("topic") for c in br.caveats()}
         assert "alpha_override_preserved" in topics
 
+    @pytest.mark.parametrize("df_survey", [0, None])
+    def test_replicate_design_without_an_interval_says_none_is_available(self, df_survey):
+        """A replicate design whose df is undefined stores ``df_survey = 0``
+        (rank-deficient) or ``None`` (rank one). With NaN bounds the alpha
+        caveat must say that no interval is available, not that the displayed
+        one keeps its native coverage."""
+        from types import SimpleNamespace
+
+        class _ReplicateStub:
+            pass
+
+        stub = _ReplicateStub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = float("nan")
+        stub.conf_int = (float("nan"), float("nan"))
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="replicate",
+            replicate_method="JK1",
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=None,
+            n_psu=None,
+            df_survey=df_survey,
+        )
+        report = json.dumps(BusinessReport(stub, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert "undefined-df (replicate-weight)" in report
+        assert "no confidence interval is available at any level" in report
+        assert "the displayed CI remains" not in report
+
     def test_undefined_df_survey_stub_does_not_invent_finite_ci(self):
         """When the fit's native inference returned NaN (rank-deficient
         replicate design: ``df_survey = 0``), BR must not recompute a

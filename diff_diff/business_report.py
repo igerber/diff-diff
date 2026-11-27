@@ -747,37 +747,40 @@ class BusinessReport:
                     "df_survey",
                     getattr(getattr(r, "survey_metadata", None), "df_survey", None),
                 )
+                # Whether the fit stored an interval and a p-value, from the
+                # extracted headline (``ci`` / ``p``), and whether its
+                # variance comes from replicate weights.
+                _replicate = (
+                    getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
+                    is not None
+                )
+                _inference_reported = (
+                    ci is not None
+                    and len(ci) == 2
+                    and all(b is not None and np.isfinite(b) for b in ci)
+                    and p is not None
+                    and np.isfinite(p)
+                )
+                _zero_df = isinstance(df_survey, (int, float)) and df_survey == 0
+                # A rank-one replicate design stores ``df_survey = None``.
+                _unrecorded_replicate_df = df_survey is None and _replicate
                 if isinstance(df_survey, (int, float)) and df_survey > 0:
                     inference_label = "finite-df survey"
-                elif isinstance(df_survey, (int, float)) and df_survey == 0:
+                elif (_zero_df or _unrecorded_replicate_df) and not _inference_reported:
                     # The fit deliberately left inference undefined: a
                     # rank-deficient replicate design, or a Taylor-linearized
                     # design with n_PSU - n_strata = 0. Preserve (NaN bounds
                     # remain NaN) and name the variance method that applies.
-                    _replicate = (
-                        getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
-                        is not None
+                    inference_label = (
+                        "undefined-df (replicate-weight)"
+                        if _replicate
+                        else "undefined-df (Taylor-linearized survey)"
                     )
-                    _stored_ci = getattr(r, "conf_int", None)
-                    _stored_p = getattr(r, "p_value", None)
-                    _inference_reported = (
-                        _stored_ci is not None
-                        and len(_stored_ci) == 2
-                        and all(isinstance(b, (int, float)) and np.isfinite(b) for b in _stored_ci)
-                        and isinstance(_stored_p, (int, float))
-                        and np.isfinite(_stored_p)
-                    )
-                    if _inference_reported:
-                        # Some estimators still report inference at zero
-                        # design df through a fallback reference distribution.
-                        # Describe what the fit stored, not what it should be.
-                        inference_label = "zero-df survey (fallback reference distribution)"
-                    else:
-                        inference_label = (
-                            "undefined-df (replicate-weight)"
-                            if _replicate
-                            else "undefined-df (Taylor-linearized survey)"
-                        )
+                elif _zero_df:
+                    # Some estimators still report inference at zero design
+                    # df through a fallback reference distribution. Describe
+                    # what the fit stored, not what it should be.
+                    inference_label = "zero-df survey (fallback reference distribution)"
                 else:
                     # Ordinary analytical fit with a finite but unexposed
                     # ``df`` (``DifferenceInDifferences`` / most staggered

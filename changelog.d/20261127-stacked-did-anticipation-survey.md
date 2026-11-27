@@ -66,13 +66,15 @@
   intervals rebuilt from the standard error; a row with a finite standard
   error and a NaN stored interval (inference failed closed, for example a
   survey design with zero degrees of freedom) is now drawn as a point with no
-  interval, as the `aggregate("event_study")` container already was. On the
+  interval, as the `aggregate("event_study")` container already was; this
+  holds for dCDH results (effects and placebos) as well. On the
   Plotly backend the shaded band is now broken at any estimated row without an
   interval, where it used to fill straight across it; a row left on its own by
   the break is drawn with a vertical bar between its bounds.
 - `BusinessReport` no longer describes a Taylor-linearized fit with zero
   survey degrees of freedom as "replicate-weight" inference whose interval
-  "remains at the fit's native level". When the fit stored no interval it
+  "remains at the fit's native level". The same applies to a replicate
+  design that records no degrees of freedom and stored no interval. When the fit stored no interval it
   names the variance method and says that none is available; when the fit
   did store one (an estimator that falls back to a reference distribution at
   zero df) it describes that interval.

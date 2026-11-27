@@ -7303,7 +7303,8 @@ should be a deliberate user choice.
   its own cohort base and no single shift represents them faithfully
 - **Note (undefined stored inference on the raw-results route):** a results object passed
   directly (not its `aggregate("event_study")` container) has its intervals recomputed
-  from the SE. A row whose STORED interval is NaN while its SE is finite and positive -
+  from the SE. This covers both raw routes: the generic `event_study_effects` route and the
+  dCDH route (its effects and its placebo horizons). A row whose STORED interval is NaN while its SE is finite and positive -
   inference the producer failed closed, such as a survey design with zero degrees of
   freedom - is exempt: its point estimate is drawn with no interval, on the pointwise and
   the band channel, with or without an explicit `reference_period=`. Before this rule a
@@ -7311,8 +7312,10 @@ should be a deliberate user choice.
   estimates whose inference was undefined. The auto-inferred reference row keeps its
   zero-width constraint bar. On the Plotly backend the filled band is drawn as one polygon per run of
   rows that carry an interval: an estimated row without one ends the run, so the fill does
-  not span it (a reference row without an interval is a constraint and does not break the
-  band). A run of a single row has no area to fill and is drawn as a vertical bar between
+  not span it (a normalization constraint without an interval does not break the band; that
+  means a reference row carrying no uncertainty - SE NaN, or effect and SE both exactly 0 -
+  not a row that is merely styled as the reference by the `-1` fallback, which under a
+  varying base is an estimated placebo). A run of a single row has no area to fill and is drawn as a vertical bar between
   its bounds, so a valid interval isolated by the split stays visible. Before, the band
   skipped a row without an interval and filled straight across it.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is

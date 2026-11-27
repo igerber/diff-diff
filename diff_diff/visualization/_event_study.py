@@ -628,14 +628,24 @@ def _render_event_study_plotly(
     # CI band (filled area). One polygon per run of rows that carry an
     # interval: an ESTIMATED row without one (undefined inference, a zero or
     # missing SE) ends the run, so the fill never spans it and implies bounds
-    # it does not have. A reference row without an interval is a constraint,
-    # not an estimate, and does not break the band.
+    # it does not have. A normalization constraint without an interval is not
+    # an estimate and does not break the band.
     has_ci = [not (np.isnan(lo) or np.isnan(hi)) for lo, hi in zip(ci_lower, ci_upper)]
+    # Reference STYLING is not enough to bridge a gap: the raw routes fall back
+    # to styling event time -1 when the producer marks no reference, and under
+    # a varying base that row is an estimated placebo. Only an actual
+    # normalization constraint - a reference row carrying no uncertainty (SE
+    # NaN, or effect and SE both exactly 0) - lets the band continue.
+    ses = df["se"].tolist()
+    is_constraint = [
+        bool(ref) and (not np.isfinite(sd) or (sd == 0 and eff == 0))
+        for ref, sd, eff in zip(is_ref, ses, effects)
+    ]
     runs: List[List[int]] = [[]]
-    for i, (has, ref) in enumerate(zip(has_ci, is_ref)):
+    for i, (has, constraint) in enumerate(zip(has_ci, is_constraint)):
         if has:
             runs[-1].append(i)
-        elif not ref:
+        elif not constraint:
             runs.append([])
     for run in runs:
         if not run:
@@ -723,6 +733,27 @@ def _render_event_study_plotly(
         fig.show()
 
     return fig
+
+
+def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:
+    """A row of a raw ``event_study_effects``-style dict whose STORED
+    inference is undefined: a finite, positive SE with an all-NaN stored
+    interval (the producer failed inference closed, e.g. a survey design with
+    zero degrees of freedom). Reference rows are constraints, not estimates,
+    and never qualify. The raw routes recompute intervals from the SE, so such
+    rows must be handed back on the pointwise channel as NaN."""
+    if entry.get("is_reference", False):
+        return False
+    stored_ci = entry.get("conf_int")
+    stored_se = entry.get("se")
+    if stored_ci is None or stored_se is None:
+        return False
+    return bool(
+        np.isfinite(stored_se)
+        and stored_se > 0
+        and not np.isfinite(stored_ci[0])
+        and not np.isfinite(stored_ci[1])
+    )
 
 
 def _extract_plot_data(
@@ -971,6 +1002,8 @@ def _extract_plot_data(
         ci_lower_override = {}
         ci_upper_override = {}
         has_cband = False
+        # Rows whose stored inference is undefined (see the generic branch).
+        dcdh_undefined: Dict[Any, float] = {}
 
         # Merge placebo horizons (negative keys)
         if results.placebo_event_study:
@@ -981,6 +1014,8 @@ def _extract_plot_data(
                     ci_lower_override[h] = entry["cband_conf_int"][0]
                     ci_upper_override[h] = entry["cband_conf_int"][1]
                     has_cband = True
+                if _stored_inference_undefined(entry):
+                    dcdh_undefined[h] = np.nan
 
         # Reference period at 0
         effects[0] = 0.0
@@ -995,6 +1030,8 @@ def _extract_plot_data(
                     ci_lower_override[h] = entry["cband_conf_int"][0]
                     ci_upper_override[h] = entry["cband_conf_int"][1]
                     has_cband = True
+                if _stored_inference_undefined(entry):
+                    dcdh_undefined[h] = np.nan
 
         if periods is None:
             periods = sorted(effects.keys())
@@ -1013,8 +1050,8 @@ def _extract_plot_data(
             True,  # inferred
             ci_lower_override if has_cband else None,
             ci_upper_override if has_cband else None,
-            None,
-            None,
+            dict(dcdh_undefined) or None,
+            dict(dcdh_undefined) or None,
             None,
         )
 
@@ -1045,16 +1082,7 @@ def _extract_plot_data(
                 ci_lower_override[rel_period] = cband_ci[0]
                 ci_upper_override[rel_period] = cband_ci[1]
                 has_cband = True
-            stored_ci = effect_data.get("conf_int")
-            stored_se = effect_data["se"]
-            if (
-                stored_ci is not None
-                and not effect_data.get("is_reference", False)
-                and np.isfinite(stored_se)
-                and stored_se > 0
-                and not np.isfinite(stored_ci[0])
-                and not np.isfinite(stored_ci[1])
-            ):
+            if _stored_inference_undefined(effect_data):
                 undefined_lower[rel_period] = np.nan
                 undefined_upper[rel_period] = np.nan
 

@@ -1127,6 +1127,139 @@ class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
         assert len([t for t in fig.data if getattr(t, "fill", None) == "toself"]) == 1
 
 
+def _toself_bands(fig):
+    return [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+
+
+def _vertical_bars(fig):
+    return [
+        t
+        for t in fig.data
+        if getattr(t, "mode", None) == "lines"
+        and t.x is not None
+        and len(t.x) == 2
+        and t.x[0] == t.x[1]
+    ]
+
+
+def _marker_xs(fig):
+    return [
+        x
+        for t in fig.data
+        if getattr(t, "mode", None) == "markers" and t.x is not None
+        for x in t.x
+    ]
+
+
+class TestPlotEventStudyRawDCDHUndefinedInference:
+    """The raw dCDH route recomputes intervals from the SE too. A horizon whose
+    stored interval is NaN (replicate design with undefined df) must plot as a
+    marker with no interval - including the isolated case ``L_max=1`` without
+    placebos, where the one-row band segment is drawn as a visible bar."""
+
+    @staticmethod
+    def _dcdh(conf_int, placebo=None):
+        from types import SimpleNamespace
+
+        entry = {
+            "effect": 1.4,
+            "se": 0.3,
+            "t_stat": float("nan"),
+            "p_value": float("nan"),
+            "conf_int": conf_int,
+            "n_obs": 40,
+        }
+        return SimpleNamespace(L_max=1, placebo_event_study=placebo, event_study_effects={1: entry})
+
+    def test_isolated_undefined_horizon_draws_no_interval(self):
+        pytest.importorskip("plotly")
+
+        fig = plot_event_study(
+            self._dcdh((float("nan"), float("nan"))), backend="plotly", show=False
+        )
+        assert _vertical_bars(fig) == [] and _toself_bands(fig) == []
+        assert len(_marker_xs(fig)) == 2  # the synthesized reference and horizon 1
+
+    def test_isolated_defined_horizon_draws_its_bar(self):
+        pytest.importorskip("plotly")
+
+        fig = plot_event_study(self._dcdh((0.8, 2.0)), backend="plotly", show=False)
+        (bar,) = _vertical_bars(fig)
+        half = 1.959963984540054 * 0.3
+        assert sorted(float(y) for y in bar.y) == pytest.approx([1.4 - half, 1.4 + half])
+
+    def test_undefined_placebo_and_effect_matplotlib(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        nan_ci = (float("nan"), float("nan"))
+        placebo = {-1: {"effect": 0.1, "se": 0.2, "conf_int": nan_ci, "p_value": float("nan")}}
+        ax = plot_event_study(self._dcdh(nan_ci, placebo=placebo), show=False)
+        assert _plotted_intervals(ax) == {}
+        assert len({p[0] for p in _plotted_points(ax)}) == 3
+        plt.close()
+
+
+class TestPlotEventStudyBandAndFallbackReference:
+    """When the producer marks no reference, the raw route styles event time -1
+    as the reference. Under a varying base that row is an ESTIMATED placebo; if
+    its inference is undefined the Plotly band must break there, not treat it
+    as a constraint and fill across it."""
+
+    @staticmethod
+    def _varying_base(minus_one_ci):
+        from types import SimpleNamespace
+
+        def row(effect, se, ci):
+            return {"effect": effect, "se": se, "conf_int": ci, "p_value": 0.5, "n_obs": 30}
+
+        return SimpleNamespace(
+            event_study_effects={
+                -2: row(0.05, 0.10, (-0.15, 0.25)),
+                -1: row(0.02, 0.10, minus_one_ci),
+                0: row(1.00, 0.12, (0.76, 1.24)),
+                1: row(1.10, 0.12, (0.86, 1.34)),
+            }
+        )
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
+    def test_no_polygon_spans_an_undefined_row_styled_as_reference(self, kwargs):
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((float("nan"), float("nan")))
+        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
+        x_minus_one = sorted(results.event_study_effects).index(-1)
+        for band in _toself_bands(fig):
+            xs = [x for x in band.x if x is not None]
+            assert x_minus_one not in xs and not (min(xs) < x_minus_one < max(xs))
+        # -2 is isolated by the break and keeps a visible interval
+        assert [b for b in _vertical_bars(fig) if b.x[0] == 0]
+        assert x_minus_one in _marker_xs(fig)
+
+    def test_a_defined_row_at_minus_one_keeps_one_band(self):
+        pytest.importorskip("plotly")
+
+        fig = plot_event_study(self._varying_base((-0.18, 0.22)), backend="plotly", show=False)
+        assert len(_toself_bands(fig)) == 1 and _vertical_bars(fig) == []
+
+    def test_a_real_reference_constraint_still_bridges(self):
+        """A producer-marked reference row (effect 0, no uncertainty) is a
+        constraint: the band continues across it."""
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((float("nan"), float("nan")))
+        results.event_study_effects[-1] = {
+            "effect": 0.0,
+            "se": float("nan"),
+            "conf_int": (float("nan"), float("nan")),
+            "is_reference": True,
+        }
+        fig = plot_event_study(results, backend="plotly", show=False)
+        (band,) = _toself_bands(fig)
+        xs = [x for x in band.x if x is not None]
+        assert min(xs) == 0 and max(xs) == 3
+
+
 class TestPlotEventStudyWooldridge:
     """plot_event_study accepts a WooldridgeDiDResults by converting it to the
     unified container, so it takes the EventStudyResults route end to end."""
