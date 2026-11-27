@@ -235,8 +235,8 @@ Multi-Period and Staggered Adoption
 
   - **Efficient imputation**: OLS on untreated observations, impute counterfactuals, aggregate
   - **Conservative variance**: Theorem 3 clustered variance estimator with auxiliary model
-  - **Pre-trend test**: Independent of treatment effect estimation (Proposition 9)
-  - **Efficiency gains**: ~50% shorter CIs than Callaway-Sant'Anna under homogeneous effects
+  - **Pre-trend test**: Independent of treatment effect estimation under spherical, normal errors (Proposition 9)
+  - **Efficiency**: the efficient linear unbiased estimator under spherical errors, meaning equal variance and no correlation across units or periods (Theorem 1), with unrestricted treatment-effect heterogeneity
 
 - **Callaway, B., & Sant'Anna, P. H. C. (2021).** "Difference-in-Differences with Multiple Time Periods." *Journal of Econometrics*, 225(2), 200-230. https://doi.org/10.1016/j.jeconom.2020.12.001
 
@@ -248,7 +248,7 @@ Multi-Period and Staggered Adoption
 
 - **Gardner, J. (2022).** "Two-stage differences in differences." *arXiv preprint arXiv:2207.05943*. https://arxiv.org/abs/2207.05943
 
-- **Butts, K., & Gardner, J. (2022).** "did2s: Two-Stage Difference-in-Differences." *The R Journal*, 14(1), 162-173. https://doi.org/10.32614/RJ-2022-048
+- **Butts, K., & Gardner, J. (2022).** "did2s: Two-Stage Difference-in-Differences." *The R Journal*, 14(3), 162-173. https://doi.org/10.32614/RJ-2022-048
 
 - **Butts, K. (2023).** "Difference-in-Differences with Spatial Spillovers." *arXiv:2105.03737v3* (originally posted 2021). https://arxiv.org/abs/2105.03737
 

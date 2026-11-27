@@ -17,8 +17,11 @@ Inference uses the conservative clustered variance estimator from Theorem 3.
 
 **When to use ImputationDiD:**
 
-- Staggered adoption settings where treatment effects may be **homogeneous**
-  across cohorts and time — produces ~50% shorter CIs than Callaway-Sant'Anna
+- Staggered adoption settings where parallel trends is credible in **every**
+  pre-treatment period. Unbiased under arbitrary treatment-effect heterogeneity,
+  and the minimum-variance linear unbiased estimator under spherical errors
+  (equal variance, uncorrelated across units and periods), which often shows
+  up as shorter CIs than Callaway-Sant'Anna
 - When you want to use **all untreated observations** (never-treated +
   not-yet-treated) for maximum efficiency
 - As a complement to Callaway-Sant'Anna or Sun-Abraham: if all three agree,

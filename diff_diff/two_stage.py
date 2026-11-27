@@ -18,7 +18,7 @@ References
 Gardner, J. (2022). Two-stage differences in differences.
     arXiv:2207.05943.
 Butts, K. & Gardner, J. (2022). did2s: Two-Stage
-    Difference-in-Differences. R Journal, 14(1), 162-173.
+    Difference-in-Differences. R Journal, 14(3), 162-173.
 """
 
 import dataclasses
@@ -1320,7 +1320,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
     Gardner, J. (2022). Two-stage differences in differences.
         arXiv:2207.05943.
     Butts, K. & Gardner, J. (2022). did2s: Two-Stage
-        Difference-in-Differences. R Journal, 14(1), 162-173.
+        Difference-in-Differences. R Journal, 14(3), 162-173.
     """
 
     def __init__(

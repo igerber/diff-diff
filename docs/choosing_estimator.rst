@@ -32,7 +32,7 @@ Start here and follow the questions:
 
    - **No** → Go to question 4
    - **Yes** → Use :class:`~diff_diff.CallawaySantAnna` (or :class:`~diff_diff.EfficientDiD` for tighter SEs under PT-All)
-   - **Yes, and you suspect homogeneous effects** → Use :class:`~diff_diff.ImputationDiD` or :class:`~diff_diff.TwoStageDiD` for tighter CIs
+   - **Yes, and parallel trends is credible in every pre-treatment period** → Use :class:`~diff_diff.ImputationDiD` or :class:`~diff_diff.TwoStageDiD` for a possible precision gain
    - **Yes, with nonlinear outcome (binary/count)** → Use :class:`~diff_diff.WooldridgeDiD` with ``method='logit'`` or ``method='poisson'``
    - **Want to diagnose TWFE bias?** → Use :class:`~diff_diff.BaconDecomposition` first
 
@@ -105,7 +105,7 @@ Quick Reference
      - Conditional parallel trends
      - Cohort-specific ATTs, event study
    * - ``ImputationDiD``
-     - Staggered, homogeneous effects
+     - Staggered, parallel trends in all periods
      - Unit + time FE structure
      - Imputed treatment effects, event study
    * - ``TwoStageDiD``
@@ -514,8 +514,8 @@ Imputation DiD
 
 Use :class:`~diff_diff.ImputationDiD` when:
 
-- You have staggered adoption with homogeneous treatment effects
-- You want shorter confidence intervals than Callaway-Sant'Anna (~50% shorter)
+- You have staggered adoption and parallel trends is credible in every pre-treatment period
+- You want the precision that comes from using every untreated observation (often, not always, shorter confidence intervals than Callaway-Sant'Anna)
 - You need imputed counterfactual outcomes for treated observations
 
 Borusyak, Jaravel & Spiess (2024) estimate unit + time FE on untreated observations,
@@ -533,8 +533,11 @@ impute counterfactual Y(0) for treated observations, then aggregate.
 
 .. note::
 
-   Under homogeneous effects, ImputationDiD is semiparametrically efficient.
-   If you suspect heterogeneous effects across cohorts, prefer Callaway-Sant'Anna.
+   ImputationDiD is unbiased under arbitrary treatment-effect heterogeneity, and is
+   the efficient linear unbiased estimator under spherical errors: equal variance,
+   uncorrelated across units and periods (Borusyak, Jaravel & Spiess 2024, Theorem 1). It assumes parallel
+   trends in all periods; if early pre-treatment periods are suspect, prefer
+   Callaway-Sant'Anna, which restricts trends only from the period before treatment.
 
 Two-Stage DiD
 ~~~~~~~~~~~~~

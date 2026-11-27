@@ -29,7 +29,7 @@ the key difference is the variance estimator (GMM sandwich vs. conservative).
 
 **Reference:** Gardner, J. (2022). Two-stage differences in differences.
 *arXiv:2207.05943*. Butts, K. & Gardner, J. (2022). did2s: Two-Stage
-Difference-in-Differences. *R Journal*, 14(1), 162-173.
+Difference-in-Differences. *R Journal*, 14(3), 162-173.
 
 .. module:: diff_diff.two_stage
 
@@ -153,9 +153,9 @@ Estimator Comparison
      - Lower (2x2 comparisons)
      - High (uses all untreated obs)
    * - Heterogeneous effects
-     - Consistent under homogeneity
      - Robust to heterogeneity
-     - Consistent under homogeneity
+     - Robust to heterogeneity
+     - Robust to heterogeneity
    * - Covariates
      - Supported
      - Supported (outcome regression or IPW)
