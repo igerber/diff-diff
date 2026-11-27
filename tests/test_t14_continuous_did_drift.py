@@ -7,13 +7,16 @@ ATT(d) = 1 + 2d. Its claims:
    ACRT 2.15 [1.96, 2.34] against a true 2.0.
 2. **The curve is evaluated on a bounded grid**, percentiles 10 to 99 of the
    dose (0.90 to 4.80), although the largest dose is 7.08.
-3. **The overall ATT does not depend on the spline**; the overall ACRT does,
-   and more flexibility is not automatically closer (0.67 / 0.91 / 0.97
-   against a true 0.77 on log-shaped data).
+3. **The overall ATT does not depend on the spline while the same
+   cohort-period cells are kept** (a cell with too few treated units for the
+   basis is skipped, and the average then changes); the overall ACRT does
+   depend on it, and more flexibility is not automatically closer (0.67 / 0.91
+   / 0.97 against a true 0.77 on log-shaped data).
 4. **The binary analysis returns the same overall ATT with one cohort**,
-   standard error included, and nothing else. With two cohorts the two overall
-   numbers differ (4.7070 against 4.6741): they weight the same cohort-period
-   effects differently.
+   standard error included, with its cohort-period and event-study summaries;
+   it does not return the dose-response curve or the marginal effect. With two
+   cohorts the two overall numbers differ (4.7070 against 4.6741): they weight
+   the same cohort-period effects differently.
 5. The prose states strong parallel trends as an assumption about outcomes
    under treatment (no selection into dose on gains), and names the result
    attribute ``results.att``.
@@ -160,6 +163,16 @@ class TestEventStudyAndOptions:
         with pytest.warns(UserWarning, match="Not enough treated units .* Skipping cell"):
             cubic = ContinuousDiD(degree=3, seed=42).fit(small, **FIT)
         assert abs(linear.att - cubic.att) > 0.02
+        # which cells: the small cohort's post-treatment cells, and only those
+        kept_linear = {(int(g), int(t)) for g, t in linear.group_time_effects}
+        kept_cubic = {(int(g), int(t)) for g, t in cubic.group_time_effects}
+        assert {(5, 5), (5, 6)} <= kept_linear
+        assert kept_linear - kept_cubic == {(5, t) for t in range(2, 7)}
+        # the cells both fits keep carry the same binary contrast
+        for cell, entry in cubic.group_time_effects.items():
+            assert entry["att_glob"] == pytest.approx(
+                linear.group_time_effects[cell]["att_glob"], abs=1e-10
+            )
 
     def test_control_groups_agree_here(self):
         panel = _panel(n_periods=6, cohort_periods=(3, 5))
@@ -289,6 +302,7 @@ class TestNotebookSurface:
             # the overall ATT is spline-free only while the same cells are kept
             "That holds as long as the\n  same cells are kept.",
             "What it cannot return is\nthe dose-response curve or the return to an extra hour.",
+            "What the binary analysis cannot give is the dose-response part of this tutorial.",
         ):
             assert needle in md, needle
         for stale in (
@@ -298,6 +312,7 @@ class TestNotebookSurface:
             "M-025",
             "only the overall ATT has a causal\nreading",
             "it returns the same overall ATT, and nothing else",
+            "Its single\nnumber",
             "does not depend on the spline** at all",
         ):
             assert stale not in md, stale
