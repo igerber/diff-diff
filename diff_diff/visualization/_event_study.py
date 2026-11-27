@@ -1,6 +1,7 @@
 """Event study visualization functions."""
 
 import warnings
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -290,7 +291,7 @@ def plot_event_study(
             # from the SE, which must not revive inference the producer
             # disabled (their normalized point estimates still plot).
             se = {
-                p: (np.nan if (p == reference_period or p in undefined_inference) else s)
+                p: (np.nan if (_same_label(p, reference_period) or p in undefined_inference) else s)
                 for p, s in se.items()
             }
             # REGISTRY (Event Study Plotting): after explicit normalization,
@@ -349,7 +350,8 @@ def plot_event_study(
             ci_lower = np.nan
             ci_upper = np.nan
         elif np.isfinite(std_err) and (
-            std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
+            std_err > 0
+            or (_same_label(period, reference_period) and effect == 0.0 and std_err == 0.0)
         ):
             # A zero/negative-SE row has all-NaN stored inference
             # (safe_inference), and effect +/- z*0 would draw a finite
@@ -376,7 +378,7 @@ def plot_event_study(
                 # Row-aligned marks (multi-reference containers) hollow
                 # every normalization anchor; the scalar covers the
                 # single-reference routes.
-                "is_reference": period == reference_period
+                "is_reference": _same_label(period, reference_period)
                 or (reference_marks is not None and period in reference_marks),
                 # A normalization CONSTRAINT, as opposed to reference styling:
                 # a row the caller normalized on, a producer-declared
@@ -384,7 +386,8 @@ def plot_event_study(
                 # fallback styles a marker but is not a constraint.
                 "is_constraint": (reference_marks is not None and period in reference_marks)
                 or (
-                    period == reference_period and (reference_period_explicit or reference_verified)
+                    _same_label(period, reference_period)
+                    and (reference_period_explicit or reference_verified)
                 ),
             }
         )
@@ -744,21 +747,53 @@ def _render_event_study_plotly(
     return fig
 
 
+def _label_key(label: Any) -> Any:
+    """An exact, comparable key for a horizon label.
+
+    Numbers are compared as exact rationals at their NATIVE precision, so
+    labels of different numeric types are equal only when they are the same
+    number: ``np.float64(-9007199254740996)`` does not match the integer
+    ``-9007199254740995`` (plain ``==`` converts the integer to float and says
+    it does), and an extended-precision float is not narrowed first.
+    """
+    if isinstance(label, (bool, np.bool_)):
+        return ("bool", bool(label))
+    if isinstance(label, (int, np.integer)):
+        return ("number", Fraction(int(label)))
+    if isinstance(label, (float, np.floating)):
+        if not np.isfinite(label):
+            return ("non-finite", repr(label))
+        return ("number", Fraction(*label.as_integer_ratio()))
+    return ("other", label)
+
+
+def _same_label(a: Any, b: Any) -> bool:
+    """Exact equality of two horizon labels (see :func:`_label_key`)."""
+    if a is None or b is None:
+        return a is b
+    try:
+        return bool(_label_key(a) == _label_key(b))
+    except Exception:
+        return False
+
+
 def _exact_reference_label(label: Any) -> Any:
     """A producer-declared reference label, unrounded and without loss.
 
-    An integer is returned as ``int`` as is (no float round-trip, which would
-    move integers beyond 2**53 onto a neighbouring value). A float holding an
-    integral value becomes ``int`` (matching integer horizon keys); any other
-    float, and any non-numeric label, is returned as given.
+    An integer is returned as ``int`` as is. A float holding an integral
+    value, tested at its native precision, becomes ``int`` (matching integer
+    horizon keys); any other float, and any non-numeric label, is returned as
+    given.
     """
     if isinstance(label, (bool, np.bool_)):
         return label
     if isinstance(label, (int, np.integer)):
         return int(label)
     if isinstance(label, (float, np.floating)):
-        as_float = float(label)
-        return int(as_float) if as_float.is_integer() else label
+        if not np.isfinite(label):
+            return label
+        numerator, denominator = label.as_integer_ratio()
+        return int(numerator) if denominator == 1 else label
     return label
 
 
@@ -786,7 +821,7 @@ def _reference_is_verified(results: Any, reference_period: Any) -> bool:
     declared = getattr(results, "reference_period", None)
     if declared is not None:
         # The declared reference must be THIS horizon, not merely exist.
-        return bool(_exact_reference_label(declared) == reference_period)
+        return _same_label(_exact_reference_label(declared), reference_period)
     surface = getattr(results, "event_study_effects", None)
     if isinstance(surface, dict):
         entry = surface.get(reference_period)

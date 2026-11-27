@@ -1348,6 +1348,23 @@ class TestDeclaredReferenceLabelIsExact:
         assert _exact_reference_label(-0.5) == -0.5
         assert _exact_reference_label("2019") == "2019"
 
+    def test_labels_of_different_numeric_types_compare_exactly(self):
+        from diff_diff.visualization._event_study import _exact_reference_label, _same_label
+
+        big = -9007199254740995
+        # plain == converts the integer to float and reports these as equal
+        assert np.float64(big - 1) == big
+        assert not _same_label(np.float64(big - 1), big)
+        assert _same_label(np.float64(-1.0), -1) and _same_label(np.int64(3), 3.0)
+        assert _same_label(-0.5, np.float64(-0.5)) and not _same_label(-0.5, 0)
+        assert not _same_label(None, 0) and _same_label("2019", "2019")
+        # integrality is tested at native precision, not after narrowing
+        wide = np.longdouble("-1") - np.finfo(np.longdouble).eps
+        if wide != np.longdouble("-1"):
+            assert _exact_reference_label(wide) is wide
+            assert not _same_label(wide, -1)
+        assert _exact_reference_label(np.longdouble("2")) == 2
+
     def test_only_the_named_horizon_is_verified(self):
         from types import SimpleNamespace
 
@@ -1390,23 +1407,69 @@ class TestDeclaredReferenceLabelIsExact:
         assert [b for b in _vertical_bars(fig) if b.x[0] == x_undefined] == []
         assert x_undefined in _marker_xs(fig)
 
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
+    def test_float_horizon_next_to_an_integer_reference_is_not_the_reference(self, kwargs):
+        """Horizons stored as NumPy floats, reference declared as a Python
+        integer one above an estimated horizon: ``==`` across the two types
+        calls them equal. The estimated row must not be styled as the
+        reference, and the band must break at it."""
+        pytest.importorskip("plotly")
+        from types import SimpleNamespace
+
+        big = -9007199254740995
+        nan_ci = (float("nan"), float("nan"))
+
+        def row(effect, ci):
+            return {"effect": effect, "se": 0.1, "conf_int": ci, "p_value": 0.5, "n_obs": 30}
+
+        neighbour = np.float64(big - 1)
+        assert neighbour == big  # the lossy comparison this guards against
+        results = SimpleNamespace(
+            reference_period=big,
+            event_study_effects={
+                np.float64(big - 5): row(0.1, (-0.1, 0.3)),
+                np.float64(big - 3): row(0.2, (0.0, 0.4)),
+                neighbour: row(2.0, nan_ci),  # estimated, inference undefined
+                np.float64(big + 3): row(1.0, (0.8, 1.2)),
+                np.float64(big + 5): row(1.1, (0.9, 1.3)),
+            },
+        )
+        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
+        x_undefined = 2
+        bands = _toself_bands(fig)
+        assert len(bands) == 2
+        for band in bands:
+            xs = [x for x in band.x if x is not None]
+            assert x_undefined not in xs and not (min(xs) < x_undefined < max(xs))
+        assert [b for b in _vertical_bars(fig) if b.x[0] == x_undefined] == []
+        # drawn as an ordinary estimate, not a hollow reference marker
+        reference_markers = [
+            t
+            for t in fig.data
+            if getattr(t, "mode", None) == "markers"
+            and "open" in str(getattr(t.marker, "symbol", ""))
+        ]
+        assert all(x_undefined not in (t.x or ()) for t in reference_markers)
+        assert x_undefined in _marker_xs(fig)
+
 
 class TestPlotEventStudyFittedUndefinedRows:
-    """End to end on a fitted model: SunAbraham with ``vcov_type="hc2_bm"`` and
-    a cohort of one unit stores a finite SE and NaN inference at the horizons
-    only that unit identifies. Plotting the results object keeps their markers,
-    draws no interval for them and does not shade across them."""
+    """End to end on a fitted model: SunAbraham with ``vcov_type="hc2_bm"``.
+    Cohorts adopt at 2.5 and 3.5, and calendar period 3.5 is observed only for
+    the one-unit cohort and the never-treated units. The fit declares a shared
+    reference at -0.5 (between horizons) and stores a finite SE with NaN
+    inference at event time 0, which only the single unit identifies."""
 
     @staticmethod
     def _fit():
         from diff_diff import SunAbraham
 
         rows, unit = [], 0
-        for g, n in ((2.5, 10), (3.0, 1), (np.inf, 12)):
+        for g, n, has_half_period in ((2.5, 10, False), (3.5, 1, True), (np.inf, 12, True)):
             for _ in range(n):
-                for t in range(8):
+                for t in [0, 1, 2, 3, 4, 5, 6, 7] + ([3.5] if has_half_period else []):
                     effect = 2.0 if (np.isfinite(g) and t >= g) else 0.0
-                    y = 0.3 * t + (unit % 4) + effect + 0.2 * ((unit * 5 + t * 3) % 7)
+                    y = 0.3 * t + (unit % 4) + effect + 0.2 * ((unit * 5 + int(t * 2) * 3) % 7)
                     rows.append((unit, t, g, y))
                 unit += 1
         data = pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome"])
@@ -1416,34 +1479,35 @@ class TestPlotEventStudyFittedUndefinedRows:
                 data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
             )
 
+    def test_the_fit_declares_a_fractional_reference_and_withholds_inference_at_zero(self):
+        results = self._fit()
+        assert results.reference_period == -0.5
+        row = results.event_study_effects[0.0]
+        assert np.isfinite(row["se"]) and row["se"] > 0
+        assert np.isnan(row["conf_int"][0]) and np.isnan(row["p_value"])
+        for neighbour in (-1.5, 0.5):
+            assert np.isfinite(results.event_study_effects[neighbour]["conf_int"][0])
+
     @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_undefined_rows_keep_markers_and_get_no_interval(self, kwargs):
+    def test_event_time_zero_keeps_its_marker_and_gets_no_interval(self, kwargs):
         pytest.importorskip("plotly")
 
         results = self._fit()
         surface = results.event_study_effects
         horizons = sorted(surface)
-        undefined = [
-            h
-            for h in horizons
-            if np.isfinite(surface[h]["se"])
-            and surface[h]["se"] > 0
-            and np.isnan(surface[h]["conf_int"][0])
-        ]
-        defined = [h for h in horizons if np.isfinite(surface[h]["conf_int"][0])]
-        assert undefined and len(defined) >= 4  # the fixture exercises both kinds
         fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        markers = _marker_xs(fig)
         covered = set()
         for band in _toself_bands(fig):
             xs = [x for x in band.x if x is not None]
             covered.update(range(int(min(xs)), int(max(xs)) + 1))
         covered.update(int(b.x[0]) for b in _vertical_bars(fig))
-        for h in undefined:
-            x = horizons.index(h)
-            assert x in markers and x not in covered
-        for h in defined:
-            assert horizons.index(h) in covered
+        x_zero = horizons.index(0.0)
+        assert x_zero in _marker_xs(fig) and x_zero not in covered
+        # the horizons on both sides keep their intervals
+        assert horizons.index(-1.5) in covered and horizons.index(0.5) in covered
+        for h in horizons:
+            if np.isfinite(surface[h]["conf_int"][0]):
+                assert horizons.index(h) in covered
 
 
 class TestPlotEventStudyWooldridge:
