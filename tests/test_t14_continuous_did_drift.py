@@ -179,8 +179,6 @@ class TestEventStudyAndOptions:
         all_treated = two_cohorts[two_cohorts["first_treat"] > 0]
         with pytest.raises(ValueError, match="No never-treated"):
             ContinuousDiD(control_group="not_yet_treated", seed=42).fit(all_treated, **FIT)
-        md = notebook_markdown(NB)
-        assert "It still needs never-treated units in the panel: without any, the fit raises." in md
 
     def test_control_groups_agree_here(self):
         panel = _panel(n_periods=6, cohort_periods=(3, 5))
@@ -307,6 +305,7 @@ class TestNotebookSurface:
             "the\nheight of the left curve at *d* read as ATT(d|d)",
             "parallel trends identifies the overall ATT and each dose group's own\n  effect, ATT(d|d)",
             "The estimator requires a balanced panel.",
+            "It still needs never-treated units in the panel: without any, the fit raises.",
             # the overall ATT is spline-free only while the same cells are kept
             "That holds as long as the\n  same cells are kept.",
             "What it cannot return is\nthe dose-response curve or the return to an extra hour.",
