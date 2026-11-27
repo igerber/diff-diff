@@ -643,6 +643,20 @@ def _render_event_study_plotly(
         ci_x = [period_to_x[periods[i]] for i in run]
         ci_lo = [ci_lower[i] for i in run]
         ci_hi = [ci_upper[i] for i in run]
+        if len(run) == 1:
+            # A one-row run has no area to fill: draw its interval as a
+            # vertical bar so a valid interval is never invisible.
+            fig.add_trace(
+                go.Scatter(
+                    x=[ci_x[0], ci_x[0]],
+                    y=[ci_lo[0], ci_hi[0]],
+                    mode="lines",
+                    line=dict(color=_color_to_rgba(color, 0.45), width=6),
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+            continue
         fig.add_trace(
             go.Scatter(
                 x=ci_x + ci_x[::-1],

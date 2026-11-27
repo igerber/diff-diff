@@ -7312,7 +7312,9 @@ should be a deliberate user choice.
   zero-width constraint bar. On the Plotly backend the filled band is drawn as one polygon per run of
   rows that carry an interval: an estimated row without one ends the run, so the fill does
   not span it (a reference row without an interval is a constraint and does not break the
-  band). Before, the band skipped such a row's vertices and filled straight across it.
+  band). A run of a single row has no area to fill and is drawn as a vertical bar between
+  its bounds, so a valid interval isolated by the split stays visible. Before, the band
+  skipped a row without an interval and filled straight across it.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
   converted to the unified `EventStudyResults` container at entry
   (`build_event_study_surface`) and takes the container route end to end: its stored
@@ -7343,9 +7345,9 @@ should be a deliberate user choice.
   estimated row with effect exactly 0 and se 0 at the fallback position retains today's
   bar - today's behavior preserved, not a new defect). The dCDH route's synthesized
   reference carries `se = NaN` and keeps its hollow-marker-no-bar rendering, unchanged.
-  Plotly caveat: the plotly renderer filters NaN-CI rows out of the CI band and
-  interpolates the polygon across the gap (pre-existing NaN-SE convention); the matplotlib
-  backend is where the gated interval visibly disappears.
+  On the plotly backend the gated row breaks the CI band, as any estimated row without an
+  interval does (undefined-stored-inference Note above); the band is no longer interpolated
+  across it.
 - **Note (`plot_dose_response` zero-SE gate and band labeling):** the raw-DataFrame `se` branch adopts the same gate: rows with non-positive or non-finite `se` have their reconstructed band masked to NaN with a `UserWarning` (previously a zero-SE row drew a finite zero-width band); the plotly renderer filters non-finite-CI rows out of the `toself` band polygon and bridges the gap (the `plot_group_effects` convention above; CI values only - the dose axis may be non-numeric), and both renderers suppress an all-masked band entirely (no stray legend entry). Band LABELING states the confidence level only where it is knowable: the requested `alpha` on the DataFrame-`se` branch (validated strictly inside (0, 1)), `results.alpha` on `results=` input, and the level-free "CI" for bare-curve and explicit-CI input. Alpha semantics deliberately DIVERGE from `plot_group_effects`: that surface recomputes `effect +/- z*SE` at a requested alpha, while `plot_dose_response` warns-and-ignores an explicit `alpha` on non-`se` input, because stored/explicit-CI dose-response inputs cannot be recomputed. `plot_honest_event_study`'s raw
   (non-container) routes mirror the container's retained-row semantics: zero/non-finite-SE
   rows are excluded up front (explicitly requesting one raises), the reference row - now

@@ -1012,11 +1012,34 @@ class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
         horizons = sorted(results.event_study_effects)
         x_undefined = horizons.index(1)
         bands = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
-        assert len(bands) >= 2  # rows before it and rows after it
+        assert bands  # the rows before it
         for band in bands:
             xs = [x for x in band.x if x is not None]
             assert x_undefined not in xs
             assert not (min(xs) < x_undefined < max(xs))
+            assert len(set(xs)) >= 2  # a polygon with area, never a zero-width one
+        # the last horizon is isolated by the split: its VALID interval must be
+        # visible, drawn as a vertical bar between its bounds
+        x_last = horizons.index(2)
+        bars = [
+            t
+            for t in fig.data
+            if getattr(t, "mode", None) == "lines"
+            and t.x is not None
+            and len(t.x) == 2
+            and t.x[0] == t.x[1] == x_last
+        ]
+        assert len(bars) == 1
+        lower, upper = sorted(float(y) for y in bars[0].y)
+        if "reference_period" not in kwargs:
+            # a results object passed directly gets the bounds this route
+            # selects: effect +/- z * SE
+            row = results.event_study_effects[2]
+            half = 1.959963984540054 * row["se"]
+            assert (lower, upper) == pytest.approx((row["effect"] - half, row["effect"] + half))
+        assert lower < upper
+        assert bars[0].line.width >= 2
+
         # the row's marker is still drawn
         marker_x = [
             x
@@ -1025,6 +1048,30 @@ class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
             for x in trace.x
         ]
         assert x_undefined in marker_x
+
+    def test_plotly_isolated_row_shows_the_stored_interval_on_the_container_route(self):
+        pytest.importorskip("plotly")
+
+        results = self._mixed()
+        surface = results.aggregate("event_study")
+        frame = surface.to_dataframe().set_index("event_time")
+        assert np.isnan(frame.loc[1, "conf_int_lower"]) and np.isfinite(
+            frame.loc[2, "conf_int_lower"]
+        )
+        fig = plot_event_study(surface, backend="plotly", show=False)
+        x_last = sorted(frame.index).index(2)
+        bars = [
+            t
+            for t in fig.data
+            if getattr(t, "mode", None) == "lines"
+            and t.x is not None
+            and len(t.x) == 2
+            and t.x[0] == t.x[1] == x_last
+        ]
+        assert len(bars) == 1
+        assert sorted(float(y) for y in bars[0].y) == pytest.approx(
+            [frame.loc[2, "conf_int_lower"], frame.loc[2, "conf_int_upper"]]
+        )
 
     def test_plotly_band_is_one_polygon_when_every_row_is_defined(self):
         pytest.importorskip("plotly")
