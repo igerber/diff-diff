@@ -186,6 +186,36 @@ class TestTROP:
         assert fit.conf_int[0] <= TRUE_ATT <= fit.conf_int[1]
 
 
+def test_singular_value_cell_handles_a_zero_factor_matrix(capsys):
+    """A large enough penalty shrinks the factor matrix to zero; the notebook's
+    singular-value cell must say so, not divide by zero. CI does not execute this
+    notebook, so the cell itself is run here."""
+    path = Path(__file__).resolve().parents[1] / NB
+    if not path.exists():
+        pytest.skip("notebook not available in this environment")
+    cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+    source = next(
+        "".join(c["source"])
+        for c in cells
+        if c["cell_type"] == "code" and "np.linalg.svd(factor_matrix" in "".join(c["source"])
+    )
+
+    class Stub:
+        def __init__(self, matrix):
+            self.factor_matrix = matrix
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        exec(source, {"np": np, "results": Stub(np.zeros((9, 30)))})  # noqa: S102
+        zero = capsys.readouterr().out
+        rank_one = np.outer(np.arange(1.0, 10.0), np.ones(30))
+        exec(source, {"np": np, "results": Stub(rank_one)})  # noqa: S102
+        nonzero = capsys.readouterr().out
+    assert "No factor variation: the factor matrix is zero." in zero
+    assert "Share of variation" not in zero
+    assert "Share of variation in the two largest: 100.0%" in nonzero
+
+
 class TestNotebookSurface:
     def test_rendered_numbers(self):
         assert_quotes_in_rendered(
