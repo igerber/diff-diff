@@ -79,3 +79,6 @@
   names the variance method and says that none is available; when the fit
   did store one (an estimator that falls back to a reference distribution at
   zero df) it describes that interval.
+- `StackedDiD.fit()` on a panel with no rows raises a `ValueError` that says
+  so. It raised "cannot convert float NaN to integer", or an `IndexError`
+  when the survey design named a finite-population column.

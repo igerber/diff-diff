@@ -786,6 +786,35 @@ class TestCleanControlAnticipationSurvey:
         )
 
 
+class TestEmptyPanel:
+    """A zero-row panel raises a descriptive ``ValueError`` before anything
+    else, with or without a survey design."""
+
+    @staticmethod
+    def _empty():
+        return pd.DataFrame(
+            {
+                "unit": pd.Series(dtype=int),
+                "period": pd.Series(dtype=int),
+                "first_treat": pd.Series(dtype=float),
+                "outcome": pd.Series(dtype=float),
+                "N": pd.Series(dtype=float),
+                "w": pd.Series(dtype=float),
+            }
+        )
+
+    @pytest.mark.parametrize(
+        "design_kwargs",
+        [None, {"fpc": "N"}, {"weights": "w"}, {"weights": "w", "fpc": "N", "psu": "unit"}],
+    )
+    def test_empty_panel_raises_value_error(self, design_kwargs):
+        from diff_diff import SurveyDesign
+
+        design = SurveyDesign(**design_kwargs) if design_kwargs else None
+        with pytest.raises(ValueError, match=r"empty panel \(0 rows\)"):
+            StackedDiD().fit(self._empty(), survey_design=design, **_ANT_FIT)
+
+
 # =============================================================================
 # TestClustering
 # =============================================================================

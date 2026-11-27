@@ -498,8 +498,8 @@ class StackedDiD(BaseEstimator):
         Raises
         ------
         ValueError
-            If required columns are missing or data validation fails: a
-            missing or non-integer ``time``, a duplicated ``(unit, time)``
+            If required columns are missing or data validation fails: an
+            empty panel, a missing or non-integer ``time``, a duplicated ``(unit, time)``
             row, a non-integer ``first_treat``, or no adoption event with
             both a treated unit and a clean control observed at every event
             time of the window. Also under ``weighting="population"`` when a
@@ -538,6 +538,14 @@ class StackedDiD(BaseEstimator):
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+        if len(data) == 0:
+            # Before the survey design is resolved: an empty frame has no
+            # rows to read a design from (an FPC column would index an empty
+            # array).
+            raise ValueError(
+                "StackedDiD.fit() received an empty panel (0 rows): there is "
+                "nothing to estimate."
+            )
 
         if self.weighting == "population" and population is None:
             raise ValueError("population column must be specified when weighting='population'")
