@@ -9,6 +9,640 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- entries live in changelog.d/*.md; compiled at release by .claude/scripts/changelog_compile.py -->
 
+## [4.1.0] - 2026-11-26
+
+### Behavioral Changes
+- **One statistic with fewer than two valid replicates no longer changes the
+  inference of the others** (`CallawaySantAnna`, staggered `TripleDifference`
+  and `DMLDiD` event-study / group aggregates, `EfficientDiD`,
+  `ContinuousDiD`). Such a statistic has a NaN SE and NaN inference; it used to
+  also alter the df shared with the rest of the fit:
+  - `CallawaySantAnna` family aggregates: every event-study horizon or group
+    row went NaN, and the overall relay could write `0` into
+    `survey_metadata.df_survey`. Now only the affected row is NaN.
+  - `EfficientDiD`: every statistic computed afterwards silently switched from
+    the t reference to the normal reference. Now they keep the design df.
+  - `ContinuousDiD`: every statistic's inference went NaN. Now only the
+    affected statistic is NaN.
+  - This needs a non-finite influence function on a single statistic, so it is
+    not expected on well-formed fits. `ChaisemartinDHaultfoeuille` is unchanged:
+    it deliberately takes one global minimum over all its replicate-variance
+    sites (fail-closed).
+- **`SyntheticControl` conformal intervals move**: reported intervals widen
+  to the true boundary of the accepted set (by up to one former grid step
+  per side), and cases formerly reported as `empty` or `grid_limited` on the
+  default range now return `ran` with finite endpoints. On the default range
+  `grid_limited` now arises only when an edge candidate's proxy fit does not
+  converge. When `alpha` is below the single-slot floor the result is
+  `unbounded` with infinite endpoints instead of a finite `grid_limited`
+  interval. Non-contiguous sets, which occur on near-exact pre-period fits,
+  are now seen in full and reported as their hull with `contiguous=False`.
+- **`get_conformal_grid_df()` lists every candidate evaluated**, one row per
+  distinct value: the rows of each scan, the point estimate, and the
+  endpoint-refinement candidates. Its row count is therefore no longer
+  `n_grid` (which is now the number of points per scan), `lower` / `upper`
+  are rows of it, and `n_grid_in_set` / `n_grid_nonconverged` count its rows.
+  Outcomes too large for a finite candidate range raise `ValueError`
+  (previously a scan over non-finite values).
+- **`bounds=(lo, hi)` whose width `hi - lo` overflows float64 now raises
+  `ValueError`** in `conformal_confidence_intervals()`,
+  `conformal_average_effect()` and `confidence_set()` (for example
+  `(-1.7e308, 1.7e308)`). The grid built from such a pair contained NaN
+  values. A pair with a finite width is still accepted, including one that
+  ends at the largest float.
+- **`SunAbraham`: per-cohort reference period.** A cohort that cannot be
+  normalized at `e = -1 - anticipation` (it is not observed there, or no
+  never-treated unit is observed at that calendar period) is normalized at
+  its latest usable pre-treatment period instead, and `fit()` warns naming
+  the cohort and its reference. `SunAbrahamResults.reference_event_times` (new field) lists the
+  distinct bases, and `reference_period` reports the shared fallback when no
+  cohort is observed at `e = -1 - anticipation` and all share one (for
+  example `-2` on a biennial grid), so the event-study anchor row sits at the
+  true base. Panels in which every cohort is observed at the reference
+  period, with never-treated units observed at those calendar periods, are
+  unchanged.
+- **`SunAbraham`: cohorts with no pre-treatment observation are excluded.**
+  `fit()` warns naming the cohort and estimates on the data without it; with
+  no treated cohort left it raises `ValueError`. Under `survey_design=` it
+  raises `NotImplementedError` instead, since dropping rows there would not
+  be domain estimation.
+- **`SunAbraham`: unidentified coefficients are NaN.** A cohort-by-period
+  coefficient that the observed rows do not identify is reported as NaN with
+  one warning naming the cells, as is every pooled event-study row that
+  contains one (and the overall ATT when a post-treatment row does).
+  `event_study_vcov` is NaN on those rows and columns only. Bootstrap draws
+  that cannot identify a row are dropped for that row, and replicate-weight
+  variances are computed over the identified entries.
+  `rank_deficient_action="error"` raises on such a panel and `"silent"`
+  suppresses the warning.
+- **`compute_pretrends_power` refuses a `SunAbraham` fit whose cohorts are
+  normalized against different reference periods** (`reference_event_times`
+  with more than one entry): the hypothesized violation is defined relative
+  to one reference. `DiagnosticReport` reports that as an error status on its
+  `pretrends_power` section.
+- **`StackedDiD`: complete event windows.** A unit enters a sub-experiment
+  only if it is observed at every event time of the window
+  `[-kappa_pre - anticipation, kappa_post]`. On a panel with missing
+  observations the units that are not are excluded from that sub-experiment
+  and `fit()` warns with the per-event "kept of eligible" counts; the estimand
+  is the trimmed aggregate ATT over the units observed across their whole
+  window, and `n_treated_units`, `n_control_units` and `stacked_data` reflect
+  them. Balanced panels are unchanged.
+- **`StackedDiD`: events without complete units are dropped.** An adoption
+  event left without a treated unit or a clean control observed across its
+  window, including one whose window contains a calendar period no unit
+  observes, is dropped with a warning naming the reason and is reported in
+  `trimmed_groups` instead of `groups`. With no event left `fit()` raises
+  `ValueError`, naming the gaps in the time grid when there are any (a
+  biennial or datetime-coded `time` column must be re-indexed to consecutive
+  integers). Panels that previously raised "would be fabricated" for a
+  missing reference period now raise this error instead.
+- **`StackedDiD` + `survey_design=` refuses a panel that would be trimmed**
+  (`NotImplementedError`), whether a unit or a whole adoption event would be
+  dropped: excluding them would remove their PSUs and strata from the variance
+  and its degrees of freedom.
+- **`StackedDiD` estimates change under `weighting="population"`,
+  `weighting="sample_share"` and `survey_design=`** (see Fixed): under the two
+  alternative schemes wherever their target shares differ from the treated-unit
+  shares, and under a survey design wherever the survey weights differ across
+  cohorts. Replicate-weight standard errors change as well, since each refit
+  recomputes the corrective weights. A sub-experiment with no treated or
+  control unit of positive weight, or a zero treated population, now carries
+  zero weight and is named in a warning; `weighting="population"` requires a
+  finite, non-negative, unit-constant population for the treated units.
+- **`StackedDiD(balance="entropy")` trims ragged windows** like the default
+  path, where it previously raised `ValueError`.
+
+### Added
+- **`diagnose_design`: design diagnosis on your own untreated panel.** Before
+  analysing a study, check how each candidate estimator behaves on the panel
+  you will actually use. `diagnose_design(data, outcome=, unit=, time=,
+  estimators=, cohort_periods=, n_treated= | treatment_fraction=, ...)`
+  repeatedly assigns placebo treatments that follow the declared design,
+  optionally adds a known effect to the placebo-treated observations, fits
+  every estimator on the same placebo draws, and returns a
+  `DesignDiagnosisResults` with, per estimator, the rejection rate under no
+  effect (size) and the power, bias, RMSE and coverage at each injected effect,
+  plus an optional minimum detectable effect (`power=`).
+  - Outcome-blind: no real treatment effect is estimated. Pass `first_treat=`
+    to drop every period from the earliest real adoption onward.
+  - Estimators are returned in input order and never ranked. `size_controlled`
+    flags those whose no-effect rejection rate is consistent with `alpha`; no
+    minimum detectable effect is reported for the others.
+  - Supports `DifferenceInDifferences`, `TwoWayFixedEffects`,
+    `CallawaySantAnna`, `SunAbraham`, `ImputationDiD`, `TwoStageDiD`,
+    `StackedDiD` and `EfficientDiD`, under common or staggered timing.
+  - Sources: Bertrand, Duflo & Mullainathan (2004), Mizushima & Powell (2025),
+    Coglianese & Fang (2026) and Blair et al. (2019). The size check, the
+    minimum detectable effect on real data and the other choices with no paper
+    source are documented as Notes in `docs/methodology/REGISTRY.md`
+    `## DesignDiagnosis`.
+- **Design lock: carry the estimator chosen with `diagnose_design` into the
+  analysis.** `DesignDiagnosisResults.lock(label, data=)` records one estimator
+  and its configuration as a `DesignLock`;
+  `DesignLock.reconcile(estimator, outcome=, unit=, time=, ...)` later checks
+  the analysis that was run against it and returns the status `match` or
+  `deviates`.
+  - Lock rerun: when more than one estimator was compared, `lock()` reruns only
+    the chosen one on the same panel with new placebo draws (pass the panel
+    again as `data=`) and reports that run. This removes the part of the
+    overstatement of the chosen estimator's power that comes from the placebo
+    draws; the part that comes from the panel itself remains (about one
+    percentage point in the simulation behind the registry note). The lock
+    records the rerun's size verdict and warns when it differs from the
+    comparison's.
+  - `DesignLock` is plain JSON data (`to_json()`, `DesignLock.from_json()`,
+    `DESIGN_LOCK_SCHEMA_VERSION`) holding the chosen estimator and its
+    configuration, the declared design, a fingerprint of the panel, every
+    estimator that was compared and the chosen estimator's diagnosands.
+    `to_estimator()` builds the estimator exactly as locked. The lock does not
+    record when it was made.
+  - `reconcile` reports one check per item (estimator class, each constructor
+    parameter, `fit()` keywords, column names, and with `data=` the fingerprint
+    of the diagnosed periods, unit count, panel balance, treated count, cohort
+    count and post-window lengths) in a `DesignReconciliationResults`. It
+    compares what the analyst declares with the lock; `match` covers the checks
+    that were run, a deviation is not graded, and the summary shows how many
+    checks were not run next to the status.
+  - The summaries of `DesignDiagnosisResults` and `DesignLock` state that random
+    placebo assignment tests inference (size, power), not parallel trends.
+  - The reconciliation idea follows Blair et al. (2019); the rerun, the lock
+    format and the status are library choices documented as Notes in
+    `docs/methodology/REGISTRY.md` `## DesignDiagnosis`, with the simulation in
+    `benchmarks/python/design_lock_rerun.py`.
+- **Cluster jackknife inference for `CallawaySantAnna`** (`vcov_type="jackknife"`):
+  the delete-one-cluster jackknife (CV3) of Karim, Nielsen, MacKinnon & Webb
+  (2026, arXiv:2602.12043), for designs with few clusters, where the default
+  influence-function standard errors and the multiplier bootstrap reject a true
+  null too often. Each cluster (the `cluster=` column, or the unit when none is
+  given) is deleted in turn, the estimator is re-run, and the variance is
+  `((H - 1) / H) * sum_h (theta_h - theta)^2` around the full-sample estimate,
+  with a `t(H - 1)` reference. It applies to the overall ATT, every ATT(g,t) and
+  the `event_study` / `group` aggregations (the event-study container carries
+  the jackknife covariance). `results.get_loo_effects_df()` lists the
+  delete-one overall ATTs. Overall, event-study and group standard errors match
+  R `did` on delete-one samples to 1e-8.
+  - In the library's size simulation (no effect, nominal 5%, 8 to 32 clusters)
+    the jackknife rejected 3-10% for the overall ATT with two or more treated
+    clusters per cohort, against 4-15% for the clustered default and 7-21% for
+    the multiplier bootstrap; with one treated cluster per cohort it rejected
+    8-18% against 15-35%. A fit warns when a reported quantity rests on fewer
+    than three treated clusters.
+  - A deletion that leaves no estimate makes every jackknife standard error
+    NaN; a cell, horizon or cohort that is not estimable in every delete-one
+    sample gets a NaN standard error.
+  - Not combinable with `n_bootstrap > 0`, `survey_design=` or
+    `allow_unbalanced_panel=True`; `panel=False` needs `cluster=`.
+  - `DiagnosticReport` gives a jackknife fit a Bonferroni pre-trend check (no
+    covariance-based joint Wald) and skips its pre-trends power section.
+  - `CallawaySantAnna(vcov_type="jackknife")` can be passed to
+    `diagnose_design` as a candidate.
+- **Fit from a design lock, and design reconciliation in the reports.**
+  - `DesignLock.fit(data, first_treat= | treatment=, post=)` builds the locked
+    estimator, fits it on the analysis data with the locked columns and `fit()`
+    keywords, and reconciles the result against the lock on that same frame. It
+    returns the `DesignReconciliationResults`, with the estimate in a new
+    `results` field. The configuration is the locked one by construction; the
+    realized design (units, treated units, cohorts, post-window lengths) and the
+    data in the diagnosed periods can still deviate.
+  - `DesignReconciliationResults` gains `results` and `declared` (`False` when
+    `DesignLock.fit` ran the analysis, `True` when the estimator and columns
+    were declared to `DesignLock.reconcile`).
+  - `DiagnosticReport` and `BusinessReport` accept `design_reconciliation=` and
+    state whether the analysis is `match` or `deviates` against the lock, the
+    deviating items and the number of checks that were not run: a top-level
+    `design_reconciliation` key in both `to_dict()` schemas (additive, no schema
+    version change), one sentence in `summary()` and a section in
+    `full_report()`. `BusinessReport` adds the caveat topics `design_deviation`
+    and `design_not_checked`. A reconciliation that was not made for the
+    reported results is refused. The reports do not say when the design was
+    fixed, which a lock does not record.
+  - New tutorial "Design Diagnosis and the Design Lock" (Study Design group):
+    diagnose candidate estimators on untreated history, lock one, fit the locked
+    analysis after the rollout and report the reconciliation.
+- **Planned pre-trend power at the design stage.**
+  `diagnose_design(..., event_study=True)` keeps, for each `CallawaySantAnna`
+  and `StackedDiD` estimator, a placebo event study: the mean and the
+  covariance, across the no-effect placebo draws, of the event-study
+  coefficients of each fit (`DesignDiagnosisResults.event_study_results`, an
+  `EventStudyResults` labelled `estimand="placebo"`). `PreTrendsPower.fit`,
+  `power_at`, `power_curve`, `compute_pretrends_power` and `compute_mdv` accept
+  the diagnosis (or one of its surfaces) and return planned pre-trend power from
+  Roth's (2022) formula before any outcome exists
+  (`covariance_source="placebo_draws"`). The new
+  `PreTrendsPower.power_by_pre_periods(diagnosis)` tabulates the minimum
+  detectable violation and the test's no-violation rejection rate by the number
+  of pre-periods tested.
+  - The formula assumes that each coefficient's own test rejects at its nominal
+    level. For the pre-periods being planned, `PreTrendsPower` counts how often
+    the pre-trend test rejected in the placebo draws (none of which contains a
+    violation) and compares that with the rate the formula assumes. Planned
+    power is reported only where the two agree within Monte Carlo error: `fit`
+    raises with both rates otherwise, and the by-pre-period table shows both
+    rates on every row (`power_no_violation`, `placebo_rejection_rate`) and
+    leaves the planned numbers blank on rows that disagree. In the library's
+    simulation the formula matched direct trend injection on all 28 cells that
+    passed this check (power at the planned minimum detectable violation 73%
+    to 84% against a target of 80%), and every cell on which it did not match
+    was one the check withholds (mostly 40-unit panels with 10 treated units).
+  - Planned power is available for the default pre-test form
+    (`pretest_form="nis"`) only.
+  - No placebo event study is recorded for a `vcov_type="jackknife"` candidate
+    or for the other estimator classes.
+  - `HonestDiD`, `PreTrendsPower.sensitivity_to_honest_did`, and
+    `precomputed["pretrends_power"]` in `DiagnosticReport` / `BusinessReport`
+    refuse a placebo event study or a result planned from one.
+- **Planned sensitivity analysis at the design stage: `HonestDiD.power_by_M`.**
+  `diagnose_design(..., event_study=True)` now keeps the event-study container
+  of every no-effect placebo draw, and `HonestDiD.power_by_M(diagnosis,
+  M_grid=, effect_size=, power=)` runs the sensitivity analysis on each of
+  them. It returns one row per `M`: the rate at which the robust interval
+  excluded zero although no effect was present (`placebo_rejection_rate`), the
+  interval's mean width (`ci_width`), the minimum detectable effect (`mde`),
+  the power at `effect_size` (`power`: the share of draws whose interval
+  excludes zero, the definition of the rejection rates `diagnose_design`
+  reports), the number of replicates scored and lost, and whether the row
+  passes the size rule (`size_controlled`).
+  - The numbers are counted, not derived from a formula. An effect that is the
+    same across treated units moves a draw's robust interval by the value of
+    the target parameter and changes nothing else, so the interval at any
+    effect size follows from the no-effect draw. The library's tests check
+    this against real injection for `CallawaySantAnna` and `StackedDiD`.
+  - `mde` and `power` are left blank on a row that fails the size rule
+    `diagnose_design` applies to its own MDE (the interval excludes zero too
+    often with no effect present, or more than 10% of the replicates were
+    lost); the rate is shown on every row. In the library's simulation the
+    `method="smoothness"` interval at `M = 0` excluded zero in 14% to 45% of
+    no-effect draws on 40-unit panels with 10 treated units, and all of those
+    rows are withheld.
+  - The planned `mde` matched real injection on all 72 rows of that
+    simulation (76% to 85% power on fresh draws against a target of 80%).
+  - `method="combined"` is not planned, and a fitted model is refused (use
+    `sensitivity_analysis`). `HonestDiD.fit`, `sensitivity_analysis` and
+    `breakdown_value` still refuse a placebo event study.
+  - Tutorial 34 gains a section that plans the sensitivity analysis of its
+    design.
+
+### Changed
+- **`diagnose_design` data fingerprint encodes numbers by value.**
+  `data_sha256` no longer distinguishes `1` from `1.0`, so the digest of a set
+  of rows does not change when pandas stores an integer column as float because
+  some other row is missing. `diagnose_design` has not been released, so no
+  stored fingerprint is affected.
+- **Tutorial 2 (staggered DiD)** no longer says the multiplier bootstrap gives
+  valid inference with few clusters; it points to the cluster jackknife.
+- A `DesignDiagnosisResults` from `diagnose_design(..., event_study=True)` is
+  larger than before: each placebo event study carries the event-study
+  container of every replicate (about 3 KB each). Nothing else in the
+  diagnosis changes.
+
+### Fixed
+- **Per-cell ATT(g,t) standard errors now honor replicate-weight and PSU survey
+  designs** (`CallawaySantAnna`, staggered `TripleDifference`). The aggregate SEs
+  (overall, event study, group) of these fits were already design-based, but the
+  per-cell `group_time_effects` SE, t-statistic, p-value and confidence interval
+  were silently those of a weights-only fit in three lanes:
+  - `CallawaySantAnna` with `SurveyDesign(replicate_weights=...)`;
+  - staggered `TripleDifference` with `SurveyDesign(replicate_weights=...)`;
+  - staggered `TripleDifference` with `SurveyDesign(psu=...)`.
+
+  On a one-cell panel, where the cell is the overall ATT, the cell SE now equals
+  the overall SE: 0.3428 instead of 0.1568 for `CallawaySantAnna` under JK1
+  replicates (cell p-value 0.016 instead of 4.9e-06), and 0.3253 instead of 0.2173
+  for staggered `TripleDifference` under both JK1 replicates and a PSU design.
+  Per-cell SEs under those designs will generally be larger than before; point
+  estimates and all aggregate results are unchanged, as are fits with no survey
+  design or a weights-only, strata-only or FPC-only design.
+  - Replicate designs use IF reweighting on the cell's influence function with a
+    cell-local df `min(df_survey, n_valid - 1)` (new helper
+    `diff_diff.survey.cap_replicate_df`); PSU designs use CR1 on the PSU totals of
+    the cell's influence function. For staggered `TripleDifference` both are
+    applied to the GMM-combined influence function the aggregates consume.
+  - Fail-closed: a cell whose replicate variance is zero, negative or non-finite,
+    or whose influence function carries a non-finite value, reports a NaN SE with
+    NaN inference. The non-finite guard also applies to the existing
+    `CallawaySantAnna` and `DMLDiD` PSU per-cell lane, which could otherwise report
+    a finite clustered SE for a partly-NaN influence function.
+  - See the REGISTRY CallawaySantAnna and StaggeredTripleDifference per-cell
+    survey Notes.
+- **Replicate-weight inference df: a dropped replicate now caps the design df
+  instead of replacing it** (every estimator with replicate-weight support:
+  `CallawaySantAnna`, `TripleDifference` (2x2x2 and staggered), `EfficientDiD`,
+  `ContinuousDiD`, `DifferenceInDifferences`, `TwoWayFixedEffects` including
+  event-study mode, `SunAbraham`, `StackedDiD`, `ImputationDiD`, `TwoStageDiD`,
+  `DMLDiD` aggregates, and `LinearRegression`). When a replicate was dropped
+  (an all-zero replicate column, or a failed replicate refit / solve) the
+  inference df became `n_valid - 1`, ignoring the design df (QR rank of the
+  replicate matrix minus 1). It is now `min(df_survey, n_valid - 1)`. Two
+  outcomes were wrong and are fixed; SEs and point estimates are unchanged:
+  - **Rank-deficient replicate matrix: df was raised above the design df.** With
+    15 usable columns of rank 5 plus one all-zero column, t-stats were referred
+    to t(14) instead of t(4): on a small staggered panel the `CallawaySantAnna`
+    overall p-value was 9.1e-09 and is now 2.7e-04, the `TwoWayFixedEffects`
+    p-value was 7.4e-11 and is now 6.5e-05, and `survey_metadata.df_survey`
+    read 14 and now reads 4. p-values and confidence intervals on such designs
+    get wider.
+  - **Undefined design df (rank <= 1) plus a dropped column gave t-inference.**
+    Statistics were referred to t(`n_valid - 1`) (e.g. `CallawaySantAnna`
+    p = 0.013 at t(2)); they now report NaN t-stat, p-value and CI with the SE
+    still reported, the same as an undefined design with no dropped column.
+    `survey_metadata.df_survey` stays `None` (it previously read
+    `n_valid - 1`).
+  - `LinearRegression.survey_df_` follows the same rule: the capped df, or
+    `None` on an undefined design df, in which case `get_inference()` emits its
+    existing "undefined survey d.f." warning and returns NaN inference whether
+    or not a replicate dropped.
+  - Plain (no-absorb) `DifferenceInDifferences`: when failed replicate solves
+    lowered the df, inference used the lower df but `survey_metadata.df_survey`
+    and `summary()` kept showing the design df. They now report the df used.
+  - Designs with no dropped replicate, and designs whose surviving replicate
+    columns are full rank, are unaffected (the two rules coincide).
+  - See the REGISTRY Survey Data Support replicate-df Note. New helper
+    `diff_diff.survey.reduced_replicate_df`.
+- **`SyntheticControl` conformal confidence intervals no longer depend on a
+  heuristic grid span** (`conformal_confidence_intervals()`,
+  `conformal_average_effect()`; Chernozhukov-Wuthrich-Zhu 2021). The
+  automatic range was `max(8 x sd(pre residuals), 0.5 x |point estimate|)`
+  around the point estimate, scanned at `n_grid` points, with the outermost
+  accepted grid points reported as the endpoints. Three consequences are
+  fixed:
+  - when the effect was large relative to the residual scale the grid step
+    exceeded the interval: at effect / residual sd of 50 the reported 90%
+    interval was 17% too narrow, and at 500 or more no grid point fell in the
+    set and the result was a false `status="empty"` with NaN endpoints;
+  - when the pre-period fit was near exact and the point estimate near zero
+    (typical for the block-collapsed average-effect interval with as many
+    donors as pre-blocks) the range was far too narrow and the result was a
+    `grid_limited` sliver of the set;
+  - the endpoints were always an inner approximation, short by up to one grid
+    step per side (4-5% of the width in ordinary cases), on explicit
+    `bounds=` as well.
+  The scan now covers a range derived from the data that contains the finite
+  boundary of the set (the proxy weights lie on the simplex, which bounds
+  every residual), the point estimate is itself evaluated as a candidate,
+  and each endpoint is located by bisection to 1e-6 of the interval width.
+- **`status="unbounded"` is now decided by the attainable p-value floor of
+  the single-post-slot test** rather than `1/|Pi|`. With one tested slot
+  among `m`, the p-value cannot fall below the share of permutations that
+  leave that slot in place: `1/m` for the moving-block set and for an exact
+  i.i.d. enumeration alike. Under `scheme="iid"` the old check let such cases
+  through and reported a finite `grid_limited` interval for a set that is the
+  whole line. The warnings and docstrings no longer advise `scheme="iid"` as
+  a way to obtain a finer p-value for these two intervals (it refines only
+  the joint `conformal_test`).
+- **`plot_event_study` accepts `WooldridgeDiDResults`**: passing a Wooldridge
+  ETWFE result (the object `results.aggregate("event_study")` returns) raised
+  `KeyError: 'effect'`. The result is now converted to the unified event-study
+  container at entry, so its stored intervals are drawn as-is, the
+  stored-`alpha` mismatch warning applies, and a `weights="cohort_share"`
+  aggregation (NaN intervals by design) draws no error bars. A fit on which
+  `aggregate("event_study")` has not been called raises a `ValueError` naming
+  that call. On every container input, a row whose stored interval is NaN now
+  also stays without an interval under an explicit `reference_period=`
+  (previously the normalization path recomputed one from the SE, which would
+  have redrawn inference that a producer had disabled). A contract test now pins the one event-study idiom the tutorials
+  teach (`es = results.aggregate("event_study")` where the class has
+  `aggregate`, else the result; `plot_event_study(es)`) on all thirteen
+  estimators that produce an event study.
+- **`SunAbraham` no longer reports wrong finite numbers when a
+  cohort-by-period coefficient is not identified.** The saturated regression
+  omitted one relative period, `e = -1 - anticipation`, for every cohort.
+  Whenever some coefficient was not identified in that design the QR step
+  dropped one unnamed column (a data-dependent choice, often a
+  post-treatment one), every coefficient sharing the dependency was then
+  measured against the dropped one, and those numbers were pooled into the
+  event-study rows and the overall ATT. On a noiseless panel with true
+  effect `2 + 0.5 e` (90 units, 8 periods, cohorts 3 and 5):
+  - a cohort treated at the first panel period: overall ATT NaN, seven wrong
+    cohort coefficients, an `e = 0` row of 0.0 for a true 2.0;
+  - a cohort first observed at `e = 0`: ATT NaN, five wrong coefficients, an
+    `e = 0` row of -0.25;
+  - a cohort whose units are observed at disjoint sets of periods: ATT NaN,
+    four wrong coefficients, an `e = 0` row of 1.0;
+  - never-treated units absent at one post-treatment calendar period: ATT
+    NaN and an `e = 3` row of 2.25 for a true 3.5;
+  - a cohort with a gap at `e = -1`: the baseline for that cohort was
+    whichever of its columns QR dropped (a pre-period one on this panel,
+    which left the estimates right and the `e = -2` row NaN).
+  On 50 random-missingness panels, 14 had a wrong finite cohort coefficient,
+  5 of them with no rank-deficiency warning at all (the demeaned design was
+  not detected as deficient). Each case is now handled (see Behavioral
+  Changes). `fixest::sunab` has the same defect on
+  these panels, so the corrected behavior is a documented deviation from R.
+- **`SunAbraham` bootstrap SEs were wrong, or the fit raised `IndexError`,
+  on a frame whose index is not `0..n-1`.** Both the pairs bootstrap and the
+  Rao-Wu bootstrap used index labels as row positions. A filtered frame
+  (reversed labels on the regression-test panel: SE 0.1085 instead of
+  0.0958), a frame with shifted labels, and a default-index frame holding a
+  unit with a negative or missing `first_treat` were all affected.
+- **`SunAbraham` under survey weights: a cohort-by-period cell with zero
+  total weight no longer turns identified results into NaN.** Such a cell
+  got an all-zero weighted design column, and its NaN coefficient was then
+  pooled at weight zero (`0 * NaN`). With one cohort entirely at weight 0
+  the overall ATT and five event-study rows were NaN although the other
+  cohort identified them.
+- `PreTrendsPower.fit`, `power_at`, `power_curve` and
+  `PreTrendsPowerResults.power_at` reported a power of 100% (default pre-test
+  form) or of `alpha` (Wald form) for a violation magnitude `M` that was NaN.
+  A non-finite `M` now raises `ValueError`.
+- The `PreTrendsPower` example in the bundled `llms-full.txt` guide called a
+  method and an argument that do not exist (`ptp.compute`, `M_grid=` on
+  `compute_pretrends_power`).
+- **`StackedDiD` no longer returns shifted estimates on panels with missing
+  observations.** The stacked regression contrasts (treated x event-time) and
+  (control x event-time) cell means, which are within-unit changes only when
+  the same units sit in every cell of a sub-experiment. The paper's stack is
+  built that way (Wing, Freedman & Hollingsworth 2024, Section 5.1), but
+  `fit()` kept every row of an eligible unit, so on a ragged panel level
+  differences between units leaked into the estimates, with no warning. On a
+  noiseless panel with a true ATT of 2.5 (90 units, 10 periods, cohorts 4 and
+  6, `kappa_pre = kappa_post = 2`):
+  - one never-treated observation missing: 2.4978;
+  - 5% of rows missing at random: 2.6020;
+  - half of one cohort missing its `e = -1` row: 2.2965; the whole cohort
+    missing it, or having no pre-treatment rows at all: 1.9500;
+  - never-treated units missing two post-treatment periods: 2.7000;
+  - a calendar period absent for every unit: 1.7667 or 2.6833, depending on
+    the period;
+  - no never-treated rows inside the event windows: NaN with a rank warning.
+  Each case now returns 2.5 exactly or raises (see Behavioral Changes). The
+  authors' reference R code returns the same shifted numbers on such panels
+  (the library matched it to 12 digits), so the corrected behavior is a
+  documented deviation from it; R `cbwsdid` already builds its stack from
+  complete units, and `balance="entropy"` now matches it on ragged panels.
+- **`StackedDiD` no longer mis-assigns rows it cannot place on the event-time
+  grid.** Duplicate `(unit, time)` rows were double-counted (2.5411 on the
+  panel above), rows at a fractional `time` were absorbed into the reference
+  category (1.3833), rows with a missing `time` were dropped silently, and a
+  fractional `first_treat` was truncated to the period before it. All four
+  now raise `ValueError`.
+- **`StackedDiD(weighting="population")` and `weighting="sample_share"` now
+  apply the paper's treatment weight.** Table 1 of Wing, Freedman &
+  Hollingsworth (2024) weights the treated rows as well as the controls; the
+  library set the treated weight to 1 under every scheme, so under these two
+  the treated arm was aggregated by unit shares and the control arm by
+  population or sample shares, the untreated trends did not cancel, and the
+  estimate was not the named aggregate. On balanced noiseless panels with
+  cohort-specific effects and a quadratic time trend the largest error in an
+  event-study row was 0.0023 (`population`) and 0.10 (`sample_share`); both
+  are now exact. The default `weighting="aggregate"` was correct and is
+  bit-identical.
+- **`StackedDiD` + `survey_design=`: the corrective weights now use
+  survey-weighted cohort shares.** They were formed from raw unit counts and
+  then multiplied by the survey weight, which left the treated arm on
+  survey-weighted shares and the control arm on a mix of both. With
+  unit-constant weights of 1.5 / 0.5 / 1 across two cohorts and the controls,
+  a noiseless panel with a true ATT of 2.50 returned 2.46; with half of a
+  cohort at weight 0 it returned 2.4733. Both are now exact, replicate-weight
+  refits recompute the corrective weights from each replicate's weights, and
+  an independent R implementation (`survey::svyglm`) of the same formula
+  matches to 1e-11.
+- **`StackedDiD` + `survey_design=` no longer accepts survey columns that
+  change within a unit.** A weight that varies over a unit's rows changes
+  each event-time cell's weighted composition exactly as a missing row does
+  (2.6174 for a true 2.5 with positive time-varying weights); it now raises
+  `ValueError`, as it does for the other panel estimators.
+- **`StackedDiDResults.groups` no longer lists an adoption event whose
+  sub-experiment was not built.**
+
+### Documentation
+- Extended the paper review of Bertrand, Duflo and Mullainathan's *How Much
+  Should We Trust Differences-in-Differences Estimates?* (Quarterly Journal of
+  Economics, 2004) at
+  `docs/methodology/papers/bertrand-duflo-mullainathan-2004-review.md` with a
+  full source audit: the placebo-law procedure on real data, rejection rates
+  under no effect and under an injected effect, and the inference remedies
+  evaluated, with all eight tables transcribed. The review text behind the
+  `PlaceboTests` registry section is retained in the same file. Source audit
+  for prospective design-stage tooling; no estimator or public API is
+  introduced.
+- Added a paper review of Blair, Cooper, Coppock and Humphreys' *Declaring and
+  Diagnosing Research Designs* (American Political Science Review, 2019) at
+  `docs/methodology/papers/blair-2019-review.md`: the model / inquiry / data
+  strategy / answer strategy framework, the diagnosand roster, the simulation
+  diagnosis procedure, and the paper's treatment of pre-registration and
+  reconciliation of planned and realized designs. Source audit for prospective
+  design-stage tooling; no estimator or public API is introduced.
+- Added a paper review of Coglianese and Fang's *An Evaluation of
+  Difference-in-Differences Methods Using Placebo Event Studies* (FEDS 2026-045)
+  at `docs/methodology/papers/coglianese-fang-2026-review.md`: the placebo
+  event-study procedure, the placebo-MSE metric, the thirteen estimators
+  evaluated, and an explicit list of what the paper does not provide (no effect
+  injection, power, size, or coverage). Source audit for prospective
+  design-stage tooling; no estimator or public API is introduced.
+- Added a paper review of Karim, Nielsen, MacKinnon and Webb's *Improved
+  Inference for CSDID Using the Cluster Jackknife* (arXiv 2602.12043v1) at
+  `docs/methodology/papers/karim-2026-review.md`: the cluster-jackknife variance
+  for the aggregate ATT (equation 20), its caveats when a deleted cluster removes
+  a cohort, the Monte Carlo rejection frequencies, and the points the paper
+  leaves unspecified. Source audit for prospective few-cluster inference on
+  `CallawaySantAnna`; no estimator or public API is introduced.
+- Added a paper review of Mizushima and Powell's working paper *Inference with
+  Modern Difference-in-Differences Methods* (SSRN 5221387) at
+  `docs/methodology/papers/mizushima-powell-2025-review.md`: the placebo and
+  synthetic simulation designs, rejection rates for eight estimators with few
+  treated units, and the imputation-based randomization and wild-bootstrap
+  procedures, with all four tables transcribed. Source audit for prospective
+  design-stage tooling; no estimator or public API is introduced.
+- Added a paper review of Bellégo, Benatia and Dortet-Bernadet (2025), *The
+  chained difference-in-differences* (Journal of Econometrics 248, 105783;
+  reviewed from arXiv:2301.01085v4), at
+  `docs/methodology/papers/bellego-2025-review.md`: the identifying
+  assumptions for incomplete panels, the pairwise inverse-probability-weighted
+  building blocks, the GMM combination with its optimal and identity weighting
+  variants, the influence functions and multiplier bootstrap, the sample
+  selection corrections, the simulation tables, and a list of the points the
+  paper leaves open. Source audit for evaluating a contributed estimator; no
+  estimator or public API is introduced.
+- Corrected the `CallawaySantAnnaResults.group_time_effects` entry in the
+  bundled `llms-full.txt` guide: each ATT(g,t) cell is a plain dict with the
+  keys `effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_treated`,
+  `n_control` and `skip_reason` (read as `cell["effect"]`), not a
+  `GroupTimeEffect` object. The `GroupTimeEffect` section of the staggered API
+  page now says the same. No behavior change.
+- **Fundamentals tutorials repaired and brought to the tutorial conventions**
+  (`01_basic_did`, `02_staggered_did`, `03_synthetic_did`, `08_triple_diff`,
+  `09_real_world_examples`). Each now states its estimand and identifying
+  assumptions before the first fit, checks estimates against a stated truth
+  where the data is simulated, clusters panel fits at the unit, and is
+  committed with executed outputs and a drift test. Corrections of substance:
+  - `01`: the clustering example printed "Cluster-robust SE is 0.26x larger"
+    for a cluster-robust standard error that is smaller; the section now
+    explains why it is smaller in that design and when the opposite holds.
+  - `02`: the true effect path is stated (it was mis-described and never
+    compared with an estimate); `aggregate("event")`, which raises in 4.0, is
+    gone; pre-treatment estimates are read with simultaneous bands instead of
+    pointwise pass/fail; the Callaway-Sant'Anna vs Sun-Abraham "robustness
+    check" is replaced by an explanation of why the two coincide there.
+  - `03`: time weights are described correctly (fit on control units); the
+    count-based placebo p-value and its floor are explained; shipped
+    diagnostics replace hand-rolled ones.
+  - `08`: both plain two-way DiDs are shown to miss the truth where the triple
+    difference recovers it; the staggered example states its truth and
+    explains the two overall summaries.
+  - `09`: the Card-Krueger conclusion no longer rests on unclustered standard
+    errors; the Castle doctrine section explains the TWFE vs
+    Callaway-Sant'Anna gap by the baseline period and reads the pre-treatment
+    estimates as a warning rather than passing over them.
+- **Study-design tutorials repaired and brought to the tutorial conventions**
+  (`04_parallel_trends`, `05_honest_did`, `06_power_analysis`,
+  `07_pretrends_power`, `24_staggered_vs_collapsed_power`). Each now states
+  what it estimates and assumes before the first fit, checks results against a
+  stated truth, and is committed with executed outputs and a drift test.
+  Corrections of substance:
+  - `04`: pre-treatment diagnostics are presented as evidence, not as a
+    pass/fail gate; the group placebo passes `treatment=` so that treated
+    units are dropped (without it they sat in the placebo control group); the
+    permutation example no longer labels the placebo mean as the estimate.
+  - `05`: the relative-magnitudes restriction is stated on first differences,
+    as implemented (it was written on levels, which cannot reproduce the
+    output); the breakdown value is searched on a grid that reaches it; the
+    conventional interval is shown to miss the simulated truth where both
+    honest intervals cover it; relative magnitudes and smoothness are no
+    longer compared at "the same M"; `l_vec` and the staggered route are
+    shown.
+  - `06`: closed-form and simulated sample sizes are compared for the same
+    design (32 against 35 units, where the old comparison set 63 against 42
+    and blamed simulation noise); `sigma` and `rho` are defined once, with the
+    double-counting trap worked through; panel simulations cluster by unit.
+  - `07`: the linear minimum detectable violation is treated as a slope and
+    translated into the bias it implies, and is no longer passed to Honest DiD
+    as a smoothness bound; power grids sit on the scale of the MDV instead of
+    saturating at 100%; the form of the pre-test is named; a new section shows
+    by simulation that, in the notebook's design, bias is larger and coverage
+    lower among the samples that pass the pre-test.
+  - `24`: the removed `overall_att` name is gone from the prose; the event
+    study is drawn with `plot_event_study`; blanket warning filters are
+    removed (the fits are warning-free); the claim that the `simulate_*`
+    functions draw independently per estimator is corrected.
+- Added a paper review of Wang, Sant'Anna, Chernozhukov and Cinelli's preprint
+  *Omitted Variable Bias in Difference-in-Differences Designs*
+  (arXiv:2609.19386v1) at `docs/methodology/papers/wang-2026-review.md`: the
+  exact omitted-variable-bias decomposition of the ATT into alignment, trend,
+  selection and scale factors, the debiased-machine-learning scores and
+  delta-method confidence limits for the bias bounds, the robustness value and
+  extreme robustness value, covariate and pre-trend benchmarking, the Monte
+  Carlo design with its closed-form true values, and the minimum-wage
+  application tables. Source audit for evaluating a contributed sensitivity
+  analysis; no estimator or public API is introduced.
+
+### Internal
+- **Release wheel build moved off the retired `macos-14` runner**:
+  `build-wheels.yml`'s macOS ARM64 job now runs on `macos-15`. GitHub retired
+  the macOS 14 images from GitHub Actions on 2026-11-02, so every macOS wheel
+  job was rejected before starting and the next release could not have
+  published. No change to the library or to the published wheel set.
+- **Tutorial conventions and a CI guard for them**: `CONTRIBUTING.md` gains a
+  "Tutorial conventions" section (what every notebook states and how: estimand
+  and assumptions, the truth check on simulated data, clustered inference, one
+  event-study idiom, warnings, committed outputs, a drift test per notebook).
+  `tests/test_tutorial_conventions.py` enforces the mechanical rules over every
+  notebook by parsing the notebook JSON, with a shrinking allowlist of the
+  violations that exist today; it runs in the docs-tests workflow. The notebooks
+  workflow now runs every tutorial drift test, so a notebook-only change can no
+  longer leave its pinned numbers unchecked. `docs/tutorials/README.md` is
+  reduced to a pointer to the tutorial index and the conventions.
+
 ## [4.0.0] - 2026-11-01
 
 ### Breaking Changes
@@ -6603,6 +7237,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[4.1.0]: https://github.com/igerber/diff-diff/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/igerber/diff-diff/compare/v3.13.0...v4.0.0
 [3.13.0]: https://github.com/igerber/diff-diff/compare/v3.12.0...v3.13.0
 [3.12.0]: https://github.com/igerber/diff-diff/compare/v3.11.1...v3.12.0

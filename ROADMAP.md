@@ -8,7 +8,7 @@ Forward-looking plan for diff-diff, organized as queued work, candidates under c
 
 Queued work, ordered by expected leverage. Each item is its own PR. Ordering is priority-sequenced, not time-committed.
 
-### 4.1 `event_study()` comparison front door
+### 4.2 `event_study()` comparison front door
 
 - **One entry point over the staggered family.** `event_study(data, outcome, unit, time, first_treat, estimator=...)` runs the chosen staggered estimator and returns the unified event-study surface, so the estimators can be compared on one call signature. Design sketch: `docs/v4-design.md` phase 6 (sketch only; specified in its own plan).
 
