@@ -261,7 +261,9 @@ class TestLinear:
             "outcomes in other periods, early ones included, can then move the post-treatment\n"
             "  coefficients",
             "to be unrelated to the idiosyncratic shocks to the outcome",
-            "the whole path of each covariate must\n  be strictly exogenous",
+            "parallel trends is assumed conditional on them",
+            "The whole path of each covariate\n  must be strictly exogenous",
+            "treatment must not change the covariate",
             "a\n  cohort treated in period 6 with no rows in period 5 is measured against period 4",
             'For the linear model (`method="ols"`) with `"never_treated"`, a balanced panel and\n'
             "no covariates, only those from the reference period on.",
@@ -639,7 +641,10 @@ def test_reference_period_on_an_unbalanced_panel():
     the never-treated units are both observed. The fit warns either way, but
     only names the move when the never-treated units lack the period."""
     md = notebook_markdown(NB)
-    assert "it names the new reference when the never-treated units lack the\n  period" in md
+    assert (
+        "It names the new reference when the period it drops is the cohort's\n"
+        "  latest observed pre-treatment period and an earlier supported one remains" in md
+    )
     panel = generate_staggered_data(
         n_units=150,
         n_periods=9,
@@ -665,6 +670,16 @@ def test_reference_period_on_an_unbalanced_panel():
         else:
             assert "reference period moved" not in messages
             assert "no observations: (6, 5)" in messages
+    # both at once: the cohort lacks period 5, so period 4 is its latest observed
+    # pre-period, and the never-treated units lack period 4, so the move to 3 is named
+    both = gaps["cohort"] | ((panel["first_treat"] == 0) & (panel["period"] == 4))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit = WooldridgeDiD(control_group="never_treated").fit(panel[~both], **FIT)
+    messages = " ".join(str(w.message) for w in caught)
+    assert sorted(int(t) for g, t in fit.group_time_effects if g == 6) == [0, 1, 2, 6, 7, 8]
+    assert "Cohort 6's reference period moved from 4 to 3" in messages
+    assert "no observations: (6, 5)" in messages
     # a period no unit is observed in is not on the panel's time grid: period 4 is
     # the reference again, and nothing is reported
     with warnings.catch_warnings(record=True) as caught:
