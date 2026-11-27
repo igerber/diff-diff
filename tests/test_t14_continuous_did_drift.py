@@ -147,6 +147,20 @@ class TestEventStudyAndOptions:
             assert 1.0 < abs(fit.overall_acrt - true_acrt) / fit.overall_acrt_se < 2.0
         assert fits[0].overall_acrt_se < fits[1].overall_acrt_se < fits[2].overall_acrt_se
 
+    def test_overall_att_moves_when_the_spline_drops_a_cell(self):
+        """The overall ATT is spline-free only while the same cells are kept: a
+        three-unit cohort is estimated under a linear spline (2 basis functions)
+        and skipped, with a warning, under a cubic one (4)."""
+        two_cohorts = _panel(n_periods=6, cohort_periods=(3, 5))
+        late = two_cohorts.loc[two_cohorts["first_treat"] == 5, "unit"].unique()
+        small = two_cohorts[~two_cohorts["unit"].isin(late[3:])]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            linear = ContinuousDiD(degree=1, seed=42).fit(small, **FIT)
+        with pytest.warns(UserWarning, match="Not enough treated units .* Skipping cell"):
+            cubic = ContinuousDiD(degree=3, seed=42).fit(small, **FIT)
+        assert abs(linear.att - cubic.att) > 0.02
+
     def test_control_groups_agree_here(self):
         panel = _panel(n_periods=6, cohort_periods=(3, 5))
         never = ContinuousDiD(control_group="never_treated", seed=42).fit(panel, **FIT)
@@ -272,6 +286,9 @@ class TestNotebookSurface:
             "the\nheight of the left curve at *d* read as ATT(d|d)",
             "parallel trends identifies the overall ATT and each dose group's own\n  effect, ATT(d|d)",
             "The estimator requires a balanced panel.",
+            # the overall ATT is spline-free only while the same cells are kept
+            "That holds as long as the\n  same cells are kept.",
+            "What it cannot return is\nthe dose-response curve or the return to an extra hour.",
         ):
             assert needle in md, needle
         for stale in (
@@ -280,6 +297,8 @@ class TestNotebookSurface:
             "removed at 4.0",
             "M-025",
             "only the overall ATT has a causal\nreading",
+            "it returns the same overall ATT, and nothing else",
+            "does not depend on the spline** at all",
         ):
             assert stale not in md, stale
 

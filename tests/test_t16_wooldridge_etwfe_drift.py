@@ -301,22 +301,24 @@ class TestAllEventuallyTreated:
             )
 
 
-@pytest.fixture
-def mpdta(tmp_path, monkeypatch):
-    """The canonical panel. A full checkout carries the checksum-matching source
-    file, so the loader is fed those bytes and the numbers are re-derived
-    offline; without it the loader downloads, and a fallback skips."""
+@pytest.fixture(scope="module")
+def mpdta(tmp_path_factory):
+    """The canonical panel, loaded once for the module. A full checkout carries
+    the checksum-matching source file, so the loader is fed those bytes and the
+    numbers are re-derived offline; without it the loader is asked once, and a
+    fallback skips. Tests copy the frame before changing it."""
     fixture = Path(__file__).resolve().parents[1] / "benchmarks/data/real/mpdta.csv"
     if fixture.exists():
         import diff_diff.datasets as datasets_mod
 
-        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
         response = MagicMock()
         response.__enter__ = lambda self: self
         response.__exit__ = lambda self, *a: False
         response.read.return_value = fixture.read_bytes()
-        with patch("diff_diff.datasets.urlopen", return_value=response):
-            frame = load_mpdta(force_download=True)
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path_factory.mktemp("mpdta"))
+            with patch("diff_diff.datasets.urlopen", return_value=response):
+                frame = load_mpdta(force_download=True)
         # with the source file in the checkout a fallback is a failure, not a skip
         assert frame.attrs.get("source") == "callaway_santanna_mpdta"
         return frame
