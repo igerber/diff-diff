@@ -191,8 +191,8 @@ class TestLinear:
         post-treatment coefficient. With a gap anywhere, or with a covariate,
         early outcomes reach it, which is all the notebook claims."""
 
-        def post(missing=(), early=None, covariate=False, n_treated=2, n_control=3):
-            early = early or {}
+        def post(missing=(), early=None, late=None, covariate=False, n_treated=2, n_control=3):
+            early, late = early or {}, late or {}
             rows = []
             units = [(f"T{i}", 3) for i in range(n_treated)] + [
                 (f"C{i}", 0) for i in range(n_control)
@@ -204,6 +204,8 @@ class TestLinear:
                     y = 2.0 if (cohort == 3 and time == 3) else 0.0
                     if time == 1:
                         y += early.get(unit, 0.0)
+                    if time == 3:
+                        y += late.get(unit, 0.0)
                     x = float(np.sin(1.7 * index + 2.3 * time))
                     rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y, "x": x})
             keys = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
@@ -223,20 +225,29 @@ class TestLinear:
         assert post(missing={("T1", 2)}, early={"T1": 10.0}) == pytest.approx(-0.5, abs=1e-8)
         assert post(missing={("T1", 3)}) == pytest.approx(2.0, abs=1e-8)
         assert post(missing={("T1", 3)}, early={"T0": 10.0}) == pytest.approx(-0.5, abs=1e-8)
-        # a covariate on a balanced panel does it too
+        # a time-varying covariate on a balanced panel does it too
         wide = dict(covariate=True, n_treated=5, n_control=7)
         assert post(**wide) == pytest.approx(2.0, abs=1e-8)
         assert abs(post(early={"T0": 10.0}, **wide) - 2.0) > 0.1
+        # missingness related to the idiosyncratic shocks biases the fit: offsetting
+        # target-period shocks average out until the unit with the low one is dropped
+        shocks = {"T0": 10.0, "T1": -10.0}
+        assert post(late=shocks) == pytest.approx(2.0, abs=1e-8)
+        assert post(late=shocks, missing={("T1", 3)}) == pytest.approx(12.0, abs=1e-8)
         md = notebook_markdown(NB)
         for needle in (
-            "On a balanced panel without covariates each coefficient is then",
-            "That reading\n  is specific to a balanced panel without covariates",
-            "outcomes in other periods, early ones included, can move the post-treatment\n"
+            "With no covariates on a balanced panel, the case this tutorial uses, each coefficient\n"
+            "  is then a difference-in-differences against that period",
+            "Gaps in the panel, or time-varying covariates, can\n  change that",
+            "outcomes in other periods, early ones included, can then move the post-treatment\n"
             "  coefficients",
-            '`"never_treated"` on a balanced panel without covariates, and in any period the fit '
-            "uses\notherwise",
-            'With missing observations or covariates `"never_treated"` no longer\n'
-            "confines the assumption to the reference period",
+            "to be unrelated to the idiosyncratic shocks to the outcome",
+            "a\n  cohort treated in period 6 with no rows in period 5 is measured against period 4",
+            'For the linear model (`method="ols"`) with `"never_treated"`, a balanced panel and\n'
+            "no covariates, only those from the reference period on.",
+            "for Poisson and logit under either, any of\nthem",
+            'With gaps in the panel or time-varying covariates `"never_treated"`\n'
+            "may no longer confine the assumption to the reference period",
         ):
             assert needle in md, needle
         for stale in (
@@ -244,6 +255,7 @@ class TestLinear:
             "cohort's placebo coefficient, not into the post-treatment ones",
             "protects against early shifts a cohort shares",
             "use Callaway-Sant'Anna there",
+            "With\n  missing observations or with covariates",
         ):
             assert stale not in md, stale
 
