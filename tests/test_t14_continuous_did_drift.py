@@ -239,11 +239,22 @@ class TestNotebookSurface:
             "different assumptions, not a weaker and a stronger version of one",
             "keep them inside the range of\ndoses you observe",
             # a lowest-dose comparison is relative to that group, with its own conditions
-            "It requires a single treatment\n  date, no never-treated units and at least two units at the minimum dose.",
+            "It requires a balanced panel, a single treatment date, no never-treated units and at\n  least two units at the minimum dose.",
             "Reading it as the effect of\nmoving from the lowest dose to dose *d* needs strong parallel trends.",
+            # parallel trends alone identifies own-dose effects, not only the overall ATT
+            "| ATT(d\\|d) |",
+            "the\nheight of the left curve at *d* read as ATT(d|d)",
+            "parallel trends identifies the overall ATT and each dose group's own\n  effect, ATT(d|d)",
+            "The estimator requires a balanced panel.",
         ):
             assert needle in md, needle
-        for stale in ("overall_att", "since 4.0", "removed at 4.0", "M-025"):
+        for stale in (
+            "overall_att",
+            "since 4.0",
+            "removed at 4.0",
+            "M-025",
+            "only the overall ATT has a causal\nreading",
+        ):
             assert stale not in md, stale
 
     def test_code(self):

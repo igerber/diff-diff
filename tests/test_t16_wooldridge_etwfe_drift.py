@@ -305,6 +305,39 @@ class TestMpdta:
         assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
         assert_quotes_in_rendered(NB, ["Provenance: callaway_santanna_mpdta"], surface="output")
 
+    def test_section_skips_its_fits_on_the_synthetic_fallback(self, capsys):
+        """The section's own cells, run with a loader that returns the simulated
+        panel: they must say so and fit nothing, because the prose below them
+        discusses the canonical numbers."""
+        path = Path(__file__).resolve().parents[1] / NB
+        if not path.exists():
+            pytest.skip("notebook not available in this environment")
+        cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+        section = [
+            "".join(c["source"])
+            for c in cells
+            if c["cell_type"] == "code"
+            and "mpdta" in "".join(c["source"])
+            and "import" not in "".join(c["source"])
+        ]
+        assert len(section) == 3
+
+        def fallback_loader():
+            frame = pd.DataFrame({"countyreal": [1], "year": [2003], "lemp": [0.0]})
+            frame.attrs["source"] = "synthetic_fallback"
+            return frame
+
+        def no_fit(*args, **kwargs):
+            raise AssertionError("a fit ran on the synthetic fallback")
+
+        scope = {"load_mpdta": fallback_loader, "WooldridgeDiD": no_fit, "np": np}
+        for source in section:
+            exec(source, scope)  # noqa: S102 - the notebook's own cell source
+        printed = capsys.readouterr().out
+        assert "Provenance: synthetic_fallback" in printed
+        assert "section are skipped" in printed
+        assert "mpdta_fit" not in scope and "mpdta_poisson" not in scope
+
 
 class TestNotebookSurface:
     def test_prose(self):
@@ -317,6 +350,9 @@ class TestNotebookSurface:
             "parallel trends is assumed on the index\nscale",
             "analytical from the influence function; multiplier bootstrap optional",
             "Rios-Avila, F. (2021).",
+            # parity with Callaway-Sant'Anna is stated with its conditions everywhere
+            "On this balanced panel without covariates, ETWFE with never-treated controls reproduces",
+            "it reproduces Callaway-Sant'Anna when the panel is\n  balanced",
         ):
             assert needle in md, needle
         for stale in (
@@ -324,6 +360,7 @@ class TestNotebookSurface:
             "Tracked as follow-up work",
             "Friosavila",
             "the only valid",
+            "it reproduces Callaway-Sant'Anna on a linear outcome",
         ):
             assert stale not in md, stale
 
