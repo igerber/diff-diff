@@ -13,7 +13,9 @@
     under factor confounding, and TROP and Synthetic DiD have similar observed
     errors in that design. The five-draw Monte Carlo, the duplicated Summary and the
     stale plot annotation are gone. The time weights are described as centred on
-    the period of the observation being predicted, not on the adoption date.
+    the period of the observation being predicted, not on the adoption date,
+    and `effective_rank` and `factor_matrix` as properties of the average of
+    the per-observation fits.
   - `11`, `12`, `13`: the simulated data used the generator's default of
     effects that grow over time while every table was labelled "True effect =
     2.0" (the true average was about 2.42); the generator is now called with a
@@ -47,8 +49,10 @@
     control group and the same pre-treatment reference period, where they
     coincide at every event time on a balanced panel without covariates; the
     comparison cell stops if the two event studies do not cover the same event
-    times; the `mpdta` section prints the data's provenance; the Poisson and
-    logit examples gain a truth check.
+    times; the `mpdta` section prints the data's provenance, labels its
+    intervals as county-clustered and adds a state-clustered fit (minimum
+    wages are set by states: SE 0.019 against 0.013); the Poisson and logit
+    examples gain a truth check.
   - Event studies in `14`, `15` and `16` are drawn with `plot_event_study`.
   - Links to the Pre-Trends Power and Honest DiD tutorials now say which fit
     those diagnostics take: they reject the event studies of Imputation,
@@ -59,7 +63,8 @@
   (README, the three `llms` guides, the estimator-choice page, references and
   the API pages): efficient under spherical errors (equal variance,
   uncorrelated across units and periods) and robust to effect heterogeneity, not "efficient under homogeneous
-  effects". The Two-Stage API page's comparison table no longer says the
+  effects". The statement is scoped to the unweighted fit: with survey weights
+  the first stage is weighted least squares. The Two-Stage API page's comparison table no longer says the
   two-stage and imputation estimators are consistent only under homogeneity.
 - The `did2s` reference (Butts & Gardner 2022) is cited as *The R Journal*
   14(3), not 14(1).

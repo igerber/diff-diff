@@ -535,7 +535,8 @@ impute counterfactual Y(0) for treated observations, then aggregate.
 
    ImputationDiD is unbiased under arbitrary treatment-effect heterogeneity, and is
    the efficient linear unbiased estimator under spherical errors: equal variance,
-   uncorrelated across units and periods (Borusyak, Jaravel & Spiess 2024, Theorem 1). It assumes parallel
+   uncorrelated across units and periods (Borusyak, Jaravel & Spiess 2024, Theorem 1,
+   which is for the unweighted fit). It assumes parallel
    trends in all periods; if early pre-treatment periods are suspect, prefer
    Callaway-Sant'Anna with never-treated controls, which restricts trends only from
    the period before each cohort's treatment.

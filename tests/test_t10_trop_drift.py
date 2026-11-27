@@ -244,6 +244,9 @@ class TestNotebookSurface:
             # time weights decay around the target period, not around adoption
             "the weights are centred on `t`, not on the adoption date",
             "it does not\n  take a TROP fit",
+            # effective_rank and factor_matrix describe the average of the local fits
+            "It summarises the returned matrix, not how many factors any single fit used.",
+            "not the rank of any one of them",
             "over the periods, other than `t` itself,\n  in which both units are untreated",
         ):
             assert needle in md, needle
@@ -253,5 +256,7 @@ class TestNotebookSurface:
             "have been removed",
             "Reduced from",
             "the periods just before treatment",
+            "show how many factors the fit is using",
+            "the fit uses about two factors",
         ):
             assert stale not in md, stale

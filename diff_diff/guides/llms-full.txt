@@ -442,7 +442,7 @@ results.print_summary()
 
 ### ImputationDiD
 
-Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Unbiased under arbitrary treatment-effect heterogeneity; the minimum-variance linear unbiased estimator under spherical errors: equal variance, uncorrelated across units and periods (Theorem 1). Its reported CIs are often, not always, shorter than CS/SA. Assumes parallel trends in all periods.
+Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Unbiased under arbitrary treatment-effect heterogeneity; the minimum-variance linear unbiased estimator under spherical errors: equal variance, uncorrelated across units and periods (Theorem 1, for the unweighted fit; not established with `survey_design=` weights, where the first stage is weighted least squares). Its reported CIs are often, not always, shorter than CS/SA. Assumes parallel trends in all periods.
 
 ```python
 ImputationDiD(

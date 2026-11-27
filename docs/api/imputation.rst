@@ -19,9 +19,11 @@ Inference uses the conservative clustered variance estimator from Theorem 3.
 
 - Staggered adoption settings where parallel trends is credible in **every**
   pre-treatment period. Unbiased under arbitrary treatment-effect heterogeneity,
-  and the minimum-variance linear unbiased estimator under spherical errors
-  (equal variance, uncorrelated across units and periods), which often shows
-  up as shorter CIs than Callaway-Sant'Anna
+  and, for an unweighted fit, the minimum-variance linear unbiased estimator
+  under spherical errors (equal variance, uncorrelated across units and
+  periods), which often shows up as shorter CIs than Callaway-Sant'Anna. With
+  survey weights the first stage is weighted least squares and that guarantee
+  does not carry over as stated
 - When you want to use **all untreated observations** (never-treated +
   not-yet-treated) for maximum efficiency
 - As a complement to Callaway-Sant'Anna or Sun-Abraham: if all three agree,

@@ -71,9 +71,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
     no anticipation, with unrestricted treatment-effect heterogeneity. It is the
     efficient linear unbiased estimator under spherical errors (equal variance,
     uncorrelated across units and periods; Theorem 1): no other linear unbiased
-    estimator of the same target has a smaller variance. Reported confidence
-    intervals are often shorter than Callaway-Sant'Anna's or Sun-Abraham's as a
-    result, but their width also depends on the variance estimator.
+    estimator of the same target has a smaller variance. The theorem is for the
+    unweighted fit: with ``survey_design=`` weights the untreated model is fitted
+    by weighted least squares and spherical errors alone do not give that
+    guarantee. Reported confidence intervals are often shorter than
+    Callaway-Sant'Anna's or Sun-Abraham's as a result, but their width also
+    depends on the variance estimator.
 
     The estimation procedure:
     1. Run OLS on untreated observations to estimate unit + time fixed effects

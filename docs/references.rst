@@ -236,7 +236,7 @@ Multi-Period and Staggered Adoption
   - **Efficient imputation**: OLS on untreated observations, impute counterfactuals, aggregate
   - **Conservative variance**: Theorem 3 clustered variance estimator with auxiliary model
   - **Pre-trend test**: Independent of treatment effect estimation under spherical, normal errors (Proposition 9)
-  - **Efficiency**: the efficient linear unbiased estimator under spherical errors, meaning equal variance and no correlation across units or periods (Theorem 1), with unrestricted treatment-effect heterogeneity
+  - **Efficiency**: the efficient linear unbiased estimator under spherical errors, meaning equal variance and no correlation across units or periods (Theorem 1, for the unweighted fit), with unrestricted treatment-effect heterogeneity
 
 - **Callaway, B., & Sant'Anna, P. H. C. (2021).** "Difference-in-Differences with Multiple Time Periods." *Journal of Econometrics*, 225(2), 200-230. https://doi.org/10.1016/j.jeconom.2020.12.001
 

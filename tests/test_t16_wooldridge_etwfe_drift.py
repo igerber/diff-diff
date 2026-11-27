@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -300,11 +301,31 @@ class TestAllEventuallyTreated:
             )
 
 
+@pytest.fixture
+def mpdta(tmp_path, monkeypatch):
+    """The canonical panel. A full checkout carries the checksum-matching source
+    file, so the loader is fed those bytes and the numbers are re-derived
+    offline; without it the loader downloads, and a fallback skips."""
+    fixture = Path(__file__).resolve().parents[1] / "benchmarks/data/real/mpdta.csv"
+    if fixture.exists():
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        response = MagicMock()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda self, *a: False
+        response.read.return_value = fixture.read_bytes()
+        with patch("diff_diff.datasets.urlopen", return_value=response):
+            frame = load_mpdta(force_download=True)
+    else:
+        frame = load_mpdta()
+    if frame.attrs.get("source") == "synthetic_fallback":
+        pytest.skip("mpdta not available offline; canonical numbers cannot be re-derived")
+    return frame
+
+
 class TestMpdta:
-    def test_overall_effect_on_log_employment(self):
-        mpdta = load_mpdta()
-        if mpdta.attrs.get("source") == "synthetic_fallback":
-            pytest.skip("mpdta not available offline; canonical numbers cannot be re-derived")
+    def test_overall_effect_on_log_employment(self, mpdta):
         fit = WooldridgeDiD().fit(
             mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
@@ -326,6 +347,39 @@ class TestMpdta:
         assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
         assert_quotes_in_rendered(NB, ["Provenance: callaway_santanna_mpdta"], surface="output")
 
+    def test_state_clustering_widens_the_interval(self, mpdta):
+        """Minimum wages are set by states. The county-clustered fit is the `jwdid`
+        benchmark; clustering by state gives the same estimate and a larger SE."""
+        keys = dict(outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
+        mpdta = mpdta.copy()
+        mpdta["state"] = mpdta["countyreal"] // 1000
+        assert mpdta["state"].nunique() == 29
+        assert mpdta.groupby("state")["first_treat"].nunique().max() == 1  # set by state
+        assert mpdta.groupby("first_treat")["state"].nunique().to_dict() == {
+            0: 16,
+            2004: 1,
+            2006: 3,
+            2007: 9,
+        }
+        by_county = WooldridgeDiD().fit(mpdta, **keys)
+        by_state = WooldridgeDiD(cluster="state").fit(mpdta, **keys)
+        assert by_state.att == pytest.approx(by_county.att, abs=1e-12)
+        assert by_state.se == pytest.approx(0.0190, abs=3e-4)
+        assert by_state.se > 1.3 * by_county.se
+        assert by_state.conf_int[0] == pytest.approx(-0.0867, abs=5e-4)
+        assert by_state.conf_int[1] == pytest.approx(-0.0087, abs=5e-4)
+        assert_quotes_in_rendered(
+            NB,
+            [
+                "county          -0.0477   0.0133",
+                "state           -0.0477   0.0190   [-0.0867, -0.0087]",
+            ],
+            surface="output",
+        )
+        md = notebook_markdown(NB)
+        assert "the state is the level to cluster at" in md
+        assert "the 2004 cohort is a single state" in md
+
     def test_section_skips_its_fits_on_the_synthetic_fallback(self, capsys):
         """The section's own cells, run with a loader that returns the simulated
         panel: they must say so and fit nothing, because the prose below them
@@ -341,7 +395,7 @@ class TestMpdta:
             and "mpdta" in "".join(c["source"])
             and "import" not in "".join(c["source"])
         ]
-        assert len(section) == 3
+        assert len(section) == 4
 
         def fallback_loader():
             frame = pd.DataFrame({"countyreal": [1], "year": [2003], "lemp": [0.0]})
@@ -357,7 +411,7 @@ class TestMpdta:
         printed = capsys.readouterr().out
         assert "Provenance: synthetic_fallback" in printed
         assert "section are skipped" in printed
-        assert "mpdta_fit" not in scope and "mpdta_poisson" not in scope
+        assert not {"mpdta_fit", "mpdta_poisson", "mpdta_by_state"} & set(scope)
 
 
 class TestNotebookSurface:
