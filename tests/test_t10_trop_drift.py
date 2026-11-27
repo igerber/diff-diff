@@ -241,8 +241,16 @@ class TestNotebookSurface:
             "No anticipation; no spillovers, so that one unit's\ntreatment does not change another unit's outcome",
             "That option adds a requirement of no carryover",
             "For a\n  single treated block and fixed weights",
+            # time weights decay around the target period, not around adoption
+            "the weights are centred on `t`, not on the adoption date",
+            "over the periods, other than `t` itself,\n  in which both units are untreated",
         ):
             assert needle in md, needle
         assert md.count("## Summary") == 1
-        for stale in ("TROP should recover", "have been removed", "Reduced from"):
+        for stale in (
+            "TROP should recover",
+            "have been removed",
+            "Reduced from",
+            "the periods just before treatment",
+        ):
             assert stale not in md, stale

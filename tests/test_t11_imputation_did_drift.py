@@ -161,9 +161,20 @@ class TestNotebookSurface:
             "2.0 x 1020 / 1230 = 1.66",
             # pre-trends are not pass/fail
             "not as confirmation of it",
+            # Proposition 9 is about the lead coefficients; independence needs normality
+            "coefficients this test estimates are uncorrelated with the effect estimate",
+            "Zero correlation alone does not make it safe to condition on the test.",
+            # which Callaway-Sant'Anna assumption leaves early trends unrestricted
+            'prefer Callaway-Sant\'Anna with `control_group="never_treated"`',
+            "a gap does not isolate the early periods",
         ):
             assert needle in md, needle
-        for stale in ("homogeneous", "~50% shorter"):
+        for stale in (
+            "homogeneous",
+            "~50% shorter",
+            "this test is uncorrelated with the effect",
+            "a gap between them points\nat those early periods",
+        ):
             assert stale not in md, stale
 
     def test_code(self):

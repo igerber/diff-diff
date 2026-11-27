@@ -238,6 +238,9 @@ class TestNotebookSurface:
             "**not automatically closer to the truth**",
             "different assumptions, not a weaker and a stronger version of one",
             "keep them inside the range of\ndoses you observe",
+            # a lowest-dose comparison is relative to that group, with its own conditions
+            "It requires a single treatment\n  date, no never-treated units and at least two units at the minimum dose.",
+            "Reading it as the effect of\nmoving from the lowest dose to dose *d* needs strong parallel trends.",
         ):
             assert needle in md, needle
         for stale in ("overall_att", "since 4.0", "removed at 4.0", "M-025"):

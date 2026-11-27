@@ -136,6 +136,67 @@ class TestLinear:
         assert 'With `base_period="universal"` it uses ETWFE\'s reference' in md
         assert "agreement period by period" not in md
 
+    def test_equality_with_callaway_santanna_needs_a_balanced_panel(self, data):
+        """The regression uses every observation; each Callaway-Sant'Anna
+        comparison uses the units observed in both of its periods. Dropping one
+        post-treatment period for ten units of one cohort separates them."""
+        units = data.loc[data["first_treat"] == 5, "unit"].unique()[:10]
+        unbalanced = data[~(data["unit"].isin(units) & (data["period"] == 6))]
+        etwfe_fit = WooldridgeDiD(control_group="never_treated").fit(unbalanced, **FIT)
+        etwfe_fit.aggregate("event_study")
+        etwfe = etwfe_fit.to_dataframe(level="event_study").set_index("event_time")["att"]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Unbalanced panel", category=UserWarning)
+            frame = (
+                CallawaySantAnna(base_period="universal")
+                .fit(unbalanced, **FIT)
+                .aggregate("event_study")
+                .to_dataframe()
+            )
+        callaway = frame[~frame["is_reference"]].set_index("event_time")["att"]
+        assert list(etwfe.index) == list(callaway.index)
+        gap = (etwfe - callaway).abs()
+        assert gap.idxmax() == 1
+        assert gap.max() == pytest.approx(0.0036, abs=5e-4)
+        assert gap.drop(1).max() < 1e-8
+        md = notebook_markdown(NB)
+        assert "on a balanced\npanel with a linear outcome and no covariates" in md
+        assert "moves the estimates at event time\n1 apart by 0.004" in md
+
+    def test_comparison_cell_refuses_unmatched_event_times(self):
+        """The notebook's own alignment code, run on two event studies of which one
+        lacks a horizon: it must raise, not report the gap over the rows that match."""
+        path = Path(__file__).resolve().parents[1] / NB
+        if not path.exists():
+            pytest.skip("notebook not available in this environment")
+        cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+        source = next(
+            "".join(c["source"])
+            for c in cells
+            if c["cell_type"] == "code" and "both = pd.concat(" in "".join(c["source"])
+        )
+        start = source.index("both = pd.concat(")
+        stop = source.index("\n", source.index("gap = ")) + 1
+        snippet = source[start:stop]
+
+        def run(etwfe_times, callaway_values):
+            scope = {
+                "pd": pd,
+                "np": np,
+                "etwfe_es": pd.DataFrame({"event_time": etwfe_times, "att": 1.0}),
+                "callaway_es": pd.DataFrame(
+                    {"event_time": list(callaway_values), "att": list(callaway_values.values())}
+                ),
+            }
+            exec(snippet, scope)  # noqa: S102 - the notebook's own cell source
+            return scope["gap"]
+
+        assert run([0, 1, 2], {0: 1.0, 1: 1.0, 2: 1.5}) == pytest.approx(0.5)
+        with pytest.raises(ValueError, match=r"\[2\]"):
+            run([0, 1, 2], {0: 1.0, 1: 1.0})
+        with pytest.raises(ValueError, match=r"\[1\]"):
+            run([0, 1, 2], {0: 1.0, 1: float("nan"), 2: 1.0})
+
     def test_matches_callaway_santanna_with_the_same_controls(self, results, results_never, data):
         callaway = CallawaySantAnna().fit(data, **FIT)
         assert results_never.att == pytest.approx(callaway.att, abs=1e-4)
@@ -240,6 +301,9 @@ class TestMpdta:
         )
         assert poisson.att == pytest.approx(-28.9, abs=0.3)
         assert poisson.conf_int[0] < 0 < poisson.conf_int[1]
+        # the notebook prints where the data came from, so a fallback run is visible
+        assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
+        assert_quotes_in_rendered(NB, ["Provenance: callaway_santanna_mpdta"], surface="output")
 
 
 class TestNotebookSurface:

@@ -12,7 +12,8 @@
     simulated panels with TROP cross-validated on each: DiD is unreliable
     under factor confounding, and TROP and Synthetic DiD have similar observed
     errors in that design. The five-draw Monte Carlo, the duplicated Summary and the
-    stale plot annotation are gone.
+    stale plot annotation are gone. The time weights are described as centred on
+    the period of the observation being predicted, not on the adoption date.
   - `11`, `12`, `13`: the simulated data used the generator's default of
     effects that grow over time while every table was labelled "True effect =
     2.0" (the true average was about 2.42); the generator is now called with a
@@ -20,7 +21,10 @@
   - `11`: Imputation DiD is no longer described as efficient "under
     homogeneous effects". It is unbiased under arbitrary effect heterogeneity,
     and efficient under spherical errors (equal variance, uncorrelated across
-    units and periods).
+    units and periods). The pre-test result (Proposition 9) is stated for the
+    pre-treatment coefficients, with independence only under normal errors, and
+    the Callaway-Sant'Anna alternative for suspect early periods is named as the
+    never-treated one.
   - `12`: the pre-treatment coefficients the prose described are now produced
     (`pretrends=True`); the comparison with Imputation DiD separates what is
     identical (the overall ATT and the post-treatment point estimates) from
@@ -32,14 +36,19 @@
   - `14`: the removed `overall_att` name is gone; strong parallel trends is
     described as an assumption about outcomes under treatment (no selection
     into dose on gains), which the old text mis-stated as the standard
-    assumption.
+    assumption. `control_group="lowest_dose"` is described with its
+    requirements and with what it identifies: effects relative to the
+    lowest-dose group, causal as a dose effect only under strong parallel
+    trends.
   - `15`: the comparison set under PT-All is described correctly; the
     hard-coded "condition number > 100" flag, which marked most of the
     tutorial's own cells, is gone; `EfficientDiD.hausman_pretest` is shown.
   - `16` (Wooldridge): ETWFE and Callaway-Sant'Anna are compared on the same
     control group and the same pre-treatment reference period, where they
-    coincide at every event time; the Poisson and logit examples gain a
-    truth check.
+    coincide at every event time on a balanced panel without covariates; the
+    comparison cell stops if the two event studies do not cover the same event
+    times; the `mpdta` section prints the data's provenance; the Poisson and
+    logit examples gain a truth check.
   - Event studies in `14`, `15` and `16` are drawn with `plot_event_study`.
 - **Imputation DiD efficiency condition corrected across the documentation**
   (README, the three `llms` guides, the estimator-choice page, references and

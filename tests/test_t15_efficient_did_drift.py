@@ -176,6 +176,7 @@ class TestNotebookSurface:
             "there is no universal threshold",
             "Neither dominates",
             "pre-treatment period *for the\ncomparison group*",
+            "difference is positive semidefinite when PT-All holds",
         ):
             assert needle in md, needle
         for stale in ("(3.9", "(3.10)", "M-023", "REGISTRY", "<< HIGH", " --- "):

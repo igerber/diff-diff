@@ -132,6 +132,15 @@ class TestWindowAndTrimming:
         assert fit.se == pytest.approx(results.se, abs=1e-3)
         assert fit.aggregate("event_study").to_dataframe()["event_time"].min() == -3
 
+    def test_anticipation_lengthens_the_window_and_can_trim_a_cohort(self, data):
+        with pytest.warns(UserWarning, match="Trimmed 1 adoption event"):
+            fit = StackedDiD(kappa_pre=3, kappa_post=2, anticipation=1).fit(data, **FIT)
+        assert [int(g) for g in fit.trimmed_groups] == [3]
+        assert fit.aggregate("event_study").to_dataframe()["event_time"].min() == -4
+        md = notebook_markdown(NB)
+        assert "to `[-kappa_pre - k, kappa_post]`" in md
+        assert "drops the cohort adopting in period 3" in md
+
 
 class TestChoices:
     def test_weighting(self, data):
