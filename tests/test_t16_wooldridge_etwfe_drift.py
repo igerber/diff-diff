@@ -142,9 +142,10 @@ class TestLinear:
         """Pre-Trends Power and Honest DiD reject an ETWFE event study and accept the
         universal-base Callaway-Sant'Anna fit the notebook names."""
         own = results_never.aggregate("event_study")
-        with pytest.raises(TypeError):
+        rejected = "Unsupported results type: .*WooldridgeDiDResults"
+        with pytest.raises(TypeError, match=rejected):
             PreTrendsPower().fit(own)
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match=rejected):
             compute_honest_did(own, method="relative_magnitude", M=1.0)
         supported = (
             CallawaySantAnna(base_period="universal").fit(data, **FIT).aggregate("event_study")

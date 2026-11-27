@@ -232,7 +232,7 @@ class TestEventStudyAndOptions:
         continuous_es = (
             ContinuousDiD(seed=42).fit(two_cohorts, dose="dose", **keys).aggregate("event_study")
         )
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="PreTrendsPower accepts"):
             PreTrendsPower().fit(continuous_es)
         with warnings.catch_warnings():
             warnings.simplefilter("error")

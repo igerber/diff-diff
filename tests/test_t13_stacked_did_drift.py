@@ -140,7 +140,9 @@ class TestWindowAndTrimming:
         md = notebook_markdown(NB)
         assert "That is not automatic." in md
         assert "the standard\nerrors agree at the precision shown" in md
-        assert fit.se != results.se and f"{fit.se:.3f}" == f"{results.se:.3f}"
+        # the longer window changes the finite-sample correction, a little
+        assert fit.se / results.se == pytest.approx(1.00003, abs=1e-5)
+        assert f"{fit.se:.3f}" == f"{results.se:.3f}"
         assert 'under `control_group="strict"`\nit moves the clean-control cutoff' in md
 
     def test_anticipation_lengthens_the_window_and_can_trim_a_cohort(self, data):
