@@ -587,8 +587,22 @@ class StackedDiD(BaseEstimator):
             _validate_unit_constant_survey,
         )
 
+        # A Taylor-linearized design that names no PSU samples UNITS: the unit
+        # column is declared as the PSU here, before anything is trimmed, so
+        # the design is validated against the FULL supplied sample (an FPC
+        # below a stratum's unit count raises, as it does for an explicit
+        # ``psu``) and the same specification is reused on the stack
+        # (REGISTRY StackedDiD, survey-PSU Note).
+        _implicit_unit_psu = (
+            isinstance(survey_design, SurveyDesign)
+            and survey_design.psu is None
+            and survey_design.replicate_weights is None
+        )
+        _design_for_fit = (
+            dataclasses.replace(survey_design, psu=unit) if _implicit_unit_psu else survey_design
+        )
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
-            _resolve_survey_for_fit(survey_design, data, "analytical")
+            _resolve_survey_for_fit(_design_for_fit, data, "analytical")
         )
         # Survey columns must be constant within a unit: the regression
         # contrasts event-time cell means, and a weight that changes over a
@@ -1238,7 +1252,7 @@ class StackedDiD(BaseEstimator):
             # through the same singleton-stratum and FPC validation as an
             # explicit ``survey_design.psu`` (REGISTRY StackedDiD, survey-PSU
             # Note).
-            if survey_design.psu is None:
+            if _implicit_unit_psu:
                 if self.cluster == "unit_subexp":
                     warnings.warn(
                         "StackedDiD with survey_design= and no survey_design.psu "
@@ -1250,7 +1264,7 @@ class StackedDiD(BaseEstimator):
                         UserWarning,
                         stacklevel=2,
                     )
-                resolved_stacked = dataclasses.replace(survey_design, psu=unit).resolve(stacked_df)
+                resolved_stacked = _design_for_fit.resolve(stacked_df)
             else:
                 resolved_stacked = survey_design.resolve(stacked_df)
 
@@ -1261,7 +1275,7 @@ class StackedDiD(BaseEstimator):
             # Original-scale residuals for TSL variance
             resid_orig = Y - X @ coef
 
-            if survey_design.psu is not None:
+            if not _implicit_unit_psu:
                 # Explicit PSU overrides the user-specified cluster.
                 _resolve_effective_cluster(resolved_composed, cluster_ids, self.cluster)
 

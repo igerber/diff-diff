@@ -702,10 +702,12 @@ def _render_event_study_plotly(
 
 def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:
     """A row of a raw ``event_study_effects``-style dict whose STORED
-    inference is undefined: a finite, positive SE with an all-NaN stored
-    interval (the producer failed inference closed, e.g. a survey design with
-    zero degrees of freedom). Reference rows are constraints, not estimates,
-    and never qualify. The raw routes recompute intervals from the SE, so such
+    inference is undefined: a finite, positive SE with a stored interval that
+    is not fully finite - either endpoint missing or non-finite (the producer
+    failed inference closed, e.g. a survey design with zero degrees of
+    freedom). Reference rows are constraints, not estimates, and never
+    qualify, and a row that stores no interval at all keeps the legacy
+    recomputation. The raw routes recompute intervals from the SE, so such
     rows are handed back on the pointwise channel as NaN."""
     if entry.get("is_reference", False):
         return False
@@ -713,12 +715,18 @@ def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:
     stored_se = entry.get("se")
     if stored_ci is None or stored_se is None:
         return False
-    return bool(
-        np.isfinite(stored_se)
-        and stored_se > 0
-        and not np.isfinite(stored_ci[0])
-        and not np.isfinite(stored_ci[1])
-    )
+    try:
+        lower, upper = stored_ci
+    except (TypeError, ValueError):
+        return False
+
+    def _finite(value: Any) -> bool:
+        try:
+            return value is not None and bool(np.isfinite(value))
+        except TypeError:
+            return False
+
+    return bool(_finite(stored_se) and stored_se > 0 and not (_finite(lower) and _finite(upper)))
 
 
 def _extract_plot_data(

@@ -4183,6 +4183,45 @@ class TestAnalyticalFiniteDfAlphaOverride:
         assert "no confidence interval is available at any level" in report
         assert "the displayed CI remains" not in report
 
+    @pytest.mark.parametrize("df_survey", [0, None])
+    def test_replicate_design_with_an_interval_but_no_p_value(self, df_survey):
+        """Interval availability follows the stored bounds and significance
+        availability the stored p-value. A fit that stored finite bounds and a
+        NaN p-value must not be told that no interval is available."""
+        from types import SimpleNamespace
+
+        class _ReplicateStub:
+            pass
+
+        stub = _ReplicateStub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = float("nan")
+        stub.conf_int = (0.4, 1.6)
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="replicate",
+            replicate_method="JK1",
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=None,
+            n_psu=None,
+            df_survey=df_survey,
+        )
+        br = BusinessReport(stub, alpha=0.10, auto_diagnostics=False)
+        headline = br.to_dict()["headline"]
+        assert headline["ci_lower"] == pytest.approx(0.4)
+        assert headline["ci_upper"] == pytest.approx(1.6)
+        report = json.dumps(br.to_dict())
+        assert "no confidence interval is available" not in report
+        assert "the displayed CI remains" in report
+        assert "The fit stored no p-value, so significance is not assessed." in report
+
     def test_undefined_df_survey_stub_does_not_invent_finite_ci(self):
         """When the fit's native inference returned NaN (rank-deficient
         replicate design: ``df_survey = 0``), BR must not recompute a

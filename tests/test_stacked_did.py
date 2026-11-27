@@ -741,6 +741,27 @@ class TestCleanControlAnticipationSurvey:
                     **_ANT_FIT,
                 )
 
+    @pytest.mark.parametrize("psu", [None, "psu"])
+    def test_fpc_is_checked_against_the_full_sample_not_the_stack(self, psu):
+        """Six sampled units per stratum, FPC = 4. Cohort 8 is trimmed (its
+        window does not fit) and, with never-treated controls, is no one's
+        control, so only four units per stratum reach the stack. The implicit
+        unit PSUs must be validated on the supplied sample, as an explicit
+        ``psu`` is: the fit raises instead of passing the check on the trimmed
+        stack and reporting SE 0."""
+        from diff_diff import SurveyDesign
+
+        data = self._census(lead=0)
+        data["N"] = 4
+        design = SurveyDesign(
+            weights="w", strata="stratum", fpc="N", **({"psu": psu} if psu else {})
+        )
+        est = StackedDiD(kappa_pre=2, kappa_post=2, control_group="never_treated")
+        with pytest.raises(ValueError, match=r"FPC \(4\.0\) is less than the number of PSUs \(6\)"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est.fit(data, survey_design=design, **_ANT_FIT)
+
     def test_lost_units_helper(self):
         info = pd.DataFrame({"_first_treat": [3.0] * 2 + [6.0] * 3 + [8.0] * 4 + [np.inf] * 2})
         nyt = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1)

@@ -60,11 +60,13 @@
   implicit unit PSUs like explicit ones.** A stratum with a single unit now
   warns that it is excluded from variance estimation under
   `lonely_psu="remove"`, and a finite-population size below a stratum's unit
-  count raises `ValueError`; both checks were skipped before.
+  count raises `ValueError`; both checks were skipped before. The count is
+  that of the supplied sample, not of the units that reach the stack.
 - **`plot_event_study(results)` no longer rebuilds intervals for rows whose
   stored inference is undefined.** A results object passed directly has its
   intervals recomputed from the standard error; a row with a finite standard
-  error and a NaN stored interval (inference failed closed, for example a
+  error and a stored interval with a missing or NaN endpoint (inference
+  failed closed, for example a
   survey design with zero degrees of freedom) now gets none, as the
   `aggregate("event_study")` container already did. This holds for dCDH
   results (effects and placebos) too. On the matplotlib backend the row is a

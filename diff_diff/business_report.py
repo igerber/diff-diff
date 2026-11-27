@@ -754,19 +754,17 @@ class BusinessReport:
                     getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
                     is not None
                 )
-                _inference_reported = (
+                _ci_available = (
                     ci is not None
                     and len(ci) == 2
                     and all(b is not None and np.isfinite(b) for b in ci)
-                    and p is not None
-                    and np.isfinite(p)
                 )
                 _zero_df = isinstance(df_survey, (int, float)) and df_survey == 0
                 # A rank-one replicate design stores ``df_survey = None``.
                 _unrecorded_replicate_df = df_survey is None and _replicate
                 if isinstance(df_survey, (int, float)) and df_survey > 0:
                     inference_label = "finite-df survey"
-                elif (_zero_df or _unrecorded_replicate_df) and not _inference_reported:
+                elif (_zero_df or _unrecorded_replicate_df) and not _ci_available:
                     # The fit deliberately left inference undefined: a
                     # rank-deficient replicate design, or a Taylor-linearized
                     # design with n_PSU - n_strata = 0. Preserve (NaN bounds
@@ -776,10 +774,10 @@ class BusinessReport:
                         if _replicate
                         else "undefined-df (Taylor-linearized survey)"
                     )
-                elif _zero_df:
-                    # Some estimators still report inference at zero design
-                    # df through a fallback reference distribution. Describe
-                    # what the fit stored, not what it should be.
+                elif _zero_df or _unrecorded_replicate_df:
+                    # The fit stored an interval although its design df is
+                    # zero or unrecorded (an estimator that falls back to a
+                    # reference distribution). Describe what the fit stored.
                     inference_label = "zero-df survey (fallback reference distribution)"
                 else:
                     # Ordinary analytical fit with a finite but unexposed
@@ -790,13 +788,20 @@ class BusinessReport:
 
             display_alpha = float(result_alpha)
             alpha_was_honored = False
+            # Interval availability comes from the stored bounds and
+            # significance availability from the stored p-value, separately.
+            _p_stored = p is not None and bool(np.isfinite(p))
+            _significance_clause = (
+                "The significance phrasing still uses the requested alpha."
+                if _p_stored
+                else "The fit stored no p-value, so significance is not assessed."
+            )
             if inference_label.startswith("undefined-df"):
                 alpha_override_caveat = (
                     f"Requested alpha ({phrasing_alpha:.2f}) does not apply: "
                     f"this fit has {inference_label} inference with zero "
                     "degrees of freedom, so no confidence interval is "
-                    "available at any level and the significance of the "
-                    "estimate is undefined."
+                    "available at any level. " + _significance_clause
                 )
             else:
                 alpha_override_caveat = (
@@ -804,8 +809,7 @@ class BusinessReport:
                     f"for the confidence interval because this fit uses "
                     f"{inference_label} inference; the displayed CI remains "
                     f"at the fit's native level "
-                    f"({_coverage_pct(result_alpha)}%). The "
-                    f"significance phrasing still uses the requested alpha."
+                    f"({_coverage_pct(result_alpha)}%). " + _significance_clause
                 )
 
         unit = self._context.outcome_unit

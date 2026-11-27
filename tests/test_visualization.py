@@ -980,6 +980,36 @@ class TestPlotEventStudyUndefinedStoredInference:
         assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
         plt.close()
 
+    @pytest.mark.parametrize(
+        "stored", [(float("nan"), 3.1), (0.4, float("nan")), (None, 3.1), (0.4, None)]
+    )
+    def test_a_partly_missing_stored_interval_is_not_rebuilt(self, stored):
+        """One finite endpoint is not an interval: the row keeps its marker and
+        gets no bar, as it does through the container."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        results.event_study_effects[1].update(p_value=np.nan, conf_int=stored)
+        horizons = sorted(results.event_study_effects)
+        ax = plot_event_study(results, show=False)
+        drawn = _plotted_intervals(ax)
+        assert float(horizons.index(1)) not in drawn
+        assert float(horizons.index(0)) in drawn and float(horizons.index(2)) in drawn
+        plt.close()
+
+    def test_a_row_that_stores_no_interval_keeps_the_recomputed_one(self):
+        """Legacy rows without a ``conf_int`` key are still drawn from the SE."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        del results.event_study_effects[1]["conf_int"]
+        horizons = sorted(results.event_study_effects)
+        ax = plot_event_study(results, show=False)
+        assert float(horizons.index(1)) in _plotted_intervals(ax)
+        plt.close()
+
 
 class TestPlotEventStudyRawDCDHUndefinedInference:
     """The raw dCDH route recomputes intervals from the SE too. An effect or
