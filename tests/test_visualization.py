@@ -974,6 +974,65 @@ class TestPlotEventStudyUndefinedStoredInference:
         plt.close()
 
 
+class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
+    """One horizon with undefined stored inference (finite SE, NaN interval)
+    between horizons with valid intervals: its point is drawn, it carries no
+    interval, and the Plotly band is split there instead of filling across."""
+
+    @staticmethod
+    def _mixed():
+        results = _zero_df_stacked_fit(zero_df=False)
+        row = results.event_study_effects[1]
+        assert np.isfinite(row["se"]) and np.isfinite(row["conf_int"][0])
+        row.update(t_stat=np.nan, p_value=np.nan, conf_int=(np.nan, np.nan))
+        return results
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    def test_matplotlib_draws_no_interval_on_that_row(self, kwargs):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = self._mixed()
+        ax = plot_event_study(results, show=False, **kwargs)
+        horizons = sorted(results.event_study_effects)
+        x_undefined = float(horizons.index(1))
+        drawn = _plotted_intervals(ax)
+        assert x_undefined not in drawn
+        estimated = [h for h in horizons if h not in (1, -1)]
+        assert all(float(horizons.index(h)) in drawn for h in estimated)
+        assert x_undefined in {p[0] for p in _plotted_points(ax)}
+        plt.close()
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    def test_plotly_band_is_split_at_that_row(self, kwargs):
+        pytest.importorskip("plotly")
+
+        results = self._mixed()
+        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
+        horizons = sorted(results.event_study_effects)
+        x_undefined = horizons.index(1)
+        bands = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+        assert len(bands) >= 2  # rows before it and rows after it
+        for band in bands:
+            xs = [x for x in band.x if x is not None]
+            assert x_undefined not in xs
+            assert not (min(xs) < x_undefined < max(xs))
+        # the row's marker is still drawn
+        marker_x = [
+            x
+            for trace in fig.data
+            if getattr(trace, "fill", None) != "toself" and trace.x is not None
+            for x in trace.x
+        ]
+        assert x_undefined in marker_x
+
+    def test_plotly_band_is_one_polygon_when_every_row_is_defined(self):
+        pytest.importorskip("plotly")
+
+        fig = plot_event_study(_zero_df_stacked_fit(zero_df=False), backend="plotly", show=False)
+        assert len([t for t in fig.data if getattr(t, "fill", None) == "toself"]) == 1
+
+
 class TestPlotEventStudyWooldridge:
     """plot_event_study accepts a WooldridgeDiDResults by converting it to the
     unified container, so it takes the EventStudyResults route end to end."""

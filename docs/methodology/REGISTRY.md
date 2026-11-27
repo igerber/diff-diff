@@ -7309,7 +7309,10 @@ should be a deliberate user choice.
   the band channel, with or without an explicit `reference_period=`. Before this rule a
   zero-df `StackedDiDResults` plotted directly showed 95% normal-theory intervals for
   estimates whose inference was undefined. The auto-inferred reference row keeps its
-  zero-width constraint bar.
+  zero-width constraint bar. On the Plotly backend the filled band is drawn as one polygon per run of
+  rows that carry an interval: an estimated row without one ends the run, so the fill does
+  not span it (a reference row without an interval is a constraint and does not break the
+  band). Before, the band skipped such a row's vertices and filled straight across it.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
   converted to the unified `EventStudyResults` container at entry
   (`build_event_study_surface`) and takes the container route end to end: its stored

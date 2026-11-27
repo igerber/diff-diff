@@ -1974,6 +1974,42 @@ class TestStackedDiDAssumptionBlock:
         assert "no confidence interval is available at any level" in report
         assert "the displayed CI remains" not in report
 
+    def test_zero_df_caveat_follows_the_stored_inference(self):
+        """SunAbraham still reports inference at zero survey df (a t(1)
+        fallback, tracked in TODO.md). The caveat must describe that stored
+        interval, not claim that none is available."""
+        from diff_diff import SunAbraham, SurveyDesign
+
+        cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+        rows = []
+        for unit, g in enumerate(cohorts):
+            for t in range(9):
+                effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+                y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+                rows.append((unit, t, g, y, unit, 1.0, unit))
+        panel = pd.DataFrame(
+            rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w", "psu"]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = SunAbraham().fit(
+                panel,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(
+                    weights="w", strata="stratum", psu="psu", lonely_psu="adjust"
+                ),
+            )
+            report = json.dumps(BusinessReport(fit, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert fit.survey_metadata.df_survey == 0
+        if not all(np.isfinite(b) for b in fit.conf_int):
+            pytest.skip("SunAbraham no longer reports inference at zero survey df")
+        assert "zero-df survey (fallback reference distribution)" in report
+        assert "the displayed CI remains" in report
+        assert "no confidence interval is available at any level" not in report
+
     def test_strict_names_strict_rule(self):
         desc = BusinessReport(self._stub("strict"), auto_diagnostics=False).to_dict()["assumption"][
             "description"

@@ -758,11 +758,26 @@ class BusinessReport:
                         getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
                         is not None
                     )
-                    inference_label = (
-                        "undefined-df (replicate-weight)"
-                        if _replicate
-                        else "undefined-df (Taylor-linearized survey)"
+                    _stored_ci = getattr(r, "conf_int", None)
+                    _stored_p = getattr(r, "p_value", None)
+                    _inference_reported = (
+                        _stored_ci is not None
+                        and len(_stored_ci) == 2
+                        and all(isinstance(b, (int, float)) and np.isfinite(b) for b in _stored_ci)
+                        and isinstance(_stored_p, (int, float))
+                        and np.isfinite(_stored_p)
                     )
+                    if _inference_reported:
+                        # Some estimators still report inference at zero
+                        # design df through a fallback reference distribution.
+                        # Describe what the fit stored, not what it should be.
+                        inference_label = "zero-df survey (fallback reference distribution)"
+                    else:
+                        inference_label = (
+                            "undefined-df (replicate-weight)"
+                            if _replicate
+                            else "undefined-df (Taylor-linearized survey)"
+                        )
                 else:
                     # Ordinary analytical fit with a finite but unexposed
                     # ``df`` (``DifferenceInDifferences`` / most staggered

@@ -625,13 +625,24 @@ def _render_event_study_plotly(
             x=period_to_x[reference_period], line_dash="dot", line_color="gray", line_width=1
         )
 
-    # CI band (filled area)
+    # CI band (filled area). One polygon per run of rows that carry an
+    # interval: an ESTIMATED row without one (undefined inference, a zero or
+    # missing SE) ends the run, so the fill never spans it and implies bounds
+    # it does not have. A reference row without an interval is a constraint,
+    # not an estimate, and does not break the band.
     has_ci = [not (np.isnan(lo) or np.isnan(hi)) for lo, hi in zip(ci_lower, ci_upper)]
-    ci_x = [period_to_x[p] for p, h in zip(periods, has_ci) if h]
-    ci_lo = [lo for lo, h in zip(ci_lower, has_ci) if h]
-    ci_hi = [hi for hi, h in zip(ci_upper, has_ci) if h]
-
-    if ci_x:
+    runs: List[List[int]] = [[]]
+    for i, (has, ref) in enumerate(zip(has_ci, is_ref)):
+        if has:
+            runs[-1].append(i)
+        elif not ref:
+            runs.append([])
+    for run in runs:
+        if not run:
+            continue
+        ci_x = [period_to_x[periods[i]] for i in run]
+        ci_lo = [ci_lower[i] for i in run]
+        ci_hi = [ci_upper[i] for i in run]
         fig.add_trace(
             go.Scatter(
                 x=ci_x + ci_x[::-1],
