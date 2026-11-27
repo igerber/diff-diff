@@ -21,6 +21,7 @@ Everything is deterministic given the seed.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,9 @@ import pytest
 from diff_diff import (
     CallawaySantAnna,
     ImputationDiD,
+    PreTrendsPower,
     SunAbraham,
+    compute_honest_did,
     generate_staggered_data,
 )
 from tests._tutorial_drift import assert_quotes_in_rendered, notebook_markdown
@@ -149,6 +152,26 @@ class TestOptions:
 
 
 class TestNotebookSurface:
+    def test_diagnostics_take_a_callaway_santanna_fit_not_this_one(self, results, data):
+        """The notebook sends readers to Pre-Trends Power and Honest DiD; both
+        reject this estimator's event study and accept a universal-base
+        Callaway-Sant'Anna one, which is the fit the notebook names."""
+        own = results.aggregate("event_study")
+        with pytest.raises(TypeError, match="PreTrendsPower accepts"):
+            PreTrendsPower().fit(own)
+        with pytest.raises(TypeError, match="HonestDiD accepts"):
+            compute_honest_did(own, method="relative_magnitude", M=1.0)
+        supported = (
+            CallawaySantAnna(base_period="universal").fit(data, **FIT).aggregate("event_study")
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            PreTrendsPower().fit(supported)
+            compute_honest_did(supported, method="relative_magnitude", M=1.0)
+        md = notebook_markdown(NB)
+        assert "Neither takes this estimator's event study." in md
+        assert '`CallawaySantAnna(base_period="universal")` fit of the same data' in md
+
     def test_prose(self):
         md = notebook_markdown(NB)
         for needle in (

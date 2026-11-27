@@ -50,6 +50,11 @@
     times; the `mpdta` section prints the data's provenance; the Poisson and
     logit examples gain a truth check.
   - Event studies in `14`, `15` and `16` are drawn with `plot_event_study`.
+  - Links to the Pre-Trends Power and Honest DiD tutorials now say which fit
+    those diagnostics take: they reject the event studies of Imputation,
+    Two-Stage, Continuous, Efficient and Wooldridge fits, so the notebooks name
+    a `CallawaySantAnna(base_period="universal")` fit of the same data. `13`
+    explains why its asymmetric window leaves the estimate unchanged.
 - **Imputation DiD efficiency condition corrected across the documentation**
   (README, the three `llms` guides, the estimator-choice page, references and
   the API pages): efficient under spherical errors (equal variance,

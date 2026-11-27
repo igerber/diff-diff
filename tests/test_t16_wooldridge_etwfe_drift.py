@@ -352,6 +352,7 @@ class TestNotebookSurface:
             "Rios-Avila, F. (2021).",
             # parity with Callaway-Sant'Anna is stated with its conditions everywhere
             "On this balanced panel without covariates, ETWFE with never-treated controls reproduces",
+            "That diagnostic and Honest DiD do not take an ETWFE event study",
             "it reproduces Callaway-Sant'Anna when the panel is\n  balanced",
         ):
             assert needle in md, needle

@@ -243,6 +243,7 @@ class TestNotebookSurface:
             "For a\n  single treated block and fixed weights",
             # time weights decay around the target period, not around adoption
             "the weights are centred on `t`, not on the adoption date",
+            "it does not\n  take a TROP fit",
             "over the periods, other than `t` itself,\n  in which both units are untreated",
         ):
             assert needle in md, needle

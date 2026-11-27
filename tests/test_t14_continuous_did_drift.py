@@ -206,6 +206,7 @@ class TestEventStudyAndOptions:
         assert "On the two-cohort panel they differ, 4.71 against 4.67" in md
         assert "the\nevent study of a `ContinuousDiD` fit is not accepted there" in md
         assert 'fit `CallawaySantAnna(base_period="universal")` on\nthe binary treatment' in md
+        assert "What they report then\ndescribes the binary fit." in md
         with pytest.raises(TypeError):
             compute_honest_did(
                 ContinuousDiD(base_period="universal", seed=42).fit(

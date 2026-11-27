@@ -131,6 +131,15 @@ class TestWindowAndTrimming:
         assert fit.att == pytest.approx(results.att, abs=1e-3)
         assert fit.se == pytest.approx(results.se, abs=1e-3)
         assert fit.aggregate("event_study").to_dataframe()["event_time"].min() == -3
+        # identical post-treatment estimates: same units, controls, weights and reference
+        both = [
+            f.aggregate("event_study").to_dataframe().set_index("event_time")["att"]
+            for f in (results, fit)
+        ]
+        np.testing.assert_allclose(both[0].loc[[0, 1, 2]], both[1].loc[[0, 1, 2]], atol=1e-10)
+        md = notebook_markdown(NB)
+        assert "That is not automatic." in md
+        assert 'under `control_group="strict"`\nit moves the clean-control cutoff' in md
 
     def test_anticipation_lengthens_the_window_and_can_trim_a_cohort(self, data):
         with pytest.warns(UserWarning, match="Trimmed 1 adoption event"):
