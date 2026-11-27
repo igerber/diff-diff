@@ -4222,6 +4222,44 @@ class TestAnalyticalFiniteDfAlphaOverride:
         assert "the displayed CI remains" in report
         assert "The fit stored no p-value, so significance is not assessed." in report
 
+    def test_no_interval_but_a_stored_p_value_keeps_significance(self):
+        """Zero survey df, NaN bounds, a stored p = 0.07, requested alpha 0.10:
+        the caveat says no interval can be produced and that significance
+        still uses the requested alpha - it does not say alpha "does not
+        apply" and then use it."""
+        from types import SimpleNamespace
+
+        class _Stub:
+            pass
+
+        stub = _Stub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = 0.07
+        stub.conf_int = (float("nan"), float("nan"))
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="pweight",
+            replicate_method=None,
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=6,
+            n_psu=6,
+            df_survey=0,
+        )
+        br = BusinessReport(stub, alpha=0.10, auto_diagnostics=False)
+        report = json.dumps(br.to_dict())
+        assert "cannot produce a confidence interval" in report
+        assert "no confidence interval is available at any level" in report
+        assert "The significance phrasing still uses the requested alpha." in report
+        assert "does not apply" not in report
+        assert br.to_dict()["headline"]["is_significant"] is True
+
     def test_undefined_df_survey_stub_does_not_invent_finite_ci(self):
         """When the fit's native inference returned NaN (rank-deficient
         replicate design: ``df_survey = 0``), BR must not recompute a

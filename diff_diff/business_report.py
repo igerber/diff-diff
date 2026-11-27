@@ -798,10 +798,10 @@ class BusinessReport:
             )
             if inference_label.startswith("undefined-df"):
                 alpha_override_caveat = (
-                    f"Requested alpha ({phrasing_alpha:.2f}) does not apply: "
-                    f"this fit has {inference_label} inference with zero "
-                    "degrees of freedom, so no confidence interval is "
-                    "available at any level. " + _significance_clause
+                    f"Requested alpha ({phrasing_alpha:.2f}) cannot produce a "
+                    f"confidence interval: this fit has {inference_label} "
+                    "inference with zero degrees of freedom, so no confidence "
+                    "interval is available at any level. " + _significance_clause
                 )
             else:
                 alpha_override_caveat = (

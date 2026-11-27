@@ -980,10 +980,11 @@ class TestPlotEventStudyUndefinedStoredInference:
         assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
         plt.close()
 
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
     @pytest.mark.parametrize(
         "stored", [(float("nan"), 3.1), (0.4, float("nan")), (None, 3.1), (0.4, None)]
     )
-    def test_a_partly_missing_stored_interval_is_not_rebuilt(self, stored):
+    def test_a_partly_missing_stored_interval_is_not_rebuilt(self, stored, kwargs):
         """One finite endpoint is not an interval: the row keeps its marker and
         gets no bar, as it does through the container."""
         pytest.importorskip("matplotlib")
@@ -992,10 +993,11 @@ class TestPlotEventStudyUndefinedStoredInference:
         results = _zero_df_stacked_fit(zero_df=False)
         results.event_study_effects[1].update(p_value=np.nan, conf_int=stored)
         horizons = sorted(results.event_study_effects)
-        ax = plot_event_study(results, show=False)
+        ax = plot_event_study(results, show=False, **kwargs)
         drawn = _plotted_intervals(ax)
         assert float(horizons.index(1)) not in drawn
         assert float(horizons.index(0)) in drawn and float(horizons.index(2)) in drawn
+        assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
         plt.close()
 
     def test_a_row_that_stores_no_interval_keeps_the_recomputed_one(self):
@@ -1029,13 +1031,24 @@ class TestPlotEventStudyRawDCDHUndefinedInference:
         }
         return SimpleNamespace(L_max=1, placebo_event_study=placebo, event_study_effects={1: entry})
 
-    def test_undefined_effect_and_placebo_get_no_interval(self):
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            (float("nan"), float("nan")),
+            (float("nan"), 2.0),
+            (0.8, float("nan")),
+            (None, 2.0),
+            (0.8, None),
+        ],
+    )
+    def test_undefined_effect_and_placebo_get_no_interval(self, stored):
+        """Fully or partly missing stored bounds, on the effect and on the
+        placebo horizon alike."""
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
-        nan_ci = (float("nan"), float("nan"))
-        placebo = {-1: {"effect": 0.1, "se": 0.2, "conf_int": nan_ci, "p_value": float("nan")}}
-        ax = plot_event_study(self._dcdh(nan_ci, placebo=placebo), show=False)
+        placebo = {-1: {"effect": 0.1, "se": 0.2, "conf_int": stored, "p_value": float("nan")}}
+        ax = plot_event_study(self._dcdh(stored, placebo=placebo), show=False)
         assert _plotted_intervals(ax) == {}
         assert len({p[0] for p in _plotted_points(ax)}) == 3
         plt.close()
