@@ -452,12 +452,13 @@ class TestMpdta:
         assert poisson.conf_int[0] < 0 < poisson.conf_int[1]
         assert poisson.cluster_name == "countyreal"
         lower, upper = (f"{bound:.0f}" for bound in poisson.conf_int)
+        # these run before the notebook is read, so also where only tests/ is present
+        assert (lower, upper) == ("-76", "18")
+        assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
         md = notebook_markdown(NB)
         assert f"with a county-clustered interval from {lower} to {upper} that includes zero" in md
-        assert (lower, upper) == ("-76", "18")
         assert "far less precise" not in md
         # the notebook prints where the data came from, so a fallback run is visible
-        assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
         assert_quotes_in_rendered(NB, ["Provenance: callaway_santanna_mpdta"], surface="output")
 
     def test_state_clustering_widens_the_interval(self, mpdta):

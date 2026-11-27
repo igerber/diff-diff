@@ -174,6 +174,14 @@ class TestEventStudyAndOptions:
                 linear.group_time_effects[cell]["att_glob"], abs=1e-10
             )
 
+    def test_not_yet_treated_still_needs_never_treated_units(self):
+        two_cohorts = _panel(n_periods=6, cohort_periods=(3, 5))
+        all_treated = two_cohorts[two_cohorts["first_treat"] > 0]
+        with pytest.raises(ValueError, match="No never-treated"):
+            ContinuousDiD(control_group="not_yet_treated", seed=42).fit(all_treated, **FIT)
+        md = notebook_markdown(NB)
+        assert "It still needs never-treated units in the panel: without any, the fit raises." in md
+
     def test_control_groups_agree_here(self):
         panel = _panel(n_periods=6, cohort_periods=(3, 5))
         never = ContinuousDiD(control_group="never_treated", seed=42).fit(panel, **FIT)
