@@ -974,3 +974,68 @@ class TestPrePeriodsParameterTWFE:
         pt = PreTrendsPower()
         with pytest.raises(ValueError):
             pt.fit(twfe_long_pre_results, pre_periods=[4, 6])
+
+
+class TestNISDeterminismAndPowerAdequate:
+    """NIS box integration is deterministic and at-MDV fits report adequate power."""
+
+    def test_nis_fit_and_power_at_are_deterministic(self, twfe_long_pre_results):
+        pt = PreTrendsPower(alpha=0.05, power=0.80, pretest_form="nis")
+        runs = [pt.fit(twfe_long_pre_results) for _ in range(5)]
+
+        mdvs = [r.mdv for r in runs]
+        powers = [r.power for r in runs]
+        probs = [r.nis_box_probability for r in runs]
+        assert len(set(mdvs)) == 1
+        assert len(set(powers)) == 1
+        assert len(set(probs)) == 1
+
+        at_vals = [runs[0].power_at(0.2) for _ in range(5)]
+        assert len(set(at_vals)) == 1
+
+    def test_default_fit_at_mdv_is_consistently_adequate(self, twfe_long_pre_results):
+        pt = PreTrendsPower(alpha=0.05, power=0.80, pretest_form="nis")
+        for _ in range(10):
+            res = pt.fit(twfe_long_pre_results)
+            assert res.power_adequate is True
+            assert "meets target" in res.summary()
+            assert "below target" not in res.summary()
+
+        # Explicit underpowered M stays inadequate
+        under = pt.fit(twfe_long_pre_results, M=0.5 * res.mdv)
+        assert under.power_adequate is False
+        assert "below target" in under.summary()
+
+    def test_power_adequate_respects_tolerance_bounds(self):
+        base = dict(
+            mdv=0.5,
+            violation_magnitude=0.5,
+            violation_type="linear",
+            alpha=0.05,
+            target_power=0.80,
+            n_pre_periods=2,
+            test_statistic=float("nan"),
+            critical_value=1.96,
+            noncentrality=float("nan"),
+            pre_period_effects=np.zeros(2),
+            pre_period_ses=np.ones(2),
+            vcov=np.eye(2),
+            pretest_form="nis",
+        )
+        # Within NIS integration error (1e-5) -> adequate
+        assert PreTrendsPowerResults(power=0.80 - 5e-6, **base).power_adequate is True
+        # Clearly below target -> not adequate
+        assert PreTrendsPowerResults(power=0.799, **base).power_adequate is False
+        # Non-finite power -> not adequate
+        assert PreTrendsPowerResults(power=float("nan"), **base).power_adequate is False
+
+    def test_unreachable_mdv_fallback_is_not_adequate(self):
+        # Huge SE so MDV=inf and M=None falls back to max(ses) with low power
+        rows = {
+            0: (0.0, 1e4, 0.0, 1.0, (-2e4, 2e4)),
+            2: (1.0, 1.0, 1.0, 0.3, (-1.0, 3.0)),
+        }
+        surface = calendar_surface(rows, reference=1, post_periods=[2], vcov=np.diag([1e8, 1.0]))
+        res = PreTrendsPower(alpha=0.05, power=0.99, pretest_form="nis").fit(surface)
+        assert np.isinf(res.mdv)
+        assert res.power_adequate is False

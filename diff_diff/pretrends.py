@@ -25,6 +25,7 @@ https://github.com/jonathandroth/pretrends - R package implementation
 diff_diff.honest_did - Sensitivity analysis for parallel trends violations
 """
 
+import inspect
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -35,6 +36,12 @@ from scipy import optimize, stats
 
 from diff_diff._base import BaseEstimator
 from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
+
+# Absolute error tolerance for scipy.stats.multivariate_normal.cdf (randomized
+# Genz QMC integration in scipy >= 1.15). Shared with power_adequate so an
+# at-MDV evaluation does not flip below target_power due to integration noise.
+_NIS_CDF_ABSEPS = 1e-5
+_MVN_CDF_SUPPORTS_RNG = "rng" in inspect.signature(stats.multivariate_normal.cdf).parameters
 
 
 def _compute_nis_acceptance_prob(
@@ -64,15 +71,29 @@ def _compute_nis_acceptance_prob(
 
     accept_prob: float
     try:
-        accept_prob = float(
-            stats.multivariate_normal.cdf(
-                upper,
-                lower_limit=lower,
-                mean=np.zeros(len(weights)),
-                cov=vcov,
-                allow_singular=True,
+        if _MVN_CDF_SUPPORTS_RNG:
+            accept_prob = float(
+                stats.multivariate_normal.cdf(
+                    upper,
+                    lower_limit=lower,
+                    mean=np.zeros(len(weights)),
+                    cov=vcov,
+                    allow_singular=True,
+                    abseps=_NIS_CDF_ABSEPS,
+                    rng=np.random.default_rng(0),
+                )
             )
-        )
+        else:
+            accept_prob = float(
+                stats.multivariate_normal.cdf(
+                    upper,
+                    lower_limit=lower,
+                    mean=np.zeros(len(weights)),
+                    cov=vcov,
+                    allow_singular=True,
+                    abseps=_NIS_CDF_ABSEPS,
+                )
+            )
     except (ValueError, np.linalg.LinAlgError):
         accept_prob = float("nan")
 
@@ -514,8 +535,9 @@ class PreTrendsPowerResults(Diagnostic):
 
     @property
     def power_adequate(self) -> bool:
-        """Check if power meets the target threshold."""
-        return bool(self.power >= self.target_power)
+        """Check if power meets the target threshold (within numerical tolerance)."""
+        tol = _NIS_CDF_ABSEPS if self.pretest_form == "nis" else 1e-12
+        return bool(self.power + tol >= self.target_power)
 
     def summary(self) -> str:
         """
