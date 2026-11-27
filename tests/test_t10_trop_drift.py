@@ -11,8 +11,9 @@ and compares it with DiD and Synthetic DiD. Its claims:
 3. **Across 12 panels DiD is unreliable and TROP is not better than Synthetic
    DiD**: RMSE 0.89 against 0.33 and 0.33. The notebook does not claim TROP
    wins.
-4. **The factor penalty controls the rank**: about two factors at 0.1, about
-   one at 1.0, none at 10.
+4. **The factor penalty controls the effective rank of the returned factor
+   matrix** (the average of the per-observation fits): about 2 at 0.1, about 1
+   at 1.0, 0 at 10. Nothing is claimed about the rank of an individual fit.
 
 TROP is slow (tens of seconds per cross-validated fit), so every TROP
 re-derivation is ``@pytest.mark.slow``; the cheap DiD and Synthetic DiD numbers
@@ -260,5 +261,6 @@ class TestNotebookSurface:
             "show how many factors the fit is using",
             "the components the\nindividual fits have in common",
             "the fit uses about two factors",
+            "a penalised fit keeps mostly the dominant one",
         ):
             assert stale not in md, stale

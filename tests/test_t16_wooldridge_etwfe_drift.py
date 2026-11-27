@@ -317,8 +317,10 @@ def mpdta(tmp_path, monkeypatch):
         response.read.return_value = fixture.read_bytes()
         with patch("diff_diff.datasets.urlopen", return_value=response):
             frame = load_mpdta(force_download=True)
-    else:
-        frame = load_mpdta()
+        # with the source file in the checkout a fallback is a failure, not a skip
+        assert frame.attrs.get("source") == "callaway_santanna_mpdta"
+        return frame
+    frame = load_mpdta()
     if frame.attrs.get("source") == "synthetic_fallback":
         pytest.skip("mpdta not available offline; canonical numbers cannot be re-derived")
     return frame
@@ -379,6 +381,31 @@ class TestMpdta:
         md = notebook_markdown(NB)
         assert "the state is the level to cluster at" in md
         assert "the 2004 cohort is a single state" in md
+
+    def test_late_horizons_are_the_2004_cohort_alone(self, mpdta):
+        """The data end in 2007, so the event-study horizons average different
+        cohorts; the notebook says which, and that the late ones are one state."""
+        fit = WooldridgeDiD().fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
+        by_horizon = {}
+        for g, t in fit.group_time_effects:
+            by_horizon.setdefault(int(t - g), set()).add(int(g))
+        assert by_horizon == {
+            0: {2004, 2006, 2007},
+            1: {2004, 2006},
+            2: {2004},
+            3: {2004},
+        }
+        first = mpdta[mpdta["first_treat"] == 2004]
+        assert first["countyreal"].nunique() == 20
+        assert (first["countyreal"] // 1000).nunique() == 1
+        md = notebook_markdown(NB)
+        assert (
+            "event times 2 and 3 only the 2004 cohort, which is 20\ncounties in a single state"
+            in md
+        )
+        assert "Do not read that growth as the effect of time alone." in md
 
     def test_notebook_cells_print_the_state_clustered_row(self, mpdta, capsys):
         """The notebook's own load-and-fit cell and state-clustering cell, run on the
