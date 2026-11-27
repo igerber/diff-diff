@@ -16,6 +16,11 @@ on:
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
+      # The isolated test lanes copy this pinned file and rely on its exact bytes
+      # (the loader's checksum); a change to it or to its line-ending rule must
+      # run this suite.
+      - 'benchmarks/data/real/mpdta.csv'
+      - '.gitattributes'
       # docs-tests.yml / notebooks.yml / ci-gate.yml carry ready-for-ci label
       # contracts locked by TestCiWorkflowLabelEventGuard in
       # tests/test_openai_review.py; include them so a regression there triggers
@@ -57,6 +62,11 @@ on:
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
+      # The isolated test lanes copy this pinned file and rely on its exact bytes
+      # (the loader's checksum); a change to it or to its line-ending rule must
+      # run this suite.
+      - 'benchmarks/data/real/mpdta.csv'
+      - '.gitattributes'
       # docs-tests.yml / notebooks.yml / ci-gate.yml carry ready-for-ci label
       # contracts locked by TestCiWorkflowLabelEventGuard in
       # tests/test_openai_review.py; include them so a regression there triggers

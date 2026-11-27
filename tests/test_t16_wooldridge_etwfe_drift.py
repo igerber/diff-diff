@@ -450,6 +450,9 @@ class TestMpdta:
         )
         assert poisson.att == pytest.approx(-28.9, abs=0.3)
         assert poisson.conf_int[0] < 0 < poisson.conf_int[1]
+        md = notebook_markdown(NB)
+        assert "with a county-clustered interval from -76 to 18 that includes zero" in md
+        assert "far less precise" not in md
         # the notebook prints where the data came from, so a fallback run is visible
         assert mpdta.attrs["source"] == "callaway_santanna_mpdta"
         assert_quotes_in_rendered(NB, ["Provenance: callaway_santanna_mpdta"], surface="output")
