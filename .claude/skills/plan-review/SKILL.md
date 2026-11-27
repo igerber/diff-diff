@@ -1,15 +1,15 @@
 ---
 name: plan-review
-description: Review a Claude Code plan file with the dual engine (Opus reviewer + codex gpt-6.1-sol, merge/verify; the Opus+Sol pair was Campaign-1 selected, run with gpt-5.6-sol, and 6.1-sol is carried over from the 2026-10 code-review campaign), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
+description: Review a Claude Code plan file with the dual engine (Opus reviewer + codex gpt-6.2-sol, merge/verify; the Opus+Sol pair was Campaign-1 selected, run with gpt-5.6-sol, and 6.2-sol is carried over from the 2026-11 code-review campaign), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
 ---
 
 # Plan Review (dual engine)
 
 Owns the plan-review → revise cycle. The review ENGINE is **dual** — two blind
-reviewers (Claude @ Opus 4.8 + codex `gpt-6.1-sol`) then a merge/verify pass —
+reviewers (Claude @ Opus 4.8 + codex `gpt-6.2-sol`) then a merge/verify pass —
 the configuration Campaign 1 selected (measured with gpt-5.6-sol; the codex pin
-now tracks the production code-review model, carried over from the 2026-10
-code-review campaign 2 and not re-validated by plan-review-eval): its
+now tracks the production code-review model, carried over from the 2026-11
+code-review campaign 3 and not re-validated by plan-review-eval): its
 exploratory run had dual reliably catch **7/9** must-catch plan defects vs
 **1/9** for any single reviewer (measured with gpt-5.6-sol). That
 campaign was **NON-GATING** (contaminated negatives + a criteria regression);
@@ -141,7 +141,7 @@ read-only intent — whose prompt is the exact contents of
 and returns the findings list + summary table. Write its output to
 `<work_dir>/review_a.md`.
 
-### 4. Reviewer 2 — codex gpt-6.1-sol (blind) — DUAL mode only
+### 4. Reviewer 2 — codex gpt-6.2-sol (blind) — DUAL mode only
 
 **Single mode**: skip steps 4-5 and take the **Single-reviewer mode
 (deliberate)** path below — the review body is reviewer 1's output with the
@@ -205,8 +205,14 @@ verbatim, then the contents of `<work_dir>/review_a.md`:
 ```
 > ⚠ **codex unavailable — SINGLE-Claude fallback.** This is the un-validated
 > weak arm (Campaign 1, measured with gpt-5.6-sol: caught 1/9 hard plan defects vs 7/9 for the dual
-> engine). Run `codex login` and re-review for full coverage.
+> engine). Check `codex_review.py`'s stderr for the cause: run `codex login` if codex is not
+> logged in, or upgrade the codex CLI to 0.172.0 or newer if it rejected the model. Then
+> re-review for full coverage.
 ```
+
+The codex half is verified on codex-cli 0.172.0; 0.162.1 rejects the pinned model
+(`model_not_found`), which lands here as exit 3 with codex's own "model is not
+supported" error on stderr.
 
 The review still persists and gates normally.
 

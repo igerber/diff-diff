@@ -212,7 +212,7 @@ class TestAdaptReviewCriteria:
         assert "Warning: prompt substitution did not match" not in captured.err
 
     def test_strips_shell_grep_directive_from_real_prompt(self, review_mod):
-        """The local path has no shell access — the literal `grep` directive
+        """The API path has no shell access — the literal `grep` directive
         in pr_review.md must be neutralized so the model doesn't claim to
         have run it."""
         assert _SCRIPT_PATH is not None
@@ -227,6 +227,33 @@ class TestAdaptReviewCriteria:
         adapted = review_mod._adapt_review_criteria(source)
         assert "Command to check: `grep" not in adapted
         assert "no shell access" in adapted
+
+    def test_codex_backend_keeps_shell_directive_on_real_prompt(self, review_mod, capsys):
+        """The codex backend HAS a shell: its prompt keeps the `grep` directive and
+        never says "no shell access" (that sentence, once applied to both backends,
+        made gpt-6.2-sol stop reading the working tree). Checked on the real
+        template, per backend, both through the adapter and the compiled prompt."""
+        assert _SCRIPT_PATH is not None
+        repo_root = _SCRIPT_PATH.parent.parent.parent
+        prompt_path = repo_root / ".github" / "codex" / "prompts" / "pr_review.md"
+        if not prompt_path.exists():
+            pytest.skip("pr_review.md not found")
+        source = prompt_path.read_text()
+        adapted = review_mod._adapt_review_criteria(source, shell_access=True)
+        assert 'Command to check: `grep -n "pattern" diff_diff/*.py`' in adapted
+        assert "no shell access" not in adapted
+        # Every other local-framing substitution still applies, with no warning.
+        assert "You are a code reviewer for a causal inference library." in adapted
+        assert "Warning: prompt substitution did not match" not in capsys.readouterr().err
+
+        def compiled(shell_access):
+            return review_mod.compile_prompt(
+                source, "reg", "diff", "M\tf.py", "b", None, shell_access=shell_access
+            )
+
+        codex_prompt, api_prompt = compiled(True), compiled(False)
+        assert "no shell access" not in codex_prompt and "Command to check: `grep" in codex_prompt
+        assert "no shell access" in api_prompt and "Command to check: `grep" not in api_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1676,7 +1703,11 @@ class TestIsReasoningModel:
         assert review_mod.PRICING["gpt-6.1-sol"] == (
             2.00,
             10.00,
-        )  # production since 2026-10-17 (campaign 2)
+        )  # previous production (2026-10-17 to 2026-11-26)
+        assert review_mod.PRICING["gpt-6.2-sol"] == (
+            2.00,
+            10.00,
+        )  # production since 2026-11-26 (campaign 3)
         assert review_mod.PRICING["gpt-6-luna"] == (0.10, 0.50)
         assert review_mod.estimate_cost(1_000_000, 0, "gpt-6-astra").startswith("$10.00")
 
@@ -1686,9 +1717,9 @@ class TestIsReasoningModel:
 
     def test_default_model_is_production_pin(self, review_mod):
         """DEFAULT_MODEL is the production reviewer pin (kept in lockstep with the
-        CI workflow's model: input; the 2026-10 reviewer-eval campaign 2 selected
-        gpt-6.1-sol, PARITY accepted as GO)."""
-        assert review_mod.DEFAULT_MODEL == "gpt-6.1-sol"
+        CI workflow's model: input; the 2026-11 reviewer-eval campaign 3 selected
+        gpt-6.2-sol, mechanical GO accepted)."""
+        assert review_mod.DEFAULT_MODEL == "gpt-6.2-sol"
 
     def test_o3_is_reasoning(self, review_mod):
         assert review_mod._is_reasoning_model("o3") is True
@@ -3178,9 +3209,14 @@ class TestCallCodex:
 
     @pytest.mark.parametrize(
         "name, expected_other",
-        [("codex_stderr_0_162_1.txt", 0), ("codex_stderr_0_162_1_websearch.txt", 2)],
+        [
+            ("codex_stderr_0_162_1.txt", 0),
+            ("codex_stderr_0_162_1_websearch.txt", 2),
+            # codex-cli 0.172.0 (2026-11 re-pin): same exec/status/web-search format
+            ("codex_stderr_0_172_0.txt", 10),
+        ],
     )
-    def test_session_parser_against_sanitized_0_162_1_fixtures(
+    def test_session_parser_against_sanitized_fixtures(
         self, review_mod, fake_subprocess, name, expected_other
     ):
         """The sanitized live transcripts keep every header/start/status line, so
@@ -3193,6 +3229,42 @@ class TestCallCodex:
         n = len(u["session_commands"])
         assert n > 0 and n == u["session_commands_start_lines"] == u["session_commands_exec_lines"]
         assert u["session_other_events"] == expected_other
+        # Command CONTENTS, not only counts: every entry starts at its shell start line.
+        for entry in u["session_commands"]:
+            assert re.match(r"^\S*/(zsh|bash|sh) -lc ", entry)
+
+    def test_multiline_command_text_is_kept_whole(self, review_mod, fake_subprocess):
+        """Every line between a start line and its status line stays in the entry,
+        including a heredoc line that LOOKS like a tool event. Human-mode stderr
+        cannot tell a literal `web search: ...` line from an interleaved event, so
+        the parser over-includes (a stray event line may ride along) rather than
+        hide part of a command from the audit."""
+        stderr = (
+            "codex\nLooking.\nexec\n"
+            "/bin/zsh -lc \"python - <<'PY'\n"
+            "tool = 1\n"
+            "web search: a literal heredoc line\n"
+            "print(tool)\n"
+            'PY" in /tmp/wt\n'
+            "web search: an interleaved event\n"
+            " succeeded in 12ms:\nout\n"
+            "exec\n/bin/zsh -lc 'ls' in /tmp/wt\n succeeded in 0ms:\na\n"
+        )
+        u = self._session(review_mod, fake_subprocess, stderr)
+        assert u["session_commands"] == [
+            "/bin/zsh -lc \"python - <<'PY'\n"
+            "tool = 1\n"
+            "web search: a literal heredoc line\n"
+            "print(tool)\n"
+            'PY" in /tmp/wt\n'
+            "web search: an interleaved event",
+            "/bin/zsh -lc 'ls' in /tmp/wt",
+        ]
+        assert u["session_commands_start_lines"] == u["session_commands_exec_lines"] == 2
+        # The counter is broader than the truth by design (`tool = 1` and both
+        # `web search:` lines count): over-counting only pushes a cell toward
+        # `unaudited`, the conservative class.
+        assert u["session_other_events"] == 3
         assert not any(c.endswith("[truncated]") for c in u["session_commands"])
 
     def test_session_truncated_flag_when_stderr_drain_still_alive(
@@ -3362,8 +3434,11 @@ class TestCallCodex:
     def test_nonzero_exit_raises_with_stderr(self, review_mod, fake_subprocess):
         fake_subprocess["returncode"] = 1
         fake_subprocess["stderr_text"] = "auth failure: token expired\n"
-        with pytest.raises(RuntimeError, match="codex exec failed"):
+        with pytest.raises(RuntimeError, match="codex exec failed") as exc:
             review_mod.call_codex("p", "gpt-5.4", "/r")
+        # The message is codex's stderr and nothing else: the script does not try
+        # to diagnose the failure (a model rejection by an older CLI included).
+        assert str(exc.value) == "codex exec failed (exit 1):\nauth failure: token expired\n"
 
     def test_empty_output_file_raises(self, review_mod, fake_subprocess):
         fake_subprocess["output"] = ""

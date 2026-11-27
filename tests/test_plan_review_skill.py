@@ -168,7 +168,7 @@ def test_reviewer_invocations_are_pinned():
     byte-match silently. The codex pins live at the real `call_codex` site
     (`codex_review.py`); the Claude subagent model pin lives in SKILL.md."""
     codex = (_SKILL / "codex_review.py").read_text()
-    assert 'CODEX_MODEL = "gpt-6.1-sol"' in codex
+    assert 'CODEX_MODEL = "gpt-6.2-sol"' in codex
     assert 'CODEX_EFFORT = "xhigh"' in codex
     # The ceiling EQUALS the code-review harness's CALL_TIMEOUT_S (read with a
     # regex: codex_reviewer.py imports eval_core/adapters, which this file's
@@ -355,7 +355,7 @@ def test_codex_review_forwards_pins_and_prints_sensitive_notice(tmp_path, monkey
     assert len(fake.codex_calls) == 1
     call = fake.codex_calls[0]
     assert call["prompt"] == "RENDERED PROMPT"
-    assert call["model"] == cr.CODEX_MODEL == "gpt-6.1-sol"
+    assert call["model"] == cr.CODEX_MODEL == "gpt-6.2-sol"
     assert call["effort"] == cr.CODEX_EFFORT == "xhigh"
     assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 3600.0
 
@@ -392,6 +392,16 @@ def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
 
     assert rc == 3  # timeout/error is treated identically to absence (fallback)
     assert not out.exists()
+
+
+def test_plan_review_docs_name_the_cli_upgrade_for_a_rejected_model():
+    """An older codex CLI rejects the pinned model; that is an ordinary exit 3 (the
+    helper does not diagnose it). The recovery advice lives in the docs: the
+    fallback warning and the helper's header both say to upgrade the CLI."""
+    skill = (_REPO / ".claude" / "skills" / "plan-review" / "SKILL.md").read_text()
+    assert "upgrade the codex CLI to 0.172.0 or newer" in skill
+    helper = (_REPO / ".claude" / "skills" / "plan-review" / "codex_review.py").read_text()
+    assert "verified on codex-cli 0.172.0" in helper and "upgrade the CLI" in helper
 
 
 # --------------------------------------------------------------------------- #

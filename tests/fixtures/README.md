@@ -1,10 +1,10 @@
 # Test fixtures
 
-## `codex_stderr_0_162_1*.txt` - sanitized codex exec stderr transcripts
+## `codex_stderr_0_*.txt` - sanitized codex exec stderr transcripts
 
-Event-structure transcripts of `codex exec` (codex-cli 0.162.1) used by
-`tests/test_openai_review.py` to pin the `call_codex` session parser against
-the live stderr format:
+Event-structure transcripts of `codex exec` (codex-cli 0.162.1 and 0.172.0)
+used by `tests/test_openai_review.py` to pin the `call_codex` session parser
+against the live stderr format:
 
 - `codex_stderr_0_162_1.txt` - the 2026-10 control-arm harness smoke
   (`run_eval.py smoke`, gpt-5.6-sol @ xhigh, isolated `CODEX_HOME`): 8 shell
@@ -14,6 +14,12 @@ the live stderr format:
   `--cd` dir): codex printed `web search: <query>` PREFIX lines, so the
   `session_other_events` counter uses `OTHER_EVENT_PREFIX_RE` as well as the
   bare-word `OTHER_EVENT_HEADERS` set.
+- `codex_stderr_0_172_0.txt` - the 2026-11 re-pin check on codex-cli 0.172.0:
+  an off-corpus review of merged PR #841's diff with the CI prompt shape
+  (`ci_prompt.build_ci_prompt` + `call_codex`, gpt-6.2-sol @ xhigh, isolated
+  `CODEX_HOME`): 22 shell commands and 10 `web search:` lines. The `exec` /
+  start-line / status-line / `web search:` format is unchanged from 0.162.1.
+  Non-empty web-search queries are replaced by `<QUERY REDACTED>`.
 
 A committed transcript keeps ONLY the event structure: every event-header line
 (`codex`, `exec`, `user`, `thinking`, `tokens used`, `web search: ...`, any
@@ -31,7 +37,8 @@ run in the authoring session (not committed code); re-create a fixture by
 capturing `2> <file>` from a real run and applying the same rules.
 
 There is deliberately NO 0.153.4 transcript: the format was first observed on
-that CLI, but the live pin is 0.162.1 and the older CLI is no longer installed.
+that CLI, which is no longer installed. The live pin is 0.172.0; the 0.162.1
+transcripts stay as regression cases for the same parser.
 
 ## `v4_aggregate_oracles.json` - pre-removal aggregation oracles (4.0 PRs 3a-3c)
 

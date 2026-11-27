@@ -7,13 +7,21 @@ raw review, and emits a side-by-side bundle you (or an LLM) read into a
 caught / missed / false-positive table — optionally **blinded** (arm identities
 stripped) so graders can't favor a model.
 
-**Status:** harness supports N-arm matrices (current config: a 6-arm file).
+**Status:** harness supports N-arm matrices (current config: a 7-arm file).
 2026-10 campaign 1 was `--configs B,E --k 2`, control gpt-5.6-sol vs candidate
 gpt-6-astra: mechanical NO-GO (one regression; rule archived as
 `campaigns/2026-10-gpt6-DECISION_RULE.md`). Campaign 2 is `--configs B,F --k 2`,
 the same control vs candidate gpt-6.1-sol: mechanical PARITY, accepted as GO by
 the user, so gpt-6.1-sol @ xhigh is production (CI + local + plan-review) and arm
-F carries role=control (`campaigns/2026-10-gpt61sol-VERDICT.md`). Per-arm repeat
+F carried role=control (`campaigns/2026-10-gpt61sol-VERDICT.md`). Campaign 3
+(2026-11, `--configs F,G --k 2`) compared that control against candidate
+gpt-6.2-sol, both on codex-cli 0.172.0: gpt-6.2-sol is not reachable on
+0.162.1, so the control was re-sampled on the new CLI rather than taken from
+the campaign-2 grades (campaign 2's rule archived as
+`campaigns/2026-10-gpt61sol-DECISION_RULE.md`). Outcome: mechanical DEFINITIVE
+GO, accepted by the user, so gpt-6.2-sol @ xhigh is production (CI + local +
+plan-review) and arm G carries role=control
+(`campaigns/2026-11-gpt62sol-VERDICT.md`). Per-arm repeat
 counts, blinded grading sealed to the run artifacts, a post-unblinding
 session-log audit and a mechanical verdict CLI. Local-only — not wired to CI.
 The go/no-go rule is pre-registered in `DECISION_RULE.md`; the grader-facing
@@ -41,7 +49,7 @@ tools/reviewer-eval/
 ├── config/configs.json  # the arms (one role=control) + declared treatment_fields
 ├── DECISION_RULE.md     # pre-registered gates (grader rubric is separate)
 ├── GRADING_RUBRIC.md    # grader-facing: definitions, LEAK? flag, marker list, output JSON
-├── campaigns/           # archived rules + verdicts (2026-07-gpt56-*, 2026-10-gpt6-*)
+├── campaigns/           # archived rules + verdicts (2026-07-gpt56-*, 2026-10-gpt6-*, 2026-10-gpt61sol-*, 2026-11-gpt62sol-*)
 └── corpus/              # cases/{s1_synthetic, s2_historical, s3_negative, s4_missed} + schema + synonyms
 ```
 
@@ -56,28 +64,33 @@ python tools/reviewer-eval/run_eval.py verify-corpus
 
 # 2. Smoke test (1 case, first real codex call) for the CONTROL only. Bare
 #    `smoke` exercises the role=control arm (derived from configs.json; after
-#    the 2026-10 swap that is F = gpt-6.1-sol, production). A registered
+#    the 2026-11 swap that is G = gpt-6.2-sol, production). A registered
 #    candidate's first corpus run is the campaign itself (pre-registration by
 #    construction); `smoke` REFUSES a registered candidate arm other than the
-#    control, and `run` accepts one only as the exact registered campaign shape
-#    below; the next campaign registers its own (control, candidate) pair in
-#    its own PR-1. A review runs 2-15 min.
+#    control or a former control, and `run` accepts one only as the exact registered campaign shape
+#    below; each campaign registers its own (control, candidate) pair before
+#    its first dispatch. A review runs 2-15 min.
 python tools/reviewer-eval/run_eval.py smoke
 
 # 3. Full matrix — k=2 repeats on control vs candidate (one run = one experiment;
-#    the 2026-10 campaign-2 shape, now complete - a new campaign uses its own subdir)
-python tools/reviewer-eval/run_eval.py run --subdir gpt61sol --configs B,F --k 2
+#    the 2026-11 campaign-3 shape, now complete - a new campaign uses its own subdir)
+python tools/reviewer-eval/run_eval.py run --subdir gpt62sol --configs F,G --k 2
 
 # 4. Emit the side-by-side bundle to grade (+ the identity-stripped, sealed one)
-python tools/reviewer-eval/run_eval.py compare --subdir gpt61sol --blinded
+python tools/reviewer-eval/run_eval.py compare --subdir gpt62sol --blinded
 
 # 5. After unblinding: the session-log audit (outputs go OUTSIDE the repo or
 #    under the gitignored runs/ — a root-level file dirties the tree and trips
 #    the identity guard) and the mechanical verdict (PROVISIONAL without
-#    --audit-hits, DEFINITIVE with it)
-python tools/reviewer-eval/run_eval.py audit --subdir gpt61sol -o /tmp/<scratch>/hits.json
-python tools/reviewer-eval/run_eval.py verdict --subdir gpt61sol --grades <reconciled.json> \
-    --control B --candidate F [--audit-hits /tmp/<scratch>/hits.json] [--expect-head <sha>]
+#    --audit-hits, DEFINITIVE with it). DEFINITIVE also needs a valid exposure
+#    history: this checkout's campaign ledger and frozen ref must be the
+#    campaign's own. The F,G example below is a COMPLETED contrast, so re-running
+#    it in a fresh checkout yields 44 reviews and a NON-mechanical verdict even
+#    with --audit-hits (reviewer_verdict.COMPLETED_CAMPAIGNS); a new campaign
+#    registers its own contrast first.
+python tools/reviewer-eval/run_eval.py audit --subdir gpt62sol -o /tmp/<scratch>/hits.json
+python tools/reviewer-eval/run_eval.py verdict --subdir gpt62sol --grades <reconciled.json> \
+    --control F --candidate G [--audit-hits /tmp/<scratch>/hits.json] [--expect-head <sha>]
 ```
 
 Run artifacts and the bundles land under `runs/` (gitignored). `--blinded` also
@@ -90,7 +103,9 @@ grades file, bundle, hits file or artifact set that drifted.
 Every harness codex call runs under an **isolated `CODEX_HOME`** that mirrors
 CI's codex-action home (the credential plus `sandbox_mode = "read-only"` and
 `approval_policy = "never"`; no MCP servers, hooks or memories; codex's default
-features otherwise). Progress during a run: read `done:`/`INFRA` lines from
+features otherwise, except `apps = false`, which turns off the ChatGPT-account
+app connectors that CI's API-key login does not have - see the comment on
+`ISOLATED_CONFIG_TOML`). Progress during a run: read `done:`/`INFRA` lines from
 stdout and count artifact files; the manifest exists from the START of an
 attempt as a `{"failed": true}` marker and is replaced only at the end.
 
@@ -134,7 +149,7 @@ any path). The grading rubric's marker-based `LEAK?` flag (verifier-confirmed
 leaks VOID the cell and contest the gate) plus the NON-gating post-unblinding
 session-log audit (`audit`; informational, over-matching by design, best-effort
 because codex's default non-shell channels such as web search leave no shell
-trace - on codex-cli 0.162.1 BOTH arms web-search routinely, so expect most
+trace - on codex-cli 0.162.1 and 0.172.0 BOTH arms web-search routinely, so expect most
 cells `unaudited` and the audit vacuous; accepted by user decision, see
 `DECISION_RULE.md`) cover this campaign; OS-level isolation is a TODO.md row.
 
@@ -173,6 +188,15 @@ each arm in a clean single-field contrast.
 
 ## Known limitations
 
+- **Only the CI prompt is measured.** Every arm runs `ci_prompt.build_ci_prompt`.
+  The local `/ai-review-local` path compiles a different prompt
+  (`openai_review.compile_prompt`), and a model can use its tools differently
+  under it: in the 2026-11 pre-registration probes gpt-6.2-sol ran no shell
+  command at all under the local prompt (3 of 3 off-corpus reviews) while
+  reading the checkout normally under the CI prompt. The cause was a sentence
+  the local adaptation added for the api backend ("no shell access in this
+  path") that also reached the codex backend; it is api-only now. A
+  local-prompt arm is a TODO.md row.
 - **Tutorial-notebook cases are supported with CI-equivalent context.** CI
   special-cases only `docs/tutorials/*.ipynb`: it excludes them from the diff *and*
   appends a sanitized `<notebook-prose>` block extracted via

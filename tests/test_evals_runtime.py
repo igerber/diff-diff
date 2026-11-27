@@ -708,6 +708,27 @@ def test_experiment_tag_differs_when_backend_wrapper_changes(monkeypatch):
     ), "a codex-wrapper change must yield a distinct experiment tag"
 
 
+def test_experiment_tag_differs_when_only_the_isolated_codex_config_changes(monkeypatch):
+    """The isolated home's config.toml sets the reviewer's tool surface. Toggling
+    ONLY `apps` (same model/effort/sandbox/prompt/cli/wrapper) must yield a
+    distinct tag, so a resumed matrix cannot reuse reviews produced with different
+    connector access."""
+    from adapters import codex_reviewer as cr
+    from eval_core.models import Config
+
+    r = _make_reviewer(monkeypatch)
+    cfg = Config(id="B", model="gpt-5.4")
+    tag_apps_off = r.experiment_tag(cfg)
+    assert "apps = false" in cr.ISOLATED_CONFIG_TOML
+    monkeypatch.setattr(
+        cr, "ISOLATED_CONFIG_TOML", cr.ISOLATED_CONFIG_TOML.replace("apps = false", "apps = true")
+    )
+    tag_apps_on = r.experiment_tag(cfg)
+    assert tag_apps_on != tag_apps_off
+    monkeypatch.undo()
+    assert _make_reviewer(monkeypatch).experiment_tag(cfg) == tag_apps_off  # deterministic
+
+
 def test_resume_reruns_when_backend_wrapper_changes(monkeypatch):
     """A cached run must NOT be resumed once the codex-invocation wrapper changed,
     even when the case/config and the built prompt are byte-identical.
@@ -2302,8 +2323,8 @@ def test_live_configs_resolve_control_and_candidate():
     b, e = cfgs
     assert b.model != e.model and b.effort == e.effort == "xhigh"
     assert b.sandbox == e.sandbox and b.action_version == e.action_version
-    assert b.cli_version == e.cli_version == "codex-cli 0.162.1"
-    assert run_eval._control_id() == "F"  # production since the 2026-10 campaign-2 swap
+    assert b.cli_version == e.cli_version == "codex-cli 0.172.0"
+    assert run_eval._control_id() == "G"  # production since the 2026-11 campaign-3 swap
     assert run_eval._treatment_fields() == ("model", "effort")
     # Campaign 2 (2026-10-17): arm F = gpt-6.1-sol differs from B in model only,
     # same effort/sandbox/action/CLI pins; (B, F) is a registered contrast too.
@@ -2315,16 +2336,24 @@ def test_live_configs_resolve_control_and_candidate():
     assert f.action_version == b2.action_version and f.cli_version == b2.cli_version
     import reviewer_verdict
 
-    assert reviewer_verdict.REGISTERED_CONTRASTS == (("B", "E"), ("B", "F"))
+    # Campaign 3 (2026-11-26): arm G = gpt-6.2-sol differs from the control F in
+    # model only, same effort/sandbox/action/CLI pins; (F, G) is registered.
+    cfgs_g = run_eval._resolve_configs("F,G")
+    assert cfgs_g is not None and [c.id for c in cfgs_g] == ["F", "G"]
+    f2, g = cfgs_g
+    assert g.model == "gpt-6.2-sol" and f2.model == "gpt-6.1-sol"
+    assert g.effort == f2.effort == "xhigh" and g.sandbox == f2.sandbox
+    assert g.action_version == f2.action_version and g.cli_version == f2.cli_version
+    assert reviewer_verdict.REGISTERED_CONTRASTS == (("B", "E"), ("B", "F"), ("F", "G"))
     # Bare `run` is the ACTIVE registered campaign shape end to end: the COMPLETE
-    # default argument combination passes the candidate-exposure gate (configs B,F
+    # default argument combination passes the candidate-exposure gate (configs F,G
     # at k=2, no --k-per, no --strata), so `python run_eval.py run` is not
     # configured to refuse.
     ns = run_eval._build_parser().parse_args(["run"])
-    assert ns.configs == "B,F" and ns.k == 2 and ns.k_per == "" and ns.strata is None
+    assert ns.configs == "F,G" and ns.k == 2 and ns.k_per == "" and ns.strata is None
     assert (
         run_eval._candidate_exposure_violations(
-            cfgs_f, ns.k, run_eval._parse_k_per(ns.k_per, cfgs_f), ns.strata, "run"
+            cfgs_g, ns.k, run_eval._parse_k_per(ns.k_per, cfgs_g), ns.strata, "run"
         )
         == []
     )
@@ -2469,7 +2498,16 @@ def test_isolated_codex_home_mirrors_ci_and_restores_env(tmp_path, monkeypatch):
         assert (pathlib.Path(home) / "config.toml").read_text() == cr.ISOLATED_CONFIG_TOML
         assert 'sandbox_mode = "read-only"' in cr.ISOLATED_CONFIG_TOML
         assert 'approval_policy = "never"' in cr.ISOLATED_CONFIG_TOML
-        assert "[features]" not in cr.ISOLATED_CONFIG_TOML and "mcp" not in cr.ISOLATED_CONFIG_TOML
+        # ONE feature switch, nothing else: the ChatGPT-account app connectors are
+        # off (CI's API-key auth has none); no MCP servers, web search untouched.
+        assert cr.ISOLATED_CONFIG_TOML.splitlines() == [
+            'sandbox_mode = "read-only"',
+            'approval_policy = "never"',
+            "",
+            "[features]",
+            "apps = false",
+        ]
+        assert "mcp" not in cr.ISOLATED_CONFIG_TOML and "web_search" not in cr.ISOLATED_CONFIG_TOML
         assert cr.ACTIVE_ISOLATED_HOME == home and os.environ["CODEX_HOME"] == home
         assert home != str(real)
     assert cr.ACTIVE_ISOLATED_HOME is None
@@ -2898,6 +2936,10 @@ def _gate_setup(tmp_path, monkeypatch):
         # from the gate; E is still a confined candidate)
         dict(configs="E,F", strata=None, subdir="x", k=2, max_parallel=1),
         dict(configs="B,E,F", strata=None, subdir="x", k=2, max_parallel=1),
+        # E with campaign 3's G (G is production/control after the 2026-11 swap and
+        # exempt, as is the former control F; E is still a confined candidate)
+        dict(configs="E,G", strata=None, subdir="x", k=2, max_parallel=1),
+        dict(configs="E,F,G", strata=None, subdir="x", k=2, max_parallel=1),
     ],
 )
 def test_run_refuses_candidate_exposure_outside_registered_campaign(
@@ -2910,17 +2952,29 @@ def test_run_refuses_candidate_exposure_outside_registered_campaign(
 
 
 def test_smoke_refuses_candidate_arm(tmp_path, monkeypatch, capsys):
+    # E is the one registered candidate that was never production (G was confined
+    # the same way until the 2026-11 swap made it the control).
     run_eval = _gate_setup(tmp_path, monkeypatch)
     assert run_eval.cmd_smoke(_ns(configs="E", strata=None, k=1, limit=1, max_parallel=1)) == 1
     assert "may not be smoked" in capsys.readouterr().err
 
 
 def test_control_arm_is_exempt_from_the_exposure_gate():
-    """After the 2026-10 swap F is production (role=control): it is measured by
+    """After the 2026-11 swap G is production (role=control): it is measured by
     definition, so bare `smoke` (which resolves the control) and any `run` shape
-    that includes F pass the gate; E stays confined to its registered shape."""
+    that includes G pass the gate. F, the previous production arm and the control
+    of the registered (F, G) contrast, stays exempt too; E (a candidate that was
+    never production) stays confined to its registered shape."""
     run_eval = _run_eval()
-    assert run_eval._control_id() == "F"
+    assert run_eval._control_id() == "G"
+    g_only = run_eval._resolve_configs("G")
+    assert run_eval._candidate_exposure_violations(g_only, 1, {}, ["s1_synthetic"], "smoke") == []
+    assert (
+        run_eval._candidate_exposure_violations(
+            run_eval._resolve_configs("F,G"), 1, {}, None, "run"
+        )
+        == []
+    )
     f_only = run_eval._resolve_configs("F")
     assert run_eval._candidate_exposure_violations(f_only, 1, {}, ["s1_synthetic"], "smoke") == []
     assert (
@@ -2937,7 +2991,7 @@ def test_control_arm_is_exempt_from_the_exposure_gate():
 
 def test_registered_campaign_shape_passes_the_gate():
     run_eval = _run_eval()
-    for contrast in ("B,E", "B,F"):
+    for contrast in ("B,E", "B,F", "F,G"):
         cfgs = run_eval._resolve_configs(contrast)
         assert run_eval._candidate_exposure_violations(cfgs, 2, {}, None, "run") == []
     assert (

@@ -533,9 +533,9 @@ jobs:
           # @openai/codex and @openai/codex-responses-api-proxy at this version,
           # so bump only to a version that exists for both, together with the
           # configs.json pin + a harness smoke (the lockstep test enforces equality).
-          codex-version: 0.162.1
+          codex-version: 0.172.0
           # Recommended by OpenAI for review quality/consistency:
-          model: gpt-6.1-sol
+          model: gpt-6.2-sol
           effort: xhigh
 
       - name: Post PR comment (new on every event except initial open)

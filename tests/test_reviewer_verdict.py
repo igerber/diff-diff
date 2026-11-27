@@ -415,6 +415,12 @@ def _write_campaign(tmp_path, monkeypatch, cases=None, k=2, arms=("B", "E"), tam
     # the registered-surface diff is stubbed (fake heads have no git history).
     monkeypatch.setattr(run_eval, "_registered_surface_diff", lambda root, a, b: ("", False))
     monkeypatch.setattr(run_eval, "_read_frozen_ref", lambda root, contrast: "h1")
+    # The synthetic campaign uses fake heads (h0/h1), so it is a contrast "in
+    # progress": no recorded completed revision (the completed-contrast rule has
+    # its own test, which sets the record explicitly).
+    import reviewer_verdict
+
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {})
     run_eval._append_ledger(
         {
             "kind": "dispatch",
@@ -575,6 +581,9 @@ def test_verdict_cli_happy_path_and_audit(tmp_path, monkeypatch, capsys):
         ("E", "B", "registered contrast"),
         ("F", "B", "registered contrast"),  # campaign-2 contrast inverted
         ("E", "F", "registered contrast"),  # two candidates, no control
+        ("G", "F", "registered contrast"),  # campaign-3 contrast inverted
+        ("B", "G", "registered contrast"),  # campaign-3 candidate, wrong control
+        ("E", "G", "registered contrast"),  # two candidates, no control
         ("B", "B", "must differ"),
         ("A", "B", "registered contrast"),
     ],
@@ -944,6 +953,58 @@ def test_verdict_exposure_status_cases(tmp_path, monkeypatch, capsys):
         "re-registered" in body["exposure"]["reason"]
         and "reviewer_verdict.py" in body["exposure"]["surface_diff_stat"]
     )
+
+
+def test_verdict_refuses_to_re_register_a_completed_contrast(tmp_path, monkeypatch, capsys):
+    """A fresh checkout has neither the original ledger nor the frozen ref (both are
+    local), so re-dispatching a FINISHED contrast creates a new, self-consistent
+    ledger + ref. The tracked COMPLETED_CAMPAIGNS record keeps that from being read
+    as the contrast's first pre-registered exposure."""
+    import reviewer_verdict
+
+    run_eval, runs_dir, manifest, blinding, results = _write_campaign(tmp_path, monkeypatch)
+    grades = tmp_path / "g.json"
+    grades.write_text(json.dumps(_full_grades(_corpus_cases(), blinding, results)))
+    # The campaign as actually run: ledger starts at the recorded revision -> mechanical.
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {("B", "E"): "h1"})
+    body = _verdict_body(run_eval, grades, capsys)
+    assert body["exposure"]["mechanical"] is True and "RE-REGISTERED" not in body["label"]
+    # The same ledger shape in a fresh checkout, where the recorded revision is
+    # some OTHER commit: first dispatch + matching ref, yet non-mechanical.
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {("B", "E"): "h-original"})
+    body = _verdict_body(run_eval, grades, capsys)
+    assert body["exposure"]["mechanical"] is False and body["definitive"] is False
+    assert "RE-REGISTERED" in body["label"]
+    assert "re-run of a completed contrast" in body["exposure"]["reason"]
+    assert "h-original" in body["exposure"]["reason"]
+    # A contrast with no record (still in progress) is unaffected.
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {("F", "G"): "h-original"})
+    assert _verdict_body(run_eval, grades, capsys)["exposure"]["mechanical"] is True
+    # The record is the FIRST-DISPATCH revision, not the verdict revision: a
+    # rule-allowed re-run (first dispatch on h0, voided, re-run on h1 in a fresh
+    # subdir with the registered surfaces untouched) stays mechanical both
+    # before and after its completion is recorded.
+    _ledger_write(run_eval, [_dispatch("h0", "first"), _dispatch("h1", "camp")])
+    monkeypatch.setattr(run_eval, "_read_frozen_ref", lambda root, contrast: "h0")
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {})
+    body = _verdict_body(run_eval, grades, capsys)
+    assert body["exposure"]["mechanical"] is True and body["exposure"]["head_changed"] is True
+    monkeypatch.setattr(reviewer_verdict, "COMPLETED_CAMPAIGNS", {("B", "E"): "h0"})
+    body = _verdict_body(run_eval, grades, capsys)
+    assert body["exposure"]["mechanical"] is True and body["exposure"]["head_changed"] is True
+
+
+def test_completed_campaigns_are_registered_contrasts_with_full_shas():
+    """A SUBSET, not equality: the next contrast is registered before its first run
+    and gets its completion record only in the PR that ships its verdict."""
+    import reviewer_verdict
+
+    assert set(reviewer_verdict.COMPLETED_CAMPAIGNS) <= set(reviewer_verdict.REGISTERED_CONTRASTS)
+    # The three finished campaigns stay recorded: dropping one would silently
+    # disable the re-run guard for that contrast.
+    assert {("B", "E"), ("B", "F"), ("F", "G")} <= set(reviewer_verdict.COMPLETED_CAMPAIGNS)
+    for sha in reviewer_verdict.COMPLETED_CAMPAIGNS.values():
+        assert len(sha) == 40 and set(sha) <= set("0123456789abcdef")
 
 
 def test_registered_surface_diff_detects_timeout_only_change(tmp_path):

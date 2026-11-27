@@ -1,0 +1,2795 @@
+{
+  "artifacts_sha": "bc5dbec5dd2339a2303058e790670c4a604b64e7a9af9840a1a63c5befb0974c",
+  "branch": "sol-review",
+  "coverage": {
+    "covered": 1,
+    "no_commands": 0,
+    "total": 44,
+    "unaudited": 43
+  },
+  "hits": [
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "884d771621ede5cf5bc119e19a2eb99753374c536c5493c631bc8bae8917f0e5",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "e05630328fc5b762a1adf5dce28d33ebedd6c16089599bcdfc7e64479ddd90c8",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "5aeb2426fc9a263621ccddcc0ab77178223b4feb9e9236f2dc6e8590c1fd518a",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "43ca4188ec02982e0612d9a15f1239f30977468e43f263273b86f716d060a3db",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "43705b394395c5fcbea1d52aaea3fe8a3dec56b9727066643f3291781382b58a",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "0b33013ff79e18f48ef8e8e606455df6bc78fd41d11eefe5ec909dfb72b78055",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "db8b6d80aa2c0bc551784dd6e26cdcedda4e8d551ee8d025961603065ac348dc",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "line_sha256": "3650f27c9e9e30ed446f025fd7a4b023d7616f55baaad6f65259125130831bfd",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "c41f414c91d4353f6f4a3b0931bf591e99f866aebbd44968597be95aa2ba4a57",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "63c1c9f1e26c5c256898d3095995543909730115e12ff71f4c464415fc097115",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "4b0d5ac3d7ccb4d6dce637cd290f64f49eb752228cf81fd2359f867e54d4a0fd",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "f6b0c2d98e42553cb8f3ed6f7af89d332891f0bff8810794e836f54ff42bd441",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "8ade1c5e7b8217f10f05cec5b3923e620e576d3748066b7bf09321b198d9e6bc",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "d40649c076a7d986d386e0bfa2d4ac5b8526515e2e7306fc61e233bf92694e8d",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "d8f39c089338565248956a4e166ea712bbcaaa8aba2ae89768c725a3bbd59a65",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "e80c145f9039ae17e159574bdd602692da64a0f9c2bba9aab4ef66b9c3aed48c",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "9b60c1800ae7da6b7cdea640121319efda88c150d72ec710db3f419c0336f59e",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "64f8269710df33ff7a9173f22784a287a132a5356f6d902074d82e6da80722c0",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "4c6aff18b23f927ea01d775c4f9993cc4f83a868b6f69e1ac62622c82d0a5a07",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "f1df15a87b142f274b06223cd11432d90c9ba72045cb2c52ca9e353fbda88221",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "326c7ab469c3c2bcced86c3c8219476dcf1e257986a320990494bd71adf3bdb2",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "e351053f1c40f037899242f8f6b295ce07ca0acf2bed40c540a2c176899ff454",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "39f7fc055fb00429103078d0bc2076ceda3e2fb9232a1bdc711e6cd20d0fe3e1",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "097da46bbfe6b804b798e33be0978435da63da9cde4dd5035524b2fae4a23f5c",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "06dc9958697c31030f63f97b6a5773658a50b5cb6ae235541d90dd890b770b79",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "line_sha256": "cc1b3a1f8304a46cd9fe3520fcc8951cc9b1bd40fa67ca4affa9d022d88144b1",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "5089406c01bb0e7fe1b7ac51f24730b4d6b9cd0d2ca983dcabd2f5784bc34814",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "a98ba120bb0370b50efd45bdeab721e810e50426d34dd792bf02d6eb4359e046",
+      "markers": [
+        "tools/reviewer-eval/"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "a2d449fb46fda55515dbaf4736410a8104fd1131cb254a92fd3f440470cc95ec",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "bef192f81cb8eb736af98bc37ddabb05f128a8d065298b01500fe278f85efa75",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "9947a5f8a9869eb0faac485ac92bce53d5fd328fb7a49f44072868fa2f3ff11a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "8535edaa4828490753083cbaaaf9b391f29396781776912c6405c1e2775085f0",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "45be1e5153c0c0daabf7f8a1435aa2e7e9ef4201503abfc701732171734ccea8",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "aa7d4b335e6794f1492225ffa2a490a49fec998e11cba489651c587399a2befc",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "3e881a064fc4a56820c6ea198bd579fa326822e0ef367fd954a1bbb55b0a8847",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "9aab8fdbfc97ce3583d91fc74f49ec81472b8986cc64c03e3d896425b785f4ec",
+      "markers": [
+        "git show HEAD",
+        "BARE_SHOW_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "9c03a9ec3b5b00c43cb1415a26049f932b4b4db630634a32f514150e0d32cef1",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "dc44a580472d8854a7c994af8877a13a86cf08b9efdc066fb69ff184eed1f84d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "f514fcc492dc59742171ce882a6c04d3946e40e286b670e09d2293fdf6bd1429",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "d8f39c089338565248956a4e166ea712bbcaaa8aba2ae89768c725a3bbd59a65",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "f45a245c2dd1b632984fa523aebc0ae15f4aa51dfeabd80a44fbd9d4d4b7d2ff",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "GIT_DIR_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "53acc88d65009c5323aed366ea7762ae71d631b84299b4b1e12dea76d5f76a3e",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "0beb36fb6ce8ea5591edc8c61af5fc7bd7703a4e7493b0270a8bbfeaa25a593c",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "c18a1a4aaa6c235b94008e3c9f651f59170cf67e63cbd0c704740f10f9661a9a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "92bd42c09c487fa9e95eee2b29caca273f09ab4cec05a4bc6aa0346681db99e6",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "c401f35126a62c1b6c9125926e36827a814602243329c0eaa28ef3e3ae0d9963",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "50c14b23e7f8982975ed0a91a07b471727177e248d1b3e750b9468acf46727be",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "26c2a6198a68701fea4e6b2d7f29dfc1137dc935145519820f58dc96c80888f1",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "9db87f5485b7b698113b7da458472475d74653bf7092b62d059abfcb2a3d393d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "8cc32342aa67345160baabb315721e91caa12e0e892e4b498224e633f7821cbc",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "915f2d37906f422685a9b211d18f84a619f2e20646f36e8af02f1f9b87bcdf3d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "03f24791dce1bf7c906ca8d767f7bdd00f88ab28d58d808442c6aa8273527972",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "943974dc4086441be85e2ae6f94fe070073a2930aa3397f7f6803a6c0cc296c4",
+      "markers": [
+        "../",
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "02323c2d027619d9bf19c5395c0c0fb0b611223058174153fdf399903b4e1841",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "dcb704c02194e33b48ecfc5f23c098c73a31f0e2d7f06cf4bd370bc6d339d19d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "d0f8fc9f4f3c65a41919c89c70f86b7e290fdd73e2509096075425df441ff57b",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "8e7bd642e515ecdc792d95e6f4c035e3e26e0565ec7777a02175586326ecbced",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "5ca6cd1b1c0057e0f7691423b628ca56deb61c5b3545dbf26e3bbabcf43226d4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "249070daa27ae48cb739744afb50544e0f34fefb77f906eab3e2bfa852cb41e5",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "0206a38a29f6777ceaf995b95e2e401d0bcd6400bbbee17492bd0a67b6167916",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "8bdbc22ae5576053b551294ef525c4a44be3b8a4fc3ec5ef169d523efcf122fd",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "1abc27ce604fd60e41784a66d690d89c6787098a0c9aafa59d0d5fa69f098fe8",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "e996ab40b181ce9c2334a9ed3443b4e662b5f000bc74d7968464222b8011dc13",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "e27a5eaf850cee499f2b781a0d0866063a3ef346f44f4a47eb7a997f59d0a401",
+      "markers": [
+        "DOTDOT_RE",
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "e8545fa041514873e219fad7cdf9fabbeaa69ad57929fdff131be71b09b7739a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "3466e621f285c8fa1769a9283ba0944df721cc0d2d290b4e1fb5043b43e8c367",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "b9a05a9cd9620d968c4f2848c0cc341042a309b1c2b079db27b4518afab8f2ca",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "b79ec805c5edb11880c6e1fd547f156f4efbf37ecd5c7b26b390b062d77d63b6",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "51dcad3ba23fe5998191a7476a8fbf2374fa8b16bc104f541044adb770312d78",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "line_sha256": "35da43b13f3ac81186e1ea9a95d14aef93ed91273a87585159e33a4293e4681e",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "60ace1062d08ae5518fcce74d951608c4d3219f0a0cc4220ca17ba6e27803b04",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "ec6e978d6ddc5c8ef5c4071d7625fc3700fc466e0c938c6a90b7123916d35982",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "b8b19fa77e1a29603b0876c6e1d5ebc374ed151acd93a571fbee8ee8c8445a71",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "d3d8614ed1296aebd9bdcd828b29277e0b76609c7947e810335c238ff22b0262",
+      "markers": [
+        "rev-parse"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "dccede3031df1dd2f02d0664ec52721285b2a93ea022fb8307e414038e876109",
+      "markers": [
+        "git log -1",
+        "--format",
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "6f9dd12d49454ff270bab6721bc30cedcbf07478a203264efa279a24236469a6",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "ac570f17f8ee468bd62775681ea1c11b79b60a9563cfb7a2a52d33f0c754ce2e",
+      "markers": [
+        "../",
+        "DOTDOT_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "cd94995f82558f469b11d39a15d64d3274c3990ae4c9c9d3f07ef6314a9bc0c2",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "9df5578c82ee48960590b98fbcc76b58ae9208c788eff65b190fee1f296dfbc1",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "51d8dc3e84069261b111fc4c0941ebd647e4eec25db68476a2b165a473d3d86e",
+      "markers": [
+        "BARE_SHOW_RE",
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "2d89e42d43cb6b644b3a442bba562067801cbb5aaf4257d8361a30c8dcce641b",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "cccfb98fdbe7122a386ae7d8afe3b82df3944053e0f6178c82bef5d28ec8b0e0",
+      "markers": [
+        "BARE_SHOW_RE",
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "e2f936b539eb753d78a625b03a9593eae53b1fc6f0af372f77319310732c5013",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "line_sha256": "1bb8d72e43385f0608849c97e6b8a68c0f655a9747a35db7e318c16e20c9eec5",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "77a3aae0a845e7bbf8ec4caaa0eaa3a4edbd8ef9e3698f5f16479f2a4b80b9e2",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "98b42fededcec4b47dba428c3b89ab7fee6786e0959e9ec8ec0b3f4dea0f4256",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "7e574f0f157eae7cacadc253b8bb6ec53acb0901067ac47b4daeedbd44ae0fac",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "1bcc64861efc8c173007137866618ce8b94f4aeb66cfb62170094dd967937397",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "38b6f3cd69bb133f2e8bdb34012e7e102d926a37de2b43416a6f8491fbe75536",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "f970e2bed1c8ebb982684216f523b6f2b3473380e1ccdbecbdd6d0be612093e3",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "3cc20491b5e5f45a363df7c3a7a264a459d76a6a86a2eb170b5a3a9d6263ea53",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "2ba70cb2072996729ae4a37dda0819dda781d86d92ddf191905b714ab0c55174",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "6193c654e3fe6616a1ca296fd4aeba6b5c5519bf408664101decdd66fbbba1f2",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "aa7460771dffa8559869ee17992d5945aaec4c41fa0e91b666c49f6dfb6cf277",
+      "markers": [
+        "GIT_DIR_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "8658ded252863553e4470abc8fbb43ce284017c5f75aaf91608efe4b012ac48f",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "a0e678c00e49b0872a553ef45363faa5a5c7ff1ac11b2e5165d42d3aefb75977",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "4bf40e22bddbd299fcc546f1d7df72bfd2c5de1e1bf816081437e84eed3db625",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "f61fa92bf699852671fe23155e84a6b13a067908e50595eee846e94a2e55275a",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "a7678d45d448846287c24daedd9ad60fd7164ff26360a6269edc3765a7ba33c4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "186bce692cbeb9ab2ada439c74428dd3b13e2522da8d859e0d91053da119c351",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "69a31b32b83f12509dbbfc49d5301c8c83ba0e9899b0fcab504ff7d4a65ae060",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "8e81109e649eb094622cf7b99b9ad4661d0501ed1b49f432e7b20c83506ab1f8",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "279846075c5bb084d41ea0dbf5efd61345ca97b71bf701e1b81c6b525efba60f",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "b4085ba4074d590e2cb79a84f3b9ffd2fba7570166b3169e2719c3a8f79fc6c4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "9a84fe905d0630d52025e0bb2f9315181f3934a989b453b63676fc088a3c7813",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "06b0d4b0c11604a69a06dbbc8aa1e1f11633209f85d2ba72688071a3b3a50f51",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "f1c68409b4b588fb52a35a3a69f264157e4f4203e7d1106a0e197b7c2f1cb620",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "0b7a8851a5e15bc5068498cd64ba6a7d7a3846498b6afe299d858820ad6563a5",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "60c406b57aa5e552410bd39a94e0806ac2f2ba42477a16495ee2a80169d167b2",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "5e686eb3f3ba2f93f8140732f65ed231dd48385730caad6c13a9f18a1998bc74",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "bad1751cf0333c70daa49f753b9497b9f4a4a2dd289bff8c00e04dabcc1d7e06",
+      "markers": [
+        "tools/reviewer-eval/",
+        "GIT_DIR_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "d08e395c95c59fbe7f686e940d84b6d912737f2165ea68200212249bfaf82c75",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "0f9a21d48cd942e1855efaee01a33bca53964a405aa06673dba7e9188c4d9b33",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "e097a3a04d6f88a89d7f8aa01df4c6b303f37b993cad7940876d6902a47d1510",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "7b4328b47aaf5d6620bd588902229bce89654186e5bffe09f700b501027e82c0",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "5227eae70c4ad4d46e66c4e4740aeb558609e092d6334500f761ee3dd8d41992",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "8f5152306b8b2287f9d0d0e64897b114267d0ecf45488757ce0fad90b5ced9f3",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "e501a9f0a11fc29e9caff1862a191d311bd8a58b6cdd73f7de366899eaaf4f3b",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "80f67c96b14d331f69e870713c2471a07b67a08d16f42aece147432969c60d76",
+      "markers": [
+        "tools/reviewer-eval/"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "41f5c2cb0e3480a3f92c7e10df9afd9c320f97c9476e34cfdf570f4a716ebb38",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "43e766cc8a6ca28292f70785174e17f27eec9e31730b5265a480b8f61ae08459",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "6a7d3a058d2dc62261af2dbe3e9935acef9aa9311c864820faaff27bd2b67bfe",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "line_sha256": "07e221496cdbb8cb75f28c012566ee4ee0481731e6e9d962a1638aee76e3da95",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "2c36eb7985edebaf12828b54b5b46ae3f7b44a78271088173e665ca483c1df35",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "d8f39c089338565248956a4e166ea712bbcaaa8aba2ae89768c725a3bbd59a65",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "77a3aae0a845e7bbf8ec4caaa0eaa3a4edbd8ef9e3698f5f16479f2a4b80b9e2",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "7eb68bbadd651e297da0dab2fc181c3f74637f9450ae2bdccc0f3998cb3d9eed",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "56a54fa289b9abcaaa33d7dea0872ac3ff317880341cd745042583202ae51fc2",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "56d7234ee45d98b75aab31aaea0d00c86ce9d1710d4dbb389a4ef32d35be6603",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "19f800a3b6929b12410f3a7c3ee0ad3681adbfff7a4c49ca02e1b76d6da030ee",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "f1ef03b80de92129fd22b4bc4b92dc0e59e2737073dfc767d8237f5426d301b3",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "6d981358f2dcbb9632963e11d89443ee52deb482e7b9be4f15925c12bf970c7a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "6f8570650361aad3a291d6a9190af209ca9e0a0e880c2334b63a49bbe29c9286",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "b1ae084dc27e4c9ec00f95ca4ccb5593d56853120ae81307940474d67546baad",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "7e1217dd6e2b63aed3674c3f61a3416cb90efce2fc064a7d59418577f0c45c7b",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "fd47675c9e0b194e18cffa32089e8eec37a39b8ee2f9f03ea21d680a50aeef1d",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "7a7ed30ebb01b6c0f3070442a60a1f6aa47d62bf5b33580ad7e886825c0664a8",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "42400e8782cfb7a15cec56e56eea2453035da8e112c5bbceeca3c48242930ea9",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "042b7a34d94766448e43e0b8f624919c1f51835db1988b3a8d1a5f4950aafd3a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "8a17e6963052a155c94ce999473c6b856c2495fc8103571f545dacf497a2e96a",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "9af808101536c427e4123d9bfc6c0f25b9423fc6ff6424f94f735af9c52de88e",
+      "markers": [
+        "-maxdepth"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "87263efd1b837b83968a1aa9fd5cf2a1aca2c705398e0d8f37a9882de061d945",
+      "markers": [
+        "-maxdepth"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "line_sha256": "1ab6fe4221749ea8d8f425d87d9b3e4621724cdf44e4fbcb0bd16af77d60aa41",
+      "markers": [
+        "tools/reviewer-eval/"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s3-changelog-prose",
+      "line_sha256": "d8f39c089338565248956a4e166ea712bbcaaa8aba2ae89768c725a3bbd59a65",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s3-changelog-prose",
+      "line_sha256": "03d9dfe787ee5bd3bf9573f859260f5d8204ba9dd27a215df4f36697323d8833",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s3-changelog-prose",
+      "line_sha256": "5722d72f7e457d12d713d3925fc815960b018a733be6d0784436a4b656dded5d",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "GIT_DIR_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "0327f28bb246f3d2888ba87e845b0b1c76b5d3189f3516164b6f96a14664b7b8",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "e349e2291db883b9c37a75edc5cb467dc008eb83ead09b040ea2468a3d9440d8",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "2ce6688fef26e827b1e34a05c2c54167c3d2da249b65cf0662ba12cec647ed75",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "d64784e9a1291ab591a49c8f98c8e0f6549cd308151abac7e53d8b7d11e0ff58",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "141b5e18be78aa2f0223b44b391bf7173aedce3fa503d99cc058aaf392b17962",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "e24659902a8694339eb1a5a8bbed4a40e66e1038e3e57f00a78840f5229e3826",
+      "markers": [
+        "../",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "8d4065d69fb74a561df05a8b94e42a85dadec4763f5df9f53e313463889c8c62",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "efc00b63315facc3b74a618e766ad828b9f95ed925b271a80f5376deeab1c958",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "def210ae1cf5598c73c173f9e36ca0c7c47614a61fea2cb09b037f01984e705b",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "line_sha256": "49f871649caf85ef51924e332015e2cc32a507b00f4630d952810bfdea4356a0",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s3-wcr-pfloor-comment",
+      "line_sha256": "dafbe8d99412f67a6c477a59592e0e6cf42ef8e600b84f48b8a571d85e9a8d6f",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s3-wcr-pfloor-comment",
+      "line_sha256": "aa92233c29830076e31c0b7ebde5941842caf1df60d98ee2266f59bd76af506a",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-wcr-pfloor-comment",
+      "line_sha256": "5ea73989ab4de8b20a5b96ece1dd3f3774258fae26e613b66c64e361486b7340",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-wcr-pfloor-comment",
+      "line_sha256": "db8b6d80aa2c0bc551784dd6e26cdcedda4e8d551ee8d025961603065ac348dc",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-wcr-pfloor-comment",
+      "line_sha256": "4f28070aac74d6f0b99fcea17bf5c7b3aa30c21c4e7af4fb29108e1d9af30e12",
+      "markers": [
+        "--format",
+        "BARE_SHOW_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "7836692902dba301a40247d66b31e3c312d72ff9b2b0ca9ac00abc0530a9d0a0",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "eeeff794ca0adda9a343224f623413a0d335b7b418f327a62e76f89b671673d2",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "1ae2dbae2eb86ba7d518a9e266511db83a74db523c35408cd47802ed7e5f884e",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "dceea4f87143b944190ebffa8aa9805dd05e0458cccaf849a2ea766b9d4a7081",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "37dc0a2a5655ad4c71efda9829508e42dec41e4b628eb26bd380dada4b807485",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "6629bebe402247aa274bc66fd13c3a445296ef6ea01fe9b6116863dc2cfae82f",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "abd8b7f90f528df21b25f43553f2965037b5a2ae9e833e5d8d3535bd5d363c0a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "53ba9f8a223c9da45e297171a705600b5c752474e8c8aac747fb5b511d0d7061",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "b87b97f3f58c7639d98198238ff5cc7480a480f8063e51f09d58eae1b340fbcb",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "d8f39c089338565248956a4e166ea712bbcaaa8aba2ae89768c725a3bbd59a65",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "592b2389c384127cb42a4f450d6d4e00dbdc2afe31fe670d68304525f1b93480",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "6080ad2bc05695986d0c38cc5fb6ecc234fb1d63dde30f95f61dd34cdd3aa753",
+      "markers": [
+        "DOTDOT_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "94da74061e7457f5974d4618f808b27dfbbe0adf63bafc749d0183dd2e8a4983",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "87ba8f82f0df9dc50ad2746d527f1bd18f2763205e0386fdbf7e9f1c65c2d46b",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "6440ec912da48de02fdc70aa8d80c6b507cab7e4751fe65ea1af7ce09a56f271",
+      "markers": [
+        "DOTDOT_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "line_sha256": "4d35c26a8eeff1dd01478a5cfea91042c8c0db254fa71fa1141fa96aaca37713",
+      "markers": [
+        "BARE_SHOW_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "b56218f1d8b0ced8c7cfe0dd4b9a2c1cb78d05d1ab0d8a0679fa31e4eba32414",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "GIT_LOG_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "58d7e8526e3be21dda0b839599166e9d5c112b3c00fea360ecbfd1524970daa9",
+      "markers": [
+        "worktrees/",
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "79c1815497714bcd34099538077ab77dd980f4d058249ca3d020b280be8c3f88",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "76abaf8046e002e13477aa5d26fce3ffc8d354ea6b25d831fa3d9b8199b1d4be",
+      "markers": [
+        "../"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "6225b2827295db603f599d27e52fcaaa89f414f193e97173084853e2d941c5c6",
+      "markers": [
+        "-maxdepth",
+        "DOTDOT_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "67892af45acb74ab601226c2ea555ed3c56b977c75b0a54ef333bbab135fd2c6",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "2660620f068447ff3cc63b1cedb71ac7490af9aeb0b82f7c74ecd1c64d53fa07",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "6bc260f2d4db2d4b30f183ced18f992947df11664fb95fbbc66445e5c125a4aa",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "c4f57570ed67d0d30edd6943c9eb723aed4554a690e6b1855c79ba61b6919f4b",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "424b81bb48ae34715fbd2190de4f707fd8f7bacf4b7039aa2e889f9791fd69c8",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "608c73db975df018cc183215d906956e367d9cf1444b59c32022a1dd63f7cfc8",
+      "markers": [
+        "tools/reviewer-eval/",
+        "GIT_DIR_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "0f870cef1ff04f13b1f312c8a190037e313c6e11859799e8cc5dc480b042fd2d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "e416bb3dd21e6d689778e669648cd3187c993833934ffaecb2f80c46b20b5cb6",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "5fbedc5eafa6c13844f5d9460ea2a274a48d083e39fef234c77ee44bc00be373",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "ca2152d1bd3c9eb94985894f632471679988b7068f9017a3dc36a1d6ffb09125",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "c1d41feaf15dbc693d677e14c04590cdb3ae317a5db5fc6ad98f092ba43861e4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "df5fd98e095152b1825da7fc060e139844cff0547e279f1f17734b8304bc3cb1",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "5dc56cf4ceb72d57553dc93527fe59694b4a230384d9859c08dd5a5b0f2bfdfc",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "line_sha256": "5b617bc78dcdbc6d73eb75ede8402f0d1c962758ec1740d29de2a3831b850d15",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "5089406c01bb0e7fe1b7ac51f24730b4d6b9cd0d2ca983dcabd2f5784bc34814",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "8df8b1c5dd96cdec9c0f07bb127c5546a70c978b494baf85ccf56adb5928da1e",
+      "markers": [
+        "git log -1",
+        "--format",
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "676334406916b669d087f45ec5dee4ab5ba624a20bfdf904b2a64ed3d54fa42a",
+      "markers": [
+        "--format",
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "6c10a37705236c279b4585833ab746d682e6c6b9e8b5746921b67704846c986b",
+      "markers": [
+        "--format",
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "80615047de1c6fa8e393cdd435b5623e9ba8fa4ce5ac6da2a130499c186a7e56",
+      "markers": [
+        "repo_root",
+        "repo_main_checkout"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "4b83287fd31df4aafcf596f95c27ef9f95ce27bac5d083ce5f62a500894f18eb",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "5307ba778e71cd54f076a91c485d433c42a40854e6ad6ee391f968d76440d671",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "2e9a3e5b426cd959bd512ec51eb71dbf3686fb0d707bf0675a11dd15e4c81ecd",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "9506ed69f821a40d062319b8734317c580246b5f39b754fa515c7d5b5266221d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "50f816e5b1291edd65891f6d962c81ed4e43d884788ff3554c829fd074093796",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "c7cc872f144ed23f7e2d51240e72a3fc80656802cae7e6bd9320d5c03ae23c7f",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "9472b9aaf7e26d69b72096b913ad544c237441add9cad18c70822c6adf945131",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "36741578b1929514faa0c9fa0d29ed8543da9b7f5e8eaaa57bfd6b1afab1b3a4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "11836e28caf7fa36a28262e36cbdfbb7710753201969948e6a043bd0fbcc7b73",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "87570da6caf4a39012d5f9f066f0ba96daf0a230a88090a45c11b34cc062b29b",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "c4fb66fad9ad33db775da7fd701eba3223ef126662e39198cfa56d10185be814",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "38d2af9cf619a4a390a24148475c816766a52753480b7ab7b877fa756cf1df0e",
+      "markers": [
+        "../",
+        "DOTDOT_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "7acbb54ba4126ac60feb8a185dc44035aedcc1efa061b616d77684ef4441f6b4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "a21a728f216c9b23333323e49fc121ec04a655d1b29b8a70abece3019314dd2b",
+      "markers": [
+        "--format",
+        "GIT_LOG_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "60d153cf354ac07b622ff6a890fe79feb169af628ccba8b97999ff7801f0dae0",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "8e42a4113e505530442bfc14fedff43dffc938a38ab22f5cec15f8eeb7240add",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "22c443ea72fe180d244b4e6946c201830ad4f9d736c8fd9631b74c25c52b7044",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "b211ca847fd9831c99fb61e638b672288ad10d8690efc8018a1573b24243f8a1",
+      "markers": [
+        "GIT_DIR_RE"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "5a4070dbe1dc9c815ec2c05d8c47ede2bd290e2452cc9327b688af81c7d32890",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "18289b3ba66ab7ffa6cd2c661d7a91d5a838ed3a79dec593b0511abdf6ab27f7",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "5010eeeab56e6b7fd3877ec9b092d3a96ec4695a58e21653f848606512b830ef",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "4f761d69de7ab171e28a08301b13d326f7a78d065072ace801d0d4ee64aaaacf",
+      "markers": [
+        "BARE_SHOW_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "11dd4c1bfbaa9d384ae4319c64eacdd3f0c1bd71568a08e02de0480a5f80dd10",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "359d324e428a08a5aec075b63d7cffd7cc6976430ddc594b6954bf39a23735ab",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "ad8cde53049369594e3c7a6067ad5fb1dbfa0b31ee73a62d8391d2c94211d51a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "06a9324bd97f26dac81e6425f56b7d12b90155e5cb84c84b489f4c8717aa8669",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "49593fda03c0de05467025b6b442b08b48727812afe28ea09ecd21f84ea4a976",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "ed22fdaa60f758b957a573ecf4452adb273b0863c92cc452858d8ec8d63f538d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "9aebcc61f29b60f8df10a27bdeeff72fbab893e4e980036a6e0ef415c080fd57",
+      "markers": [
+        "GIT_LOG_RE"
+      ],
+      "orientation_only": true,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "349f72b8e42f56fadae2369bc0afab606527b89e263f6d15ce6162ccdb388102",
+      "markers": [
+        "tools/reviewer-eval/"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "d6ff4b750892692524924d1b26497dc4de5c79f6bd5045ccad9c27884c077b52",
+      "markers": [
+        "tools/reviewer-eval/",
+        "DOTDOT_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "6c79d4dddd9f543fb7c1ef8076e9c8b3696ce26264dd45c2523b61027e32be4a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "1264c94b4afcb73f119ae41adf3c5f4d6ca03474534ec7643701b519d6ba548f",
+      "markers": [
+        "git log -1",
+        "--format",
+        "GIT_LOG_RE",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "4cfc00cb190bfc7753c633abc1f7864e27dad721760f7ab4c300f824d7acf4d2",
+      "markers": [
+        "tools/reviewer-eval/",
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "08ca124f69440fb4715e112037c3787a4cb975f0f1053e9ad152d3fdc4dc7ec7",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "2698f1fa19f3730f0c57e4da575c794e950c53b6f128ecb1d53803f216c0452a",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "17f2935bb40a4887a7359fbfec0c8fe56f1ee7a04989fb65cab0e059402c6700",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "fe26e5bd8a9db27ccf715ec7ff384303925443314c1d8978a1332bb19ed999d8",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "d9e3fc7c61dbc51c87b60d34fb68bf00a802a8511a95b95e34ee99d99489b119",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "8f6e5da1d5f9b99c3f3b7deb86e949a0ceac29986bfe3b5e32a91c54ddc578f5",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "890021d7b56ea271d5af51e4433d832871ebbcc0d40812cd0f439884996f6c65",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "4749bf39a172f79e3e341b06860b09defb08d4992fb13431c17cc8f3006fff35",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "cf4068d497125b0b7ca7cebde499484b95392e87623147f0a00ee460b654be8d",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "b8e06ab3c5c962fd6198a2194442995916116897e78dd1cea9e7c3419d48dce5",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "f0a790b4ace6e5db9cb8550538c6152da8b1e0337e271eb8684bd2b9570f7ca4",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "d1a0588cdeb1b80be3f07c2944ea133d676ba667dd61e17bb798d4a1783b6fa6",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "570a33e0676110ea68823f1695f8dc2aec346d4ad970c87479dcc9524d92e35c",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "line_sha256": "ae77c801cc1ca46ef8e746034134ee68279c4495001b257107ed5e745698801f",
+      "markers": [
+        "repo_root"
+      ],
+      "orientation_only": false,
+      "repeat": 1
+    }
+  ],
+  "no_commands": [],
+  "run_ids_sha": "3723da96ab8a3cadad87fbdcb72a88cca83f5b6882504a477238d8e558ac71ae",
+  "unaudited": [
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-coef-dict-collision",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-coef-dict-collision",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s1-cs-dr-plugin-se",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s1-cs-dr-plugin-se",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-acrt-single-dose",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-acrt-single-dose",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-cic-practitioner-screen",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-cic-practitioner-screen",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-cic-practitioner-screen",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-had-cluster-guard",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-had-cluster-guard",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s2-nan-dof-fail-closed",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s2-nan-dof-fail-closed",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s3-changelog-prose",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s3-changelog-prose",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-changelog-prose",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s3-wcr-pfloor-comment",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-wcr-pfloor-comment",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s3-wcr-pfloor-comment",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-cs-unbalanced-nan-outcome",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-lpdid-survey-unreduced-design",
+      "repeat": 1
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "repeat": 0
+    },
+    {
+      "arm": "F",
+      "case": "s4-wcr-saturated-guard-order",
+      "repeat": 1
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "repeat": 0
+    },
+    {
+      "arm": "G",
+      "case": "s4-wcr-saturated-guard-order",
+      "repeat": 1
+    }
+  ],
+  "vacuous": false
+}

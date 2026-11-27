@@ -39,9 +39,30 @@ NO_GO = "NO-GO"
 PARITY = "PARITY"
 UNDETERMINED = "UNDETERMINED"
 
-# The ONE pre-registered gating contrast (control, candidate). A PR-2 swap does
-# not change it; a future campaign registers its own pair in its own PR-1.
-REGISTERED_CONTRASTS = (("B", "E"), ("B", "F"))
+# The pre-registered gating contrasts (control, candidate), one per campaign;
+# the LAST pair is the active campaign. A swap does not change a registered
+# pair; a future campaign appends its own.
+REGISTERED_CONTRASTS = (("B", "E"), ("B", "F"), ("F", "G"))
+
+# Completed campaigns: contrast -> the revision of its FIRST dispatch (the
+# candidate's frozen exposure revision: the ledger's first record and the
+# `refs/campaign/<ctrl>-<cand>/frozen` ref). NOT the revision the verdict was
+# computed on: the rule allows a voided campaign to re-run on a later HEAD in a
+# fresh subdir, and that re-run's ledger still STARTS at the first dispatch.
+# (For the three campaigns below the two revisions are the same commit.)
+#
+# This is TRACKED on purpose. The ledger and the frozen ref live only in the
+# checkout that ran the campaign, so a fresh checkout that re-dispatches a
+# finished contrast creates a brand-new ledger and ref; without this record
+# `verdict` would read that re-run as the contrast's first, pre-registered
+# exposure. A ledger that does not start at the recorded revision is reported
+# non-mechanical (`run_eval._exposure_status`). Add a campaign's entry in the PR
+# that ships its verdict; a contrast still being run has no entry.
+COMPLETED_CAMPAIGNS = {
+    ("B", "E"): "225a4afb73106614c37d34b21100eafcdf34be43",
+    ("B", "F"): "e1674c0e2a138f63300696f2b967268920c7e07b",
+    ("F", "G"): "51e4a85efea6805fdd50517239520578a253fb25",
+}
 
 _VERDICT_VOCAB = ("caught", "partial", "missed")
 _SEVERITY_VOCAB = ("P0", "P1", "P2", "P3")
@@ -614,6 +635,7 @@ __all__ = [
     "attach_audit",
     "gates",
     "REGISTERED_CONTRASTS",
+    "COMPLETED_CAMPAIGNS",
     "GATE_NAMES",
     "RELIABLE",
     "UNSTABLE",
