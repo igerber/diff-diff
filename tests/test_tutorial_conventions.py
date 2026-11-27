@@ -122,20 +122,7 @@ _EM_DASH = "—"
 # Rules each notebook violated when the guard was introduced. See the module
 # docstring: entries are deleted as notebooks are repaired, never added.
 KNOWN_VIOLATIONS: Dict[str, FrozenSet[str]] = {
-    "10_trop": frozenset({EXECUTED, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "11_imputation_did": frozenset(
-        {EXECUTED, JARGON, BLANKET_WARNING_FILTER, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}
-    ),
-    "12_two_stage_did": frozenset(
-        {EXECUTED, JARGON, BLANKET_WARNING_FILTER, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}
-    ),
-    "13_stacked_did": frozenset({EXECUTED, JARGON, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "14_continuous_did": frozenset(
-        {EXECUTED, REMOVED_NAME, JARGON, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}
-    ),
-    "15_efficient_did": frozenset({EXECUTED, JARGON, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "16_survey_did": frozenset({REMOVED_NAME, JARGON, EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
-    "16_wooldridge_etwfe": frozenset({EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "17_brand_awareness_survey": frozenset({EM_DASH, MATPLOTLIB_GUARD, DRIFT_TEST}),
     "18_geo_experiments": frozenset({EM_DASH, DRIFT_TEST}),
     "19_dcdh_marketing_pulse": frozenset({EXECUTED, JARGON}),

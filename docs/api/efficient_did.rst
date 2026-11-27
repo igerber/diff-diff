@@ -163,7 +163,7 @@ Comparison with Other Staggered Estimators
    * - Efficiency
      - Achieves the semiparametric bound on the no-covariate path; the doubly-robust covariate path attains it too (under regularity conditions) via sieve nuisances
      - Not efficient
-     - Efficient under homogeneity
+     - Efficient under spherical errors
    * - Covariates
      - Supported (doubly robust, sieve-based PS ratio + sieve outcome regression)
      - Supported (OR, IPW, DR)

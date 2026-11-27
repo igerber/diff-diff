@@ -224,7 +224,7 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |-- YES: Do NOT use plain TWFE. Use one of:
 |   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
 |   |-- SunAbraham (SA)        -- interaction-weighted, good for event studies
-|   |-- ImputationDiD (BJS)    -- most efficient under homogeneous effects
+|   |-- ImputationDiD (BJS)    -- uses all untreated obs; efficient under spherical errors
 |   |-- TwoStageDiD            -- two-stage with GMM variance
 |   |-- StackedDiD             -- sub-experiment approach
 |   |-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs

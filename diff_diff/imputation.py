@@ -67,10 +67,16 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
     """
     Borusyak-Jaravel-Spiess (2024) imputation DiD estimator.
 
-    This is the efficient estimator for staggered Difference-in-Differences
-    under parallel trends. It produces shorter confidence intervals than
-    Callaway-Sant'Anna (~50% shorter) and Sun-Abraham (2-3.5x shorter)
-    under homogeneous treatment effects.
+    Unbiased for staggered Difference-in-Differences under parallel trends and
+    no anticipation, with unrestricted treatment-effect heterogeneity. It is the
+    efficient linear unbiased estimator under spherical errors (equal variance,
+    uncorrelated across units and periods; Theorem 1): no other linear unbiased
+    estimator of the same target has a smaller variance. The theorem is for the
+    unweighted fit: with ``survey_design=`` weights the untreated model is fitted
+    by weighted least squares and spherical errors alone do not give that
+    guarantee. Reported confidence intervals are often shorter than
+    Callaway-Sant'Anna's or Sun-Abraham's as a result, but their width also
+    depends on the variance estimator.
 
     The estimation procedure:
     1. Run OLS on untreated observations to estimate unit + time fixed effects
