@@ -58,6 +58,7 @@ from diff_diff._reporting_helpers import (
     is_staggered_ddd,
     render_design_reconciliation,
     results_design,
+    stacked_control_cutoff_wording,
 )
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
@@ -746,12 +747,38 @@ class BusinessReport:
                     "df_survey",
                     getattr(getattr(r, "survey_metadata", None), "df_survey", None),
                 )
+                # Whether the fit stored an interval and a p-value, from the
+                # extracted headline (``ci`` / ``p``), and whether its
+                # variance comes from replicate weights.
+                _replicate = (
+                    getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
+                    is not None
+                )
+                _ci_available = (
+                    ci is not None
+                    and len(ci) == 2
+                    and all(b is not None and np.isfinite(b) for b in ci)
+                )
+                _zero_df = isinstance(df_survey, (int, float)) and df_survey == 0
+                # A rank-one replicate design stores ``df_survey = None``.
+                _unrecorded_replicate_df = df_survey is None and _replicate
                 if isinstance(df_survey, (int, float)) and df_survey > 0:
                     inference_label = "finite-df survey"
-                elif isinstance(df_survey, (int, float)) and df_survey == 0:
-                    # Rank-deficient replicate design: the fit deliberately
-                    # left inference undefined. Preserve (NaN bounds remain NaN).
-                    inference_label = "undefined-df (replicate-weight)"
+                elif (_zero_df or _unrecorded_replicate_df) and not _ci_available:
+                    # The fit deliberately left inference undefined: a
+                    # rank-deficient replicate design, or a Taylor-linearized
+                    # design with n_PSU - n_strata = 0. Preserve (NaN bounds
+                    # remain NaN) and name the variance method that applies.
+                    inference_label = (
+                        "undefined-df (replicate-weight)"
+                        if _replicate
+                        else "undefined-df (Taylor-linearized survey)"
+                    )
+                elif _zero_df or _unrecorded_replicate_df:
+                    # The fit stored an interval although its design df is
+                    # zero or unrecorded (an estimator that falls back to a
+                    # reference distribution). Describe what the fit stored.
+                    inference_label = "zero-df survey (fallback reference distribution)"
                 else:
                     # Ordinary analytical fit with a finite but unexposed
                     # ``df`` (``DifferenceInDifferences`` / most staggered
@@ -761,14 +788,29 @@ class BusinessReport:
 
             display_alpha = float(result_alpha)
             alpha_was_honored = False
-            alpha_override_caveat = (
-                f"Requested alpha ({phrasing_alpha:.2f}) was not honored "
-                f"for the confidence interval because this fit uses "
-                f"{inference_label} inference; the displayed CI remains "
-                f"at the fit's native level "
-                f"({_coverage_pct(result_alpha)}%). The "
-                f"significance phrasing still uses the requested alpha."
+            # Interval availability comes from the stored bounds and
+            # significance availability from the stored p-value, separately.
+            _p_stored = p is not None and bool(np.isfinite(p))
+            _significance_clause = (
+                "The significance phrasing still uses the requested alpha."
+                if _p_stored
+                else "The fit stored no p-value, so significance is not assessed."
             )
+            if inference_label.startswith("undefined-df"):
+                alpha_override_caveat = (
+                    f"Requested alpha ({phrasing_alpha:.2f}) cannot produce a "
+                    f"confidence interval: this fit has {inference_label} "
+                    "inference with zero degrees of freedom, so no confidence "
+                    "interval is available at any level. " + _significance_clause
+                )
+            else:
+                alpha_override_caveat = (
+                    f"Requested alpha ({phrasing_alpha:.2f}) was not honored "
+                    f"for the confidence interval because this fit uses "
+                    f"{inference_label} inference; the displayed CI remains "
+                    f"at the fit's native level "
+                    f"({_coverage_pct(result_alpha)}%). " + _significance_clause
+                )
 
         unit = self._context.outcome_unit
         unit_kind = _UNIT_KINDS.get(unit.lower() if unit else "", "unknown")
@@ -1543,6 +1585,12 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         # adoption event. REGISTRY.md §StackedDiD (identification /
         # clean-control rules).
         control_group = getattr(results, "control_group", None)
+        # Same cutoff wording as the target-parameter description: under
+        # anticipation the cutoff and the window both move by `anticipation`.
+        shift, cutoff_caveat = stacked_control_cutoff_wording(results)
+        # The window has always widened under anticipation; only the cutoff
+        # rule depends on which version fitted the result.
+        anticipating = (getattr(results, "anticipation", 0) or 0) > 0
         if control_group == "never_treated":
             control_clause = (
                 "controls are restricted to units that are never treated "
@@ -1551,17 +1599,22 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         elif control_group == "strict":
             control_clause = (
                 "controls for event ``a`` are units satisfying the strict "
-                "rule ``A_s > a + kappa_post + kappa_pre`` (strictly "
+                f"rule ``A_s > a + kappa_post + kappa_pre{shift}`` (strictly "
                 "untreated across the full pre- and post-event window)"
             )
         else:
-            # Default: "not_yet_treated" — A_s > a + kappa_post.
+            # Default: "not_yet_treated" - A_s > a + kappa_post (+ anticipation).
             control_clause = (
                 "controls for event ``a`` are units satisfying ``A_s > a + "
-                "kappa_post`` (not yet treated through the end of the "
+                f"kappa_post{shift}`` (not yet treated through the end of the "
                 "event's post-window, so future-treated units can serve "
                 "as controls for earlier events)"
             )
+        window = (
+            "``[-kappa_pre - anticipation, +kappa_post]``"
+            if anticipating
+            else "``[-kappa_pre, +kappa_post]``"
+        )
         block = {
             "parallel_trends_variant": "stacked_sub_experiment",
             "no_anticipation": True,
@@ -1570,9 +1623,12 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "Hollingsworth 2024): within each stacked sub-experiment "
                 "parallel trends holds between the treated cohort and the "
                 "corresponding clean-control set over the event window "
-                "``[-kappa_pre, +kappa_post]``; "
+                + window
+                + "; "
                 + control_clause
-                + ". Sub-experiments are restricted by IC1 (the event "
+                + "."
+                + cutoff_caveat
+                + " Sub-experiments are restricted by IC1 (the event "
                 "window fits within the available time range) and IC2 "
                 "(at least one clean control exists). The aggregate ATT is "
                 "a weighted sum over sub-experiments, so the common-trends "

@@ -1028,6 +1028,8 @@ StackedDiD(
 
 **Complete event windows:** a unit enters a sub-experiment only if it is observed at every event time of the window `[-kappa_pre - anticipation, kappa_post]` (the regression contrasts event-time cell means, which needs the same units in every cell; Wing et al. 2024, Section 5.1). On a panel with missing observations the units that are not are excluded from that sub-experiment with a `UserWarning` giving the counts, and the estimand is the trimmed aggregate ATT over the units observed across their whole window. An adoption event left without a complete treated unit or clean control (including one whose window contains a period no unit observes) is dropped with a warning and listed in `results.trimmed_groups`; if none is left `fit()` raises `ValueError`. Under `survey_design=` both the unit-level exclusion and a dropped event raise `NotImplementedError`. `time` must be integer-valued (consecutive integers) with at most one row per unit and period, and `first_treat` an integer period: duplicates, a missing or fractional `time` and a fractional `first_treat` raise `ValueError`.
 
+**Clean controls under anticipation:** with `anticipation=k` a later adopter is a clean control for event `a` only if it starts responding after the window closes: `A_s > a + kappa_post + k` (`"not_yet_treated"`), `A_s > a + kappa_post + kappa_pre + k` (`"strict"`). With the default `anticipation=0` these are the paper's rules. Under `survey_design=`, a fit in which that shift leaves a later cohort out of every sub-experiment raises `NotImplementedError` (its PSUs or strata can drop out of the design).
+
 **fit() parameters:**
 
 ```python

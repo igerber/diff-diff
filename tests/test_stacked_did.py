@@ -436,6 +436,386 @@ class TestCleanControl:
 
 
 # =============================================================================
+# TestCleanControlAnticipation
+# =============================================================================
+
+
+def _anticipation_panel(cohorts, lead, n_periods, effect=2.0, n_per_group=30):
+    """Noiseless balanced panel: equal-sized groups adopting at ``cohorts``
+    (``np.inf`` = never treated), with a constant effect that starts ``lead``
+    periods BEFORE the recorded adoption date."""
+    rows = []
+    for unit in range(n_per_group * len(cohorts)):
+        g = cohorts[unit % len(cohorts)]
+        for t in range(n_periods):
+            responding = np.isfinite(g) and t >= g - lead
+            rows.append((unit, t, g, 0.5 * t + (unit % 7) + (effect if responding else 0.0)))
+    return pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome"])
+
+
+def _control_cohorts(results):
+    stacked = results.stacked_data
+    return {
+        float(a): sorted(float(g) for g in sub.loc[sub["_D_sa"] == 0, "first_treat"].unique())
+        for a, sub in stacked.groupby("_sub_exp")
+    }
+
+
+_ANT_FIT = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+class TestCleanControlAnticipation:
+    """A later adopter responds from ``A_s - anticipation``, so it is a clean
+    control for event ``a`` only if ``A_s - anticipation > a + kappa_post``."""
+
+    def test_anticipating_later_cohort_is_not_a_control(self):
+        """Cohort 6 responds from period 5, inside cohort 3's window [0, 5].
+        Using it as a control biased event time 2 to 1.5 and the overall ATT
+        to 1.875 where the truth is 2 at every included horizon."""
+        data = _anticipation_panel([3, 6, np.inf], lead=1, n_periods=9)
+        results = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1).fit(data, **_ANT_FIT)
+        assert _control_cohorts(results) == {3.0: [np.inf], 6.0: [np.inf]}
+        es = results.aggregate("event_study").to_dataframe().set_index("event_time")
+        assert es.loc[2, "att"] == pytest.approx(2.0, abs=1e-10)
+        # anticipation periods count as post-treatment: h in {-1, 0, 1, 2}
+        np.testing.assert_allclose(es.loc[[-1, 0, 1, 2], "att"].to_numpy(), 2.0, atol=1e-10)
+        assert es.loc[-3, "att"] == pytest.approx(0.0, abs=1e-10)
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+
+    def test_later_cohort_far_enough_away_stays_a_control(self):
+        """Cohort 7 responds from period 6, after cohort 3's window closes."""
+        data = _anticipation_panel([3, 7, np.inf], lead=1, n_periods=10)
+        results = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1).fit(data, **_ANT_FIT)
+        assert _control_cohorts(results) == {3.0: [7.0, np.inf], 7.0: [np.inf]}
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+
+    def test_no_anticipation_keeps_the_paper_rule(self):
+        """``anticipation=0``: A_s > a + kappa_post, so cohort 6 is a control
+        for cohort 3 (Wing et al. 2024, Appendix A)."""
+        data = _anticipation_panel([3, 6, np.inf], lead=0, n_periods=9)
+        results = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **_ANT_FIT)
+        assert _control_cohorts(results) == {3.0: [6.0, np.inf], 6.0: [np.inf]}
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+
+    def test_strict_adds_its_separation_on_top(self):
+        """``strict`` with anticipation longer than ``kappa_pre``: cohort 8
+        passes A_s > a + kappa_post + kappa_pre = 7 but responds from period 6,
+        inside cohort 4's window [1, 6]."""
+        data = _anticipation_panel([4, 8, np.inf], lead=2, n_periods=12)
+        results = StackedDiD(kappa_pre=1, kappa_post=2, anticipation=2, control_group="strict").fit(
+            data, **_ANT_FIT
+        )
+        assert _control_cohorts(results) == {4.0: [np.inf], 8.0: [np.inf]}
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+
+    def test_inclusion_check_uses_the_same_rule(self):
+        """IC2 and the stack builder agree. With no never-treated units, cohort
+        3's only candidate control is the later cohort: at 7 it qualifies and
+        the last cohort is trimmed; at 6 nothing qualifies and the fit raises."""
+        kept = _anticipation_panel([3, 7], lead=1, n_periods=10)
+        with pytest.warns(UserWarning, match="Trimmed 1 adoption event"):
+            results = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1).fit(kept, **_ANT_FIT)
+        assert [float(g) for g in results.groups] == [3.0]
+        assert [float(g) for g in results.trimmed_groups] == [7.0]
+        assert _control_cohorts(results) == {3.0: [7.0]}
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+
+        none_left = _anticipation_panel([3, 6], lead=1, n_periods=9)
+        with pytest.raises(ValueError, match="adoption events were trimmed"):
+            StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1).fit(none_left, **_ANT_FIT)
+
+
+class TestCleanControlAnticipationSurvey:
+    """Under ``survey_design=`` the design is re-resolved on the stacked rows.
+    If the anticipation term takes a later cohort out of every sub-experiment,
+    its PSUs and strata would leave the variance, so the fit is refused."""
+
+    @staticmethod
+    def _census(lead):
+        """Stratified census: 3 strata x cohorts (3, 8, never) x 2 single-unit
+        PSUs, FPC = 6 per stratum. Cohort 3's effects alternate 1.5 / 2.5 within
+        a stratum and start ``lead`` periods before adoption."""
+        rows, unit = [], 0
+        for stratum in range(3):
+            for g in (3, 8, np.inf):
+                for k in range(2):
+                    effect = 1.5 if k == 0 else 2.5
+                    for t in range(9):
+                        responding = g == 3 and t >= g - lead
+                        y = 0.5 * t + unit % 5 + (effect if responding else 0.0)
+                        rows.append((unit, t, g, y, stratum, unit, 1.0, 6))
+                    unit += 1
+        return pd.DataFrame(
+            rows,
+            columns=["unit", "period", "first_treat", "outcome", "stratum", "psu", "w", "N"],
+        )
+
+    @staticmethod
+    def _design():
+        from diff_diff import SurveyDesign
+
+        return SurveyDesign(weights="w", strata="stratum", psu="psu", fpc="N")
+
+    def test_refused_when_the_cutoff_removes_a_cohort_from_the_stack(self):
+        """strict, kappa 2/2, anticipation=1: cohort 8 is trimmed as an event
+        (its window ends at 10) and the adjusted cutoff (> 8) also drops it as
+        a control for cohort 3, so its six PSUs would leave the design."""
+        data = self._census(lead=1)
+        est = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1, control_group="strict")
+        with pytest.raises(NotImplementedError, match=r"cohort 8: 6"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est.fit(data, survey_design=self._design(), **_ANT_FIT)
+        # the unweighted fit proceeds and excludes cohort 8 from the controls
+        with pytest.warns(UserWarning, match="Trimmed 1 adoption event"):
+            plain = est.fit(data, **_ANT_FIT)
+        assert _control_cohorts(plain) == {3.0: [np.inf]}
+        assert plain.att == pytest.approx(2.0, abs=1e-10)
+
+    def test_supported_when_no_unit_is_lost(self):
+        """anticipation=0: cohort 8 passes the strict cutoff (> 7) and stays a
+        control, so every PSU is in the stack. A census has zero design
+        variance: 18 PSUs, 15 survey df, SE 0 and NaN inference."""
+        data = self._census(lead=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = StackedDiD(kappa_pre=2, kappa_post=2, control_group="strict").fit(
+                data, survey_design=self._design(), **_ANT_FIT
+            )
+        assert _control_cohorts(results) == {3.0: [8.0, np.inf]}
+        assert results.survey_metadata.n_psu == 18
+        assert results.survey_metadata.df_survey == 15
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+        assert results.se == pytest.approx(0.0, abs=1e-12)
+        assert np.isnan(results.t_stat) and np.isnan(results.p_value)
+        assert all(np.isnan(b) for b in results.conf_int)
+
+    def test_not_refused_when_the_cutoff_changes_nothing(self):
+        """anticipation=1 with a later cohort far enough away (and with
+        never-treated controls): no unit leaves the stack, so the survey fit
+        runs."""
+        rows, unit = [], 0
+        for stratum in range(3):
+            for g in (3, np.inf):
+                for k in range(3):
+                    for t in range(9):
+                        y = 0.5 * t + unit % 5 + (2.0 if (g == 3 and t >= 2) else 0.0) + 0.1 * k * t
+                        rows.append((unit, t, g, y, stratum, unit, 1.0, 12))
+                    unit += 1
+        data = pd.DataFrame(
+            rows,
+            columns=["unit", "period", "first_treat", "outcome", "stratum", "psu", "w", "N"],
+        )
+        est = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1)
+        assert (
+            est._units_lost_to_anticipation_cutoff(
+                [3], 0, 8, pd.DataFrame({"_first_treat": [3.0, np.inf]})
+            )
+            == {}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = est.fit(data, survey_design=self._design(), **_ANT_FIT)
+        assert results.survey_metadata.n_psu == 18
+        assert np.isfinite(results.att)
+
+    @staticmethod
+    def _sampled_panel():
+        """3 strata x cohorts (3, 6, never) x 2 units, FPC = 8 per stratum (a
+        sample of 6 from 8). Effects of 1.5 / 2.5 within each cohort and
+        stratum, starting one period before adoption."""
+        rows, unit = [], 0
+        for stratum in range(3):
+            for g in (3, 6, np.inf):
+                for k in range(2):
+                    effect = 1.5 if k == 0 else 2.5
+                    for t in range(9):
+                        responding = np.isfinite(g) and t >= g - 1
+                        y = 0.5 * t + unit % 5 + (effect if responding else 0.0)
+                        rows.append((unit, t, g, y, stratum, unit, 1.0, 8))
+                    unit += 1
+        return pd.DataFrame(
+            rows,
+            columns=["unit", "period", "first_treat", "outcome", "stratum", "unit_id", "w", "N"],
+        )
+
+    @pytest.mark.parametrize(
+        "cluster, psu, warning",
+        [
+            ("unit", None, None),
+            ("unit_subexp", None, "uses each unit as its own PSU"),
+            ("unit_subexp", "unit_id", "Both survey_design.psu and cluster"),
+        ],
+    )
+    def test_implicit_survey_psu_is_the_original_unit(self, cluster, psu, warning):
+        """With no ``psu`` column each ORIGINAL unit is the PSU, for either
+        ``cluster``. (unit, sub-experiment) pairs are not sampling units: here
+        they number 8 per stratum, which read against FPC = 8 as a census and
+        gave SE 0 with 21 df. Cohort 6 leaves cohort 3's control pool under
+        the anticipation cutoff but stays in the stack as a treated cohort, so
+        nothing is refused."""
+        from diff_diff import SurveyDesign
+
+        data = self._sampled_panel()
+        design = SurveyDesign(
+            weights="w", strata="stratum", fpc="N", **({"psu": psu} if psu else {})
+        )
+        est = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1, cluster=cluster)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = est.fit(data, survey_design=design, **_ANT_FIT)
+        messages = [str(w.message) for w in caught]
+        if warning is None:
+            assert not any("PSU" in m for m in messages)
+        else:
+            assert any(warning in m for m in messages)
+        assert _control_cohorts(results) == {3.0: [np.inf], 6.0: [np.inf]}
+        assert results.stacked_data["unit"].nunique() == 18
+        assert results.survey_metadata.n_psu == 18
+        assert results.survey_metadata.df_survey == 15
+        assert results.att == pytest.approx(2.0, abs=1e-10)
+        assert results.se == pytest.approx(0.07906, abs=1e-5)
+        assert np.isfinite(results.t_stat) and np.isfinite(results.p_value)
+
+    @staticmethod
+    def _small_panel(strata, fpc=None):
+        """Six units (two treated at 3, four never treated), nine periods."""
+        cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+        rows = []
+        for unit, g in enumerate(cohorts):
+            for t in range(9):
+                effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+                y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+                rows.append((unit, t, g, y, strata[unit], 1.0, fpc[unit] if fpc else 0.0, unit))
+        return pd.DataFrame(
+            rows,
+            columns=["unit", "period", "first_treat", "outcome", "stratum", "w", "N", "unit_id"],
+        )
+
+    @pytest.mark.parametrize("cluster", ["unit", "unit_subexp"])
+    def test_zero_survey_df_gives_nan_inference(self, cluster):
+        """One PSU per stratum under lonely_psu="adjust": df_survey = 0, the
+        variance is not identified. The df is no longer clamped to 1 (which
+        reported t(1) p-values); estimates and SEs stay, inference is NaN."""
+        from diff_diff import SurveyDesign
+
+        data = self._small_panel(strata=list(range(6)))
+        design = SurveyDesign(weights="w", strata="stratum", lonely_psu="adjust")
+        est = StackedDiD(kappa_pre=2, kappa_post=2, cluster=cluster)
+        with pytest.warns(UserWarning, match="zero degrees of freedom"):
+            results = est.fit(data, survey_design=design, **_ANT_FIT)
+        assert results.survey_metadata.df_survey == 0
+        assert np.isfinite(results.att) and np.isfinite(results.se) and results.se > 0
+        # the SE is identified as a number but not for inference
+        assert np.isnan(results.t_stat) and np.isnan(results.p_value)
+        assert all(np.isnan(bound) for bound in results.conf_int)
+        es = results.aggregate("event_study").to_dataframe()
+        rows = es[~es["is_reference"]]
+        assert np.isfinite(rows["se"]).all()
+        assert rows[["t_stat", "p_value", "conf_int_lower", "conf_int_upper"]].isna().all().all()
+
+    @pytest.mark.parametrize("psu", [None, "unit_id"])
+    def test_implicit_unit_psus_are_validated_like_explicit_ones(self, psu):
+        """A stratum holding one unit warns that it is excluded from variance
+        estimation, and an FPC below a stratum's PSU count raises, whether the
+        unit PSU is implicit or named. Both fits give the same SE."""
+        from diff_diff import SurveyDesign
+
+        strata = [0, 1, 0, 1, 0, 2]  # the last unit is alone in its stratum
+        extra = {"psu": psu} if psu else {}
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        with pytest.warns(UserWarning, match="Stratum 2 has only 1 PSU"):
+            results = est.fit(
+                self._small_panel(strata),
+                survey_design=SurveyDesign(weights="w", strata="stratum", **extra),
+                **_ANT_FIT,
+            )
+        assert results.se == pytest.approx(0.3307, abs=1e-4)
+        assert results.survey_metadata.df_survey == 3
+        with pytest.raises(ValueError, match=r"FPC \(0\.5\) is less than the number of PSUs"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est.fit(
+                    self._small_panel(strata, fpc=[10, 10, 10, 10, 10, 0.5]),
+                    survey_design=SurveyDesign(weights="w", strata="stratum", fpc="N", **extra),
+                    **_ANT_FIT,
+                )
+
+    @pytest.mark.parametrize("psu", [None, "psu"])
+    def test_fpc_is_checked_against_the_full_sample_not_the_stack(self, psu):
+        """Six sampled units per stratum, FPC = 4. Cohort 8 is trimmed (its
+        window does not fit) and, with never-treated controls, is no one's
+        control, so only four units per stratum reach the stack. The implicit
+        unit PSUs must be validated on the supplied sample, as an explicit
+        ``psu`` is: the fit raises instead of passing the check on the trimmed
+        stack and reporting SE 0."""
+        from diff_diff import SurveyDesign
+
+        data = self._census(lead=0)
+        data["N"] = 4
+        design = SurveyDesign(
+            weights="w", strata="stratum", fpc="N", **({"psu": psu} if psu else {})
+        )
+        est = StackedDiD(kappa_pre=2, kappa_post=2, control_group="never_treated")
+        with pytest.raises(ValueError, match=r"FPC \(4\.0\) is less than the number of PSUs \(6\)"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est.fit(data, survey_design=design, **_ANT_FIT)
+
+    def test_lost_units_helper(self):
+        info = pd.DataFrame({"_first_treat": [3.0] * 2 + [6.0] * 3 + [8.0] * 4 + [np.inf] * 2})
+        nyt = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1)
+        # cohort 6 was a control for cohort 3 (6 > 5) and is not one now
+        # (6 > 6 fails); it is still in the stack as a treated cohort
+        # (window [3, 8] fits in [0, 10]), so nothing is lost
+        assert nyt._units_lost_to_anticipation_cutoff([3, 6, 8], 0, 10, info) == {}
+        # with periods 0..8 cohort 6's own window [3, 8] still fits, cohort 8's
+        # does not: cohort 8 stays a control for cohort 3 (8 > 6), nothing lost
+        assert nyt._units_lost_to_anticipation_cutoff([3, 6, 8], 0, 8, info) == {}
+        strict = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1, control_group="strict")
+        # strict: cohort 8 passed 8 > 7 and fails 8 > 8; its own window does
+        # not fit in [0, 8], so its four units are in no sub-experiment
+        assert strict._units_lost_to_anticipation_cutoff([3, 8], 0, 8, info) == {8.0: 4}
+        never = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1, control_group="never_treated")
+        assert never._units_lost_to_anticipation_cutoff([3, 6, 8], 0, 8, info) == {}
+        assert (
+            StackedDiD(kappa_pre=2, kappa_post=2)._units_lost_to_anticipation_cutoff(
+                [3, 6, 8], 0, 8, info
+            )
+            == {}
+        )
+
+
+class TestEmptyPanel:
+    """A zero-row panel raises a descriptive ``ValueError`` before anything
+    else, with or without a survey design."""
+
+    @staticmethod
+    def _empty():
+        return pd.DataFrame(
+            {
+                "unit": pd.Series(dtype=int),
+                "period": pd.Series(dtype=int),
+                "first_treat": pd.Series(dtype=float),
+                "outcome": pd.Series(dtype=float),
+                "N": pd.Series(dtype=float),
+                "w": pd.Series(dtype=float),
+            }
+        )
+
+    @pytest.mark.parametrize(
+        "design_kwargs",
+        [None, {"fpc": "N"}, {"weights": "w"}, {"weights": "w", "fpc": "N", "psu": "unit"}],
+    )
+    def test_empty_panel_raises_value_error(self, design_kwargs):
+        from diff_diff import SurveyDesign
+
+        design = SurveyDesign(**design_kwargs) if design_kwargs else None
+        with pytest.raises(ValueError, match=r"empty panel \(0 rows\)"):
+            StackedDiD().fit(self._empty(), survey_design=design, **_ANT_FIT)
+
+
+# =============================================================================
 # TestClustering
 # =============================================================================
 

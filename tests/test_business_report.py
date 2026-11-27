@@ -36,6 +36,8 @@ from diff_diff import (
     CallawaySantAnna,
     DiagnosticReport,
     DifferenceInDifferences,
+    StackedDiD,
+    StackedDiDResults,
     SyntheticControl,
     SyntheticDiD,
     TwoWayFixedEffects,
@@ -43,6 +45,7 @@ from diff_diff import (
     generate_factor_data,
     generate_staggered_data,
 )
+from diff_diff._reporting_helpers import describe_target_parameter
 from diff_diff.business_report import BUSINESS_REPORT_SCHEMA_VERSION
 
 warnings.filterwarnings("ignore")
@@ -1845,6 +1848,167 @@ class TestStackedDiDAssumptionBlock:
         # key only (the ``clean_control`` dual key left at 4.0, row M-095).
         assert a["control_group"] == "not_yet_treated"
         assert "clean_control" not in a
+
+    @pytest.mark.parametrize(
+        "control_group, cutoff",
+        [
+            ("not_yet_treated", "``A_s > a + kappa_post + anticipation``"),
+            ("strict", "``A_s > a + kappa_post + kappa_pre + anticipation``"),
+        ],
+    )
+    def test_anticipation_moves_the_cutoff_and_the_window(self, control_group, cutoff):
+        """A result that records the anticipation-adjusted cutoff: the
+        assumption block and the target-parameter description both state it,
+        with the widened window and no refit caveat."""
+        stub = self._stub(control_group)
+        stub.anticipation = 1
+        stub.control_cutoff_includes_anticipation = True
+        desc = BusinessReport(stub, auto_diagnostics=False).to_dict()["assumption"]["description"]
+        assert cutoff in desc
+        assert "``[-kappa_pre - anticipation, +kappa_post]``" in desc
+        assert "unverified" not in desc
+        # the shared anticipation post-processing replaces the strict clause
+        assert "Also assumes no anticipation." not in desc
+        assert "Anticipation is allowed" in desc
+        assert cutoff in describe_target_parameter(stub)["definition"]
+
+    def test_no_anticipation_keeps_the_paper_wording(self):
+        stub = self._stub("not_yet_treated")
+        stub.anticipation = 0
+        desc = BusinessReport(stub, auto_diagnostics=False).to_dict()["assumption"]["description"]
+        assert "``[-kappa_pre, +kappa_post]``" in desc
+        assert "+ anticipation" not in desc and "unverified" not in desc
+        assert "Also assumes no anticipation." in desc
+
+    def test_never_treated_with_anticipation_has_no_cutoff_caveat(self):
+        stub = self._stub("never_treated")
+        stub.anticipation = 1
+        desc = BusinessReport(stub, auto_diagnostics=False).to_dict()["assumption"]["description"]
+        assert "``A_s = infinity``" in desc and "unverified" not in desc
+        assert "``[-kappa_pre - anticipation, +kappa_post]``" in desc
+
+    def test_reports_distinguish_a_current_fit_from_one_saved_before_the_cutoff_fix(self):
+        """Two real results on the same panel. The current fit excludes the
+        anticipating later cohort and its reports state the adjusted cutoff.
+        A result as an earlier version saved it (the old cutoff, no record of
+        the rule) keeps that cohort as a control, and its reports must not
+        claim the adjusted cutoff."""
+        import pickle
+
+        rows = []
+        for unit in range(90):
+            g = [3, 6, np.inf][unit % 3]
+            for t in range(9):
+                responding = np.isfinite(g) and t >= g - 1
+                rows.append((unit, t, g, 0.5 * t + (unit % 7) + (2.0 if responding else 0.0)))
+        panel = pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome"])
+        keys = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+        def control_cohorts(res):
+            stacked = res.stacked_data
+            sub = stacked[(stacked["_sub_exp"] == 3) & (stacked["_D_sa"] == 0)]
+            return sorted(float(g) for g in sub["first_treat"].unique())
+
+        current = StackedDiD(kappa_pre=2, kappa_post=2, anticipation=1).fit(panel, **keys)
+        assert current.control_cutoff_includes_anticipation is True
+        assert pickle.loads(pickle.dumps(current)).control_cutoff_includes_anticipation is True
+        assert control_cohorts(current) == [np.inf]
+        assert current.att == pytest.approx(2.0, abs=1e-10)
+
+        class _OldCutoff(StackedDiD):
+            def _clean_control_mask(self, a, ft):
+                return ft > a + self.kappa_post
+
+        legacy_fit = _OldCutoff(kappa_pre=2, kappa_post=2, anticipation=1).fit(panel, **keys)
+        state = dict(legacy_fit.__dict__)
+        del state["control_cutoff_includes_anticipation"]  # earlier versions had no such field
+        legacy = StackedDiDResults.__new__(StackedDiDResults)
+        legacy.__setstate__(state)
+        legacy = pickle.loads(pickle.dumps(legacy))
+        assert legacy.control_cutoff_includes_anticipation is None
+        assert control_cohorts(legacy) == [6.0, np.inf]
+        assert legacy.att == pytest.approx(1.875, abs=1e-10)
+
+        adjusted = "``A_s > a + kappa_post + anticipation``"
+        for result, is_current in ((current, True), (legacy, False)):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                block = BusinessReport(result, auto_diagnostics=False).to_dict()
+                target = DiagnosticReport(result).to_dict()["target_parameter"]["definition"]
+            for text in (block["assumption"]["description"], target):
+                assert (adjusted in text) is is_current
+                assert ("unverified" in text) is (not is_current)
+                assert ("should be rerun" in text) is (not is_current)
+
+    def test_zero_survey_df_fit_is_not_called_replicate_weight(self):
+        """A Taylor-linearized StackedDiD fit with zero survey degrees of
+        freedom has NaN inference. The alpha caveat must name the variance
+        method correctly and say that no interval is available, not that the
+        displayed interval keeps its native coverage."""
+        from diff_diff import SurveyDesign
+
+        cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+        rows = []
+        for unit, g in enumerate(cohorts):
+            for t in range(9):
+                effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+                y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+                rows.append((unit, t, g, y, unit, 1.0))
+        panel = pd.DataFrame(
+            rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w"]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                panel,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(weights="w", strata="stratum", lonely_psu="adjust"),
+            )
+            report = json.dumps(BusinessReport(fit, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert fit.survey_metadata.df_survey == 0 and np.isnan(fit.conf_int[0])
+        assert "undefined-df (Taylor-linearized survey)" in report
+        assert "replicate-weight" not in report
+        assert "no confidence interval is available at any level" in report
+        assert "the displayed CI remains" not in report
+
+    def test_zero_df_caveat_follows_the_stored_inference(self):
+        """SunAbraham still reports inference at zero survey df (a t(1)
+        fallback, tracked in TODO.md). The caveat must describe that stored
+        interval, not claim that none is available."""
+        from diff_diff import SunAbraham, SurveyDesign
+
+        cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+        rows = []
+        for unit, g in enumerate(cohorts):
+            for t in range(9):
+                effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+                y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+                rows.append((unit, t, g, y, unit, 1.0, unit))
+        panel = pd.DataFrame(
+            rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w", "psu"]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = SunAbraham().fit(
+                panel,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(
+                    weights="w", strata="stratum", psu="psu", lonely_psu="adjust"
+                ),
+            )
+            report = json.dumps(BusinessReport(fit, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert fit.survey_metadata.df_survey == 0
+        if not all(np.isfinite(b) for b in fit.conf_int):
+            pytest.skip("SunAbraham no longer reports inference at zero survey df")
+        assert "zero-df survey (fallback reference distribution)" in report
+        assert "the displayed CI remains" in report
+        assert "no confidence interval is available at any level" not in report
 
     def test_strict_names_strict_rule(self):
         desc = BusinessReport(self._stub("strict"), auto_diagnostics=False).to_dict()["assumption"][
@@ -3982,6 +4146,119 @@ class TestAnalyticalFiniteDfAlphaOverride:
         assert h["ci_upper"] == pytest.approx(native_hi)
         topics = {c.get("topic") for c in br.caveats()}
         assert "alpha_override_preserved" in topics
+
+    @pytest.mark.parametrize("df_survey", [0, None])
+    def test_replicate_design_without_an_interval_says_none_is_available(self, df_survey):
+        """A replicate design whose df is undefined stores ``df_survey = 0``
+        (rank-deficient) or ``None`` (rank one). With NaN bounds the alpha
+        caveat must say that no interval is available, not that the displayed
+        one keeps its native coverage."""
+        from types import SimpleNamespace
+
+        class _ReplicateStub:
+            pass
+
+        stub = _ReplicateStub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = float("nan")
+        stub.conf_int = (float("nan"), float("nan"))
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="replicate",
+            replicate_method="JK1",
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=None,
+            n_psu=None,
+            df_survey=df_survey,
+        )
+        report = json.dumps(BusinessReport(stub, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert "undefined-df (replicate-weight)" in report
+        assert "no confidence interval is available at any level" in report
+        assert "the displayed CI remains" not in report
+
+    @pytest.mark.parametrize("df_survey", [0, None])
+    def test_replicate_design_with_an_interval_but_no_p_value(self, df_survey):
+        """Interval availability follows the stored bounds and significance
+        availability the stored p-value. A fit that stored finite bounds and a
+        NaN p-value must not be told that no interval is available."""
+        from types import SimpleNamespace
+
+        class _ReplicateStub:
+            pass
+
+        stub = _ReplicateStub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = float("nan")
+        stub.conf_int = (0.4, 1.6)
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="replicate",
+            replicate_method="JK1",
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=None,
+            n_psu=None,
+            df_survey=df_survey,
+        )
+        br = BusinessReport(stub, alpha=0.10, auto_diagnostics=False)
+        headline = br.to_dict()["headline"]
+        assert headline["ci_lower"] == pytest.approx(0.4)
+        assert headline["ci_upper"] == pytest.approx(1.6)
+        report = json.dumps(br.to_dict())
+        assert "no confidence interval is available" not in report
+        assert "the displayed CI remains" in report
+        assert "The fit stored no p-value, so significance is not assessed." in report
+
+    def test_no_interval_but_a_stored_p_value_keeps_significance(self):
+        """Zero survey df, NaN bounds, a stored p = 0.07, requested alpha 0.10:
+        the caveat says no interval can be produced and that significance
+        still uses the requested alpha - it does not say alpha "does not
+        apply" and then use it."""
+        from types import SimpleNamespace
+
+        class _Stub:
+            pass
+
+        stub = _Stub()
+        stub.att = 1.0
+        stub.se = 0.3
+        stub.p_value = 0.07
+        stub.conf_int = (float("nan"), float("nan"))
+        stub.alpha = 0.05
+        stub.n_obs = 100
+        stub.n_treated = 40
+        stub.n_control = 60
+        stub.inference_method = "analytical"
+        stub.survey_metadata = SimpleNamespace(
+            weight_type="pweight",
+            replicate_method=None,
+            effective_n=80.0,
+            design_effect=1.25,
+            sum_weights=100.0,
+            n_strata=6,
+            n_psu=6,
+            df_survey=0,
+        )
+        br = BusinessReport(stub, alpha=0.10, auto_diagnostics=False)
+        report = json.dumps(br.to_dict())
+        assert "cannot produce a confidence interval" in report
+        assert "no confidence interval is available at any level" in report
+        assert "The significance phrasing still uses the requested alpha." in report
+        assert "does not apply" not in report
+        assert br.to_dict()["headline"]["is_significant"] is True
 
     def test_undefined_df_survey_stub_does_not_invent_finite_ci(self):
         """When the fit's native inference returned NaN (rank-deficient

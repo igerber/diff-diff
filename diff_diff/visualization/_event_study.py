@@ -339,6 +339,13 @@ def plot_event_study(
             ci_lower = ci_lower_override[period]
             assert ci_upper_override is not None
             ci_upper = ci_upper_override[period]
+        elif period in undefined_inference:
+            # The producer's stored inference for this row is undefined (a
+            # finite SE with a NaN stored interval). No channel may rebuild
+            # an interval for it from the SE - including the band channel
+            # when the result carries no band.
+            ci_lower = np.nan
+            ci_upper = np.nan
         elif np.isfinite(std_err) and (
             std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
         ):
@@ -693,6 +700,35 @@ def _render_event_study_plotly(
     return fig
 
 
+def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:
+    """A row of a raw ``event_study_effects``-style dict whose STORED
+    inference is undefined: a finite, positive SE with a stored interval that
+    is not fully finite - either endpoint missing or non-finite (the producer
+    failed inference closed, e.g. a survey design with zero degrees of
+    freedom). Reference rows are constraints, not estimates, and never
+    qualify, and a row that stores no interval at all keeps the legacy
+    recomputation. The raw routes recompute intervals from the SE, so such
+    rows are handed back on the pointwise channel as NaN."""
+    if entry.get("is_reference", False):
+        return False
+    stored_ci = entry.get("conf_int")
+    stored_se = entry.get("se")
+    if stored_ci is None or stored_se is None:
+        return False
+    try:
+        lower, upper = stored_ci
+    except (TypeError, ValueError):
+        return False
+
+    def _finite(value: Any) -> bool:
+        try:
+            return value is not None and bool(np.isfinite(value))
+        except TypeError:
+            return False
+
+    return bool(_finite(stored_se) and stored_se > 0 and not (_finite(lower) and _finite(upper)))
+
+
 def _extract_plot_data(
     results: PlottableResults,
     periods: Optional[List[Any]],
@@ -939,6 +975,8 @@ def _extract_plot_data(
         ci_lower_override = {}
         ci_upper_override = {}
         has_cband = False
+        # Rows whose stored inference is undefined (see the generic branch).
+        dcdh_undefined: Dict[Any, float] = {}
 
         # Merge placebo horizons (negative keys)
         if results.placebo_event_study:
@@ -949,6 +987,8 @@ def _extract_plot_data(
                     ci_lower_override[h] = entry["cband_conf_int"][0]
                     ci_upper_override[h] = entry["cband_conf_int"][1]
                     has_cband = True
+                if _stored_inference_undefined(entry):
+                    dcdh_undefined[h] = np.nan
 
         # Reference period at 0
         effects[0] = 0.0
@@ -963,6 +1003,8 @@ def _extract_plot_data(
                     ci_lower_override[h] = entry["cband_conf_int"][0]
                     ci_upper_override[h] = entry["cband_conf_int"][1]
                     has_cband = True
+                if _stored_inference_undefined(entry):
+                    dcdh_undefined[h] = np.nan
 
         if periods is None:
             periods = sorted(effects.keys())
@@ -981,8 +1023,8 @@ def _extract_plot_data(
             True,  # inferred
             ci_lower_override if has_cband else None,
             ci_upper_override if has_cband else None,
-            None,
-            None,
+            dict(dcdh_undefined) or None,
+            dict(dcdh_undefined) or None,
             None,
         )
 
@@ -994,6 +1036,14 @@ def _extract_plot_data(
         ci_upper_override = {}
         has_cband = False
 
+        # Rows whose STORED inference is undefined: this route recomputes
+        # intervals from the SE, so they are handed back on the pointwise
+        # channel as NaN and the plot draws their point estimates with no
+        # interval, with or without an explicit reference period (REGISTRY
+        # Event Study Plotting).
+        undefined_lower: Dict[Any, float] = {}
+        undefined_upper: Dict[Any, float] = {}
+
         for rel_period, effect_data in results.event_study_effects.items():
             effects[rel_period] = effect_data["effect"]
             se[rel_period] = effect_data["se"]
@@ -1003,6 +1053,9 @@ def _extract_plot_data(
                 ci_lower_override[rel_period] = cband_ci[0]
                 ci_upper_override[rel_period] = cband_ci[1]
                 has_cband = True
+            if _stored_inference_undefined(effect_data):
+                undefined_lower[rel_period] = np.nan
+                undefined_upper[rel_period] = np.nan
 
         if periods is None:
             periods = sorted(effects.keys())
@@ -1051,8 +1104,8 @@ def _extract_plot_data(
             reference_inferred,
             ci_lower_override if has_cband else None,
             ci_upper_override if has_cband else None,
-            None,
-            None,
+            undefined_lower or None,
+            undefined_upper or None,
             None,
         )
 

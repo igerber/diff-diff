@@ -128,6 +128,13 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         survey/replicate df on survey fits, else the
         ``df_convention``-resolved analytical fallback. None when the
         overall inference used normal theory or failed closed.
+    control_cutoff_includes_anticipation : bool, optional
+        True when later-adopter controls were selected with the
+        anticipation-adjusted cutoff (``A_s > a + kappa_post + anticipation``,
+        plus ``kappa_pre`` under ``"strict"``), which every fit now does.
+        None when the result does not record it: a result saved by diff-diff
+        4.1.0 or earlier, whose cutoff ignored ``anticipation``. Only matters
+        when ``anticipation > 0``.
     """
 
     att: float
@@ -184,6 +191,12 @@ class StackedDiDResults(BaseResults, AggregationMixin):
     # Appended LAST (generated __init__ positional indexes are public API).
     df_convention: Optional[str] = None
     inference_df: Optional[float] = None
+    # Clean-control provenance. True when later-adopter controls were selected
+    # with the anticipation-adjusted cutoff (every fit since that rule landed).
+    # None on a result that does not record it: one saved by diff-diff 4.1.0 or
+    # earlier, whose cutoff ignored ``anticipation``, or one built by hand. The
+    # report descriptions read it to state the rule the fit actually used.
+    control_cutoff_includes_anticipation: Optional[bool] = None
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Migrate 3.x pickles: the ``clean_control`` -> ``control_group``

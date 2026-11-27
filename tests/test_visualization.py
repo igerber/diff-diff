@@ -2,6 +2,8 @@
 Tests for visualization functions.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -879,6 +881,239 @@ def _plotted_intervals(ax):
             if seg.shape == (2, 2) and seg[0, 0] == seg[1, 0]:
                 out[float(seg[0, 0])] = (float(seg[:, 1].min()), float(seg[:, 1].max()))
     return out
+
+
+def _zero_df_stacked_fit(zero_df=True):
+    """StackedDiD survey fit on six units. With one unit per stratum under
+    lonely_psu="adjust" the design has zero degrees of freedom: finite SEs,
+    NaN stored intervals. With three strata of two units inference is defined."""
+    from diff_diff import StackedDiD, SurveyDesign
+
+    cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+    strata = list(range(6)) if zero_df else [0, 1, 2, 0, 1, 2]
+    rows = []
+    for unit, g in enumerate(cohorts):
+        for t in range(9):
+            effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+            y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+            rows.append((unit, t, g, y, strata[unit], 1.0))
+    data = pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w"])
+    design = SurveyDesign(weights="w", strata="stratum", lonely_psu="adjust")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return StackedDiD(kappa_pre=2, kappa_post=2).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            survey_design=design,
+        )
+
+
+class TestPlotEventStudyUndefinedStoredInference:
+    """A results object passed directly has its intervals recomputed from the
+    SE. A row whose STORED interval is NaN while its SE is finite (inference
+    failed closed, e.g. a survey design with zero degrees of freedom) must not
+    get one back."""
+
+    def test_fit_has_finite_se_and_nan_intervals(self):
+        results = _zero_df_stacked_fit()
+        rows = [e for e in results.event_study_effects.values() if not e.get("is_reference")]
+        assert rows and all(np.isfinite(e["se"]) and e["se"] > 0 for e in rows)
+        assert all(np.isnan(e["conf_int"][0]) and np.isnan(e["conf_int"][1]) for e in rows)
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": 0}])
+    def test_no_estimated_row_gets_an_interval(self, kwargs):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit()
+        # Without an explicit reference the auto-inferred reference row keeps
+        # its zero-width constraint bar (REGISTRY Event Study Plotting); no
+        # estimated row may carry an interval on either route.
+        for source in (results, results.aggregate("event_study")):
+            ax = plot_event_study(source, show=False, **kwargs)
+            assert len({p[0] for p in _plotted_points(ax)}) == len(results.event_study_effects)
+            drawn = _plotted_intervals(ax)
+            assert all(lower == upper == 0.0 for lower, upper in drawn.values())
+            assert len(drawn) <= 1
+            plt.close()
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": 0}])
+    def test_plotly_draws_no_band(self, kwargs):
+        pytest.importorskip("plotly")
+
+        def band_heights(fig):
+            return [
+                float(y)
+                for trace in fig.data
+                if getattr(trace, "fill", None) == "toself"
+                for y in trace.y
+                if y is not None and np.isfinite(y)
+            ]
+
+        fig = plot_event_study(_zero_df_stacked_fit(), backend="plotly", show=False, **kwargs)
+        assert all(y == 0.0 for y in band_heights(fig))
+        # positive control: defined inference draws a band on the same route
+        fig = plot_event_study(
+            _zero_df_stacked_fit(zero_df=False), backend="plotly", show=False, **kwargs
+        )
+        assert any(y != 0.0 for y in band_heights(fig))
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    def test_one_undefined_row_among_defined_rows(self, kwargs):
+        """Only the row with undefined inference loses its interval."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        row = results.event_study_effects[1]
+        assert np.isfinite(row["se"]) and np.isfinite(row["conf_int"][0])
+        row.update(t_stat=np.nan, p_value=np.nan, conf_int=(np.nan, np.nan))
+
+        ax = plot_event_study(results, show=False, **kwargs)
+        horizons = sorted(results.event_study_effects)
+        drawn = _plotted_intervals(ax)
+        assert float(horizons.index(1)) not in drawn
+        assert all(float(horizons.index(h)) in drawn for h in horizons if h not in (1, -1))
+        assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
+        plt.close()
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    @pytest.mark.parametrize(
+        "stored", [(float("nan"), 3.1), (0.4, float("nan")), (None, 3.1), (0.4, None)]
+    )
+    def test_a_partly_missing_stored_interval_is_not_rebuilt(self, stored, kwargs):
+        """One finite endpoint is not an interval: the row keeps its marker and
+        gets no bar, as it does through the container."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        results.event_study_effects[1].update(p_value=np.nan, conf_int=stored)
+        horizons = sorted(results.event_study_effects)
+        ax = plot_event_study(results, show=False, **kwargs)
+        drawn = _plotted_intervals(ax)
+        assert float(horizons.index(1)) not in drawn
+        assert float(horizons.index(0)) in drawn and float(horizons.index(2)) in drawn
+        assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
+        plt.close()
+
+    def test_a_row_that_stores_no_interval_keeps_the_recomputed_one(self):
+        """Legacy rows without a ``conf_int`` key are still drawn from the SE."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        del results.event_study_effects[1]["conf_int"]
+        horizons = sorted(results.event_study_effects)
+        ax = plot_event_study(results, show=False)
+        assert float(horizons.index(1)) in _plotted_intervals(ax)
+        plt.close()
+
+
+class TestPlotEventStudyRawDCDHUndefinedInference:
+    """The raw dCDH route recomputes intervals from the SE too. An effect or
+    placebo horizon whose stored interval is NaN plots with no interval."""
+
+    @staticmethod
+    def _dcdh(conf_int, placebo=None):
+        from types import SimpleNamespace
+
+        entry = {
+            "effect": 1.4,
+            "se": 0.3,
+            "t_stat": float("nan"),
+            "p_value": float("nan"),
+            "conf_int": conf_int,
+            "n_obs": 40,
+        }
+        return SimpleNamespace(L_max=1, placebo_event_study=placebo, event_study_effects={1: entry})
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            (float("nan"), float("nan")),
+            (float("nan"), 2.0),
+            (0.8, float("nan")),
+            (None, 2.0),
+            (0.8, None),
+        ],
+    )
+    def test_undefined_effect_and_placebo_get_no_interval(self, stored):
+        """Fully or partly missing stored bounds, on the effect and on the
+        placebo horizon alike."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        placebo = {-1: {"effect": 0.1, "se": 0.2, "conf_int": stored, "p_value": float("nan")}}
+        ax = plot_event_study(self._dcdh(stored, placebo=placebo), show=False)
+        assert _plotted_intervals(ax) == {}
+        assert len({p[0] for p in _plotted_points(ax)}) == 3
+        plt.close()
+
+    def test_defined_effect_keeps_its_interval(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        ax = plot_event_study(self._dcdh((0.8, 2.0)), show=False)
+        (interval,) = _plotted_intervals(ax).values()
+        half = 1.959963984540054 * 0.3
+        assert interval == pytest.approx((1.4 - half, 1.4 + half))
+        plt.close()
+
+    def test_plotly_draws_no_band_for_an_undefined_horizon(self):
+        pytest.importorskip("plotly")
+
+        fig = plot_event_study(
+            self._dcdh((float("nan"), float("nan"))), backend="plotly", show=False
+        )
+        assert not [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+
+
+class TestPlotEventStudyFittedUndefinedRow:
+    """End to end on a fitted model: SunAbraham with ``vcov_type="hc2_bm"``.
+    Calendar period 3.5 is observed only for the one-unit cohort adopting at
+    3.5 and for the never-treated units, so only that unit identifies event
+    time 0: the fit stores a finite SE and NaN inference there."""
+
+    @staticmethod
+    def _fit():
+        from diff_diff import SunAbraham
+
+        rows, unit = [], 0
+        for g, n, has_half_period in ((2.5, 10, False), (3.5, 1, True), (np.inf, 12, True)):
+            for _ in range(n):
+                for t in [0, 1, 2, 3, 4, 5, 6, 7] + ([3.5] if has_half_period else []):
+                    effect = 2.0 if (np.isfinite(g) and t >= g) else 0.0
+                    y = 0.3 * t + (unit % 4) + effect + 0.2 * ((unit * 5 + int(t * 2) * 3) % 7)
+                    rows.append((unit, t, g, y))
+                unit += 1
+        data = pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return SunAbraham(vcov_type="hc2_bm").fit(
+                data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
+    def test_event_time_zero_gets_no_interval(self, kwargs):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = self._fit()
+        surface = results.event_study_effects
+        row = surface[0.0]
+        assert np.isfinite(row["se"]) and row["se"] > 0 and np.isnan(row["conf_int"][0])
+        horizons = sorted(surface)
+        ax = plot_event_study(results, show=False, **kwargs)
+        drawn = _plotted_intervals(ax)
+        assert float(horizons.index(0.0)) not in drawn
+        for h in (-1.5, 0.5):
+            assert np.isfinite(surface[h]["conf_int"][0])
+            assert float(horizons.index(h)) in drawn
+        plt.close()
 
 
 class TestPlotEventStudyWooldridge:

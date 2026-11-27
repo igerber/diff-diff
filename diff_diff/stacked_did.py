@@ -18,6 +18,7 @@ Wing, C., Freedman, S. M., & Hollingsworth, A. (2024). Stacked
 """
 
 import copy
+import dataclasses
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -181,13 +182,23 @@ class StackedDiD(BaseEstimator):
         unit masses.
     control_group : str, default="not_yet_treated"
         How to define clean controls per Appendix A of the paper:
-        - "not_yet_treated": Units with A_s > a + kappa_post
-        - "strict": Units with A_s > a + kappa_post + kappa_pre
+        - "not_yet_treated": Units with A_s > a + kappa_post + anticipation
+        - "strict": Units with A_s > a + kappa_post + kappa_pre + anticipation
         - "never_treated": Only units with A_s = infinity
+
+        ``anticipation`` enters because a later adopter responds from
+        ``A_s - anticipation``; with the default ``anticipation=0`` these are
+        the paper's rules.
     cluster : str, default="unit"
         Clustering level for standard errors:
         - "unit": Cluster on original unit identifier
         - "unit_subexp": Cluster on (unit, sub_experiment) pairs
+
+        Under ``survey_design=`` with Taylor-linearized variance the survey
+        PSU governs: the design's ``psu`` when it names one, otherwise each
+        original unit. ``"unit_subexp"`` pairs are never used as survey PSUs.
+        Replicate-weight designs take their variance from the replicate
+        weights and use no PSU.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     anticipation : int, default=0
@@ -196,6 +207,7 @@ class StackedDiD(BaseEstimator):
         - Reference period shifts from e=-1 to e=-1-anticipation
         - Post-treatment includes anticipation periods (e >= -anticipation)
         - Event window expands by anticipation pre-periods
+        - Clean-control cutoffs for later adopters move out by anticipation
         Consistent with ImputationDiD, TwoStageDiD, SunAbraham.
     rank_deficient_action : str, default="warn"
         Action when design matrix is rank-deficient:
@@ -486,8 +498,8 @@ class StackedDiD(BaseEstimator):
         Raises
         ------
         ValueError
-            If required columns are missing or data validation fails: a
-            missing or non-integer ``time``, a duplicated ``(unit, time)``
+            If required columns are missing or data validation fails: an
+            empty panel, a missing or non-integer ``time``, a duplicated ``(unit, time)``
             row, a non-integer ``first_treat``, or no adoption event with
             both a treated unit and a clean control observed at every event
             time of the window. Also under ``weighting="population"`` when a
@@ -498,7 +510,10 @@ class StackedDiD(BaseEstimator):
             Under ``survey_design=`` when a treated or clean-control unit is
             not observed at every event time of its sub-experiment window, or
             an adoption event would be dropped for lack of complete units
-            (removing them would drop their PSUs from the design).
+            (removing them would drop their PSUs from the design). Also under
+            ``survey_design=`` with ``anticipation > 0`` when the
+            anticipation-adjusted clean-control cutoff leaves a later cohort
+            out of every sub-experiment, for the same reason.
 
         Warns
         -----
@@ -523,6 +538,14 @@ class StackedDiD(BaseEstimator):
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+        if len(data) == 0:
+            # Before the survey design is resolved: an empty frame has no
+            # rows to read a design from (an FPC column would index an empty
+            # array).
+            raise ValueError(
+                "StackedDiD.fit() received an empty panel (0 rows): there is "
+                "nothing to estimate."
+            )
 
         if self.weighting == "population" and population is None:
             raise ValueError("population column must be specified when weighting='population'")
@@ -572,8 +595,22 @@ class StackedDiD(BaseEstimator):
             _validate_unit_constant_survey,
         )
 
+        # A Taylor-linearized design that names no PSU samples UNITS: the unit
+        # column is declared as the PSU here, before anything is trimmed, so
+        # the design is validated against the FULL supplied sample (an FPC
+        # below a stratum's unit count raises, as it does for an explicit
+        # ``psu``) and the same specification is reused on the stack
+        # (REGISTRY StackedDiD, survey-PSU Note).
+        _implicit_unit_psu = (
+            isinstance(survey_design, SurveyDesign)
+            and survey_design.psu is None
+            and survey_design.replicate_weights is None
+        )
+        _design_for_fit = (
+            dataclasses.replace(survey_design, psu=unit) if _implicit_unit_psu else survey_design
+        )
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
-            _resolve_survey_for_fit(survey_design, data, "analytical")
+            _resolve_survey_for_fit(_design_for_fit, data, "analytical")
         )
         # Survey columns must be constant within a unit: the regression
         # contrasts event-time cell means, and a weight that changes over a
@@ -658,6 +695,28 @@ class StackedDiD(BaseEstimator):
 
         # ---- Trim adoption events (IC1 + IC2) ----
         omega_kappa, trimmed = self._trim_adoption_events(omega_A, T_min, T_max, unit_info)
+
+        # Under a survey design the anticipation-adjusted clean-control cutoff
+        # must not take sampled units out of the stack altogether: the design
+        # is re-resolved on the stacked rows, so their PSUs and strata would
+        # leave the variance and df_survey (REGISTRY StackedDiD, anticipation
+        # Note). Refused before any estimate is formed.
+        if survey_design is not None:
+            lost = self._units_lost_to_anticipation_cutoff(omega_A, T_min, T_max, unit_info)
+            if lost:
+                raise NotImplementedError(
+                    "StackedDiD with survey_design= and "
+                    f"anticipation={self.anticipation}: the clean-control cutoff "
+                    "moves out by the anticipation periods, and that leaves "
+                    f"{sum(lost.values())} unit(s) out of every sub-experiment ("
+                    + ", ".join(f"cohort {int(c)}: {n}" for c, n in lost.items())
+                    + "). That can take PSUs or strata out of the survey "
+                    "variance and its degrees of freedom, which is not domain "
+                    "estimation, so the fit is refused whenever a sampled unit "
+                    "leaves the stack. Fit without survey_design=, or remove those "
+                    "cohorts from the data yourself and adjust the design "
+                    "accordingly."
+                )
 
         # ---- Build stacked dataset ----
         # Complete-window rule (REGISTRY StackedDiD Note): a unit enters a
@@ -1180,7 +1239,6 @@ class StackedDiD(BaseEstimator):
             survey_metadata = compute_survey_metadata(resolved_stacked, raw_w_stacked)
         elif resolved_survey is not None:
             from diff_diff.survey import (
-                _inject_cluster_as_psu,
                 _resolve_effective_cluster,
                 compute_survey_metadata,
                 compute_survey_vcov,
@@ -1192,7 +1250,31 @@ class StackedDiD(BaseEstimator):
             # to unit level via ``subset_to_units_by_row_idx``: control units are
             # duplicated across sub-experiments, so the design must be resolved
             # at the stacked granularity, not one row per original unit.)
-            resolved_stacked = survey_design.resolve(stacked_df)
+            #
+            # A design without an explicit PSU samples UNITS: each original
+            # unit is its own PSU, whatever ``cluster`` says. The stacked
+            # (unit, sub-experiment) pairs are not sampling units - a unit that
+            # serves in several sub-experiments is still one draw, and the pair
+            # count moves with the stack. The unit column is therefore declared
+            # as the PSU BEFORE resolving, so that the implicit PSUs pass
+            # through the same singleton-stratum and FPC validation as an
+            # explicit ``survey_design.psu`` (REGISTRY StackedDiD, survey-PSU
+            # Note).
+            if _implicit_unit_psu:
+                if self.cluster == "unit_subexp":
+                    warnings.warn(
+                        "StackedDiD with survey_design= and no survey_design.psu "
+                        "uses each unit as its own PSU for the survey variance; "
+                        "cluster='unit_subexp' does not apply there, because a "
+                        "unit that appears in several sub-experiments is one "
+                        "sampled unit. Name the sampling unit in "
+                        "survey_design.psu to choose a different PSU.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                resolved_stacked = _design_for_fit.resolve(stacked_df)
+            else:
+                resolved_stacked = survey_design.resolve(stacked_df)
 
             # Create a copy with composed weights (normalized to sum=n_stacked)
             resolved_composed = copy.copy(resolved_stacked)
@@ -1201,11 +1283,9 @@ class StackedDiD(BaseEstimator):
             # Original-scale residuals for TSL variance
             resid_orig = Y - X @ coef
 
-            # Inject cluster as PSU when survey design has no explicit PSU
-            resolved_composed = _inject_cluster_as_psu(resolved_composed, cluster_ids)
-
-            # Resolve effective cluster (PSU overrides user-specified cluster)
-            _resolve_effective_cluster(resolved_composed, cluster_ids, self.cluster)
+            if not _implicit_unit_psu:
+                # Explicit PSU overrides the user-specified cluster.
+                _resolve_effective_cluster(resolved_composed, cluster_ids, self.cluster)
 
             # Compute TSL variance
             vcov = compute_survey_vcov(X, resid_orig, resolved_composed)
@@ -1217,6 +1297,15 @@ class StackedDiD(BaseEstimator):
                 else np.ones(n_stacked, dtype=np.float64)
             )
             survey_metadata = compute_survey_metadata(resolved_composed, raw_w_stacked)
+            if survey_metadata.df_survey is not None and survey_metadata.df_survey <= 0:
+                warnings.warn(
+                    "StackedDiD: the survey design has zero degrees of freedom "
+                    "(n_PSU - n_strata = 0), so its variance is not identified "
+                    "for inference. Estimates and standard errors are reported; "
+                    "t-statistics, p-values and confidence intervals are NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # ---- Extract event study effects ----
         # 3.9 (row M-024): the surface is ALWAYS materialized - the
@@ -1242,8 +1331,10 @@ class StackedDiD(BaseEstimator):
             idx = interaction_indices[h]
             effect = float(coef[idx])
             se = float(np.sqrt(max(vcov[idx, idx], 0.0)))
+            # The design's own df (n_PSU - n_strata), unclamped: at 0 the
+            # variance is not identified and safe_inference returns NaN.
             _survey_df = (
-                max(survey_metadata.df_survey, 1)
+                survey_metadata.df_survey
                 if survey_metadata is not None and survey_metadata.df_survey is not None
                 else (0 if _uses_replicate_sd else None)
             )
@@ -1335,7 +1426,7 @@ class StackedDiD(BaseEstimator):
             overall_se = np.nan
 
         _survey_df_overall = (
-            max(survey_metadata.df_survey, 1)
+            survey_metadata.df_survey
             if survey_metadata is not None and survey_metadata.df_survey is not None
             else (0 if _uses_replicate_sd else None)
         )
@@ -1415,6 +1506,7 @@ class StackedDiD(BaseEstimator):
             event_study_df=es_df_used,
             df_convention=self.df_convention,
             inference_df=_overall_df_used,
+            control_cutoff_includes_anticipation=True,
         )
 
         self.is_fitted_ = True
@@ -1561,9 +1653,7 @@ class StackedDiD(BaseEstimator):
             # a - kappa_pre >= T_min  AND  a + kappa_post <= T_max
             # (matches R reference: focalAdoptionTime - kappa_pre >= minTime)
             # With anticipation: shift window start earlier
-            lower_ok = (a_int - self.kappa_pre - self.anticipation) >= T_min
-            upper_ok = (a_int + self.kappa_post) <= T_max
-            ic1 = lower_ok and upper_ok
+            ic1 = self._window_fits(a_int, T_min, T_max)
 
             # IC2: Clean controls exist
             ic2 = self._check_clean_controls_exist(a_int, unit_info)
@@ -1595,15 +1685,72 @@ class StackedDiD(BaseEstimator):
 
         return omega_kappa, trimmed
 
+    def _clean_control_mask(self, a: int, ft: np.ndarray) -> np.ndarray:
+        """Units that are clean controls for adoption event ``a``.
+
+        A later adopter responds from ``A_s - anticipation`` onward, so it is
+        clean for event ``a`` only if that date falls after the event window
+        closes at ``a + kappa_post``: ``A_s - anticipation > a + kappa_post``.
+        ``"strict"`` also keeps the later adopter's own window, which starts at
+        ``A_s - kappa_pre - anticipation``, disjoint from this one. With
+        ``anticipation=0`` these are the rules of Wing et al. (2024),
+        Appendix A. Never-treated units (``A_s = inf``) satisfy both.
+        """
+        return self._control_mask_at(a, ft, self.anticipation)
+
+    def _control_mask_at(self, a: int, ft: np.ndarray, shift: int) -> np.ndarray:
+        """The clean-control rule with the cutoff moved out by ``shift`` periods
+        (``shift = anticipation`` is the rule in force; ``shift = 0`` is the
+        paper's rule, which :meth:`_units_lost_to_anticipation_cutoff` compares
+        against)."""
+        if self.control_group == "not_yet_treated":
+            return ft > a + self.kappa_post + shift
+        if self.control_group == "strict":
+            return ft > a + self.kappa_post + self.kappa_pre + shift
+        return np.isinf(ft)  # never_treated
+
+    def _units_lost_to_anticipation_cutoff(
+        self, adoption_events: List[Any], T_min: int, T_max: int, unit_info: pd.DataFrame
+    ) -> Dict[Any, int]:
+        """Units the anticipation term keeps out of EVERY sub-experiment.
+
+        Compares stack membership under the cutoff in force with membership
+        under the same cutoff without its ``anticipation`` term: the treated
+        units of every event that passes IC1 and has a clean control, plus
+        those controls. Returns ``{cohort: number of units}`` for the units in
+        the second set only (empty when ``anticipation == 0`` or under
+        never-treated controls). Completeness of the event windows is not
+        considered; a survey fit refuses incomplete windows separately.
+        """
+        if self.anticipation == 0 or self.control_group == "never_treated":
+            return {}
+        ft = unit_info["_first_treat"].values
+
+        def members(shift: int) -> np.ndarray:
+            inside = np.zeros(len(ft), dtype=bool)
+            for a in adoption_events:
+                a_int = int(a)
+                if not self._window_fits(a_int, T_min, T_max):
+                    continue
+                controls = self._control_mask_at(a_int, ft, shift)
+                if not controls.any():
+                    continue
+                inside |= controls | (ft == a)
+            return inside
+
+        lost = members(0) & ~members(self.anticipation)
+        cohorts, counts = np.unique(ft[lost], return_counts=True)
+        return {c: int(n) for c, n in zip(cohorts.tolist(), counts.tolist())}
+
+    def _window_fits(self, a: int, T_min: int, T_max: int) -> bool:
+        """IC1: the event window ``[a - kappa_pre - anticipation, a + kappa_post]``
+        lies within the observed periods. (The paper text states a stricter
+        lower bound, ``T_min + 1``; the co-author's R code uses ``T_min``.)"""
+        return (a - self.kappa_pre - self.anticipation) >= T_min and (a + self.kappa_post) <= T_max
+
     def _check_clean_controls_exist(self, a: int, unit_info: pd.DataFrame) -> bool:
         """Check IC2: whether clean control units exist for adoption event a."""
-        ft = unit_info["_first_treat"].values
-        if self.control_group == "not_yet_treated":
-            return bool(np.any(ft > a + self.kappa_post))
-        elif self.control_group == "strict":
-            return bool(np.any(ft > a + self.kappa_post + self.kappa_pre))
-        else:  # never_treated
-            return bool(np.any(np.isinf(ft)))
+        return bool(np.any(self._clean_control_mask(a, unit_info["_first_treat"].values)))
 
     # =========================================================================
     # Sub-experiment construction
@@ -1663,13 +1810,8 @@ class StackedDiD(BaseEstimator):
         treated_mask = ft == a
         treated_units = set(unit_ids[treated_mask])
 
-        # Clean control units
-        if self.control_group == "not_yet_treated":
-            control_mask = ft > a_int + self.kappa_post
-        elif self.control_group == "strict":
-            control_mask = ft > a_int + self.kappa_post + self.kappa_pre
-        else:  # never_treated
-            control_mask = np.isinf(ft)
+        # Clean control units (same rule as the IC2 check)
+        control_mask = self._clean_control_mask(a_int, ft)
         control_units = set(unit_ids[control_mask])
 
         counts = {
