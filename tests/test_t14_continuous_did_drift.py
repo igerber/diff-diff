@@ -180,6 +180,11 @@ class TestEventStudyAndOptions:
         with pytest.raises(ValueError, match="No never-treated"):
             ContinuousDiD(control_group="not_yet_treated", seed=42).fit(all_treated, **FIT)
 
+    def test_lowest_dose_does_not_take_covariates(self, data):
+        frame = data.assign(x=0.0)
+        with pytest.raises(NotImplementedError, match="does not yet compose with covariates"):
+            ContinuousDiD(control_group="lowest_dose", seed=42).fit(frame, covariates=["x"], **FIT)
+
     def test_control_groups_agree_here(self):
         panel = _panel(n_periods=6, cohort_periods=(3, 5))
         never = ContinuousDiD(control_group="never_treated", seed=42).fit(panel, **FIT)
@@ -306,6 +311,7 @@ class TestNotebookSurface:
             "parallel trends identifies the overall ATT and each dose group's own\n  effect, ATT(d|d)",
             "The estimator requires a balanced panel.",
             "It still needs never-treated units in the panel: without any, the fit raises.",
+            "It does not take `covariates`: the fit raises\n  if any are passed.",
             # the overall ATT is spline-free only while the same cells are kept
             "That holds as long as the\n  same cells are kept.",
             "What it cannot return is\nthe dose-response curve or the return to an extra hour.",
