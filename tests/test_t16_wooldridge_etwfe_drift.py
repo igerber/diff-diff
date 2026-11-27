@@ -186,59 +186,64 @@ class TestLinear:
         assert "on a balanced\npanel with a linear outcome and no covariates" in md
         assert "moves the estimates at event time\n1 apart by 0.004" in md
 
-    def test_reference_period_reading_needs_a_balanced_panel(self):
-        """On a balanced panel an early shock stays out of the post-treatment
-        coefficient. With a gap anywhere, the unit effects are estimated from
-        different sets of periods and early outcomes reach it; the reference
-        itself can become an early period."""
+    def test_reference_period_reading_needs_a_balanced_panel_without_covariates(self):
+        """On a balanced panel without covariates an early shock stays out of the
+        post-treatment coefficient. With a gap anywhere, or with a covariate,
+        early outcomes reach it, which is all the notebook claims."""
 
-        def coefficients(missing=(), early=None):
+        def post(missing=(), early=None, covariate=False, n_treated=2, n_control=3):
             early = early or {}
             rows = []
-            for unit, cohort in (("A", 3), ("B", 3), ("C", 0), ("D", 0), ("E", 0)):
+            units = [(f"T{i}", 3) for i in range(n_treated)] + [
+                (f"C{i}", 0) for i in range(n_control)
+            ]
+            for index, (unit, cohort) in enumerate(units):
                 for time in (1, 2, 3):
                     if (unit, time) in missing:
                         continue
                     y = 2.0 if (cohort == 3 and time == 3) else 0.0
                     if time == 1:
                         y += early.get(unit, 0.0)
-                    rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y})
+                    x = float(np.sin(1.7 * index + 2.3 * time))
+                    rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y, "x": x})
+            keys = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
+            if covariate:
+                keys["xtvar"] = ["x"]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                fit = WooldridgeDiD(control_group="never_treated").fit(
-                    pd.DataFrame(rows), outcome="y", unit="unit", time="time", first_treat="cohort"
-                )
-            return {(int(g), int(t)): v["att"] for (g, t), v in fit.group_time_effects.items()}
+                fit = WooldridgeDiD(control_group="never_treated").fit(pd.DataFrame(rows), **keys)
+            return fit.group_time_effects[(3, 3)]["att"]
 
-        def post(**kwargs):
-            return coefficients(**kwargs)[(3, 3)]
-
-        # balanced: early shocks, to one unit or to the cohort, leave the effect at 2
+        # balanced, no covariates: early shocks leave the effect at 2
         assert post() == pytest.approx(2.0, abs=1e-8)
-        assert post(early={"A": 10.0}) == pytest.approx(2.0, abs=1e-8)
-        assert post(early={"A": 10.0, "B": 10.0}) == pytest.approx(2.0, abs=1e-8)
-        # a unit missing the reference period: its own early shock reaches the effect
-        assert post(missing={("B", 2)}) == pytest.approx(2.0, abs=1e-8)
-        assert post(missing={("B", 2)}, early={"B": 10.0}) == pytest.approx(-0.5, abs=1e-8)
-        # a gap in another period does the same for another unit's early shock
-        assert post(missing={("B", 3)}, early={"A": 10.0}) == pytest.approx(-0.5, abs=1e-8)
-        # the cohort missing period 2 altogether: period 1 becomes the reference
-        shifted = coefficients(missing={("A", 2), ("B", 2)}, early={"A": 10.0, "B": 10.0})
-        assert set(shifted) == {(3, 3)} and shifted[(3, 3)] == pytest.approx(-8.0, abs=1e-8)
+        assert post(early={"T0": 10.0}) == pytest.approx(2.0, abs=1e-8)
+        assert post(early={"T0": 10.0, "T1": 10.0}) == pytest.approx(2.0, abs=1e-8)
+        # a gap, in the reference period or elsewhere: an early shock reaches the effect
+        assert post(missing={("T1", 2)}) == pytest.approx(2.0, abs=1e-8)
+        assert post(missing={("T1", 2)}, early={"T1": 10.0}) == pytest.approx(-0.5, abs=1e-8)
+        assert post(missing={("T1", 3)}) == pytest.approx(2.0, abs=1e-8)
+        assert post(missing={("T1", 3)}, early={"T0": 10.0}) == pytest.approx(-0.5, abs=1e-8)
+        # a covariate on a balanced panel does it too
+        wide = dict(covariate=True, n_treated=5, n_control=7)
+        assert post(**wide) == pytest.approx(2.0, abs=1e-8)
+        assert abs(post(early={"T0": 10.0}, **wide) - 2.0) > 0.1
         md = notebook_markdown(NB)
         for needle in (
             "On a balanced panel without covariates each coefficient is then",
-            "with gaps anywhere in the panel, outcomes in\n  early periods can move the post-treatment coefficients",
-            "the reference itself may\n  be an early period",
-            "unrelated to the time-varying\n  shocks",
-            "Check which reference period the fit reports.",
-            'unbalanced panel `"never_treated"` does not give that protection',
+            "That reading\n  is specific to a balanced panel without covariates",
+            "outcomes in other periods, early ones included, can move the post-treatment\n"
+            "  coefficients",
+            '`"never_treated"` on a balanced panel without covariates, and in any period the fit '
+            "uses\notherwise",
+            'With missing observations or covariates `"never_treated"` no longer\n'
+            "confines the assumption to the reference period",
         ):
             assert needle in md, needle
         for stale in (
             "observations being unrelated to the outcome",
-            "it goes into that\n  cohort's placebo coefficient",
+            "cohort's placebo coefficient, not into the post-treatment ones",
             "protects against early shifts a cohort shares",
+            "use Callaway-Sant'Anna there",
         ):
             assert stale not in md, stale
 
@@ -576,10 +581,10 @@ def test_never_treated_advice_is_scoped_to_the_linear_model():
     suspect pre-treatment periods."""
     md = notebook_markdown(NB)
     assert (
-        'with a linear\noutcome on a balanced panel use `"never_treated"`, or Callaway-Sant\'Anna'
-        in md
+        'with a linear\noutcome, a balanced panel and no covariates, use `"never_treated"`, or\n'
+        "Callaway-Sant'Anna" in md
     )
-    assert 'The `"never_treated"`\nremedy does not carry over to\nPoisson and logit' in md
+    assert 'The\n`"never_treated"` remedy does not carry over to\nPoisson and logit' in md
     assert "A Poisson or logit fit gives coefficients to post-treatment cells only" in md
     # nonlinear fits use cohort and period effects (jwdid's i.gvar i.tvar), not unit effects
     assert (
