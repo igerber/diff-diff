@@ -61,8 +61,11 @@ Mapping (unblinded after the tables were final): F = M2, G = M1.
 
 ## CLI-bump read (pre-registered, descriptive; no gate uses it)
 
-Same corpus, prompt and rubric bytes, same model id (gpt-6.1-sol), different CLI and
-an independent sample. R = reliable, U = unstable, M = missed.
+Same corpus, prompt and rubric bytes, same model id (gpt-6.1-sol). Three things
+differ between the two F columns: the CLI (0.162.1 vs 0.172.0), the isolated home's
+connector setting (campaign 2 ran codex's default, app connectors available;
+campaign 3 ran `[features] apps = false`), and the sample itself (independent
+repeats). R = reliable, U = unstable, M = missed.
 
 | Bug | F on 0.162.1 (campaign 2) | F on 0.172.0 (campaign 3) | G on 0.172.0 |
 |---|---|---|---|
@@ -79,9 +82,10 @@ an independent sample. R = reliable, U = unstable, M = missed.
 | Reliable catches | 5 | 5 | 6 |
 | Caught repeat-cells (of 20) | 11 | 11 | 13 |
 
-The control's totals are identical across the two CLIs; two bugs moved between
+The control's totals are identical across the two campaigns; two bugs moved between
 reliable and unstable, one repeat each way. A difference of that size cannot be
-attributed to the CLI. The CI `codex-version` pin moves to 0.172.0 with the swap
+attributed to any one of the three differences above (the CLI, the connector
+setting or repeat variation), and this comparison cannot separate them. The CI `codex-version` pin moves to 0.172.0 with the swap
 (gpt-6.2-sol is not reachable on 0.162.1).
 
 ## Informational reads (non-gating)
