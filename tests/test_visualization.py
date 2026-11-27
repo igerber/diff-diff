@@ -1073,6 +1073,53 @@ class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
             [frame.loc[2, "conf_int_lower"], frame.loc[2, "conf_int_upper"]]
         )
 
+    @pytest.mark.parametrize("route", ["results", "container"])
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    def test_plotly_marker_split_and_endpoints_on_both_routes(self, route, kwargs):
+        """Event time 1 (undefined): a marker, no bar, no polygon touching or
+        spanning it. Event time 2 (isolated, valid): a bar with the endpoints
+        the route selects - the stored interval on the container route, and
+        ``effect +/- z * SE`` on the results route or after an explicit
+        reference (which recomputes from the SE)."""
+        pytest.importorskip("plotly")
+
+        results = self._mixed()
+        source = results if route == "results" else results.aggregate("event_study")
+        fig = plot_event_study(source, backend="plotly", show=False, **kwargs)
+        horizons = sorted(results.event_study_effects)
+        x_undefined, x_last = horizons.index(1), horizons.index(2)
+
+        def bars_at(x):
+            return [
+                t
+                for t in fig.data
+                if getattr(t, "mode", None) == "lines"
+                and t.x is not None
+                and len(t.x) == 2
+                and t.x[0] == t.x[1] == x
+            ]
+
+        markers = [
+            x
+            for t in fig.data
+            if getattr(t, "mode", None) == "markers" and t.x is not None
+            for x in t.x
+        ]
+        assert x_undefined in markers and x_last in markers
+        assert bars_at(x_undefined) == []
+        for band in (t for t in fig.data if getattr(t, "fill", None) == "toself"):
+            xs = [x for x in band.x if x is not None]
+            assert x_undefined not in xs and not (min(xs) < x_undefined < max(xs))
+
+        (bar,) = bars_at(x_last)
+        row = results.event_study_effects[2]
+        if route == "container" and "reference_period" not in kwargs:
+            expected = sorted(row["conf_int"])
+        else:
+            half = 1.959963984540054 * row["se"]
+            expected = [row["effect"] - half, row["effect"] + half]
+        assert sorted(float(y) for y in bar.y) == pytest.approx(expected)
+
     def test_plotly_band_is_one_polygon_when_every_row_is_defined(self):
         pytest.importorskip("plotly")
 
