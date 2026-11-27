@@ -188,10 +188,11 @@ class TestLinear:
 
     def test_reference_period_reading_needs_a_balanced_panel_without_covariates(self):
         """On a balanced panel without covariates an early shock stays out of the
-        post-treatment coefficient. With a gap anywhere, or with a covariate,
-        early outcomes reach it, which is all the notebook claims."""
+        post-treatment coefficient, and a time-constant covariate keeps it out.
+        With a gap anywhere, or with a time-varying covariate, early outcomes
+        reach it, which is all the notebook claims."""
 
-        def post(missing=(), early=None, late=None, covariate=False, n_treated=2, n_control=3):
+        def post(missing=(), early=None, late=None, covariate=None, n_treated=2, n_control=3):
             early, late = early or {}, late or {}
             rows = []
             units = [(f"T{i}", 3) for i in range(n_treated)] + [
@@ -206,11 +207,23 @@ class TestLinear:
                         y += early.get(unit, 0.0)
                     if time == 3:
                         y += late.get(unit, 0.0)
-                    x = float(np.sin(1.7 * index + 2.3 * time))
-                    rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y, "x": x})
+                    varying = float(np.sin(1.7 * index + 2.3 * time))
+                    constant = float(np.sin(1.7 * index))
+                    rows.append(
+                        {
+                            "unit": unit,
+                            "time": time,
+                            "cohort": cohort,
+                            "y": y,
+                            "varying": varying,
+                            "constant": constant,
+                        }
+                    )
             keys = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
-            if covariate:
-                keys["xtvar"] = ["x"]
+            if covariate == "time_varying":
+                keys["xtvar"] = ["varying"]
+            elif covariate == "time_constant":
+                keys["exovar"] = ["constant"]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 fit = WooldridgeDiD(control_group="never_treated").fit(pd.DataFrame(rows), **keys)
@@ -226,9 +239,13 @@ class TestLinear:
         assert post(missing={("T1", 3)}) == pytest.approx(2.0, abs=1e-8)
         assert post(missing={("T1", 3)}, early={"T0": 10.0}) == pytest.approx(-0.5, abs=1e-8)
         # a time-varying covariate on a balanced panel does it too
-        wide = dict(covariate=True, n_treated=5, n_control=7)
+        wide = dict(covariate="time_varying", n_treated=5, n_control=7)
         assert post(**wide) == pytest.approx(2.0, abs=1e-8)
         assert abs(post(early={"T0": 10.0}, **wide) - 2.0) > 0.1
+        # a time-constant covariate does not: the same shock leaves the effect at 2
+        fixed = dict(covariate="time_constant", n_treated=5, n_control=7)
+        assert post(**fixed) == pytest.approx(2.0, abs=1e-8)
+        assert post(early={"T0": 10.0}, **fixed) == pytest.approx(2.0, abs=1e-8)
         # missingness related to the idiosyncratic shocks biases the fit: offsetting
         # target-period shocks average out until the unit with the low one is dropped
         shocks = {"T0": 10.0, "T1": -10.0}
@@ -645,3 +662,12 @@ def test_reference_period_on_an_unbalanced_panel():
         else:
             assert "reference period moved" not in messages
             assert "no observations: (6, 5)" in messages
+    # a period no unit is observed in is not on the panel's time grid: period 4 is
+    # the reference again, and nothing is reported
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit = WooldridgeDiD(control_group="never_treated").fit(panel[panel["period"] != 5], **FIT)
+    assert sorted(int(t) for g, t in fit.group_time_effects if g == 6) == [0, 1, 2, 3, 6, 7, 8]
+    assert not [w for w in caught if "(6, 5)" in str(w.message) or "moved" in str(w.message)]
+    assert "the fit moves past it without\n  a warning" in md
+    assert "provided it and the never-treated units both have rows in period 4" in md
