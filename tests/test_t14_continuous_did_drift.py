@@ -34,6 +34,7 @@ import pytest
 from diff_diff import (
     CallawaySantAnna,
     ContinuousDiD,
+    PreTrendsPower,
     compute_honest_did,
     generate_continuous_did_data,
 )
@@ -226,6 +227,22 @@ class TestEventStudyAndOptions:
                 )
             assert np.isfinite(bounds.lb) and np.isfinite(bounds.ub) and bounds.lb < bounds.ub
             assert any("base_period" in str(w.message) for w in caught) is warns
+        # Pre-Trends Power: the same rule, a continuous event study is rejected and
+        # the universal-base binary one is taken without a warning
+        continuous_es = (
+            ContinuousDiD(seed=42).fit(two_cohorts, dose="dose", **keys).aggregate("event_study")
+        )
+        with pytest.raises(TypeError):
+            PreTrendsPower().fit(continuous_es)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            binary_es = (
+                CallawaySantAnna(control_group="never_treated", base_period="universal")
+                .fit(two_cohorts, **keys)
+                .aggregate("event_study")
+            )
+            power = PreTrendsPower().fit(binary_es)
+        assert np.isfinite(power.mdv) and power.mdv > 0
 
 
 class TestNotebookSurface:

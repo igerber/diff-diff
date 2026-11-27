@@ -33,7 +33,9 @@ import pytest
 from diff_diff import (
     CallawaySantAnna,
     ImputationDiD,
+    PreTrendsPower,
     WooldridgeDiD,
+    compute_honest_did,
     generate_staggered_data,
     load_mpdta,
 )
@@ -135,6 +137,24 @@ class TestLinear:
         md = notebook_markdown(NB)
         assert 'With `base_period="universal"` it uses ETWFE\'s reference' in md
         assert "agreement period by period" not in md
+
+    def test_diagnostics_take_a_callaway_santanna_fit_not_this_one(self, results_never, data):
+        """Pre-Trends Power and Honest DiD reject an ETWFE event study and accept the
+        universal-base Callaway-Sant'Anna fit the notebook names."""
+        own = results_never.aggregate("event_study")
+        with pytest.raises(TypeError):
+            PreTrendsPower().fit(own)
+        with pytest.raises(TypeError):
+            compute_honest_did(own, method="relative_magnitude", M=1.0)
+        supported = (
+            CallawaySantAnna(base_period="universal").fit(data, **FIT).aggregate("event_study")
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            power = PreTrendsPower().fit(supported)
+            bounds = compute_honest_did(supported, method="relative_magnitude", M=1.0)
+        assert np.isfinite(power.mdv) and power.mdv > 0
+        assert np.isfinite(bounds.lb) and np.isfinite(bounds.ub) and bounds.lb < bounds.ub
 
     def test_equality_with_callaway_santanna_needs_a_balanced_panel(self, data):
         """The regression uses every observation; each Callaway-Sant'Anna
