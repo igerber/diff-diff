@@ -221,10 +221,18 @@ jobs:
 
       - name: Copy tests to isolated location (Unix)
         if: runner.os != 'Windows'
-        run: cp -r tests /tmp/tests
+        # The pinned mpdta source file goes along, at the path the tests look for
+        # it relative to their own root, so the canonical-data tests run offline
+        # here instead of downloading (or skipping when the download fails).
+        run: |
+          cp -r tests /tmp/tests
+          mkdir -p /tmp/benchmarks/data/real
+          cp benchmarks/data/real/mpdta.csv /tmp/benchmarks/data/real/mpdta.csv
 
       - name: Copy tests to isolated location (Windows)
         if: runner.os == 'Windows'
+        # The mpdta source file is not copied here: a Windows checkout may rewrite
+        # its line endings, which changes the bytes the loader's checksum pins.
         run: Copy-Item -Recurse tests $env:RUNNER_TEMP\tests
         shell: pwsh
 

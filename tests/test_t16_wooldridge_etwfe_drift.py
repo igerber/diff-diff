@@ -22,6 +22,7 @@ returns its synthetic fallback (no network and no cache).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import warnings
 from pathlib import Path
@@ -185,6 +186,34 @@ class TestLinear:
         assert "on a balanced\npanel with a linear outcome and no covariates" in md
         assert "moves the estimates at event time\n1 apart by 0.004" in md
 
+    def test_reference_period_reading_needs_a_balanced_panel(self):
+        """A treated unit missing the reference period enters through its unit
+        effect, so its earlier outcome moves the post-treatment coefficient: the
+        simple difference-in-differences reading is a balanced-panel one."""
+
+        def post_coefficient(earlier_outcome):
+            rows = []
+            for unit, cohort in (("A", 3), ("B", 3), ("C", 0), ("D", 0), ("E", 0)):
+                for time in (1, 2, 3):
+                    if unit == "B" and time == 2:
+                        continue  # B is not observed in the reference period
+                    y = 2.0 if (cohort == 3 and time == 3) else 0.0
+                    if unit == "B" and time == 1:
+                        y = earlier_outcome
+                    rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y})
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fit = WooldridgeDiD(control_group="never_treated").fit(
+                    pd.DataFrame(rows), outcome="y", unit="unit", time="time", first_treat="cohort"
+                )
+            return fit.group_time_effects[(3, 3)]["att"]
+
+        assert post_coefficient(0.0) == pytest.approx(2.0, abs=1e-8)
+        assert post_coefficient(10.0) == pytest.approx(-0.5, abs=1e-8)
+        md = notebook_markdown(NB)
+        assert "On a balanced panel without covariates each coefficient is then" in md
+        assert "its earlier outcomes can move the post-treatment coefficients" in md
+
     def test_comparison_cell_refuses_unmatched_event_times(self):
         """The notebook's own alignment code, run on two event studies of which one
         lacks a horizon: it must raise, not report the gap over the rows that match."""
@@ -306,15 +335,21 @@ def mpdta(tmp_path_factory):
     """The canonical panel, loaded once for the module. A full checkout carries
     the checksum-matching source file, so the loader is fed those bytes and the
     numbers are re-derived offline; without it the loader is asked once, and a
-    fallback skips. Tests copy the frame before changing it."""
-    fixture = Path(__file__).resolve().parents[1] / "benchmarks/data/real/mpdta.csv"
-    if fixture.exists():
-        import diff_diff.datasets as datasets_mod
+    fallback skips. A copy whose bytes do not match the pin (a checkout that
+    rewrote its line endings) is treated as absent. Tests copy the frame before
+    changing it."""
+    import diff_diff.datasets as datasets_mod
 
+    fixture = Path(__file__).resolve().parents[1] / "benchmarks/data/real/mpdta.csv"
+    payload = fixture.read_bytes() if fixture.exists() else None
+    if (
+        payload is not None
+        and hashlib.sha256(payload).hexdigest() == datasets_mod._MPDTA_SOURCE_SHA256
+    ):
         response = MagicMock()
         response.__enter__ = lambda self: self
         response.__exit__ = lambda self, *a: False
-        response.read.return_value = fixture.read_bytes()
+        response.read.return_value = payload
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path_factory.mktemp("mpdta"))
             with patch("diff_diff.datasets.urlopen", return_value=response):
