@@ -745,14 +745,21 @@ def _render_event_study_plotly(
 
 
 def _exact_reference_label(label: Any) -> Any:
-    """A producer-declared reference label, unrounded: an integral number
-    becomes ``int`` (matching integer horizon keys), anything else is returned
-    as given."""
-    try:
-        as_float = float(label)
-    except (TypeError, ValueError):
+    """A producer-declared reference label, unrounded and without loss.
+
+    An integer is returned as ``int`` as is (no float round-trip, which would
+    move integers beyond 2**53 onto a neighbouring value). A float holding an
+    integral value becomes ``int`` (matching integer horizon keys); any other
+    float, and any non-numeric label, is returned as given.
+    """
+    if isinstance(label, (bool, np.bool_)):
         return label
-    return int(as_float) if as_float.is_integer() else label
+    if isinstance(label, (int, np.integer)):
+        return int(label)
+    if isinstance(label, (float, np.floating)):
+        as_float = float(label)
+        return int(as_float) if as_float.is_integer() else label
+    return label
 
 
 def _reference_is_verified(results: Any, reference_period: Any) -> bool:
