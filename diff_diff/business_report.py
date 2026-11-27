@@ -58,6 +58,7 @@ from diff_diff._reporting_helpers import (
     is_staggered_ddd,
     render_design_reconciliation,
     results_design,
+    stacked_control_cutoff_wording,
 )
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
@@ -1543,6 +1544,12 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         # adoption event. REGISTRY.md §StackedDiD (identification /
         # clean-control rules).
         control_group = getattr(results, "control_group", None)
+        # Same cutoff wording as the target-parameter description: under
+        # anticipation the cutoff and the window both move by `anticipation`.
+        shift, cutoff_caveat = stacked_control_cutoff_wording(results)
+        # The window has always widened under anticipation; only the cutoff
+        # rule depends on which version fitted the result.
+        anticipating = (getattr(results, "anticipation", 0) or 0) > 0
         if control_group == "never_treated":
             control_clause = (
                 "controls are restricted to units that are never treated "
@@ -1551,17 +1558,22 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         elif control_group == "strict":
             control_clause = (
                 "controls for event ``a`` are units satisfying the strict "
-                "rule ``A_s > a + kappa_post + kappa_pre`` (strictly "
+                f"rule ``A_s > a + kappa_post + kappa_pre{shift}`` (strictly "
                 "untreated across the full pre- and post-event window)"
             )
         else:
-            # Default: "not_yet_treated" — A_s > a + kappa_post.
+            # Default: "not_yet_treated" - A_s > a + kappa_post (+ anticipation).
             control_clause = (
                 "controls for event ``a`` are units satisfying ``A_s > a + "
-                "kappa_post`` (not yet treated through the end of the "
+                f"kappa_post{shift}`` (not yet treated through the end of the "
                 "event's post-window, so future-treated units can serve "
                 "as controls for earlier events)"
             )
+        window = (
+            "``[-kappa_pre - anticipation, +kappa_post]``"
+            if anticipating
+            else "``[-kappa_pre, +kappa_post]``"
+        )
         block = {
             "parallel_trends_variant": "stacked_sub_experiment",
             "no_anticipation": True,
@@ -1570,9 +1582,12 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "Hollingsworth 2024): within each stacked sub-experiment "
                 "parallel trends holds between the treated cohort and the "
                 "corresponding clean-control set over the event window "
-                "``[-kappa_pre, +kappa_post]``; "
+                + window
+                + "; "
                 + control_clause
-                + ". Sub-experiments are restricted by IC1 (the event "
+                + "."
+                + cutoff_caveat
+                + " Sub-experiments are restricted by IC1 (the event "
                 "window fits within the available time range) and IC2 "
                 "(at least one clean control exists). The aggregate ATT is "
                 "a weighted sum over sub-experiments, so the common-trends "

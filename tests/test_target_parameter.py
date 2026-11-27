@@ -394,6 +394,59 @@ class TestTargetParameterFitConfigReads:
         assert expected_clause in tp["definition"]
 
     @pytest.mark.parametrize(
+        "control_group, anticipation, recorded, expected, absent",
+        [
+            ("not_yet_treated", 0, True, "``A_s > a + kappa_post``", "+ anticipation"),
+            ("not_yet_treated", 1, True, "``A_s > a + kappa_post + anticipation``", "unverified"),
+            ("strict", 0, True, "``A_s > a + kappa_post + kappa_pre``", "+ anticipation"),
+            (
+                "strict",
+                2,
+                True,
+                "``A_s > a + kappa_post + kappa_pre + anticipation``",
+                "unverified",
+            ),
+            ("never_treated", 1, True, "``A_s = infinity``", "+ anticipation"),
+            # no record of the rule (saved by an earlier version): the old
+            # cutoff is shown and labelled unverified, never the adjusted one
+            (
+                "not_yet_treated",
+                1,
+                None,
+                "``A_s > a + kappa_post``).",
+                "kappa_post + anticipation``",
+            ),
+            (
+                "strict",
+                1,
+                None,
+                "``A_s > a + kappa_post + kappa_pre``).",
+                "kappa_pre + anticipation``",
+            ),
+            ("not_yet_treated", 0, None, "``A_s > a + kappa_post``", "unverified"),
+        ],
+    )
+    def test_stacked_control_cutoff_follows_the_recorded_rule(
+        self, control_group, anticipation, recorded, expected, absent
+    ):
+        """A later adopter responds from ``A_s - anticipation``. The stated
+        cutoff carries ``+ anticipation`` only when the result records that
+        its controls were selected that way; without the record the earlier
+        cutoff is shown with an "unverified" caveat."""
+        tp = describe_target_parameter(
+            _minimal_result(
+                "StackedDiDResults",
+                control_group=control_group,
+                anticipation=anticipation,
+                control_cutoff_includes_anticipation=recorded,
+            )
+        )
+        assert expected in tp["definition"]
+        assert absent not in tp["definition"]
+        if recorded is None and anticipation > 0 and control_group != "never_treated":
+            assert "unverified" in tp["definition"] and "should be rerun" in tp["definition"]
+
+    @pytest.mark.parametrize(
         "weighting, expected_clause",
         [
             ("aggregate", "treated-unit-share-weighted"),

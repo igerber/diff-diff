@@ -24,7 +24,7 @@ Current contents:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from diff_diff.results_base import Diagnostic
 
@@ -178,6 +178,46 @@ def design_reconciliation_lines(block: Dict[str, Any]) -> List[str]:
 def is_staggered_ddd(results: Any) -> bool:
     """True for a ``TripleDifferenceResults`` fitted in the staggered design."""
     return results_design(results) == "staggered"
+
+
+def stacked_control_cutoff_wording(results: Any) -> Tuple[str, str]:
+    """Wording for a StackedDiD result's clean-control cutoff.
+
+    Returns ``(shift, caveat)``: ``shift`` is appended to the cutoff formula
+    and ``caveat`` to the sentence that states it.
+
+    Under ``anticipation > 0`` a later adopter responds from
+    ``A_s - anticipation``, and fits select later-adopter controls with
+    ``+ anticipation`` in the cutoff. A fit records that on
+    ``control_cutoff_includes_anticipation``. A result without the record
+    (saved by diff-diff 4.1.0 or earlier, whose cutoff ignored
+    ``anticipation``, or built by hand) is described with the cutoff those
+    versions used and a caveat that the rule is unverified, so that a report
+    never asserts a comparison set the fit may not have used.
+
+    Both strings are empty when ``anticipation == 0`` (the rule never
+    changed) and for never-treated controls (no cutoff applies).
+    """
+    if (getattr(results, "anticipation", 0) or 0) <= 0:
+        return "", ""
+    if getattr(results, "control_group", None) == "never_treated":
+        return "", ""
+    if getattr(results, "control_cutoff_includes_anticipation", None) is True:
+        return (
+            " + anticipation",
+            " A later adopter responds from ``A_s - anticipation``, which is "
+            "why the cutoff includes it.",
+        )
+    return (
+        "",
+        " This result does not record which cutoff built its stack, so the "
+        "rule shown is unverified: it is the one diff-diff 4.1.0 and earlier "
+        "used, which ignores ``anticipation``. If the result was fitted with "
+        "one of those versions, a later adopter may be a control while it is "
+        "already responding (from ``A_s - anticipation``) and the fit should "
+        "be rerun; later versions add ``+ anticipation`` to the cutoff and "
+        "record that on the result.",
+    )
 
 
 def describe_target_parameter(results: Any) -> Dict[str, Any]:
@@ -427,19 +467,20 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         # clean_control fallback (a getattr default would silently
         # misreport the comparison group after the 4.0 removal).
         clean_control = getattr(results, "control_group", None)
+        shift, cutoff_caveat = stacked_control_cutoff_wording(results)
         if clean_control == "never_treated":
             control_clause = "Controls are the never-treated units (``A_s = infinity``)."
         elif clean_control == "strict":
             control_clause = (
                 "Controls for each sub-experiment ``a`` are units strictly "
                 "untreated across the full pre/post event window "
-                "(``A_s > a + kappa_post + kappa_pre``)."
+                f"(``A_s > a + kappa_post + kappa_pre{shift}``).{cutoff_caveat}"
             )
         else:  # "not_yet_treated" or unknown -> default rule
             control_clause = (
                 "Controls for each sub-experiment ``a`` are units not yet "
                 "treated through the event's post-window "
-                "(``A_s > a + kappa_post``)."
+                f"(``A_s > a + kappa_post{shift}``).{cutoff_caveat}"
             )
         # Each scheme aggregates the sub-experiment ATTs with its own cohort
         # share (Wing et al. 2024, Table 1); a getattr default keeps results
