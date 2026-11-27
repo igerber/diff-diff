@@ -191,28 +191,40 @@ class TestLinear:
         effect, so its earlier outcome moves the post-treatment coefficient: the
         simple difference-in-differences reading is a balanced-panel one."""
 
-        def post_coefficient(earlier_outcome):
+        def coefficients(incomplete_unit_early, complete_unit_early=0.0):
             rows = []
             for unit, cohort in (("A", 3), ("B", 3), ("C", 0), ("D", 0), ("E", 0)):
                 for time in (1, 2, 3):
                     if unit == "B" and time == 2:
                         continue  # B is not observed in the reference period
                     y = 2.0 if (cohort == 3 and time == 3) else 0.0
-                    if unit == "B" and time == 1:
-                        y = earlier_outcome
+                    if time == 1 and unit == "B":
+                        y = incomplete_unit_early
+                    if time == 1 and unit == "A":
+                        y = complete_unit_early
                     rows.append({"unit": unit, "time": time, "cohort": cohort, "y": y})
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 fit = WooldridgeDiD(control_group="never_treated").fit(
                     pd.DataFrame(rows), outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
-            return fit.group_time_effects[(3, 3)]["att"]
+            effects = fit.group_time_effects
+            return effects[(3, 1)]["att"], effects[(3, 3)]["att"]
 
-        assert post_coefficient(0.0) == pytest.approx(2.0, abs=1e-8)
-        assert post_coefficient(10.0) == pytest.approx(-0.5, abs=1e-8)
+        assert coefficients(0.0) == pytest.approx((0.0, 2.0), abs=1e-8)
+        # a shock to the incomplete unit alone reaches the post-treatment coefficient
+        assert coefficients(10.0) == pytest.approx((2.5, -0.5), abs=1e-8)
+        # the same shift shared by the cohort goes into its placebo coefficient instead
+        assert coefficients(10.0, 10.0) == pytest.approx((10.0, 2.0), abs=1e-8)
         md = notebook_markdown(NB)
         assert "On a balanced panel without covariates each coefficient is then" in md
         assert "its earlier outcomes can move the post-treatment coefficients" in md
+        assert "missingness is not\n  related to the time-varying shocks" in md
+        assert (
+            "it goes into that\n  cohort's placebo coefficient, not into the post-treatment ones"
+            in md
+        )
+        assert "missing\n  observations being unrelated to the outcome" not in md
 
     def test_comparison_cell_refuses_unmatched_event_times(self):
         """The notebook's own alignment code, run on two event studies of which one

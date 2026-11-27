@@ -1,0 +1,3 @@
+# The loader pins this file's SHA-256, and tests feed it to the loader offline:
+# keep its bytes identical on every platform (no CRLF conversion on Windows).
+benchmarks/data/real/mpdta.csv text eol=lf

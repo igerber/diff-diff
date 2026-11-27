@@ -231,9 +231,12 @@ jobs:
 
       - name: Copy tests to isolated location (Windows)
         if: runner.os == 'Windows'
-        # The mpdta source file is not copied here: a Windows checkout may rewrite
-        # its line endings, which changes the bytes the loader's checksum pins.
-        run: Copy-Item -Recurse tests $env:RUNNER_TEMP\tests
+        # .gitattributes pins the mpdta file to LF, so the copy has the bytes the
+        # loader's checksum expects on Windows too.
+        run: |
+          Copy-Item -Recurse tests $env:RUNNER_TEMP\tests
+          New-Item -ItemType Directory -Force -Path $env:RUNNER_TEMP\benchmarks\data\real | Out-Null
+          Copy-Item benchmarks\data\real\mpdta.csv $env:RUNNER_TEMP\benchmarks\data\real\mpdta.csv
         shell: pwsh
 
       - name: Run Rust backend tests (Unix)
