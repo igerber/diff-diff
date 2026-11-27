@@ -261,6 +261,7 @@ class TestLinear:
             "outcomes in other periods, early ones included, can then move the post-treatment\n"
             "  coefficients",
             "to be unrelated to the idiosyncratic shocks to the outcome",
+            "the whole path of each covariate must\n  be strictly exogenous",
             "a\n  cohort treated in period 6 with no rows in period 5 is measured against period 4",
             'For the linear model (`method="ols"`) with `"never_treated"`, a balanced panel and\n'
             "no covariates, only those from the reference period on.",
@@ -399,17 +400,17 @@ def mpdta(tmp_path_factory):
     """The canonical panel, loaded once for the module. A full checkout carries
     the checksum-matching source file, so the loader is fed those bytes and the
     numbers are re-derived offline; without it the loader is asked once, and a
-    fallback skips. A copy whose bytes do not match the pin (a checkout that
-    rewrote its line endings) is treated as absent. Tests copy the frame before
-    changing it."""
+    fallback skips. A copy whose bytes do not match the pin is a failure, never
+    a silent skip (``.gitattributes`` keeps the file's bytes fixed across
+    platforms). Tests copy the frame before changing it."""
     import diff_diff.datasets as datasets_mod
 
     fixture = Path(__file__).resolve().parents[1] / "benchmarks/data/real/mpdta.csv"
-    payload = fixture.read_bytes() if fixture.exists() else None
-    if (
-        payload is not None
-        and hashlib.sha256(payload).hexdigest() == datasets_mod._MPDTA_SOURCE_SHA256
-    ):
+    if fixture.exists():
+        payload = fixture.read_bytes()
+        assert (
+            hashlib.sha256(payload).hexdigest() == datasets_mod._MPDTA_SOURCE_SHA256
+        ), "the committed mpdta file no longer matches the loader's pinned digest"
         response = MagicMock()
         response.__enter__ = lambda self: self
         response.__exit__ = lambda self, *a: False
