@@ -1,7 +1,6 @@
 """Event study visualization functions."""
 
 import warnings
-from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -219,7 +218,6 @@ def plot_event_study(
     ci_upper_override = None
     reference_marks: Optional[Set[Any]] = None
     undefined_inference: Set[Any] = set()
-    reference_verified = False
     if results is not None:
         (
             effects,
@@ -250,7 +248,6 @@ def plot_event_study(
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
-        reference_verified = _reference_is_verified(results, reference_period)
         # Channel selection: the band channel when the user wants
         # simultaneous bands; otherwise the POINTWISE channel - the
         # producer's stored intervals (NaN preserved), for input routes
@@ -291,7 +288,7 @@ def plot_event_study(
             # from the SE, which must not revive inference the producer
             # disabled (their normalized point estimates still plot).
             se = {
-                p: (np.nan if (_same_label(p, reference_period) or p in undefined_inference) else s)
+                p: (np.nan if (p == reference_period or p in undefined_inference) else s)
                 for p, s in se.items()
             }
             # REGISTRY (Event Study Plotting): after explicit normalization,
@@ -350,8 +347,7 @@ def plot_event_study(
             ci_lower = np.nan
             ci_upper = np.nan
         elif np.isfinite(std_err) and (
-            std_err > 0
-            or (_same_label(period, reference_period) and effect == 0.0 and std_err == 0.0)
+            std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
         ):
             # A zero/negative-SE row has all-NaN stored inference
             # (safe_inference), and effect +/- z*0 would draw a finite
@@ -378,17 +374,8 @@ def plot_event_study(
                 # Row-aligned marks (multi-reference containers) hollow
                 # every normalization anchor; the scalar covers the
                 # single-reference routes.
-                "is_reference": _same_label(period, reference_period)
+                "is_reference": period == reference_period
                 or (reference_marks is not None and period in reference_marks),
-                # A normalization CONSTRAINT, as opposed to reference styling:
-                # a row the caller normalized on, a producer-declared
-                # reference, or a marked anchor. The raw route's bare ``-1``
-                # fallback styles a marker but is not a constraint.
-                "is_constraint": (reference_marks is not None and period in reference_marks)
-                or (
-                    _same_label(period, reference_period)
-                    and (reference_period_explicit or reference_verified)
-                ),
             }
         )
 
@@ -638,47 +625,13 @@ def _render_event_study_plotly(
             x=period_to_x[reference_period], line_dash="dot", line_color="gray", line_width=1
         )
 
-    # CI band (filled area). One polygon per run of rows that carry an
-    # interval: an ESTIMATED row without one (undefined inference, a zero or
-    # missing SE) ends the run, so the fill never spans it and implies bounds
-    # it does not have. A normalization constraint without an interval is not
-    # an estimate and does not break the band.
+    # CI band (filled area)
     has_ci = [not (np.isnan(lo) or np.isnan(hi)) for lo, hi in zip(ci_lower, ci_upper)]
-    # Reference STYLING is not enough to bridge a gap: the raw routes fall back
-    # to styling event time -1 when the producer marks no reference, and under
-    # a varying base that row is an estimated placebo. Only a normalization
-    # constraint - a reference the caller normalized on or the producer
-    # declared (``is_constraint``, resolved in ``plot_event_study``) - lets the
-    # band continue.
-    is_constraint = (
-        df["is_constraint"].tolist() if "is_constraint" in df.columns else [False] * len(df)
-    )
-    runs: List[List[int]] = [[]]
-    for i, (has, constraint) in enumerate(zip(has_ci, is_constraint)):
-        if has:
-            runs[-1].append(i)
-        elif not constraint:
-            runs.append([])
-    for run in runs:
-        if not run:
-            continue
-        ci_x = [period_to_x[periods[i]] for i in run]
-        ci_lo = [ci_lower[i] for i in run]
-        ci_hi = [ci_upper[i] for i in run]
-        if len(run) == 1:
-            # A one-row run has no area to fill: draw its interval as a
-            # vertical bar so a valid interval is never invisible.
-            fig.add_trace(
-                go.Scatter(
-                    x=[ci_x[0], ci_x[0]],
-                    y=[ci_lo[0], ci_hi[0]],
-                    mode="lines",
-                    line=dict(color=_color_to_rgba(color, 0.45), width=6),
-                    showlegend=False,
-                    hoverinfo="skip",
-                )
-            )
-            continue
+    ci_x = [period_to_x[p] for p, h in zip(periods, has_ci) if h]
+    ci_lo = [lo for lo, h in zip(ci_lower, has_ci) if h]
+    ci_hi = [hi for hi, h in zip(ci_upper, has_ci) if h]
+
+    if ci_x:
         fig.add_trace(
             go.Scatter(
                 x=ci_x + ci_x[::-1],
@@ -747,95 +700,13 @@ def _render_event_study_plotly(
     return fig
 
 
-def _label_key(label: Any) -> Any:
-    """An exact, comparable key for a horizon label.
-
-    Numbers are compared as exact rationals at their NATIVE precision, so
-    labels of different numeric types are equal only when they are the same
-    number: ``np.float64(-9007199254740996)`` does not match the integer
-    ``-9007199254740995`` (plain ``==`` converts the integer to float and says
-    it does), and an extended-precision float is not narrowed first.
-    """
-    if isinstance(label, (bool, np.bool_)):
-        return ("bool", bool(label))
-    if isinstance(label, (int, np.integer)):
-        return ("number", Fraction(int(label)))
-    if isinstance(label, (float, np.floating)):
-        if not np.isfinite(label):
-            return ("non-finite", repr(label))
-        return ("number", Fraction(*label.as_integer_ratio()))
-    return ("other", label)
-
-
-def _same_label(a: Any, b: Any) -> bool:
-    """Exact equality of two horizon labels (see :func:`_label_key`)."""
-    if a is None or b is None:
-        return a is b
-    try:
-        return bool(_label_key(a) == _label_key(b))
-    except Exception:
-        return False
-
-
-def _exact_reference_label(label: Any) -> Any:
-    """A producer-declared reference label, unrounded and without loss.
-
-    An integer is returned as ``int`` as is. A float holding an integral
-    value, tested at its native precision, becomes ``int`` (matching integer
-    horizon keys); any other float, and any non-numeric label, is returned as
-    given.
-    """
-    if isinstance(label, (bool, np.bool_)):
-        return label
-    if isinstance(label, (int, np.integer)):
-        return int(label)
-    if isinstance(label, (float, np.floating)):
-        if not np.isfinite(label):
-            return label
-        numerator, denominator = label.as_integer_ratio()
-        return int(numerator) if denominator == 1 else label
-    return label
-
-
-def _reference_is_verified(results: Any, reference_period: Any) -> bool:
-    """Whether ``reference_period`` is a normalization anchor the PRODUCER
-    declared, as opposed to the raw route's unconditional ``-1`` fallback
-    (which only styles a marker, and under a varying base lands on an
-    estimated placebo).
-
-    Verified sources: an ``EventStudyResults`` container (its reference rows
-    are marked), the dCDH route (reference synthesized at 0), a
-    ``reference_period`` attribute on the results, or an ``is_reference`` key
-    on the row of a raw ``event_study_effects`` dict.
-    """
-    if results is None or reference_period is None:
-        return False
-    from diff_diff.results_base import EventStudyResults
-
-    if isinstance(results, EventStudyResults):
-        return True
-    if isinstance(results, pd.DataFrame):
-        return False
-    if hasattr(results, "placebo_event_study") and hasattr(results, "L_max"):
-        return True
-    declared = getattr(results, "reference_period", None)
-    if declared is not None:
-        # The declared reference must be THIS horizon, not merely exist.
-        return _same_label(_exact_reference_label(declared), reference_period)
-    surface = getattr(results, "event_study_effects", None)
-    if isinstance(surface, dict):
-        entry = surface.get(reference_period)
-        return bool(isinstance(entry, dict) and entry.get("is_reference", False))
-    return False
-
-
 def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:
     """A row of a raw ``event_study_effects``-style dict whose STORED
     inference is undefined: a finite, positive SE with an all-NaN stored
     interval (the producer failed inference closed, e.g. a survey design with
     zero degrees of freedom). Reference rows are constraints, not estimates,
     and never qualify. The raw routes recompute intervals from the SE, so such
-    rows must be handed back on the pointwise channel as NaN."""
+    rows are handed back on the pointwise channel as NaN."""
     if entry.get("is_reference", False):
         return False
     stored_ci = entry.get("conf_int")
@@ -1157,13 +1028,11 @@ def _extract_plot_data(
         ci_upper_override = {}
         has_cband = False
 
-        # Rows whose STORED inference is undefined: a finite, positive SE
-        # with an all-NaN stored interval (the producer failed inference
-        # closed, e.g. a survey design with zero degrees of freedom). This
-        # route recomputes intervals from the SE, so those rows are handed
-        # back on the pointwise channel as NaN - the plot then draws their
-        # point estimates and no interval, with or without an explicit
-        # reference period (REGISTRY Event Study Plotting).
+        # Rows whose STORED inference is undefined: this route recomputes
+        # intervals from the SE, so they are handed back on the pointwise
+        # channel as NaN and the plot draws their point estimates with no
+        # interval, with or without an explicit reference period (REGISTRY
+        # Event Study Plotting).
         undefined_lower: Dict[Any, float] = {}
         undefined_upper: Dict[Any, float] = {}
 
@@ -1197,11 +1066,7 @@ def _extract_plot_data(
             # zero count is a genuine empty horizon and never a marker).
             explicit_ref = getattr(results, "reference_period", None)
             if explicit_ref is not None:
-                # Keep the producer's exact label. An integral value is
-                # normalized to int (the horizon keys are ints); a
-                # non-integral one (a reference that sits between horizons)
-                # is NOT rounded onto a neighbouring ESTIMATED row.
-                reference_period = _exact_reference_label(explicit_ref)
+                reference_period = int(explicit_ref)
             else:
                 for period, effect_data in results.event_study_effects.items():
                     if effect_data.get("is_reference", False):

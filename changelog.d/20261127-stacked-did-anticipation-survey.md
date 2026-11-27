@@ -61,18 +61,15 @@
   warns that it is excluded from variance estimation under
   `lonely_psu="remove"`, and a finite-population size below a stratum's unit
   count raises `ValueError`; both checks were skipped before.
-- **`plot_event_study(results)` no longer draws intervals for rows whose
+- **`plot_event_study(results)` no longer rebuilds intervals for rows whose
   stored inference is undefined.** A results object passed directly has its
-  intervals rebuilt from the standard error; a row with a finite standard
+  intervals recomputed from the standard error; a row with a finite standard
   error and a NaN stored interval (inference failed closed, for example a
-  survey design with zero degrees of freedom) is now drawn as a point with no
-  interval, as the `aggregate("event_study")` container already was; this
-  holds for dCDH results (effects and placebos) as well. On the
-  Plotly backend the shaded band is now broken at any estimated row without an
-  interval, where it used to fill straight across it; a row left on its own by
-  the break is drawn with a vertical bar between its bounds. A reference a
-  results object declares between two horizons is no longer rounded onto the
-  neighbouring estimated row (which was then styled as the reference).
+  survey design with zero degrees of freedom) now gets none, as the
+  `aggregate("event_study")` container already did. This holds for dCDH
+  results (effects and placebos) too. On the matplotlib backend the row is a
+  point with no error bar. The Plotly backend still fills its band across
+  the position of such a row when the rows on both sides have intervals.
 - `BusinessReport` no longer describes a Taylor-linearized fit with zero
   survey degrees of freedom as "replicate-weight" inference whose interval
   "remains at the fit's native level". The same applies to a replicate

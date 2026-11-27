@@ -7301,29 +7301,20 @@ should be a deliberate user choice.
   normalization is accepted only when the chosen period is one of the marked rows (a no-op
   shift); any other period raises `ValueError`, because each anchor is a constraint under
   its own cohort base and no single shift represents them faithfully
-- **Note (undefined stored inference on the raw-results route):** a results object passed
+- **Note (undefined stored inference on the raw-results routes):** a results object passed
   directly (not its `aggregate("event_study")` container) has its intervals recomputed
-  from the SE. This covers both raw routes: the generic `event_study_effects` route and the
-  dCDH route (its effects and its placebo horizons). A row whose STORED interval is NaN while its SE is finite and positive -
-  inference the producer failed closed, such as a survey design with zero degrees of
-  freedom - is exempt: its point estimate is drawn with no interval, on the pointwise and
+  from the SE, on the generic `event_study_effects` route and on the dCDH route (effects
+  and placebo horizons). A row whose STORED interval is NaN while its SE is finite and
+  positive - inference the producer failed closed, such as a survey design with zero
+  degrees of freedom - is exempt: no interval is recomputed for it, on the pointwise or
   the band channel, with or without an explicit `reference_period=`. Before this rule a
   zero-df `StackedDiDResults` plotted directly showed 95% normal-theory intervals for
   estimates whose inference was undefined. The auto-inferred reference row keeps its
-  zero-width constraint bar. On the Plotly backend the filled band is drawn as one polygon per run of
-  rows that carry an interval: an estimated row without one ends the run, so the fill does
-  not span it (a normalization constraint without an interval does not break the band; that
-  means a reference the caller normalized on with `reference_period=`, or one the producer
-  declared - a marked row of a container, an `is_reference` row or `reference_period`
-  attribute on a results object, the dCDH reference at 0 - not a row that is merely styled
-  as the reference by the `-1` fallback, which under a varying base is an estimated
-  placebo, whatever its SE. A declared `reference_period` counts only for the horizon it
-  names exactly: a reference that sits between horizons (for example `-0.5`) is kept as
-  given and is no longer rounded onto a neighbouring estimated row. Labels are compared as exact
-  numbers at their native precision, so a horizon stored as a float does not match an
-  integer reference one away from it beyond 2**53). A run of a single row has no area to fill and is drawn as a vertical bar between
-  its bounds, so a valid interval isolated by the split stays visible. Before, the band
-  skipped a row without an interval and filled straight across it.
+  zero-width constraint bar. On the matplotlib backend such a row is a point with no
+  error bar. The plotly backend follows its existing NaN-interval convention (zero-SE
+  Note below): the row is filtered out of the band polygon, so when it sits between rows
+  that do have intervals the fill still passes over its position. Breaking the band
+  there is tracked in `TODO.md`.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
   converted to the unified `EventStudyResults` container at entry
   (`build_event_study_surface`) and takes the container route end to end: its stored
@@ -7354,9 +7345,9 @@ should be a deliberate user choice.
   estimated row with effect exactly 0 and se 0 at the fallback position retains today's
   bar - today's behavior preserved, not a new defect). The dCDH route's synthesized
   reference carries `se = NaN` and keeps its hollow-marker-no-bar rendering, unchanged.
-  On the plotly backend the gated row breaks the CI band, as any estimated row without an
-  interval does (undefined-stored-inference Note above); the band is no longer interpolated
-  across it.
+  Plotly caveat: the plotly renderer filters NaN-CI rows out of the CI band and
+  interpolates the polygon across the gap (pre-existing NaN-SE convention); the matplotlib
+  backend is where the gated interval visibly disappears.
 - **Note (`plot_dose_response` zero-SE gate and band labeling):** the raw-DataFrame `se` branch adopts the same gate: rows with non-positive or non-finite `se` have their reconstructed band masked to NaN with a `UserWarning` (previously a zero-SE row drew a finite zero-width band); the plotly renderer filters non-finite-CI rows out of the `toself` band polygon and bridges the gap (the `plot_group_effects` convention above; CI values only - the dose axis may be non-numeric), and both renderers suppress an all-masked band entirely (no stray legend entry). Band LABELING states the confidence level only where it is knowable: the requested `alpha` on the DataFrame-`se` branch (validated strictly inside (0, 1)), `results.alpha` on `results=` input, and the level-free "CI" for bare-curve and explicit-CI input. Alpha semantics deliberately DIVERGE from `plot_group_effects`: that surface recomputes `effect +/- z*SE` at a requested alpha, while `plot_dose_response` warns-and-ignores an explicit `alpha` on non-`se` input, because stored/explicit-CI dose-response inputs cannot be recomputed. `plot_honest_event_study`'s raw
   (non-container) routes mirror the container's retained-row semantics: zero/non-finite-SE
   rows are excluded up front (explicitly requesting one raises), the reference row - now

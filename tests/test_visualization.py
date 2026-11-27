@@ -912,9 +912,10 @@ def _zero_df_stacked_fit(zero_df=True):
 
 
 class TestPlotEventStudyUndefinedStoredInference:
-    """The raw-results route recomputes intervals from the SE. A row whose
-    STORED interval is NaN while its SE is finite (inference failed closed, here
-    a survey design with zero degrees of freedom) must not get one back."""
+    """A results object passed directly has its intervals recomputed from the
+    SE. A row whose STORED interval is NaN while its SE is finite (inference
+    failed closed, e.g. a survey design with zero degrees of freedom) must not
+    get one back."""
 
     def test_fit_has_finite_se_and_nan_intervals(self):
         results = _zero_df_stacked_fit()
@@ -922,8 +923,8 @@ class TestPlotEventStudyUndefinedStoredInference:
         assert rows and all(np.isfinite(e["se"]) and e["se"] > 0 for e in rows)
         assert all(np.isnan(e["conf_int"][0]) and np.isnan(e["conf_int"][1]) for e in rows)
 
-    @pytest.mark.parametrize("kwargs", [{}, {"reference_period": 0}])
-    def test_raw_results_draw_points_and_no_intervals(self, kwargs):
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": 0}])
+    def test_no_estimated_row_gets_an_interval(self, kwargs):
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
@@ -933,28 +934,25 @@ class TestPlotEventStudyUndefinedStoredInference:
         # estimated row may carry an interval on either route.
         for source in (results, results.aggregate("event_study")):
             ax = plot_event_study(source, show=False, **kwargs)
-            # one marker position per row (the reference bar's caps add markers at its x)
             assert len({p[0] for p in _plotted_points(ax)}) == len(results.event_study_effects)
             drawn = _plotted_intervals(ax)
             assert all(lower == upper == 0.0 for lower, upper in drawn.values())
             assert len(drawn) <= 1
             plt.close()
 
-    @pytest.mark.parametrize("kwargs", [{}, {"reference_period": 0}])
-    def test_raw_results_plotly_draw_no_band(self, kwargs):
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": 0}])
+    def test_plotly_draws_no_band(self, kwargs):
         pytest.importorskip("plotly")
 
         def band_heights(fig):
-            ys = [
+            return [
                 float(y)
                 for trace in fig.data
                 if getattr(trace, "fill", None) == "toself"
                 for y in trace.y
                 if y is not None and np.isfinite(y)
             ]
-            return ys
 
-        # no band beyond the reference row's zero-width constraint
         fig = plot_event_study(_zero_df_stacked_fit(), backend="plotly", show=False, **kwargs)
         assert all(y == 0.0 for y in band_heights(fig))
         # positive control: defined inference draws a band on the same route
@@ -963,199 +961,29 @@ class TestPlotEventStudyUndefinedStoredInference:
         )
         assert any(y != 0.0 for y in band_heights(fig))
 
-    def test_defined_inference_still_draws_intervals(self):
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
+    def test_one_undefined_row_among_defined_rows(self, kwargs):
+        """Only the row with undefined inference loses its interval."""
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
-        results = _zero_df_stacked_fit(zero_df=False)
-        ax = plot_event_study(results, show=False)
-        estimated = [e for e in results.event_study_effects.values() if not e.get("is_reference")]
-        assert len(_plotted_intervals(ax)) >= len(estimated)
-        plt.close()
-
-
-class TestPlotEventStudyUndefinedRowBetweenDefinedRows:
-    """One horizon with undefined stored inference (finite SE, NaN interval)
-    between horizons with valid intervals: its point is drawn, it carries no
-    interval, and the Plotly band is split there instead of filling across."""
-
-    @staticmethod
-    def _mixed():
         results = _zero_df_stacked_fit(zero_df=False)
         row = results.event_study_effects[1]
         assert np.isfinite(row["se"]) and np.isfinite(row["conf_int"][0])
         row.update(t_stat=np.nan, p_value=np.nan, conf_int=(np.nan, np.nan))
-        return results
 
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
-    def test_matplotlib_draws_no_interval_on_that_row(self, kwargs):
-        pytest.importorskip("matplotlib")
-        import matplotlib.pyplot as plt
-
-        results = self._mixed()
         ax = plot_event_study(results, show=False, **kwargs)
         horizons = sorted(results.event_study_effects)
-        x_undefined = float(horizons.index(1))
         drawn = _plotted_intervals(ax)
-        assert x_undefined not in drawn
-        estimated = [h for h in horizons if h not in (1, -1)]
-        assert all(float(horizons.index(h)) in drawn for h in estimated)
-        assert x_undefined in {p[0] for p in _plotted_points(ax)}
+        assert float(horizons.index(1)) not in drawn
+        assert all(float(horizons.index(h)) in drawn for h in horizons if h not in (1, -1))
+        assert float(horizons.index(1)) in {p[0] for p in _plotted_points(ax)}
         plt.close()
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
-    def test_plotly_band_is_split_at_that_row(self, kwargs):
-        pytest.importorskip("plotly")
-
-        results = self._mixed()
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        horizons = sorted(results.event_study_effects)
-        x_undefined = horizons.index(1)
-        bands = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
-        assert bands  # the rows before it
-        for band in bands:
-            xs = [x for x in band.x if x is not None]
-            assert x_undefined not in xs
-            assert not (min(xs) < x_undefined < max(xs))
-            assert len(set(xs)) >= 2  # a polygon with area, never a zero-width one
-        # the last horizon is isolated by the split: its VALID interval must be
-        # visible, drawn as a vertical bar between its bounds
-        x_last = horizons.index(2)
-        bars = [
-            t
-            for t in fig.data
-            if getattr(t, "mode", None) == "lines"
-            and t.x is not None
-            and len(t.x) == 2
-            and t.x[0] == t.x[1] == x_last
-        ]
-        assert len(bars) == 1
-        lower, upper = sorted(float(y) for y in bars[0].y)
-        if "reference_period" not in kwargs:
-            # a results object passed directly gets the bounds this route
-            # selects: effect +/- z * SE
-            row = results.event_study_effects[2]
-            half = 1.959963984540054 * row["se"]
-            assert (lower, upper) == pytest.approx((row["effect"] - half, row["effect"] + half))
-        assert lower < upper
-        assert bars[0].line.width >= 2
-
-        # the row's marker is still drawn
-        marker_x = [
-            x
-            for trace in fig.data
-            if getattr(trace, "fill", None) != "toself" and trace.x is not None
-            for x in trace.x
-        ]
-        assert x_undefined in marker_x
-
-    def test_plotly_isolated_row_shows_the_stored_interval_on_the_container_route(self):
-        pytest.importorskip("plotly")
-
-        results = self._mixed()
-        surface = results.aggregate("event_study")
-        frame = surface.to_dataframe().set_index("event_time")
-        assert np.isnan(frame.loc[1, "conf_int_lower"]) and np.isfinite(
-            frame.loc[2, "conf_int_lower"]
-        )
-        fig = plot_event_study(surface, backend="plotly", show=False)
-        x_last = sorted(frame.index).index(2)
-        bars = [
-            t
-            for t in fig.data
-            if getattr(t, "mode", None) == "lines"
-            and t.x is not None
-            and len(t.x) == 2
-            and t.x[0] == t.x[1] == x_last
-        ]
-        assert len(bars) == 1
-        assert sorted(float(y) for y in bars[0].y) == pytest.approx(
-            [frame.loc[2, "conf_int_lower"], frame.loc[2, "conf_int_upper"]]
-        )
-
-    @pytest.mark.parametrize("route", ["results", "container"])
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}, {"reference_period": -1}])
-    def test_plotly_marker_split_and_endpoints_on_both_routes(self, route, kwargs):
-        """Event time 1 (undefined): a marker, no bar, no polygon touching or
-        spanning it. Event time 2 (isolated, valid): a bar with the endpoints
-        the route selects - the stored interval on the container route, and
-        ``effect +/- z * SE`` on the results route or after an explicit
-        reference (which recomputes from the SE)."""
-        pytest.importorskip("plotly")
-
-        results = self._mixed()
-        source = results if route == "results" else results.aggregate("event_study")
-        fig = plot_event_study(source, backend="plotly", show=False, **kwargs)
-        horizons = sorted(results.event_study_effects)
-        x_undefined, x_last = horizons.index(1), horizons.index(2)
-
-        def bars_at(x):
-            return [
-                t
-                for t in fig.data
-                if getattr(t, "mode", None) == "lines"
-                and t.x is not None
-                and len(t.x) == 2
-                and t.x[0] == t.x[1] == x
-            ]
-
-        markers = [
-            x
-            for t in fig.data
-            if getattr(t, "mode", None) == "markers" and t.x is not None
-            for x in t.x
-        ]
-        assert x_undefined in markers and x_last in markers
-        assert bars_at(x_undefined) == []
-        for band in (t for t in fig.data if getattr(t, "fill", None) == "toself"):
-            xs = [x for x in band.x if x is not None]
-            assert x_undefined not in xs and not (min(xs) < x_undefined < max(xs))
-
-        (bar,) = bars_at(x_last)
-        row = results.event_study_effects[2]
-        if route == "container" and "reference_period" not in kwargs:
-            expected = sorted(row["conf_int"])
-        else:
-            half = 1.959963984540054 * row["se"]
-            expected = [row["effect"] - half, row["effect"] + half]
-        assert sorted(float(y) for y in bar.y) == pytest.approx(expected)
-
-    def test_plotly_band_is_one_polygon_when_every_row_is_defined(self):
-        pytest.importorskip("plotly")
-
-        fig = plot_event_study(_zero_df_stacked_fit(zero_df=False), backend="plotly", show=False)
-        assert len([t for t in fig.data if getattr(t, "fill", None) == "toself"]) == 1
-
-
-def _toself_bands(fig):
-    return [t for t in fig.data if getattr(t, "fill", None) == "toself"]
-
-
-def _vertical_bars(fig):
-    return [
-        t
-        for t in fig.data
-        if getattr(t, "mode", None) == "lines"
-        and t.x is not None
-        and len(t.x) == 2
-        and t.x[0] == t.x[1]
-    ]
-
-
-def _marker_xs(fig):
-    return [
-        x
-        for t in fig.data
-        if getattr(t, "mode", None) == "markers" and t.x is not None
-        for x in t.x
-    ]
 
 
 class TestPlotEventStudyRawDCDHUndefinedInference:
-    """The raw dCDH route recomputes intervals from the SE too. A horizon whose
-    stored interval is NaN (replicate design with undefined df) must plot as a
-    marker with no interval - including the isolated case ``L_max=1`` without
-    placebos, where the one-row band segment is drawn as a visible bar."""
+    """The raw dCDH route recomputes intervals from the SE too. An effect or
+    placebo horizon whose stored interval is NaN plots with no interval."""
 
     @staticmethod
     def _dcdh(conf_int, placebo=None):
@@ -1171,24 +999,7 @@ class TestPlotEventStudyRawDCDHUndefinedInference:
         }
         return SimpleNamespace(L_max=1, placebo_event_study=placebo, event_study_effects={1: entry})
 
-    def test_isolated_undefined_horizon_draws_no_interval(self):
-        pytest.importorskip("plotly")
-
-        fig = plot_event_study(
-            self._dcdh((float("nan"), float("nan"))), backend="plotly", show=False
-        )
-        assert _vertical_bars(fig) == [] and _toself_bands(fig) == []
-        assert len(_marker_xs(fig)) == 2  # the synthesized reference and horizon 1
-
-    def test_isolated_defined_horizon_draws_its_bar(self):
-        pytest.importorskip("plotly")
-
-        fig = plot_event_study(self._dcdh((0.8, 2.0)), backend="plotly", show=False)
-        (bar,) = _vertical_bars(fig)
-        half = 1.959963984540054 * 0.3
-        assert sorted(float(y) for y in bar.y) == pytest.approx([1.4 - half, 1.4 + half])
-
-    def test_undefined_placebo_and_effect_matplotlib(self):
+    def test_undefined_effect_and_placebo_get_no_interval(self):
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
@@ -1199,266 +1010,30 @@ class TestPlotEventStudyRawDCDHUndefinedInference:
         assert len({p[0] for p in _plotted_points(ax)}) == 3
         plt.close()
 
+    def test_defined_effect_keeps_its_interval(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
 
-class TestPlotEventStudyBandAndFallbackReference:
-    """When the producer marks no reference, the raw route styles event time -1
-    as the reference. Under a varying base that row is an ESTIMATED placebo; if
-    its inference is undefined the Plotly band must break there, not treat it
-    as a constraint and fill across it."""
+        ax = plot_event_study(self._dcdh((0.8, 2.0)), show=False)
+        (interval,) = _plotted_intervals(ax).values()
+        half = 1.959963984540054 * 0.3
+        assert interval == pytest.approx((1.4 - half, 1.4 + half))
+        plt.close()
 
-    @staticmethod
-    def _varying_base(minus_one_ci):
-        from types import SimpleNamespace
+    def test_plotly_draws_no_band_for_an_undefined_horizon(self):
+        pytest.importorskip("plotly")
 
-        def row(effect, se, ci):
-            return {"effect": effect, "se": se, "conf_int": ci, "p_value": 0.5, "n_obs": 30}
-
-        return SimpleNamespace(
-            event_study_effects={
-                -2: row(0.05, 0.10, (-0.15, 0.25)),
-                -1: row(0.02, 0.10, minus_one_ci),
-                0: row(1.00, 0.12, (0.76, 1.24)),
-                1: row(1.10, 0.12, (0.86, 1.34)),
-            }
+        fig = plot_event_study(
+            self._dcdh((float("nan"), float("nan"))), backend="plotly", show=False
         )
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_no_polygon_spans_an_undefined_row_styled_as_reference(self, kwargs):
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((float("nan"), float("nan")))
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        x_minus_one = sorted(results.event_study_effects).index(-1)
-        for band in _toself_bands(fig):
-            xs = [x for x in band.x if x is not None]
-            assert x_minus_one not in xs and not (min(xs) < x_minus_one < max(xs))
-        # -2 is isolated by the break and keeps a visible interval
-        assert [b for b in _vertical_bars(fig) if b.x[0] == 0]
-        assert x_minus_one in _marker_xs(fig)
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_no_polygon_spans_a_fallback_row_with_no_standard_error(self, kwargs):
-        """Same, when the estimated placebo at -1 has a NaN SE as well as a NaN
-        interval (for example a jackknife variance that is not identified
-        there): a missing SE does not make the row a constraint."""
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((float("nan"), float("nan")))
-        results.event_study_effects[-1]["se"] = float("nan")
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        horizons = sorted(results.event_study_effects)
-        x_minus_one = horizons.index(-1)
-        # -1: a marker and nothing else
-        assert x_minus_one in _marker_xs(fig)
-        assert [b for b in _vertical_bars(fig) if b.x[0] == x_minus_one] == []
-        # -2 is isolated and keeps its interval as a bar
-        (bar,) = [b for b in _vertical_bars(fig) if b.x[0] == horizons.index(-2)]
-        assert sorted(float(y) for y in bar.y) == pytest.approx(
-            [0.05 - 1.959963984540054 * 0.10, 0.05 + 1.959963984540054 * 0.10]
-        )
-        # 0 and 1 keep one band, which stops short of -1
-        (band,) = _toself_bands(fig)
-        xs = [x for x in band.x if x is not None]
-        assert min(xs) == horizons.index(0) and max(xs) == horizons.index(1)
-
-    def test_an_explicit_reference_is_a_constraint(self):
-        """The caller normalizes on -1: that row is now a constraint and the
-        band continues across it."""
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((-0.18, 0.22))
-        fig = plot_event_study(results, backend="plotly", reference_period=-1, show=False)
-        (band,) = _toself_bands(fig)
-        xs = [x for x in band.x if x is not None]
-        assert min(xs) == 0 and max(xs) == 3
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_a_declared_reference_between_horizons_does_not_make_a_neighbour_a_constraint(
-        self, kwargs
-    ):
-        """A producer that declares its reference at -0.5 names no plotted
-        horizon. It must not be rounded onto event time 0, an ESTIMATED effect:
-        when that row's inference is undefined the band breaks there."""
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((-0.18, 0.22))
-        results.reference_period = -0.5
-        row = results.event_study_effects[0]
-        row.update(conf_int=(float("nan"), float("nan")), p_value=float("nan"))
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        horizons = sorted(results.event_study_effects)
-        x_zero = horizons.index(0)
-        for band in _toself_bands(fig):
-            xs = [x for x in band.x if x is not None]
-            assert x_zero not in xs and not (min(xs) < x_zero < max(xs))
-        assert [b for b in _vertical_bars(fig) if b.x[0] == x_zero] == []
-        assert x_zero in _marker_xs(fig)
-        # the rows before it keep their band; the row after it keeps a bar
-        (band,) = _toself_bands(fig)
-        assert max(x for x in band.x if x is not None) == horizons.index(-1)
-        assert [b for b in _vertical_bars(fig) if b.x[0] == horizons.index(1)]
-
-    def test_an_integral_declared_reference_is_a_constraint(self):
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((float("nan"), float("nan")))
-        results.event_study_effects[-1].update(effect=0.0, se=float("nan"))
-        results.reference_period = -1.0
-        fig = plot_event_study(results, backend="plotly", show=False)
-        (band,) = _toself_bands(fig)
-        xs = [x for x in band.x if x is not None]
-        assert min(xs) == 0 and max(xs) == 3
-
-    def test_a_defined_row_at_minus_one_keeps_one_band(self):
-        pytest.importorskip("plotly")
-
-        fig = plot_event_study(self._varying_base((-0.18, 0.22)), backend="plotly", show=False)
-        assert len(_toself_bands(fig)) == 1 and _vertical_bars(fig) == []
-
-    def test_a_real_reference_constraint_still_bridges(self):
-        """A producer-marked reference row (effect 0, no uncertainty) is a
-        constraint: the band continues across it."""
-        pytest.importorskip("plotly")
-
-        results = self._varying_base((float("nan"), float("nan")))
-        results.event_study_effects[-1] = {
-            "effect": 0.0,
-            "se": float("nan"),
-            "conf_int": (float("nan"), float("nan")),
-            "is_reference": True,
-        }
-        fig = plot_event_study(results, backend="plotly", show=False)
-        (band,) = _toself_bands(fig)
-        xs = [x for x in band.x if x is not None]
-        assert min(xs) == 0 and max(xs) == 3
+        assert not [t for t in fig.data if getattr(t, "fill", None) == "toself"]
 
 
-class TestDeclaredReferenceLabelIsExact:
-    """A reference label declared on a results object is compared exactly:
-    no float round-trip (integers beyond 2**53 would land on a neighbour) and
-    no rounding of a label that sits between horizons."""
-
-    def test_labels_are_kept_exactly(self):
-        from diff_diff.visualization._event_study import _exact_reference_label
-
-        big = -9007199254740995  # not representable as a float
-        assert _exact_reference_label(big) == big and isinstance(_exact_reference_label(big), int)
-        assert _exact_reference_label(np.int64(-1)) == -1
-        assert _exact_reference_label(2.0) == 2 and isinstance(_exact_reference_label(2.0), int)
-        assert _exact_reference_label(-0.5) == -0.5
-        assert _exact_reference_label("2019") == "2019"
-
-    def test_labels_of_different_numeric_types_compare_exactly(self):
-        from diff_diff.visualization._event_study import _exact_reference_label, _same_label
-
-        big = -9007199254740995
-        # plain == converts the integer to float and reports these as equal
-        assert np.float64(big - 1) == big
-        assert not _same_label(np.float64(big - 1), big)
-        assert _same_label(np.float64(-1.0), -1) and _same_label(np.int64(3), 3.0)
-        assert _same_label(-0.5, np.float64(-0.5)) and not _same_label(-0.5, 0)
-        assert not _same_label(None, 0) and _same_label("2019", "2019")
-        # integrality is tested at native precision, not after narrowing
-        wide = np.longdouble("-1") - np.finfo(np.longdouble).eps
-        if wide != np.longdouble("-1"):
-            assert _exact_reference_label(wide) is wide
-            assert not _same_label(wide, -1)
-        assert _exact_reference_label(np.longdouble("2")) == 2
-
-    def test_only_the_named_horizon_is_verified(self):
-        from types import SimpleNamespace
-
-        from diff_diff.visualization._event_study import _reference_is_verified
-
-        big = -9007199254740995
-        declared = SimpleNamespace(reference_period=big, event_study_effects={})
-        assert _reference_is_verified(declared, big) is True
-        assert _reference_is_verified(declared, big - 1) is False
-        between = SimpleNamespace(reference_period=-0.5, event_study_effects={})
-        assert _reference_is_verified(between, 0) is False
-        assert _reference_is_verified(between, -1) is False
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_neighbour_of_a_huge_declared_reference_breaks_the_band(self, kwargs):
-        pytest.importorskip("plotly")
-        from types import SimpleNamespace
-
-        big = -9007199254740995
-        nan_ci = (float("nan"), float("nan"))
-
-        def row(effect, ci):
-            return {"effect": effect, "se": 0.1, "conf_int": ci, "p_value": 0.5, "n_obs": 30}
-
-        results = SimpleNamespace(
-            reference_period=big,
-            event_study_effects={
-                big - 2: row(0.1, (-0.1, 0.3)),
-                big - 1: row(2.0, nan_ci),  # estimated, inference undefined
-                big: {"effect": 0.0, "se": float("nan"), "conf_int": nan_ci, "is_reference": True},
-                big + 1: row(1.0, (0.8, 1.2)),
-                big + 2: row(1.1, (0.9, 1.3)),
-            },
-        )
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        x_undefined = 1
-        for band in _toself_bands(fig):
-            xs = [x for x in band.x if x is not None]
-            assert x_undefined not in xs and not (min(xs) < x_undefined < max(xs))
-        assert [b for b in _vertical_bars(fig) if b.x[0] == x_undefined] == []
-        assert x_undefined in _marker_xs(fig)
-
-    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_float_horizon_next_to_an_integer_reference_is_not_the_reference(self, kwargs):
-        """Horizons stored as NumPy floats, reference declared as a Python
-        integer one above an estimated horizon: ``==`` across the two types
-        calls them equal. The estimated row must not be styled as the
-        reference, and the band must break at it."""
-        pytest.importorskip("plotly")
-        from types import SimpleNamespace
-
-        big = -9007199254740995
-        nan_ci = (float("nan"), float("nan"))
-
-        def row(effect, ci):
-            return {"effect": effect, "se": 0.1, "conf_int": ci, "p_value": 0.5, "n_obs": 30}
-
-        neighbour = np.float64(big - 1)
-        assert neighbour == big  # the lossy comparison this guards against
-        results = SimpleNamespace(
-            reference_period=big,
-            event_study_effects={
-                np.float64(big - 5): row(0.1, (-0.1, 0.3)),
-                np.float64(big - 3): row(0.2, (0.0, 0.4)),
-                neighbour: row(2.0, nan_ci),  # estimated, inference undefined
-                np.float64(big + 3): row(1.0, (0.8, 1.2)),
-                np.float64(big + 5): row(1.1, (0.9, 1.3)),
-            },
-        )
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        x_undefined = 2
-        bands = _toself_bands(fig)
-        assert len(bands) == 2
-        for band in bands:
-            xs = [x for x in band.x if x is not None]
-            assert x_undefined not in xs and not (min(xs) < x_undefined < max(xs))
-        assert [b for b in _vertical_bars(fig) if b.x[0] == x_undefined] == []
-        # drawn as an ordinary estimate, not a hollow reference marker
-        reference_markers = [
-            t
-            for t in fig.data
-            if getattr(t, "mode", None) == "markers"
-            and "open" in str(getattr(t.marker, "symbol", ""))
-        ]
-        assert all(x_undefined not in (t.x or ()) for t in reference_markers)
-        assert x_undefined in _marker_xs(fig)
-
-
-class TestPlotEventStudyFittedUndefinedRows:
+class TestPlotEventStudyFittedUndefinedRow:
     """End to end on a fitted model: SunAbraham with ``vcov_type="hc2_bm"``.
-    Cohorts adopt at 2.5 and 3.5, and calendar period 3.5 is observed only for
-    the one-unit cohort and the never-treated units. The fit declares a shared
-    reference at -0.5 (between horizons) and stores a finite SE with NaN
-    inference at event time 0, which only the single unit identifies."""
+    Calendar period 3.5 is observed only for the one-unit cohort adopting at
+    3.5 and for the never-treated units, so only that unit identifies event
+    time 0: the fit stores a finite SE and NaN inference there."""
 
     @staticmethod
     def _fit():
@@ -1479,35 +1054,23 @@ class TestPlotEventStudyFittedUndefinedRows:
                 data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
             )
 
-    def test_the_fit_declares_a_fractional_reference_and_withholds_inference_at_zero(self):
-        results = self._fit()
-        assert results.reference_period == -0.5
-        row = results.event_study_effects[0.0]
-        assert np.isfinite(row["se"]) and row["se"] > 0
-        assert np.isnan(row["conf_int"][0]) and np.isnan(row["p_value"])
-        for neighbour in (-1.5, 0.5):
-            assert np.isfinite(results.event_study_effects[neighbour]["conf_int"][0])
-
     @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
-    def test_event_time_zero_keeps_its_marker_and_gets_no_interval(self, kwargs):
-        pytest.importorskip("plotly")
+    def test_event_time_zero_gets_no_interval(self, kwargs):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
 
         results = self._fit()
         surface = results.event_study_effects
+        row = surface[0.0]
+        assert np.isfinite(row["se"]) and row["se"] > 0 and np.isnan(row["conf_int"][0])
         horizons = sorted(surface)
-        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        covered = set()
-        for band in _toself_bands(fig):
-            xs = [x for x in band.x if x is not None]
-            covered.update(range(int(min(xs)), int(max(xs)) + 1))
-        covered.update(int(b.x[0]) for b in _vertical_bars(fig))
-        x_zero = horizons.index(0.0)
-        assert x_zero in _marker_xs(fig) and x_zero not in covered
-        # the horizons on both sides keep their intervals
-        assert horizons.index(-1.5) in covered and horizons.index(0.5) in covered
-        for h in horizons:
-            if np.isfinite(surface[h]["conf_int"][0]):
-                assert horizons.index(h) in covered
+        ax = plot_event_study(results, show=False, **kwargs)
+        drawn = _plotted_intervals(ax)
+        assert float(horizons.index(0.0)) not in drawn
+        for h in (-1.5, 0.5):
+            assert np.isfinite(surface[h]["conf_int"][0])
+            assert float(horizons.index(h)) in drawn
+        plt.close()
 
 
 class TestPlotEventStudyWooldridge:
