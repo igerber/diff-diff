@@ -1236,6 +1236,33 @@ class TestPlotEventStudyBandAndFallbackReference:
         assert [b for b in _vertical_bars(fig) if b.x[0] == 0]
         assert x_minus_one in _marker_xs(fig)
 
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
+    def test_no_polygon_spans_a_fallback_row_with_no_standard_error(self, kwargs):
+        """Same, when the estimated placebo at -1 has a NaN SE as well as a NaN
+        interval (for example a jackknife variance that is not identified
+        there): a missing SE does not make the row a constraint."""
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((float("nan"), float("nan")))
+        results.event_study_effects[-1]["se"] = float("nan")
+        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
+        x_minus_one = sorted(results.event_study_effects).index(-1)
+        for band in _toself_bands(fig):
+            xs = [x for x in band.x if x is not None]
+            assert x_minus_one not in xs and not (min(xs) < x_minus_one < max(xs))
+        assert x_minus_one in _marker_xs(fig)
+
+    def test_an_explicit_reference_is_a_constraint(self):
+        """The caller normalizes on -1: that row is now a constraint and the
+        band continues across it."""
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((-0.18, 0.22))
+        fig = plot_event_study(results, backend="plotly", reference_period=-1, show=False)
+        (band,) = _toself_bands(fig)
+        xs = [x for x in band.x if x is not None]
+        assert min(xs) == 0 and max(xs) == 3
+
     def test_a_defined_row_at_minus_one_keeps_one_band(self):
         pytest.importorskip("plotly")
 

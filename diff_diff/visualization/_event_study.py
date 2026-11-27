@@ -218,6 +218,7 @@ def plot_event_study(
     ci_upper_override = None
     reference_marks: Optional[Set[Any]] = None
     undefined_inference: Set[Any] = set()
+    reference_verified = False
     if results is not None:
         (
             effects,
@@ -248,6 +249,7 @@ def plot_event_study(
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
+        reference_verified = _reference_is_verified(results, reference_period)
         # Channel selection: the band channel when the user wants
         # simultaneous bands; otherwise the POINTWISE channel - the
         # producer's stored intervals (NaN preserved), for input routes
@@ -376,6 +378,14 @@ def plot_event_study(
                 # single-reference routes.
                 "is_reference": period == reference_period
                 or (reference_marks is not None and period in reference_marks),
+                # A normalization CONSTRAINT, as opposed to reference styling:
+                # a row the caller normalized on, a producer-declared
+                # reference, or a marked anchor. The raw route's bare ``-1``
+                # fallback styles a marker but is not a constraint.
+                "is_constraint": (reference_marks is not None and period in reference_marks)
+                or (
+                    period == reference_period and (reference_period_explicit or reference_verified)
+                ),
             }
         )
 
@@ -633,14 +643,13 @@ def _render_event_study_plotly(
     has_ci = [not (np.isnan(lo) or np.isnan(hi)) for lo, hi in zip(ci_lower, ci_upper)]
     # Reference STYLING is not enough to bridge a gap: the raw routes fall back
     # to styling event time -1 when the producer marks no reference, and under
-    # a varying base that row is an estimated placebo. Only an actual
-    # normalization constraint - a reference row carrying no uncertainty (SE
-    # NaN, or effect and SE both exactly 0) - lets the band continue.
-    ses = df["se"].tolist()
-    is_constraint = [
-        bool(ref) and (not np.isfinite(sd) or (sd == 0 and eff == 0))
-        for ref, sd, eff in zip(is_ref, ses, effects)
-    ]
+    # a varying base that row is an estimated placebo. Only a normalization
+    # constraint - a reference the caller normalized on or the producer
+    # declared (``is_constraint``, resolved in ``plot_event_study``) - lets the
+    # band continue.
+    is_constraint = (
+        df["is_constraint"].tolist() if "is_constraint" in df.columns else [False] * len(df)
+    )
     runs: List[List[int]] = [[]]
     for i, (has, constraint) in enumerate(zip(has_ci, is_constraint)):
         if has:
@@ -733,6 +742,36 @@ def _render_event_study_plotly(
         fig.show()
 
     return fig
+
+
+def _reference_is_verified(results: Any, reference_period: Any) -> bool:
+    """Whether ``reference_period`` is a normalization anchor the PRODUCER
+    declared, as opposed to the raw route's unconditional ``-1`` fallback
+    (which only styles a marker, and under a varying base lands on an
+    estimated placebo).
+
+    Verified sources: an ``EventStudyResults`` container (its reference rows
+    are marked), the dCDH route (reference synthesized at 0), a
+    ``reference_period`` attribute on the results, or an ``is_reference`` key
+    on the row of a raw ``event_study_effects`` dict.
+    """
+    if results is None or reference_period is None:
+        return False
+    from diff_diff.results_base import EventStudyResults
+
+    if isinstance(results, EventStudyResults):
+        return True
+    if isinstance(results, pd.DataFrame):
+        return False
+    if hasattr(results, "placebo_event_study") and hasattr(results, "L_max"):
+        return True
+    if getattr(results, "reference_period", None) is not None:
+        return True
+    surface = getattr(results, "event_study_effects", None)
+    if isinstance(surface, dict):
+        entry = surface.get(reference_period)
+        return bool(isinstance(entry, dict) and entry.get("is_reference", False))
+    return False
 
 
 def _stored_inference_undefined(entry: Dict[str, Any]) -> bool:

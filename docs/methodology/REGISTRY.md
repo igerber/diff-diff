@@ -7313,9 +7313,11 @@ should be a deliberate user choice.
   zero-width constraint bar. On the Plotly backend the filled band is drawn as one polygon per run of
   rows that carry an interval: an estimated row without one ends the run, so the fill does
   not span it (a normalization constraint without an interval does not break the band; that
-  means a reference row carrying no uncertainty - SE NaN, or effect and SE both exactly 0 -
-  not a row that is merely styled as the reference by the `-1` fallback, which under a
-  varying base is an estimated placebo). A run of a single row has no area to fill and is drawn as a vertical bar between
+  means a reference the caller normalized on with `reference_period=`, or one the producer
+  declared - a marked row of a container, an `is_reference` row or `reference_period`
+  attribute on a results object, the dCDH reference at 0 - not a row that is merely styled
+  as the reference by the `-1` fallback, which under a varying base is an estimated
+  placebo, whatever its SE). A run of a single row has no area to fill and is drawn as a vertical bar between
   its bounds, so a valid interval isolated by the split stays visible. Before, the band
   skipped a row without an interval and filled straight across it.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
