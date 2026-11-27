@@ -1246,11 +1246,20 @@ class TestPlotEventStudyBandAndFallbackReference:
         results = self._varying_base((float("nan"), float("nan")))
         results.event_study_effects[-1]["se"] = float("nan")
         fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
-        x_minus_one = sorted(results.event_study_effects).index(-1)
-        for band in _toself_bands(fig):
-            xs = [x for x in band.x if x is not None]
-            assert x_minus_one not in xs and not (min(xs) < x_minus_one < max(xs))
+        horizons = sorted(results.event_study_effects)
+        x_minus_one = horizons.index(-1)
+        # -1: a marker and nothing else
         assert x_minus_one in _marker_xs(fig)
+        assert [b for b in _vertical_bars(fig) if b.x[0] == x_minus_one] == []
+        # -2 is isolated and keeps its interval as a bar
+        (bar,) = [b for b in _vertical_bars(fig) if b.x[0] == horizons.index(-2)]
+        assert sorted(float(y) for y in bar.y) == pytest.approx(
+            [0.05 - 1.959963984540054 * 0.10, 0.05 + 1.959963984540054 * 0.10]
+        )
+        # 0 and 1 keep one band, which stops short of -1
+        (band,) = _toself_bands(fig)
+        xs = [x for x in band.x if x is not None]
+        assert min(xs) == horizons.index(0) and max(xs) == horizons.index(1)
 
     def test_an_explicit_reference_is_a_constraint(self):
         """The caller normalizes on -1: that row is now a constraint and the
@@ -1259,6 +1268,43 @@ class TestPlotEventStudyBandAndFallbackReference:
 
         results = self._varying_base((-0.18, 0.22))
         fig = plot_event_study(results, backend="plotly", reference_period=-1, show=False)
+        (band,) = _toself_bands(fig)
+        xs = [x for x in band.x if x is not None]
+        assert min(xs) == 0 and max(xs) == 3
+
+    @pytest.mark.parametrize("kwargs", [{}, {"use_cband": False}])
+    def test_a_declared_reference_between_horizons_does_not_make_a_neighbour_a_constraint(
+        self, kwargs
+    ):
+        """A producer that declares its reference at -0.5 names no plotted
+        horizon. It must not be rounded onto event time 0, an ESTIMATED effect:
+        when that row's inference is undefined the band breaks there."""
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((-0.18, 0.22))
+        results.reference_period = -0.5
+        row = results.event_study_effects[0]
+        row.update(conf_int=(float("nan"), float("nan")), p_value=float("nan"))
+        fig = plot_event_study(results, backend="plotly", show=False, **kwargs)
+        horizons = sorted(results.event_study_effects)
+        x_zero = horizons.index(0)
+        for band in _toself_bands(fig):
+            xs = [x for x in band.x if x is not None]
+            assert x_zero not in xs and not (min(xs) < x_zero < max(xs))
+        assert [b for b in _vertical_bars(fig) if b.x[0] == x_zero] == []
+        assert x_zero in _marker_xs(fig)
+        # the rows before it keep their band; the row after it keeps a bar
+        (band,) = _toself_bands(fig)
+        assert max(x for x in band.x if x is not None) == horizons.index(-1)
+        assert [b for b in _vertical_bars(fig) if b.x[0] == horizons.index(1)]
+
+    def test_an_integral_declared_reference_is_a_constraint(self):
+        pytest.importorskip("plotly")
+
+        results = self._varying_base((float("nan"), float("nan")))
+        results.event_study_effects[-1].update(effect=0.0, se=float("nan"))
+        results.reference_period = -1.0
+        fig = plot_event_study(results, backend="plotly", show=False)
         (band,) = _toself_bands(fig)
         xs = [x for x in band.x if x is not None]
         assert min(xs) == 0 and max(xs) == 3

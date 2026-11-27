@@ -7317,7 +7317,9 @@ should be a deliberate user choice.
   declared - a marked row of a container, an `is_reference` row or `reference_period`
   attribute on a results object, the dCDH reference at 0 - not a row that is merely styled
   as the reference by the `-1` fallback, which under a varying base is an estimated
-  placebo, whatever its SE). A run of a single row has no area to fill and is drawn as a vertical bar between
+  placebo, whatever its SE. A declared `reference_period` counts only for the horizon it
+  names exactly: a reference that sits between horizons (for example `-0.5`) is kept as
+  given and is no longer rounded onto a neighbouring estimated row). A run of a single row has no area to fill and is drawn as a vertical bar between
   its bounds, so a valid interval isolated by the split stays visible. Before, the band
   skipped a row without an interval and filled straight across it.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is

@@ -70,7 +70,9 @@
   holds for dCDH results (effects and placebos) as well. On the
   Plotly backend the shaded band is now broken at any estimated row without an
   interval, where it used to fill straight across it; a row left on its own by
-  the break is drawn with a vertical bar between its bounds.
+  the break is drawn with a vertical bar between its bounds. A reference a
+  results object declares between two horizons is no longer rounded onto the
+  neighbouring estimated row (which was then styled as the reference).
 - `BusinessReport` no longer describes a Taylor-linearized fit with zero
   survey degrees of freedom as "replicate-weight" inference whose interval
   "remains at the fit's native level". The same applies to a replicate

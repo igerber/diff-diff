@@ -744,6 +744,17 @@ def _render_event_study_plotly(
     return fig
 
 
+def _exact_reference_label(label: Any) -> Any:
+    """A producer-declared reference label, unrounded: an integral number
+    becomes ``int`` (matching integer horizon keys), anything else is returned
+    as given."""
+    try:
+        as_float = float(label)
+    except (TypeError, ValueError):
+        return label
+    return int(as_float) if as_float.is_integer() else label
+
+
 def _reference_is_verified(results: Any, reference_period: Any) -> bool:
     """Whether ``reference_period`` is a normalization anchor the PRODUCER
     declared, as opposed to the raw route's unconditional ``-1`` fallback
@@ -765,8 +776,10 @@ def _reference_is_verified(results: Any, reference_period: Any) -> bool:
         return False
     if hasattr(results, "placebo_event_study") and hasattr(results, "L_max"):
         return True
-    if getattr(results, "reference_period", None) is not None:
-        return True
+    declared = getattr(results, "reference_period", None)
+    if declared is not None:
+        # The declared reference must be THIS horizon, not merely exist.
+        return bool(_exact_reference_label(declared) == reference_period)
     surface = getattr(results, "event_study_effects", None)
     if isinstance(surface, dict):
         entry = surface.get(reference_period)
@@ -1142,7 +1155,11 @@ def _extract_plot_data(
             # zero count is a genuine empty horizon and never a marker).
             explicit_ref = getattr(results, "reference_period", None)
             if explicit_ref is not None:
-                reference_period = int(explicit_ref)
+                # Keep the producer's exact label. An integral value is
+                # normalized to int (the horizon keys are ints); a
+                # non-integral one (a reference that sits between horizons)
+                # is NOT rounded onto a neighbouring ESTIMATED row.
+                reference_period = _exact_reference_label(explicit_ref)
             else:
                 for period, effect_data in results.event_study_effects.items():
                     if effect_data.get("is_reference", False):
