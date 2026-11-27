@@ -1940,6 +1940,40 @@ class TestStackedDiDAssumptionBlock:
                 assert ("unverified" in text) is (not is_current)
                 assert ("should be rerun" in text) is (not is_current)
 
+    def test_zero_survey_df_fit_is_not_called_replicate_weight(self):
+        """A Taylor-linearized StackedDiD fit with zero survey degrees of
+        freedom has NaN inference. The alpha caveat must name the variance
+        method correctly and say that no interval is available, not that the
+        displayed interval keeps its native coverage."""
+        from diff_diff import SurveyDesign
+
+        cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+        rows = []
+        for unit, g in enumerate(cohorts):
+            for t in range(9):
+                effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+                y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+                rows.append((unit, t, g, y, unit, 1.0))
+        panel = pd.DataFrame(
+            rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w"]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                panel,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(weights="w", strata="stratum", lonely_psu="adjust"),
+            )
+            report = json.dumps(BusinessReport(fit, alpha=0.10, auto_diagnostics=False).to_dict())
+        assert fit.survey_metadata.df_survey == 0 and np.isnan(fit.conf_int[0])
+        assert "undefined-df (Taylor-linearized survey)" in report
+        assert "replicate-weight" not in report
+        assert "no confidence interval is available at any level" in report
+        assert "the displayed CI remains" not in report
+
     def test_strict_names_strict_rule(self):
         desc = BusinessReport(self._stub("strict"), auto_diagnostics=False).to_dict()["assumption"][
             "description"

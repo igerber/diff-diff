@@ -2,6 +2,8 @@
 Tests for visualization functions.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -879,6 +881,97 @@ def _plotted_intervals(ax):
             if seg.shape == (2, 2) and seg[0, 0] == seg[1, 0]:
                 out[float(seg[0, 0])] = (float(seg[:, 1].min()), float(seg[:, 1].max()))
     return out
+
+
+def _zero_df_stacked_fit(zero_df=True):
+    """StackedDiD survey fit on six units. With one unit per stratum under
+    lonely_psu="adjust" the design has zero degrees of freedom: finite SEs,
+    NaN stored intervals. With three strata of two units inference is defined."""
+    from diff_diff import StackedDiD, SurveyDesign
+
+    cohorts = [3, 3, np.inf, np.inf, np.inf, np.inf]
+    strata = list(range(6)) if zero_df else [0, 1, 2, 0, 1, 2]
+    rows = []
+    for unit, g in enumerate(cohorts):
+        for t in range(9):
+            effect = 2.0 + 0.5 * unit if (np.isfinite(g) and t >= g) else 0.0
+            y = 0.5 * t + unit + effect + 0.3 * ((unit * 7 + t * 3) % 5)
+            rows.append((unit, t, g, y, strata[unit], 1.0))
+    data = pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome", "stratum", "w"])
+    design = SurveyDesign(weights="w", strata="stratum", lonely_psu="adjust")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return StackedDiD(kappa_pre=2, kappa_post=2).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            survey_design=design,
+        )
+
+
+class TestPlotEventStudyUndefinedStoredInference:
+    """The raw-results route recomputes intervals from the SE. A row whose
+    STORED interval is NaN while its SE is finite (inference failed closed, here
+    a survey design with zero degrees of freedom) must not get one back."""
+
+    def test_fit_has_finite_se_and_nan_intervals(self):
+        results = _zero_df_stacked_fit()
+        rows = [e for e in results.event_study_effects.values() if not e.get("is_reference")]
+        assert rows and all(np.isfinite(e["se"]) and e["se"] > 0 for e in rows)
+        assert all(np.isnan(e["conf_int"][0]) and np.isnan(e["conf_int"][1]) for e in rows)
+
+    @pytest.mark.parametrize("kwargs", [{}, {"reference_period": 0}])
+    def test_raw_results_draw_points_and_no_intervals(self, kwargs):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit()
+        # Without an explicit reference the auto-inferred reference row keeps
+        # its zero-width constraint bar (REGISTRY Event Study Plotting); no
+        # estimated row may carry an interval on either route.
+        for source in (results, results.aggregate("event_study")):
+            ax = plot_event_study(source, show=False, **kwargs)
+            # one marker position per row (the reference bar's caps add markers at its x)
+            assert len({p[0] for p in _plotted_points(ax)}) == len(results.event_study_effects)
+            drawn = _plotted_intervals(ax)
+            assert all(lower == upper == 0.0 for lower, upper in drawn.values())
+            assert len(drawn) <= 1
+            plt.close()
+
+    @pytest.mark.parametrize("kwargs", [{}, {"reference_period": 0}])
+    def test_raw_results_plotly_draw_no_band(self, kwargs):
+        pytest.importorskip("plotly")
+
+        def band_heights(fig):
+            ys = [
+                float(y)
+                for trace in fig.data
+                if getattr(trace, "fill", None) == "toself"
+                for y in trace.y
+                if y is not None and np.isfinite(y)
+            ]
+            return ys
+
+        # no band beyond the reference row's zero-width constraint
+        fig = plot_event_study(_zero_df_stacked_fit(), backend="plotly", show=False, **kwargs)
+        assert all(y == 0.0 for y in band_heights(fig))
+        # positive control: defined inference draws a band on the same route
+        fig = plot_event_study(
+            _zero_df_stacked_fit(zero_df=False), backend="plotly", show=False, **kwargs
+        )
+        assert any(y != 0.0 for y in band_heights(fig))
+
+    def test_defined_inference_still_draws_intervals(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        results = _zero_df_stacked_fit(zero_df=False)
+        ax = plot_event_study(results, show=False)
+        estimated = [e for e in results.event_study_effects.values() if not e.get("is_reference")]
+        assert len(_plotted_intervals(ax)) >= len(estimated)
+        plt.close()
 
 
 class TestPlotEventStudyWooldridge:

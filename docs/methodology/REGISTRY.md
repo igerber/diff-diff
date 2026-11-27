@@ -7301,6 +7301,15 @@ should be a deliberate user choice.
   normalization is accepted only when the chosen period is one of the marked rows (a no-op
   shift); any other period raises `ValueError`, because each anchor is a constraint under
   its own cohort base and no single shift represents them faithfully
+- **Note (undefined stored inference on the raw-results route):** a results object passed
+  directly (not its `aggregate("event_study")` container) has its intervals recomputed
+  from the SE. A row whose STORED interval is NaN while its SE is finite and positive -
+  inference the producer failed closed, such as a survey design with zero degrees of
+  freedom - is exempt: its point estimate is drawn with no interval, on the pointwise and
+  the band channel, with or without an explicit `reference_period=`. Before this rule a
+  zero-df `StackedDiDResults` plotted directly showed 95% normal-theory intervals for
+  estimates whose inference was undefined. The auto-inferred reference row keeps its
+  zero-width constraint bar.
 - **Note (WooldridgeDiD route):** a `WooldridgeDiDResults` passed to `plot_event_study` is
   converted to the unified `EventStudyResults` container at entry
   (`build_event_study_surface`) and takes the container route end to end: its stored

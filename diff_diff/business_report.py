@@ -750,9 +750,19 @@ class BusinessReport:
                 if isinstance(df_survey, (int, float)) and df_survey > 0:
                     inference_label = "finite-df survey"
                 elif isinstance(df_survey, (int, float)) and df_survey == 0:
-                    # Rank-deficient replicate design: the fit deliberately
-                    # left inference undefined. Preserve (NaN bounds remain NaN).
-                    inference_label = "undefined-df (replicate-weight)"
+                    # The fit deliberately left inference undefined: a
+                    # rank-deficient replicate design, or a Taylor-linearized
+                    # design with n_PSU - n_strata = 0. Preserve (NaN bounds
+                    # remain NaN) and name the variance method that applies.
+                    _replicate = (
+                        getattr(getattr(r, "survey_metadata", None), "replicate_method", None)
+                        is not None
+                    )
+                    inference_label = (
+                        "undefined-df (replicate-weight)"
+                        if _replicate
+                        else "undefined-df (Taylor-linearized survey)"
+                    )
                 else:
                     # Ordinary analytical fit with a finite but unexposed
                     # ``df`` (``DifferenceInDifferences`` / most staggered
@@ -762,14 +772,23 @@ class BusinessReport:
 
             display_alpha = float(result_alpha)
             alpha_was_honored = False
-            alpha_override_caveat = (
-                f"Requested alpha ({phrasing_alpha:.2f}) was not honored "
-                f"for the confidence interval because this fit uses "
-                f"{inference_label} inference; the displayed CI remains "
-                f"at the fit's native level "
-                f"({_coverage_pct(result_alpha)}%). The "
-                f"significance phrasing still uses the requested alpha."
-            )
+            if inference_label.startswith("undefined-df"):
+                alpha_override_caveat = (
+                    f"Requested alpha ({phrasing_alpha:.2f}) does not apply: "
+                    f"this fit has {inference_label} inference with zero "
+                    "degrees of freedom, so no confidence interval is "
+                    "available at any level and the significance of the "
+                    "estimate is undefined."
+                )
+            else:
+                alpha_override_caveat = (
+                    f"Requested alpha ({phrasing_alpha:.2f}) was not honored "
+                    f"for the confidence interval because this fit uses "
+                    f"{inference_label} inference; the displayed CI remains "
+                    f"at the fit's native level "
+                    f"({_coverage_pct(result_alpha)}%). The "
+                    f"significance phrasing still uses the requested alpha."
+                )
 
         unit = self._context.outcome_unit
         unit_kind = _UNIT_KINDS.get(unit.lower() if unit else "", "unknown")

@@ -1631,9 +1631,7 @@ class StackedDiD(BaseEstimator):
             # a - kappa_pre >= T_min  AND  a + kappa_post <= T_max
             # (matches R reference: focalAdoptionTime - kappa_pre >= minTime)
             # With anticipation: shift window start earlier
-            lower_ok = (a_int - self.kappa_pre - self.anticipation) >= T_min
-            upper_ok = (a_int + self.kappa_post) <= T_max
-            ic1 = lower_ok and upper_ok
+            ic1 = self._window_fits(a_int, T_min, T_max)
 
             # IC2: Clean controls exist
             ic2 = self._check_clean_controls_exist(a_int, unit_info)
@@ -1710,9 +1708,7 @@ class StackedDiD(BaseEstimator):
             inside = np.zeros(len(ft), dtype=bool)
             for a in adoption_events:
                 a_int = int(a)
-                if (a_int - self.kappa_pre - self.anticipation) < T_min:
-                    continue
-                if (a_int + self.kappa_post) > T_max:
+                if not self._window_fits(a_int, T_min, T_max):
                     continue
                 controls = self._control_mask_at(a_int, ft, shift)
                 if not controls.any():
@@ -1723,6 +1719,12 @@ class StackedDiD(BaseEstimator):
         lost = members(0) & ~members(self.anticipation)
         cohorts, counts = np.unique(ft[lost], return_counts=True)
         return {c: int(n) for c, n in zip(cohorts.tolist(), counts.tolist())}
+
+    def _window_fits(self, a: int, T_min: int, T_max: int) -> bool:
+        """IC1: the event window ``[a - kappa_pre - anticipation, a + kappa_post]``
+        lies within the observed periods. (The paper text states a stricter
+        lower bound, ``T_min + 1``; the co-author's R code uses ``T_min``.)"""
+        return (a - self.kappa_pre - self.anticipation) >= T_min and (a + self.kappa_post) <= T_max
 
     def _check_clean_controls_exist(self, a: int, unit_info: pd.DataFrame) -> bool:
         """Check IC2: whether clean control units exist for adoption event a."""

@@ -339,6 +339,13 @@ def plot_event_study(
             ci_lower = ci_lower_override[period]
             assert ci_upper_override is not None
             ci_upper = ci_upper_override[period]
+        elif period in undefined_inference:
+            # The producer's stored inference for this row is undefined (a
+            # finite SE with a NaN stored interval). No channel may rebuild
+            # an interval for it from the SE - including the band channel
+            # when the result carries no band.
+            ci_lower = np.nan
+            ci_upper = np.nan
         elif np.isfinite(std_err) and (
             std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
         ):
@@ -994,6 +1001,16 @@ def _extract_plot_data(
         ci_upper_override = {}
         has_cband = False
 
+        # Rows whose STORED inference is undefined: a finite, positive SE
+        # with an all-NaN stored interval (the producer failed inference
+        # closed, e.g. a survey design with zero degrees of freedom). This
+        # route recomputes intervals from the SE, so those rows are handed
+        # back on the pointwise channel as NaN - the plot then draws their
+        # point estimates and no interval, with or without an explicit
+        # reference period (REGISTRY Event Study Plotting).
+        undefined_lower: Dict[Any, float] = {}
+        undefined_upper: Dict[Any, float] = {}
+
         for rel_period, effect_data in results.event_study_effects.items():
             effects[rel_period] = effect_data["effect"]
             se[rel_period] = effect_data["se"]
@@ -1003,6 +1020,18 @@ def _extract_plot_data(
                 ci_lower_override[rel_period] = cband_ci[0]
                 ci_upper_override[rel_period] = cband_ci[1]
                 has_cband = True
+            stored_ci = effect_data.get("conf_int")
+            stored_se = effect_data["se"]
+            if (
+                stored_ci is not None
+                and not effect_data.get("is_reference", False)
+                and np.isfinite(stored_se)
+                and stored_se > 0
+                and not np.isfinite(stored_ci[0])
+                and not np.isfinite(stored_ci[1])
+            ):
+                undefined_lower[rel_period] = np.nan
+                undefined_upper[rel_period] = np.nan
 
         if periods is None:
             periods = sorted(effects.keys())
@@ -1051,8 +1080,8 @@ def _extract_plot_data(
             reference_inferred,
             ci_lower_override if has_cband else None,
             ci_upper_override if has_cband else None,
-            None,
-            None,
+            undefined_lower or None,
+            undefined_upper or None,
             None,
         )
 

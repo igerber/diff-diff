@@ -61,3 +61,13 @@
   warns that it is excluded from variance estimation under
   `lonely_psu="remove"`, and a finite-population size below a stratum's unit
   count raises `ValueError`; both checks were skipped before.
+- **`plot_event_study(results)` no longer draws intervals for rows whose
+  stored inference is undefined.** A results object passed directly has its
+  intervals rebuilt from the standard error; a row with a finite standard
+  error and a NaN stored interval (inference failed closed, for example a
+  survey design with zero degrees of freedom) is now drawn as a point with no
+  interval, as the `aggregate("event_study")` container already was.
+- `BusinessReport` no longer describes a Taylor-linearized fit with zero
+  survey degrees of freedom as "replicate-weight" inference whose interval
+  "remains at the fit's native level": it names the variance method and says
+  that no interval is available.
