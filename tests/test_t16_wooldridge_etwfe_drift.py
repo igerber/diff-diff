@@ -264,6 +264,7 @@ class TestLinear:
             "parallel trends is assumed conditional on them",
             "The whole path of each covariate\n  must be strictly exogenous",
             "treatment must not change the covariate",
+            "can distort the estimated total effect",
             "a\n  cohort treated in period 6 with no rows in period 5 is measured against period 4",
             'For the linear model (`method="ols"`) with `"never_treated"`, a balanced panel and\n'
             "no covariates, only those from the reference period on.",
@@ -680,6 +681,7 @@ def test_reference_period_on_an_unbalanced_panel():
     assert sorted(int(t) for g, t in fit.group_time_effects if g == 6) == [0, 1, 2, 6, 7, 8]
     assert "Cohort 6's reference period moved from 4 to 3" in messages
     assert "no observations: (6, 5)" in messages
+    assert "the two warnings can appear together" in md
     # a period no unit is observed in is not on the panel's time grid: period 4 is
     # the reference again, and nothing is reported
     with warnings.catch_warnings(record=True) as caught:
