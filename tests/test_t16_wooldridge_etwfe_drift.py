@@ -380,6 +380,26 @@ class TestMpdta:
         assert "the state is the level to cluster at" in md
         assert "the 2004 cohort is a single state" in md
 
+    def test_notebook_cells_print_the_state_clustered_row(self, mpdta, capsys):
+        """The notebook's own load-and-fit cell and state-clustering cell, run on the
+        canonical panel: the live output must carry the rows the prose quotes."""
+        path = Path(__file__).resolve().parents[1] / NB
+        if not path.exists():
+            pytest.skip("notebook not available in this environment")
+        cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+        code = ["".join(c["source"]) for c in cells if c["cell_type"] == "code"]
+        load_cell = next(s for s in code if "canonical = mpdta.attrs.get" in s)
+        state_cell = next(s for s in code if "mpdta_by_state = " in s)
+        scope = {"load_mpdta": lambda: mpdta.copy(), "WooldridgeDiD": WooldridgeDiD, "np": np}
+        exec(load_cell, scope)  # noqa: S102 - the notebook's own cell source
+        capsys.readouterr()
+        exec(state_cell, scope)  # noqa: S102
+        printed = capsys.readouterr().out
+        assert "States: 29  (by cohort: {0: 16, 2004: 1, 2006: 3, 2007: 9})" in printed
+        assert "county          -0.0477   0.0133   [-0.0738, -0.0216]" in printed
+        assert "state           -0.0477   0.0190   [-0.0867, -0.0087]" in printed
+        assert scope["mpdta_by_state"].att == pytest.approx(scope["mpdta_fit"].att, abs=1e-12)
+
     def test_section_skips_its_fits_on_the_synthetic_fallback(self, capsys):
         """The section's own cells, run with a loader that returns the simulated
         panel: they must say so and fit nothing, because the prose below them

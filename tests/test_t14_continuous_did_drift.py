@@ -208,12 +208,18 @@ class TestEventStudyAndOptions:
         assert "the\nevent study of a `ContinuousDiD` fit is not accepted there" in md
         assert 'fit `CallawaySantAnna(base_period="universal")` on\nthe binary treatment' in md
         assert "What they report then\ndescribes the binary fit." in md
-        with pytest.raises(TypeError):
-            compute_honest_did(
-                ContinuousDiD(base_period="universal", seed=42).fit(
-                    two_cohorts, dose="dose", **keys
-                )
-            )
+        # built outside the raises blocks, so only the diagnostics' own admission
+        # checks can satisfy them
+        universal_fit = ContinuousDiD(base_period="universal", seed=42).fit(
+            two_cohorts, dose="dose", **keys
+        )
+        universal_es = universal_fit.aggregate("event_study")
+        with pytest.raises(TypeError, match="Unsupported results type: .*ContinuousDiDResults"):
+            compute_honest_did(universal_fit)
+        with pytest.raises(
+            TypeError, match=r"HonestDiD accepts .*got source='ContinuousDiDResults'"
+        ):
+            compute_honest_did(universal_es, method="relative_magnitude", M=1.0)
         # the workflow the prose recommends: a universal-base binary fit gives
         # bounds without the base-period warning; the default base warns
         for base_period, warns in (("universal", False), ("varying", True)):
@@ -232,7 +238,9 @@ class TestEventStudyAndOptions:
         continuous_es = (
             ContinuousDiD(seed=42).fit(two_cohorts, dose="dose", **keys).aggregate("event_study")
         )
-        with pytest.raises(TypeError, match="PreTrendsPower accepts"):
+        with pytest.raises(
+            TypeError, match=r"PreTrendsPower accepts .*got source='ContinuousDiDResults'"
+        ):
             PreTrendsPower().fit(continuous_es)
         with warnings.catch_warnings():
             warnings.simplefilter("error")

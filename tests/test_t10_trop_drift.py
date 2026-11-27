@@ -246,7 +246,8 @@ class TestNotebookSurface:
             "it does not\n  take a TROP fit",
             # effective_rank and factor_matrix describe the average of the local fits
             "It summarises the returned matrix, not how many factors any single fit used.",
-            "not the rank of any one of them",
+            "its singular values describe that average and nothing more",
+            "neither the rank of any\none fit nor what the fits have in common can be read from it",
             "over the periods, other than `t` itself,\n  in which both units are untreated",
         ):
             assert needle in md, needle
@@ -257,6 +258,7 @@ class TestNotebookSurface:
             "Reduced from",
             "the periods just before treatment",
             "show how many factors the fit is using",
+            "the components the\nindividual fits have in common",
             "the fit uses about two factors",
         ):
             assert stale not in md, stale
