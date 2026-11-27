@@ -189,8 +189,8 @@ class TestLinear:
     def test_reference_period_reading_needs_a_balanced_panel_without_covariates(self):
         """On a balanced panel without covariates an early shock stays out of the
         post-treatment coefficient, and a time-constant covariate keeps it out.
-        With a gap anywhere, or with a time-varying covariate, early outcomes
-        reach it, which is all the notebook claims."""
+        Gaps, or a time-varying covariate, can let early outcomes reach it (not
+        every gap does), which is all the notebook claims."""
 
         def post(missing=(), early=None, late=None, covariate=None, n_treated=2, n_control=3):
             early, late = early or {}, late or {}
@@ -233,11 +233,13 @@ class TestLinear:
         assert post() == pytest.approx(2.0, abs=1e-8)
         assert post(early={"T0": 10.0}) == pytest.approx(2.0, abs=1e-8)
         assert post(early={"T0": 10.0, "T1": 10.0}) == pytest.approx(2.0, abs=1e-8)
-        # a gap, in the reference period or elsewhere: an early shock reaches the effect
+        # a gap, in the reference period or the target period, lets an early shock
+        # reach the effect; a gap in the shocked period itself does not
         assert post(missing={("T1", 2)}) == pytest.approx(2.0, abs=1e-8)
         assert post(missing={("T1", 2)}, early={"T1": 10.0}) == pytest.approx(-0.5, abs=1e-8)
         assert post(missing={("T1", 3)}) == pytest.approx(2.0, abs=1e-8)
         assert post(missing={("T1", 3)}, early={"T0": 10.0}) == pytest.approx(-0.5, abs=1e-8)
+        assert post(missing={("T1", 1)}, early={"T0": 10.0}) == pytest.approx(2.0, abs=1e-8)
         # a time-varying covariate on a balanced panel does it too
         wide = dict(covariate="time_varying", n_treated=5, n_control=7)
         assert post(**wide) == pytest.approx(2.0, abs=1e-8)
